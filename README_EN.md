@@ -14,7 +14,7 @@ The frontend is deployed on GitHub Pages. **No installation required** — just 
 
 **https://ascendjk.github.io/ai-novel-reader-v2/**
 
-On first visit, you'll need to configure the backend server address (see below).
+You can use it without configuring a server (offline mode). Configure a server to enable sync.
 
 ### Backend (Local Deployment)
 
@@ -152,9 +152,8 @@ You can log in while the server is unreachable. Reading, notes, and AI analysis 
 
 On first visit, a login dialog appears:
 
-1. **Configure server address**: Enter the backend server's IP and port (e.g., `http://192.168.1.100:5173`)
-2. **Create New**: Enter a username (2-30 chars) to create a local reading space. If the server is online, also registers on the server
-3. **Join Existing**: Enter an existing username. If local data exists, enters directly. If no local data, fetches from the server
+1. **Enter a username** (2-30 chars), choose "Create and Enter" or select an existing user
+2. **Configure server address** (optional): Click "Configure" to enter the backend address (e.g., `http://192.168.1.100:5173`). Without it, the app runs in offline mode
 
 > Data is **browser-first** — the server is only for backup and cross-device sync. When the server is unreachable, "Create New" works normally as a local account. "Join Existing" requires the server to be online to fetch data.
 >
