@@ -35,12 +35,18 @@ npm install
 npm run server
 ```
 
-The terminal will display the server address, e.g., `http://0.0.0.0:5173`.
+The terminal will display two addresses:
+```
+[sync] https://0.0.0.0:8443 (api-only)   ← recommended, HTTPS
+[sync] http://0.0.0.0:5173 (api-only)    ← HTTP, won't work with GitHub Pages frontend (Mixed Content)
+```
+
+> **Note**: The GitHub Pages frontend uses HTTPS, so you must use an HTTPS backend address. Otherwise the browser will block requests (Mixed Content). You need [mkcert](https://github.com/FiloSottile/mkcert) installed to generate certificates.
 
 **Connect the frontend**:
 
 1. Open the frontend page
-2. Enter the backend server address on the login screen (e.g., `http://192.168.1.100:5173`)
+2. Enter the backend server address on the login screen (e.g., `https://192.168.1.100:8443`)
 3. Click "Save & Connect" — "Connected" means success
 
 > **How to find the server IP**: Windows: run `ipconfig`, macOS/Linux: run `ifconfig` or `ip addr`, look for the LAN IPv4 address.

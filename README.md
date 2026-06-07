@@ -35,12 +35,18 @@ npm install
 npm run server
 ```
 
-启动后终端会显示服务器地址，例如 `http://0.0.0.0:5173`。
+启动后终端会显示两个地址：
+```
+[sync] https://0.0.0.0:8443 (api-only)   ← 推荐，HTTPS
+[sync] http://0.0.0.0:5173 (api-only)    ← HTTP，GitHub Pages 前端无法使用（Mixed Content）
+```
+
+> **注意**：GitHub Pages 前端是 HTTPS，必须使用 HTTPS 后端地址，否则浏览器会拦截请求（Mixed Content）。需要安装 [mkcert](https://github.com/FiloSottile/mkcert) 来生成证书。
 
 **配置前端连接**：
 
 1. 打开前端页面
-2. 在登录界面输入后端服务器地址（如 `http://192.168.1.100:5173`）
+2. 在登录界面输入后端服务器地址（如 `https://192.168.1.100:8443`）
 3. 点击「保存并连接」，显示「连接成功」即可
 
 > **如何查看服务器 IP**：Windows 运行 `ipconfig`，macOS/Linux 运行 `ifconfig` 或 `ip addr`，查找局域网 IPv4 地址。

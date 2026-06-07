@@ -97,7 +97,7 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
                 <span>后端服务器地址</span>
               </div>
               <Input
-                placeholder="http://192.168.1.100:5173"
+                placeholder="https://192.168.1.100:8443"
                 value={serverUrl}
                 onChange={(e) => setServerUrlState(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSaveServerUrl()}

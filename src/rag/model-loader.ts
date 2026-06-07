@@ -6,8 +6,10 @@
 
 import { ENGINES, resolveModelKey } from "./engines";
 
-const BUILTIN = "/models/builtin/";
-const CUSTOM = "/models/custom/";
+// GitHub Pages 部署时 base path 为 /ai-novel-reader-v2/，需要拼接
+const BASE = import.meta.env.BASE_URL || "/";
+const BUILTIN = BASE + "models/builtin/";
+const CUSTOM = BASE + "models/custom/";
 
 const ONNX_EXPECTED = "model_quantized.onnx";
 

@@ -9,7 +9,7 @@ const SERVER_URL_KEY = "server-url";
 
 /**
  * 获取后端服务器地址
- * @returns 服务器地址（如 "http://192.168.1.100:5173"），未配置时返回空字符串
+ * @returns 服务器地址（如 "http://192.168.1.100:8443"），未配置时返回空字符串
  */
 export function getServerUrl(): string {
   return localStorage.getItem(SERVER_URL_KEY) || "";
@@ -17,7 +17,7 @@ export function getServerUrl(): string {
 
 /**
  * 设置后端服务器地址
- * @param url 服务器地址（如 "http://192.168.1.100:5173"）
+ * @param url 服务器地址（如 "http://192.168.1.100:8443"）
  */
 export function setServerUrl(url: string): void {
   localStorage.setItem(SERVER_URL_KEY, url.replace(/\/+$/, "")); // 移除末尾斜杠
