@@ -6,14 +6,72 @@
 
 ## 快速开始
 
-### 前置条件
+项目采用**前后端分离架构**：前端部署在 GitHub Pages，后端运行在本地电脑。
 
-- [Node.js](https://nodejs.org) v18~22 LTS
-- [mkcert](https://github.com/FiloSottile/mkcert)（用于生成 HTTPS 证书）
+### 前端（GitHub Pages）
+
+前端已部署在 GitHub Pages，**无需安装**，直接访问：
+
+**https://ascendjk.github.io/ai-novel-reader-v2/**
+
+首次访问时需要配置后端服务器地址（见下方）。
+
+### 后端（本地部署）
+
+后端提供 RAG 构建、数据同步、书库管理等服务，运行在你自己的电脑上。
+
+**前置条件**：
+- [Node.js](https://nodejs.org) v18~22 LTS（推荐 22）
+- [mkcert](https://github.com/FiloSottile/mkcert)（可选，用于 HTTPS）
 
 > **Node.js 24+ 用户注意**：`better-sqlite3` 在 Node 24 上缺少预编译二进制，需要 Python 3.x 和 C++ 构建工具。建议使用 **Node.js 22 LTS**。
 
-### 安装 mkcert
+**安装与启动**：
+
+```bash
+git clone https://github.com/AscendJK/ai-novel-reader-v2.git
+cd ai-novel-reader-v2
+npm install
+npm run server
+```
+
+启动后终端会显示服务器地址，例如 `http://0.0.0.0:3001`。
+
+**配置前端连接**：
+
+1. 打开前端页面
+2. 在登录界面输入后端服务器地址（如 `http://192.168.1.100:3001`）
+3. 点击「保存并连接」，显示「连接成功」即可
+
+> **如何查看服务器 IP**：Windows 运行 `ipconfig`，macOS/Linux 运行 `ifconfig` 或 `ip addr`，查找局域网 IPv4 地址。
+
+### 开发模式
+
+如需本地开发前端：
+
+```bash
+# 终端 1：启动后端
+npm run server
+
+# 终端 2：启动前端开发服务器
+npm run dev
+```
+
+开发服务器运行在 `http://localhost:5173`，API 请求自动代理到后端 `localhost:3001`。
+
+---
+
+## HTTPS 与证书
+
+### 前端
+
+GitHub Pages 自动提供 HTTPS，无需额外配置。PWA Service Worker 离线缓存正常工作。
+
+### 后端
+
+后端默认同时监听 HTTP（3001）和 HTTPS（8443）。如果系统安装了 [mkcert](https://github.com/FiloSottile/mkcert)，服务器会自动生成并使用受信任的 HTTPS 证书。
+
+**安装 mkcert**（可选，仅在需要 HTTPS 时）：
 
 ```bash
 # Windows (winget) - 需要管理员权限
@@ -26,105 +84,41 @@ brew install mkcert
 sudo apt install mkcert
 ```
 
-> **Windows 用户**：必须以管理员身份运行终端。右键点击 PowerShell/CMD → "以管理员身份运行"。
-
-验证安装：
+安装后初始化：
 
 ```bash
-mkcert --version
+mkcert -install    # 安装本地 CA（只需一次，需管理员权限）
 ```
 
-显示版本号即表示安装成功。
+**局域网设备信任证书**：
 
-### 初始化本地 CA
+如果使用 HTTPS 访问后端，其他设备需要安装 CA 根证书：
 
 ```bash
-# 安装本地 CA（只需执行一次，需要管理员权限）
-mkcert -install
+mkcert -CAROOT     # 获取 CA 根证书路径
 ```
 
-### 启动项目
-
-```bash
-git clone https://github.com/AscendJK/ai-novel-reader.git
-cd ai-novel-reader
-```
-
-| 系统 | 命令 |
-|------|------|
-| Linux / macOS | `./start.sh` → 选 1（开发）或 2（生产） |
-| Windows | 双击 `start.bat` → 选 1 或 2 |
-
-- **模式 1（开发）**：代码热更新，无需 mkcert，访问 `http://localhost:5173`
-- **模式 2（生产）**：支持 HTTPS，自动生成证书，访问 `https://localhost:8443`
-
-停止：`./stop.sh` 或双击 `stop.bat`
-
-> **首次使用**：脚本会自动检测并安装依赖，无需手动运行 `npm install`。
-
----
-
-## HTTPS 与证书
-
-### 为什么需要 HTTPS
-
-现代浏览器要求 **安全上下文（HTTPS）** 才能使用 Service Worker 技术。Service Worker 是 PWA 离线缓存的核心 — 它将前端页面、CSS、JS、模型文件等资源缓存到浏览器本地。这样即使服务器完全离线（关机、断网），用户仍能打开页面、阅读小说、使用笔记等基础功能。
-
-**没有 HTTPS → 没有 Service Worker → 没有离线缓存 → 服务器离线时页面无法打开。**
-
-因此本项目使用 mkcert 生成本地受信任的 HTTPS 证书，而非简单的 HTTP 服务。
-
-### 工作原理
-
-```
-mkcert CA (根证书)
-    │
-    ├── 签发 → 服务器证书 (cert.pem + key.pem)
-    │
-    └── 信任链：安装 CA → 信任所有由它签发的证书
-```
-
-### 证书文件说明
-
-| 文件 | 位置 | 作用 | 分享？ |
-|------|------|------|--------|
-| `rootCA.pem` | `mkcert -CAROOT` 目录 | CA 根证书 | ✅ 分享给其他设备 |
-| `rootCA-key.pem` | `mkcert -CAROOT` 目录 | CA 私钥 | ❌ 绝对不要分享 |
-| `server/data/cert.pem` | 项目目录 | 服务器证书 | ❌ 仅服务器 |
-| `server/data/key.pem` | 项目目录 | 服务器私钥 | ❌ 绝对不要分享 |
-
-### 局域网其他设备访问
-
-**步骤 1：获取 CA 根证书路径**
-
-```bash
-mkcert -CAROOT
-# 输出: C:\Users\{用户名}\AppData\Local\mkcert
-```
-
-**步骤 2：发送根证书**
-
-将 `rootCA.pem` 文件发送到其他设备（邮件/U盘/共享文件夹）。
-
-**步骤 3：安装 CA 根证书**
-
-- **Windows**：双击 `rootCA.pem` → 安装证书 → 受信任的根证书颁发机构
+将 `rootCA.pem` 发送到其他设备并安装：
+- **Windows**：双击 → 安装证书 → 受信任的根证书颁发机构
 - **macOS**：`sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain rootCA.pem`
-- **Linux**：`sudo cp rootCA.pem /usr/local/share/ca-certificates/ai-novel-reader-ca.crt && sudo update-ca-certificates`
 - **Android**：设置 → 安全 → 加密与凭据 → 安装证书 → CA 证书
 - **iOS**：设置 → 通用 → 描述文件 → 安装 → 设置 → 通用 → 关于 → 证书信任设置 → 启用
 
-**步骤 4：访问服务器**
+> 不使用 mkcert 时，后端仍然可以通过 HTTP 访问（如 `http://192.168.1.100:3001`），功能完全正常。
 
-在其他设备的浏览器中输入服务器的局域网 IP 地址（例如 `https://192.168.1.10:8443`）。
+---
 
-> **如何查看服务器 IP**：
-> - Windows：在服务器上运行 `ipconfig`，查找 "IPv4 地址"
-> - macOS/Linux：在服务器上运行 `ifconfig` 或 `ip addr`
+## 多人共用前端
 
-> **注意**：必须指定端口号 `8443`，因为 HTTPS 使用的是非标准端口。
+前端部署在 GitHub Pages，所有人共用同一个前端地址。每个人在自己的电脑上运行后端，数据完全隔离：
 
-浏览器显示锁图标 🔒 表示连接安全。
+- 后端各自独立 → 数据库隔离
+- 浏览器 IndexedDB 各自独立 → 本地数据互不干扰
+- 服务器地址存在各自的 localStorage → 各连各的后端
+
+即使多人使用相同的用户名也无冲突，因为各自连的是各自的后端。
+
+> 如果想完全独立（包括前端），可以 fork 本仓库，部署到自己的 GitHub Pages。
 
 ---
 
@@ -150,10 +144,11 @@ mkcert -CAROOT
 
 ### 1. 登录
 
-首次访问弹出登录框，登录操作在浏览器本地完成：
+首次访问弹出登录框：
 
-- **创建新用户**：输入用户名（2-30 字符），在本地建立独立阅读空间。若服务器在线，同时在服务器注册
-- **加入已有**：输入已存在的用户名。若本地有该用户数据则直接进入；若本地无数据则从服务器拉取
+1. **配置服务器地址**：输入后端服务器的 IP 和端口（如 `http://192.168.1.100:3001`）
+2. **创建新用户**：输入用户名（2-30 字符），在本地建立独立阅读空间。若服务器在线，同时在服务器注册
+3. **加入已有**：输入已存在的用户名。若本地有该用户数据则直接进入；若本地无数据则从服务器拉取
 
 > 数据始终以浏览器本地为主，服务器仅用于备份和跨设备同步。服务器不可达时，「创建新用户」可正常创建本地账户，「加入已有」需服务器在线才能拉取数据。
 >
@@ -342,8 +337,9 @@ admin.bat        # Windows 双击
 ## 核心架构
 
 ```
-React 19 + TypeScript (strict) + Vite + Vitest
-Express + better-sqlite3
+前端：GitHub Pages（React 19 + TypeScript + Vite + Tailwind CSS + Zustand）
+后端：本地服务器（Express + better-sqlite3）
+├─ 前后端分离：前端通过用户配置的服务器地址连接后端
 ├─ 多 Agent 引擎：总结 / 人物 / 时间线 / 图谱 / 地图（实时状态反馈）
 ├─ 多引擎语义检索：BGE / E5 / MiniLM / GTE 等 ONNX 模型（Worker Thread 编码）
 ├─ d3-force 人物关系图谱（鼠标滚轮 + 移动端双指缩放）
@@ -376,10 +372,10 @@ Express + better-sqlite3
 - **自动重注册**：服务器重启或 Token 失效时，客户端自动以已有用户名重新加入，获取新 Token 并拉取全量数据
 - **单设备在线**：同一用户名新设备登录时旧设备自动下线
 - **API Key 本地隔离**：按用户名存储在 IndexedDB，不上传服务器，不同步，被踢下线时自动保留
-- **CORS 限制**：仅允许 localhost 和局域网 IP（192.168.x.x / 10.x.x.x / 172.16-31.x.x）访问
-- **CSP 安全策略**：限制 connect-src 仅允许同源请求，阻止外部数据泄露
+- **CORS 白名单**：仅允许 localhost、局域网 IP 和 `*.github.io` 域名访问
+- **CSP 安全策略**：限制 `connect-src` 仅允许 HTTP/HTTPS 协议请求
 - **请求限流**：RAG 构建、编码等高开销接口按 IP 限频
-- **输入校验**：用户名长度限制、请求体大小限制（10MB）、文本长度限制
+- **输入校验**：用户名长度限制、请求体大小限制（50MB）、文本长度限制
 - **时间戳合并**：同步时按时间戳判断新旧，避免覆盖更新数据
 - **同步互斥锁**：防止并发同步导致数据丢失
 - **孤儿记录清理**：同步时自动跳过不存在的小说关联数据，删除小说时级联清理 RAG 缓存
@@ -388,7 +384,7 @@ Express + better-sqlite3
 
 ## 注意事项
 
-- **仅限局域网 / 本地使用，不要暴露到公网**。项目无密码认证、SQLite 不适合公网并发，暴露后存在 API Key 泄露、会话劫持、数据损坏等风险
+- **后端仅限局域网 / 本地使用，不要暴露到公网**。项目无密码认证、SQLite 不适合公网并发，暴露后存在 API Key 泄露、会话劫持、数据损坏等风险。前端部署在 GitHub Pages 是安全的，敏感数据（API Key）仅存储在浏览器本地
 - 大长篇（5000+ 章）BGE 首次构建可能需要 5-30 分钟，构建期间不影响正常阅读
 - 服务端模型加载需要 ~2GB 内存峰值
 - 同一台服务器多用户同时构建时自动排队，最多 10 个任务
@@ -434,13 +430,10 @@ MIT License
      nvm install 22       # 安装 Node 22 LTS
      nvm use 22           # 切换到 Node 22
      ```
-   - 重新运行 `start.bat` 或 `./start.sh`
-   - 其他项目需要用 Node 24 时，`nvm use 24` 即可切换回来
 
 2. **直接安装 Node.js 22 LTS**（不用 nvm）
    - 卸载当前 Node.js
    - 从 https://nodejs.org 下载 22.x.x LTS 版本安装
-   - 重新运行 `start.bat` 或 `./start.sh`
 
 ### mkcert 安装失败
 
@@ -460,6 +453,15 @@ MIT License
 3. 重启浏览器
 4. 重新启动服务器
 
+### 前端无法连接后端
+
+**检查清单**：
+1. 后端是否已启动（终端显示 `[sync] http://0.0.0.0:3001`）
+2. 服务器地址是否正确（包含协议和端口，如 `http://192.168.1.100:3001`）
+3. 前端和后端是否在同一局域网
+4. 防火墙是否放行了 3001 端口
+5. 如果使用 HTTPS，其他设备是否已安装 CA 根证书
+
 ### 如何重新安装依赖
 
 遇到依赖异常或切换 Node 版本后，可删除旧依赖重新安装：
@@ -468,11 +470,9 @@ MIT License
 # Windows CMD
 rmdir /s /q node_modules
 del package-lock.json
-start.bat
+npm install
 
 # macOS / Linux
 rm -rf node_modules package-lock.json
-./start.sh
+npm install
 ```
-
-运行 `start.bat` / `./start.sh` 时会自动检测并重新安装依赖。

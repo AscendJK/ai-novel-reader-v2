@@ -2,16 +2,76 @@
 
 A browser-based AI-powered novel reading tool. Upload TXT/EPUB files, configure any LLM API, and get chapter summaries, character relationship graphs, plot timelines, AI Q&A, and more. Built-in user system with cross-device sync.
 
+[中文](README.md)
+
 ## Quick Start
 
-### Prerequisites
+The project uses a **front-end/back-end separated architecture**: the frontend is deployed on GitHub Pages, and the backend runs on your local machine.
 
-- [Node.js](https://nodejs.org) v18~22 LTS
-- [mkcert](https://github.com/FiloSottile/mkcert) (for HTTPS certificates)
+### Frontend (GitHub Pages)
+
+The frontend is deployed on GitHub Pages. **No installation required** — just visit:
+
+**https://ascendjk.github.io/ai-novel-reader-v2/**
+
+On first visit, you'll need to configure the backend server address (see below).
+
+### Backend (Local Deployment)
+
+The backend provides RAG building, data sync, book library management, and other services, running on your own machine.
+
+**Prerequisites**:
+- [Node.js](https://nodejs.org) v18~22 LTS (22 recommended)
+- [mkcert](https://github.com/FiloSottile/mkcert) (optional, for HTTPS)
 
 > **Node.js 24+ users**: `better-sqlite3` lacks prebuilt binaries for Node 24, requiring Python 3.x and C++ build tools. We recommend **Node.js 22 LTS**.
 
-### Install mkcert
+**Install & Start**:
+
+```bash
+git clone https://github.com/AscendJK/ai-novel-reader-v2.git
+cd ai-novel-reader-v2
+npm install
+npm run server
+```
+
+The terminal will display the server address, e.g., `http://0.0.0.0:3001`.
+
+**Connect the frontend**:
+
+1. Open the frontend page
+2. Enter the backend server address on the login screen (e.g., `http://192.168.1.100:3001`)
+3. Click "Save & Connect" — "Connected" means success
+
+> **How to find the server IP**: Windows: run `ipconfig`, macOS/Linux: run `ifconfig` or `ip addr`, look for the LAN IPv4 address.
+
+### Development Mode
+
+For local frontend development:
+
+```bash
+# Terminal 1: Start backend
+npm run server
+
+# Terminal 2: Start frontend dev server
+npm run dev
+```
+
+Dev server runs at `http://localhost:5173`, API requests are automatically proxied to the backend at `localhost:3001`.
+
+---
+
+## HTTPS & Certificates
+
+### Frontend
+
+GitHub Pages provides HTTPS automatically. No extra configuration needed. PWA Service Worker offline caching works out of the box.
+
+### Backend
+
+The backend listens on both HTTP (3001) and HTTPS (8443) by default. If [mkcert](https://github.com/FiloSottile/mkcert) is installed on the system, the server will automatically generate and use a trusted HTTPS certificate.
+
+**Install mkcert** (optional, only needed for HTTPS):
 
 ```bash
 # Windows (winget) - requires admin privileges
@@ -24,105 +84,41 @@ brew install mkcert
 sudo apt install mkcert
 ```
 
-> **Windows users**: You must run the terminal as Administrator. Right-click PowerShell/CMD → "Run as administrator".
-
-Verify installation:
+Initialize after installation:
 
 ```bash
-mkcert --version
+mkcert -install    # Install local CA (only needed once, requires admin privileges)
 ```
 
-A version number indicates successful installation.
+**Trust certificate on LAN devices**:
 
-### Initialize Local CA
+If using HTTPS to access the backend, other devices need to install the CA root certificate:
 
 ```bash
-# Install local CA (only needed once, requires admin privileges)
-mkcert -install
+mkcert -CAROOT     # Get CA root certificate path
 ```
 
-### Start Project
-
-```bash
-git clone https://github.com/AscendJK/ai-novel-reader.git
-cd ai-novel-reader
-```
-
-| OS | Command |
-|----|---------|
-| Linux / macOS | `./start.sh` → choose 1 (Dev) or 2 (Prod) |
-| Windows | Double-click `start.bat` → choose 1 or 2 |
-
-- **Mode 1 (Dev)**: Hot reload, no mkcert required, access `http://localhost:5173`
-- **Mode 2 (Prod)**: HTTPS support, auto-generates certificate, access `https://localhost:8443`
-
-Stop: `./stop.sh` or double-click `stop.bat`
-
-> **First use**: The script will automatically detect and install dependencies. No need to run `npm install` manually.
-
----
-
-## HTTPS & Certificates
-
-### Why HTTPS
-
-Modern browsers require a **secure context (HTTPS)** to use Service Worker technology. Service Worker is the core of PWA offline caching — it caches frontend pages, CSS, JS, model files, and other resources to the browser locally. This way, even when the server is completely offline (shutdown, network disconnect), users can still open the page, read novels, use notes, and other basic features.
-
-**No HTTPS → No Service Worker → No offline cache → Page won't open when server is offline.**
-
-This project uses mkcert to generate locally trusted HTTPS certificates instead of a simple HTTP server.
-
-### How It Works
-
-```
-mkcert CA (Root Certificate)
-    │
-    ├── Signs → Server Certificate (cert.pem + key.pem)
-    │
-    └── Trust Chain: Install CA → Trust all certificates signed by it
-```
-
-### Certificate Files
-
-| File | Location | Purpose | Share? |
-|------|----------|---------|--------|
-| `rootCA.pem` | `mkcert -CAROOT` directory | CA root certificate | ✅ Share with other devices |
-| `rootCA-key.pem` | `mkcert -CAROOT` directory | CA private key | ❌ Never share |
-| `server/data/cert.pem` | Project directory | Server certificate | ❌ Server only |
-| `server/data/key.pem` | Project directory | Server private key | ❌ Never share |
-
-### Other LAN Devices Access
-
-**Step 1: Get CA root certificate path**
-
-```bash
-mkcert -CAROOT
-# Output: C:\Users\{username}\AppData\Local\mkcert
-```
-
-**Step 2: Send root certificate**
-
-Send `rootCA.pem` to other devices (email/USB/shared folder).
-
-**Step 3: Install CA root certificate**
-
-- **Windows**: Double-click `rootCA.pem` → Install certificate → Trusted Root Certification Authorities
+Send `rootCA.pem` to other devices and install:
+- **Windows**: Double-click → Install certificate → Trusted Root Certification Authorities
 - **macOS**: `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain rootCA.pem`
-- **Linux**: `sudo cp rootCA.pem /usr/local/share/ca-certificates/ai-novel-reader-ca.crt && sudo update-ca-certificates`
 - **Android**: Settings → Security → Encryption & credentials → Install certificate → CA certificate
 - **iOS**: Settings → General → Profiles → Install → Settings → General → About → Certificate Trust Settings → Enable
 
-**Step 4: Access server**
+> Without mkcert, the backend is still accessible via HTTP (e.g., `http://192.168.1.100:3001`) with full functionality.
 
-Enter the server's LAN IP address in the browser on other devices (e.g., `https://192.168.1.10:8443`).
+---
 
-> **How to find the server IP**:
-> - Windows: Run `ipconfig` on the server, look for "IPv4 Address"
-> - macOS/Linux: Run `ifconfig` or `ip addr` on the server
+## Shared Frontend
 
-> **Note**: You must specify the port number `8443` because HTTPS uses a non-standard port.
+The frontend is deployed on GitHub Pages — everyone shares the same frontend URL. Each person runs their own backend on their own machine. Data is fully isolated:
 
-Browser shows lock icon 🔒 indicating secure connection.
+- Each backend is independent → databases are isolated
+- Each browser's IndexedDB is independent → local data doesn't interfere
+- Server address is stored in each person's localStorage → each connects to their own backend
+
+Even if multiple people use the same username, there's no conflict — each connects to their own backend.
+
+> For full independence (including the frontend), fork this repo and deploy to your own GitHub Pages.
 
 ---
 
@@ -148,10 +144,11 @@ You can log in while the server is unreachable. Reading, notes, and AI analysis 
 
 ### 1. Login
 
-Login is a **local operation** — username validation happens in the browser:
+On first visit, a login dialog appears:
 
-- **Create New**: Enter a username (2-30 chars) to create a local reading space. If the server is online, also registers on the server
-- **Join Existing**: Enter an existing username. If local data exists, enters directly. If no local data, fetches from the server
+1. **Configure server address**: Enter the backend server's IP and port (e.g., `http://192.168.1.100:3001`)
+2. **Create New**: Enter a username (2-30 chars) to create a local reading space. If the server is online, also registers on the server
+3. **Join Existing**: Enter an existing username. If local data exists, enters directly. If no local data, fetches from the server
 
 > Data is **browser-first** — the server is only for backup and cross-device sync. When the server is unreachable, "Create New" works normally as a local account. "Join Existing" requires the server to be online to fetch data.
 >
@@ -340,8 +337,9 @@ Auto-starts server and opens admin page:
 ## Architecture
 
 ```
-React 19 + TypeScript (strict) + Vite + Vitest
-Express + better-sqlite3
+Frontend: GitHub Pages (React 19 + TypeScript + Vite + Tailwind CSS + Zustand)
+Backend: Local server (Express + better-sqlite3)
+├─ Front-back separation: frontend connects to backend via user-configured server address
 ├─ Multi-agent engine: summary / characters / timeline / graph / map
 ├─ Multi-engine semantic retrieval: BGE / E5 / MiniLM / GTE ONNX models (Worker Thread encoding)
 ├─ d3-force character graph (mouse wheel + pinch-to-zoom on mobile)
@@ -373,10 +371,10 @@ Express + better-sqlite3
 - **Session Token authentication**: Server issues tokens on login, sync endpoints (push/heartbeat) also verify tokens
 - **Single-session enforcement**: Logging in from a new device kicks the previous session; automatic re-registration after server restart
 - **API key local isolation**: Stored per-user in IndexedDB, never uploaded, never synced, preserved on kick
-- **CORS restriction**: Only localhost and LAN IPs (192.168.x.x / 10.x.x.x / 172.16-31.x.x) allowed
-- **CSP security policy**: `connect-src` restricted to same-origin only, preventing external data leaks
+- **CORS allowlist**: Only localhost, LAN IPs, and `*.github.io` domains allowed
+- **CSP security policy**: `connect-src` restricted to HTTP/HTTPS protocols only
 - **Rate limiting**: RAG build, encode, and other expensive endpoints are rate-limited per IP
-- **Input validation**: Username length limits, request body size limits, text length limits
+- **Input validation**: Username length limits, request body size limits (50MB), text length limits
 - **Timestamp-based merge**: Sync uses timestamps to determine newer data, preventing overwrite of fresher content
 - **Sync mutex lock**: Prevents concurrent sync operations from causing data loss
 - **Orphan record cleanup**: Sync automatically skips novel-associated data for deleted novels; deleting a novel cascades to RAG cache cleanup
@@ -385,7 +383,7 @@ Express + better-sqlite3
 
 ## Notes
 
-- **LAN/local use only — do not expose to the public internet**. No password auth, SQLite not suitable for public concurrency. Exposing this server risks API key theft, session hijacking, and data corruption
+- **Backend is for LAN/local use only — do not expose to the public internet**. No password auth, SQLite not suitable for public concurrency. Exposing the backend risks API key theft, session hijacking, and data corruption. The frontend on GitHub Pages is safe — sensitive data (API keys) is stored only in the browser
 - BGE index for very long novels (5000+ chapters) may take 5-30 min; normal reading is unaffected during build
 - Server model loading peaks at ~2GB RAM
 - Simultaneous builds are queued (max 10 tasks)
@@ -429,13 +427,10 @@ MIT License. Built-in models:
      nvm install 22       # Install Node 22 LTS
      nvm use 22           # Switch to Node 22
      ```
-   - Re-run `start.bat` or `./start.sh`
-   - To switch back for other projects: `nvm use 24`
 
 2. **Install Node.js 22 LTS directly** (without nvm)
    - Uninstall current Node.js
    - Download 22.x.x LTS from https://nodejs.org
-   - Re-run `start.bat` or `./start.sh`
 
 ### mkcert installation fails
 
@@ -455,6 +450,15 @@ MIT License. Built-in models:
 3. Restart browser
 4. Restart server
 
+### Frontend cannot connect to backend
+
+**Checklist**:
+1. Is the backend running? (Terminal shows `[sync] http://0.0.0.0:3001`)
+2. Is the server address correct? (Include protocol and port, e.g., `http://192.168.1.100:3001`)
+3. Are the frontend and backend on the same LAN?
+4. Is port 3001 allowed through the firewall?
+5. If using HTTPS, have other devices installed the CA root certificate?
+
 ### How to reinstall dependencies
 
 If dependencies are corrupted or after switching Node versions:
@@ -463,11 +467,9 @@ If dependencies are corrupted or after switching Node versions:
 # Windows CMD
 rmdir /s /q node_modules
 del package-lock.json
-start.bat
+npm install
 
 # macOS / Linux
 rm -rf node_modules package-lock.json
-./start.sh
+npm install
 ```
-
-`start.bat` / `./start.sh` will auto-detect and reinstall dependencies.

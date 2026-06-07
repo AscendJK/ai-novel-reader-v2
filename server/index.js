@@ -17,6 +17,7 @@ import { novelsRouter, ragRouter, syncRouter, proxyRouter } from "./routes/index
 import { mountAdminRoutes } from "./admin.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const isFullMode = process.argv.includes("--full");
 const app = express();
 
 // ── CORS: restrict to localhost origins ──
