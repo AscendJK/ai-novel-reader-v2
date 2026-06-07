@@ -48,7 +48,7 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
 
   const isNewUser = selectedUser === "__new__";
   const username = isNewUser ? newUsername.trim() : selectedUser;
-  const canSubmit = username.length >= 2 && !!getServerUrl();
+  const canSubmit = username.length >= 2;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
