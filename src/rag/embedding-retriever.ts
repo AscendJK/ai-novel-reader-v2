@@ -4,6 +4,7 @@ import { sharedDB as db } from "@/db/database";
 import { useRAGStore } from "@/stores/rag-store";
 import { useBuildStore } from "@/stores/build-store";
 import { authHeaders } from "@/lib/auth-headers";
+import { apiFetch } from "@/lib/api-client";
 import { encodeQuery } from "./client-encoder";
 import { enforceIndexedDBQuota, updateAccessTime } from "./rag-cache-utils";
 import { buildAndPollRAGIndex, downloadAndCacheIndex } from "./build-index";
@@ -156,7 +157,7 @@ export class EmbeddingRetriever {
 
     // 检查服务器状态，触发构建并轮询
     ragLog("检查服务器索引状态...");
-    const statusCheck = await fetch(`/api/rag/${novelId}/status?engine=${encodeURIComponent(this.engine)}`, { headers: authHeaders() });
+    const statusCheck = await apiFetch(`/api/rag/${novelId}/status?engine=${encodeURIComponent(this.engine)}`);
     const statusData = await statusCheck.json();
 
     // 如果服务器已有索引，直接下载
@@ -223,9 +224,8 @@ export class EmbeddingRetriever {
 
     // Try server-side encoding first
     try {
-      const resp = await fetch("/api/rag/encode", {
+      const resp = await apiFetch("/api/rag/encode", {
         method: "POST",
-        headers: { ...authHeaders(), "Content-Type": "application/json" },
         body: JSON.stringify({ texts: [query], engine: this.engine }),
       });
       if (resp.ok) {

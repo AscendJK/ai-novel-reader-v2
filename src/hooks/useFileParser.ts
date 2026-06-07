@@ -5,6 +5,7 @@ import { createNovel } from "@/parsers/utils";
 import { saveNovel } from "@/db/repositories";
 import { useNovelStore } from "@/stores/novel-store";
 import { authHeaders } from "@/lib/auth-headers";
+import { apiFetch } from "@/lib/api-client";
 import type { Novel } from "@/parsers/types";
 
 // 文件大小限制
@@ -69,9 +70,8 @@ export function useFileParser() {
       await saveNovel(novel);
 
       // Upload to server + auto-join
-      fetch(`/api/novels`, {
+      apiFetch(`/api/novels`, {
         method: "POST",
-        headers: authHeaders(),
         body: JSON.stringify({
           novel: {
             id: novel.id, title: novel.title, author: novel.author,
@@ -95,8 +95,8 @@ export function useFileParser() {
         if (!nid) { console.error(`[upload] ${novel.title}: no novelId in response`); return; }
 
         // Auto-join
-        fetch(`/api/novels/${nid}/join`, {
-          method: "POST", headers: authHeaders(),
+        apiFetch(`/api/novels/${nid}/join`, {
+          method: "POST",
         }).then((jr) => {
           if (!jr?.ok) console.error(`[upload] ${novel.title} join failed: HTTP ${jr?.status}`);
         }).catch((e) => console.error(`[upload] ${novel.title} join error:`, e));

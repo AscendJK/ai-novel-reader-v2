@@ -3,7 +3,11 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 import path from "path";
 
+// GitHub Pages 部署路径（根据仓库名调整）
+const BASE_PATH = "/ai-novel-reader-v2/";
+
 export default defineConfig({
+  base: BASE_PATH,
   plugins: [
     react(),
     VitePWA({
@@ -27,14 +31,7 @@ export default defineConfig({
               expiration: { maxEntries: 50, maxAgeSeconds: 365 * 24 * 3600 },
             },
           },
-          {
-            urlPattern: /\/api\/(?!sync\/)/,
-            handler: "NetworkFirst",
-            options: {
-              cacheName: "api-cache",
-              networkTimeoutSeconds: 3,
-            },
-          },
+          // API 缓存规则已移除 — 前后端分离后 API 请求发往不同域名
         ],
         cleanupOutdatedCaches: true,
       },
@@ -44,14 +41,16 @@ export default defineConfig({
         theme_color: "#0a0a0a",
         background_color: "#0a0a0a",
         display: "standalone",
+        start_url: BASE_PATH,
+        scope: BASE_PATH,
         icons: [
-          { src: "/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
-          { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
-          { src: "/icon-512-maskable.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+          { src: `${BASE_PATH}icon-192.png`, sizes: "192x192", type: "image/png", purpose: "any" },
+          { src: `${BASE_PATH}icon-512.png`, sizes: "512x512", type: "image/png", purpose: "any" },
+          { src: `${BASE_PATH}icon-512-maskable.png`, sizes: "512x512", type: "image/png", purpose: "maskable" },
         ],
         screenshots: [
-          { src: "/screenshot-desktop.png", sizes: "1280x720", type: "image/png", form_factor: "wide", label: "桌面端阅读界面" },
-          { src: "/screenshot-mobile.png", sizes: "720x1280", type: "image/png", form_factor: "narrow", label: "移动端阅读界面" },
+          { src: `${BASE_PATH}screenshot-desktop.png`, sizes: "1280x720", type: "image/png", form_factor: "wide", label: "桌面端阅读界面" },
+          { src: `${BASE_PATH}screenshot-mobile.png`, sizes: "720x1280", type: "image/png", form_factor: "narrow", label: "移动端阅读界面" },
         ],
       },
     }),

@@ -5,6 +5,7 @@ import { useBuildStore } from "@/stores/build-store";
 import { useUIStore } from "@/stores/ui-store";
 import { getEngineDisplayName, isEmbeddingEngine } from "@/rag/engines";
 import { authHeaders } from "@/lib/auth-headers";
+import { apiFetch } from "@/lib/api-client";
 import { useSummaryStore } from "@/stores/summary-store";
 import { useSummarizer } from "@/hooks/useSummarizer";
 import type { GraphData, MapData } from "@/hooks/useSummarizer";
@@ -123,7 +124,7 @@ export function SummaryPanel({ defaultTab = "chapter" }: { defaultTab?: string }
 
     // Check server-side build status (for badge display)
     if (isEmbeddingEngine(engine)) {
-      fetch(`/api/rag/${currentNovel.id}/status?engine=${encodeURIComponent(engine)}`, { headers: authHeaders() })
+      apiFetch(`/api/rag/${currentNovel.id}/status?engine=${encodeURIComponent(engine)}`)
         .then(r => r.json())
         .then(st => { if (!cancelled) setIndexReady(st.status === "ready"); })
         .catch((e) => {

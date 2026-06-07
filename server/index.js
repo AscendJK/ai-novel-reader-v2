@@ -21,10 +21,15 @@ const app = express();
 
 // ── CORS: restrict to localhost origins ──
 const ALLOWED_ORIGINS = [
+  // 开发环境
   "http://localhost:5173", "http://127.0.0.1:5173",
   "http://localhost:3001", "http://127.0.0.1:3001",
   "http://localhost:4173", "http://127.0.0.1:4173",
   "https://localhost", "https://127.0.0.1",
+  // GitHub Pages
+  "https://ascendjk.github.io",
+  // 用户自定义前端域名（可通过环境变量配置）
+  ...(process.env.CORS_ORIGINS || "").split(",").filter(Boolean),
 ];
 app.use(cors({
   origin: (origin, cb) => {
@@ -32,6 +37,8 @@ app.use(cors({
     if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
     // Allow any LAN/private IP (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
     if (/^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?/.test(origin)) return cb(null, true);
+    // Allow any GitHub Pages domain (*.github.io)
+    if (/^https:\/\/[a-z0-9-]+\.github\.io$/.test(origin)) return cb(null, true);
     cb(new Error("CORS not allowed"));
   },
   allowedHeaders: ["Content-Type", "Authorization", "x-api-key", "anthropic-version"],
@@ -56,26 +63,8 @@ app.get("/admin", (_req, res) => {
   res.sendFile(path.join(__dirname, "admin.html"));
 });
 
-// ── Production static serving ───────────────────────────────
-
-const isFullMode = process.argv.includes("--full");
-if (isFullMode) {
-  const distPath = path.join(__dirname, "..", "dist");
-  app.use(express.static(distPath));
-  // SPA fallback: serve index.html for any non-API, non-admin route
-  // Note: Express 5 requires named parameters, so we use a middleware instead of "*"
-  app.use((req, res, next) => {
-    // Skip API and admin routes
-    if (req.path.startsWith("/api/") || req.path.startsWith("/admin")) {
-      return next();
-    }
-    // Skip non-GET requests
-    if (req.method !== "GET") {
-      return next();
-    }
-    res.sendFile(path.join(distPath, "index.html"));
-  });
-}
+// ── Note: 前后端分离模式下，前端由 GitHub Pages 托管 ───────
+// 后端只提供 API 服务，不再需要静态文件服务
 
 // ── Global error handler ────────────────────────────────────
 
@@ -86,7 +75,7 @@ app.use((err, req, res, _next) => {
 
 // ── Start server ────────────────────────────────────────────
 
-const PORT = process.env.PORT || (isFullMode ? 5173 : 3001);
+const PORT = process.env.PORT || 3001;
 const HTTPS_PORT = process.env.HTTPS_PORT || 8443;
 const dataDir = path.join(__dirname, "data");
 

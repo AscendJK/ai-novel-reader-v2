@@ -1,9 +1,10 @@
-import { useState } from "react";
-import { BookOpen, LogIn, Trash2, UserPlus, WifiOff } from "lucide-react";
+import { useState, useEffect } from "react";
+import { BookOpen, LogIn, Trash2, UserPlus, WifiOff, Server } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2 } from "lucide-react";
+import { getServerUrl, setServerUrl, checkServerReachable } from "@/lib/api-client";
 
 interface Props {
   localUsers: string[];
@@ -19,10 +20,35 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
   const [selectedUser, setSelectedUser] = useState("");
   const [newUsername, setNewUsername] = useState("");
   const [loading, setLoading] = useState(false);
+  const [serverUrl, setServerUrlState] = useState(getServerUrl());
+  const [serverStatus, setServerStatus] = useState<"unknown" | "checking" | "ok" | "fail">("unknown");
+  const [showServerConfig, setShowServerConfig] = useState(!getServerUrl());
+
+  // 检查服务器状态
+  const checkServer = async (url: string) => {
+    if (!url) { setServerStatus("unknown"); return; }
+    setServerStatus("checking");
+    const ok = await checkServerReachable(url);
+    setServerStatus(ok ? "ok" : "fail");
+  };
+
+  // 保存服务器地址
+  const handleSaveServerUrl = async () => {
+    const url = serverUrl.trim().replace(/\/+$/, "");
+    if (!url) return;
+    setServerUrl(url);
+    await checkServer(url);
+    setShowServerConfig(false);
+  };
+
+  // 初始检查
+  useEffect(() => {
+    if (getServerUrl()) checkServer(getServerUrl());
+  }, []);
 
   const isNewUser = selectedUser === "__new__";
   const username = isNewUser ? newUsername.trim() : selectedUser;
-  const canSubmit = username.length >= 2;
+  const canSubmit = username.length >= 2 && !!getServerUrl();
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -59,73 +85,134 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
           <BookOpen className="h-10 w-10 text-primary mx-auto mb-2" />
           <CardTitle>AI 小说精读助手</CardTitle>
           <p className="text-sm text-muted-foreground mt-1">
-            选择已有用户或创建新用户
+            {showServerConfig ? "配置后端服务器地址" : "选择已有用户或创建新用户"}
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* User selector */}
-          <div className="space-y-2">
-            <select
-              id="user-select" name="user-select"
-              className="w-full text-sm border rounded px-3 py-2 bg-background"
-              value={selectedUser}
-              onChange={(e) => setSelectedUser(e.target.value)}
-            >
-              <option value="">-- 选择用户 --</option>
-              {localUsers.map((u) => (
-                <option key={u} value={u}>{u}</option>
-              ))}
-              <option value="__new__">+ 创建新用户</option>
-            </select>
-          </div>
-
-          {/* New username input */}
-          {isNewUser && (
-            <Input
-              id="new-username" name="new-username" autoComplete="username"
-              placeholder="输入用户名（2-30 字符）"
-              value={newUsername}
-              onChange={(e) => setNewUsername(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-              disabled={loading}
-              autoFocus
-            />
-          )}
-
-          {error && (
-            <p className="text-xs text-destructive text-center">{error}</p>
-          )}
-
-          {/* Action buttons */}
-          <div className="flex gap-2">
-            <Button
-              className="flex-1"
-              onClick={handleSubmit}
-              disabled={loading || !canSubmit}
-            >
-              {isNewUser ? <UserPlus className="h-4 w-4 mr-2" /> : <LogIn className="h-4 w-4 mr-2" />}
-              {isNewUser ? "创建并进入" : "进入"}
-            </Button>
-            {selectedUser && selectedUser !== "__new__" && (
+          {/* 服务器地址配置 */}
+          {showServerConfig ? (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Server className="h-4 w-4" />
+                <span>后端服务器地址</span>
+              </div>
+              <Input
+                placeholder="http://192.168.1.100:3001"
+                value={serverUrl}
+                onChange={(e) => setServerUrlState(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleSaveServerUrl()}
+                autoFocus
+              />
+              <p className="text-[10px] text-muted-foreground">
+                输入运行后端服务的电脑 IP 地址和端口
+              </p>
               <Button
-                variant="outline"
-                className="text-destructive hover:bg-destructive/10"
-                onClick={handleDelete}
-                disabled={loading}
+                className="w-full"
+                onClick={handleSaveServerUrl}
+                disabled={!serverUrl.trim() || serverStatus === "checking"}
               >
-                <Trash2 className="h-4 w-4" />
+                {serverStatus === "checking" ? (
+                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" />检测中...</>
+                ) : (
+                  "保存并连接"
+                )}
               </Button>
-            )}
-          </div>
-
-          <p className="text-[10px] text-muted-foreground text-center">
-            数据保存在浏览器本地，服务器在线时自动同步
-          </p>
-          {offlineLogin && (
-            <div className="flex items-start gap-2 p-2 rounded bg-amber-500/10 border border-amber-500/20 text-[10px] text-amber-600">
-              <WifiOff className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-              <p>当前为离线登录，服务器恢复后将自动重新连接。注意：服务器重启后需重新认证，同账号的其他设备可能被踢下线。</p>
+              {serverStatus === "fail" && (
+                <p className="text-xs text-destructive text-center">无法连接到服务器，请检查地址是否正确</p>
+              )}
+              {serverStatus === "ok" && (
+                <p className="text-xs text-green-600 text-center">连接成功！</p>
+              )}
             </div>
+          ) : (
+            <>
+              {/* 服务器状态 */}
+              <div className="flex items-center justify-between text-xs">
+                <div className="flex items-center gap-1.5 text-muted-foreground">
+                  <Server className="h-3 w-3" />
+                  <span className="truncate max-w-[200px]">{getServerUrl()}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {serverStatus === "ok" && <span className="text-green-600">● 已连接</span>}
+                  {serverStatus === "fail" && <span className="text-destructive">● 无法连接</span>}
+                  {serverStatus === "checking" && <span className="text-muted-foreground">● 检测中</span>}
+                  {serverStatus === "unknown" && <span className="text-muted-foreground">● 未知</span>}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 text-[10px]"
+                    onClick={() => setShowServerConfig(true)}
+                  >
+                    更改
+                  </Button>
+                </div>
+              </div>
+
+              {/* User selector */}
+              <div className="space-y-2">
+                <select
+                  id="user-select" name="user-select"
+                  className="w-full text-sm border rounded px-3 py-2 bg-background"
+                  value={selectedUser}
+                  onChange={(e) => setSelectedUser(e.target.value)}
+                >
+                  <option value="">-- 选择用户 --</option>
+                  {localUsers.map((u) => (
+                    <option key={u} value={u}>{u}</option>
+                  ))}
+                  <option value="__new__">+ 创建新用户</option>
+                </select>
+              </div>
+
+              {/* New username input */}
+              {isNewUser && (
+                <Input
+                  id="new-username" name="new-username" autoComplete="username"
+                  placeholder="输入用户名（2-30 字符）"
+                  value={newUsername}
+                  onChange={(e) => setNewUsername(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+                  disabled={loading}
+                  autoFocus
+                />
+              )}
+
+              {error && (
+                <p className="text-xs text-destructive text-center">{error}</p>
+              )}
+
+              {/* Action buttons */}
+              <div className="flex gap-2">
+                <Button
+                  className="flex-1"
+                  onClick={handleSubmit}
+                  disabled={loading || !canSubmit}
+                >
+                  {isNewUser ? <UserPlus className="h-4 w-4 mr-2" /> : <LogIn className="h-4 w-4 mr-2" />}
+                  {isNewUser ? "创建并进入" : "进入"}
+                </Button>
+                {selectedUser && selectedUser !== "__new__" && (
+                  <Button
+                    variant="outline"
+                    className="text-destructive hover:bg-destructive/10"
+                    onClick={handleDelete}
+                    disabled={loading}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
+
+              <p className="text-[10px] text-muted-foreground text-center">
+                数据保存在浏览器本地，服务器在线时自动同步
+              </p>
+              {offlineLogin && (
+                <div className="flex items-start gap-2 p-2 rounded bg-amber-500/10 border border-amber-500/20 text-[10px] text-amber-600">
+                  <WifiOff className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                  <p>当前为离线登录，服务器恢复后将自动重新连接。注意：服务器重启后需重新认证，同账号的其他设备可能被踢下线。</p>
+                </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>

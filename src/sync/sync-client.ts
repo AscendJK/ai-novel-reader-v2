@@ -2,6 +2,7 @@ import type { SyncData, RegisterResult, HeartbeatResult, PushResult } from "./ty
 import { useUIStore } from "@/stores/ui-store";
 import { hasMoreChanges } from "./sync-bridge";
 import { broadcast } from "@/lib/broadcast";
+import { apiFetch } from "@/lib/api-client";
 
 /** API 错误响应格式 */
 interface ApiErrorResponse {
@@ -81,7 +82,7 @@ export class SyncClient {
     lastSeen: number | null;
   } | null> {
     try {
-      const resp = await fetch(`/api/sync/check-user/${encodeURIComponent(username)}`);
+      const resp = await apiFetch(`/api/sync/check-user/${encodeURIComponent(username)}`);
       if (!resp.ok) return null;
       return await resp.json();
     } catch {
@@ -95,9 +96,8 @@ export class SyncClient {
       // 提前保存 username，这样即使网络错误，心跳也能用它来重连
       this.username = username;
       localStorage.setItem("sync-username", username);
-      const resp = await fetch("/api/sync/register", {
+      const resp = await apiFetch("/api/sync/register", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, mode, clientId: this.clientId }),
       });
       console.log("[sync] register response:", resp.status);
@@ -180,9 +180,8 @@ export class SyncClient {
 
   logout() {
     if (this.username && this.clientId) {
-      fetch("/api/sync/disconnect", {
+      apiFetch("/api/sync/disconnect", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: this.username, clientId: this.clientId, token: this.token }),
       }).catch((e) => console.warn("[sync] disconnect failed:", e));
     }
@@ -222,9 +221,8 @@ export class SyncClient {
       const pushM = changes.maps?.length || 0;
       const pushSt = changes.settings ? Object.keys(changes.settings).length : 0;
       console.log(`[sync] pushing: s=${pushS} n=${pushN} m=${pushM} settings=${pushSt}`);
-      const resp = await fetch("/api/sync/push", {
+      const resp = await apiFetch("/api/sync/push", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: this.username, clientId: this.clientId, token: this.token, changes, lastSyncTime: this.lastSyncTime }),
       });
       console.log(`[sync] push response: ${resp.status}`);
@@ -245,9 +243,8 @@ export class SyncClient {
             const regResult = await this.login(this.username, "join");
             if (regResult.success) {
               console.log("[sync] overwrite: registered, pulling server data...");
-              const retryResp = await fetch("/api/sync/push", {
+              const retryResp = await apiFetch("/api/sync/push", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ username: this.username, clientId: this.clientId, token: this.token, changes, lastSyncTime: 0 }),
               });
               if (retryResp.ok) {
@@ -295,9 +292,8 @@ export class SyncClient {
           // Retry the push with new credentials (full sync after re-register)
           console.log("[sync] re-registered, retrying push with new credentials...");
           try {
-            const retryResp = await fetch("/api/sync/push", {
+            const retryResp = await apiFetch("/api/sync/push", {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ username: this.username, clientId: this.clientId, token: this.token, changes, lastSyncTime: 0 }),
             });
             console.log("[sync] retry response:", retryResp.status);
@@ -384,17 +380,15 @@ export class SyncClient {
     this.reRegistering = true;
     try {
       // Try "join" first (user exists on server)
-      let resp = await fetch("/api/sync/register", {
+      let resp = await apiFetch("/api/sync/register", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: this.username, mode: "join", clientId: this.clientId }),
       });
       // If 404, user doesn't exist on server — try "create"
       if (resp.status === 404) {
         console.log("[sync] user not found on server, creating...");
-        resp = await fetch("/api/sync/register", {
+        resp = await apiFetch("/api/sync/register", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ username: this.username, mode: "create", clientId: this.clientId }),
         });
       }
@@ -440,9 +434,8 @@ export class SyncClient {
     }
 
     try {
-      const resp = await fetch("/api/sync/heartbeat", {
+      const resp = await apiFetch("/api/sync/heartbeat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: this.username, clientId: this.clientId, token: this.token }),
       });
       if (resp.status === 401 || resp.status === 403) {

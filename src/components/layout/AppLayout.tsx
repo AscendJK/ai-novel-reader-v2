@@ -27,6 +27,7 @@ import { syncClient } from "@/sync/sync-client";
 import { gatherChanges, applyServerData } from "@/sync/sync-bridge";
 import type { SyncData } from "@/sync/types";
 import { authHeaders } from "@/lib/auth-headers";
+import { apiFetch } from "@/lib/api-client";
 import { getAiRunning } from "@/lib/ai-state";
 
 export function AppLayout() {
@@ -394,7 +395,7 @@ export function AppLayout() {
       const username = localStorage.getItem("sync-username");
       if (!username) return;
 
-      const resp = await fetch(`/api/novels?username=${encodeURIComponent(username)}`, { headers: authHeaders() });
+      const resp = await apiFetch(`/api/novels?username=${encodeURIComponent(username)}`);
       if (!resp.ok) return;
       const list: Array<{ id: string; title: string; author?: string; fileName: string; fileFormat: string; totalChars: number; chapterCount: number; createdAt: number; updatedAt: number; joined?: boolean }> = await resp.json();
 
@@ -424,8 +425,8 @@ export function AppLayout() {
         if (serverNovelIds.has(local.id)) continue;
         try {
           const chapters = await udb.chapters.where("novelId").equals(local.id).sortBy("index");
-          const resp = await fetch("/api/novels", {
-            method: "POST", headers: { ...authHeaders(), "Content-Type": "application/json" },
+          const resp = await apiFetch("/api/novels", {
+            method: "POST",
             body: JSON.stringify({
               novel: {
                 id: local.id, title: local.title, author: local.author,
@@ -441,8 +442,8 @@ export function AppLayout() {
           });
           // Auto-join after successful upload
           if (resp.ok) {
-            await fetch(`/api/novels/${local.id}/join`, {
-              method: "POST", headers: authHeaders(),
+            await apiFetch(`/api/novels/${local.id}/join`, {
+              method: "POST",
             }).catch((e) => console.warn("[AppLayout] join novel failed:", e));
           }
         } catch { /* upload failed, will retry next sync */ }
@@ -472,7 +473,7 @@ export function AppLayout() {
           return null;
         });
         if (existing) continue;
-        const chResp = await fetch(`/api/novels/${sn.id}/chapters`, { headers: authHeaders() });
+        const chResp = await apiFetch(`/api/novels/${sn.id}/chapters`);
         if (!chResp.ok) continue;
         const chapters = await chResp.json();
         // 重新获取数据库连接

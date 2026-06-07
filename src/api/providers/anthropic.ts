@@ -1,6 +1,6 @@
 import type { AIProvider, ChatCompletionRequest, ChatCompletionResponse, ProviderConfig } from "../types";
 import { APIError, handleFetchError } from "../error-handler";
-import { authHeaders } from "@/lib/auth-headers";
+import { apiFetch } from "@/lib/api-client";
 import { useUIStore } from "@/stores/ui-store";
 
 export function createAnthropicProvider(config: ProviderConfig): AIProvider {
@@ -44,10 +44,9 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
   }
 
   async function doProxy(req: ChatCompletionRequest): Promise<Response> {
-    return fetch("/api/proxy/chat", {
+    return apiFetch("/api/proxy/chat", {
       method: "POST",
       signal: req.signal,
-      headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify({
         url: `${baseUrl}/messages`,
         headers: {

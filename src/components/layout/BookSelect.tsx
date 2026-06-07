@@ -15,6 +15,7 @@ import { useUIStore } from "@/stores/ui-store";
 import { getEngineDisplayName } from "@/rag/engines";
 import { ensureModelCached } from "@/rag/model-loader";
 import { authHeaders } from "@/lib/auth-headers";
+import { apiFetch } from "@/lib/api-client";
 import { buildAndPollRAGIndex, downloadAndCacheIndex } from "@/rag/build-index";
 import { NovelBuildWindow } from "@/components/common/NovelBuildWindow";
 import type { NovelMeta } from "@/parsers/types";
@@ -122,7 +123,7 @@ export function BookSelect() {
     const poll = async () => {
       try {
         if (!localStorage.getItem("sync-token") || useUIStore.getState().offlineMode) return;
-        const resp = await fetch(`/api/rag/statuses/all?ids=${ids.join(",")}`, { headers: authHeaders() });
+        const resp = await apiFetch(`/api/rag/statuses/all?ids=${ids.join(",")}`);
         if (!active || !resp.ok) return;
         const statuses = await resp.json();
         setBuildStatuses(statuses);
@@ -251,7 +252,7 @@ export function BookSelect() {
     try {
       const username = localStorage.getItem("sync-username");
       const url = username ? `/api/novels?username=${encodeURIComponent(username)}` : "/api/novels";
-      const r = await fetch(url, { headers: authHeaders() });
+      const r = await apiFetch(url);
       const list: ServerNovel[] = await r.json();
       setServerNovels(list.map((n) => ({
         id: n.id, title: n.title, author: n.author,
@@ -269,7 +270,7 @@ export function BookSelect() {
   const handleJoinNovel = async (novel: ServerNovel) => {
     setJoiningId(novel.id);
     try {
-      const chResp = await fetch(`/api/novels/${novel.id}/chapters`, { headers: authHeaders() });
+      const chResp = await apiFetch(`/api/novels/${novel.id}/chapters`);
       if (!chResp.ok) throw new Error(`获取章节失败 (${chResp.status})`);
       const chapters = await chResp.json();
       const udb = getUserDB();
@@ -289,8 +290,8 @@ export function BookSelect() {
         }
       });
       addNovel({ ...novel, chapters, chapterCount: chapters.length });
-      fetch(`/api/novels/${novel.id}/join`, {
-        method: "POST", headers: authHeaders(),
+      apiFetch(`/api/novels/${novel.id}/join`, {
+        method: "POST",
       }).catch((e) => console.warn("[BookSelect] join novel failed:", e));
       setSavedNovels((prev) => [{ ...novel, chapterCount: chapters.length }, ...prev]);
       setServerNovels((prev) => prev.map((n) => n.id === novel.id ? { ...n, joined: true } : n));
@@ -420,8 +421,8 @@ export function BookSelect() {
   const handleDelete = async (e: React.MouseEvent, novelId: string, title: string) => {
     e.stopPropagation();
     if (!window.confirm(`从书架移除《${title}》？\n\n将删除你关于此书的所有数据：\n- AI 总结和分析\n- 人物关系图谱\n- 笔记\n- 阅读进度\n\n小说本身仍保留在服务器书库中。`)) return;
-    fetch(`/api/novels/${novelId}/leave`, {
-      method: "POST", headers: authHeaders(),
+    apiFetch(`/api/novels/${novelId}/leave`, {
+      method: "POST",
     }).catch((e) => console.warn("[BookSelect] leave novel failed:", e));
     await deleteNovel(novelId);
     setSavedNovels((prev) => prev.filter((n) => n.id !== novelId));

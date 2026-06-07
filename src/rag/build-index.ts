@@ -4,6 +4,7 @@
  */
 
 import { authHeaders } from "@/lib/auth-headers";
+import { apiFetch } from "@/lib/api-client";
 import { sharedDB } from "@/db/database";
 import { normalizeChunks } from "./chunk-utils";
 import { enforceIndexedDBQuota, ensureCacheSpace, updateAccessTime } from "./rag-cache-utils";
@@ -82,9 +83,8 @@ interface BuildTriggerResult {
  * @returns 构建触发结果
  */
 async function triggerBuild(novelId: string, engine: string): Promise<BuildTriggerResult> {
-  const resp = await fetch(`/api/rag/${novelId}/build`, {
+  const resp = await apiFetch(`/api/rag/${novelId}/build`, {
     method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify({ engine }),
   });
 
@@ -127,9 +127,8 @@ interface PollResult {
  * 查询构建状态
  */
 async function fetchBuildStatus(novelId: string, engine: string): Promise<PollResult> {
-  const resp = await fetch(
-    `/api/rag/${novelId}/status?engine=${encodeURIComponent(engine)}`,
-    { headers: authHeaders() }
+  const resp = await apiFetch(
+    `/api/rag/${novelId}/status?engine=${encodeURIComponent(engine)}`
   );
 
   if (!resp.ok) {
@@ -158,9 +157,8 @@ export async function downloadAndCacheIndex(options: DownloadOptions): Promise<D
   const { novelId, engine, updateStore = true } = options;
   const cacheKey = `${novelId}-${engine}`;
 
-  const resp = await fetch(
-    `/api/rag/${novelId}/index?engine=${encodeURIComponent(engine)}`,
-    { headers: authHeaders() }
+  const resp = await apiFetch(
+    `/api/rag/${novelId}/index?engine=${encodeURIComponent(engine)}`
   );
 
   if (!resp.ok) {
