@@ -37,16 +37,14 @@ npm run server
 
 The terminal will display two addresses:
 ```
-[sync] https://0.0.0.0:8443 (api-only)   ← recommended, HTTPS
-[sync] http://0.0.0.0:5173 (api-only)    ← HTTP, won't work with GitHub Pages frontend (Mixed Content)
+[sync] https://0.0.0.0:8443 (api-only)
+[sync] http://0.0.0.0:5173 (api-only)    ← use this for LAN access
 ```
-
-> **Note**: The GitHub Pages frontend uses HTTPS, so you must use an HTTPS backend address. Otherwise the browser will block requests (Mixed Content). You need [mkcert](https://github.com/FiloSottile/mkcert) installed to generate certificates.
 
 **Connect the frontend**:
 
 1. Open the frontend page
-2. Enter the backend server address on the login screen (e.g., `https://192.168.1.100:8443`)
+2. Enter the backend server address on the login screen (e.g., `http://192.168.1.100:5173`)
 3. Click "Save & Connect" — "Connected" means success
 
 > **How to find the server IP**: Windows: run `ipconfig`, macOS/Linux: run `ifconfig` or `ip addr`, look for the LAN IPv4 address.
@@ -67,17 +65,19 @@ Dev server runs at `http://localhost:5173`, API requests are automatically proxi
 
 ---
 
-## HTTPS & Certificates
+## HTTPS & Certificates (Optional)
+
+LAN access works fine with HTTP. HTTPS is only needed for specific scenarios.
 
 ### Frontend
 
-GitHub Pages provides HTTPS automatically. No extra configuration needed. PWA Service Worker offline caching works out of the box.
+GitHub Pages provides HTTPS automatically. No extra configuration needed.
 
 ### Backend
 
 The backend listens on both HTTP (5173) and HTTPS (8443) by default. If [mkcert](https://github.com/FiloSottile/mkcert) is installed on the system, the server will automatically generate and use a trusted HTTPS certificate.
 
-**Install mkcert** (optional, only needed for HTTPS):
+**Install mkcert** (optional):
 
 ```bash
 # Windows (winget) - requires admin privileges

@@ -37,16 +37,14 @@ npm run server
 
 启动后终端会显示两个地址：
 ```
-[sync] https://0.0.0.0:8443 (api-only)   ← 推荐，HTTPS
-[sync] http://0.0.0.0:5173 (api-only)    ← HTTP，GitHub Pages 前端无法使用（Mixed Content）
+[sync] https://0.0.0.0:8443 (api-only)
+[sync] http://0.0.0.0:5173 (api-only)    ← 局域网直接用这个
 ```
-
-> **注意**：GitHub Pages 前端是 HTTPS，必须使用 HTTPS 后端地址，否则浏览器会拦截请求（Mixed Content）。需要安装 [mkcert](https://github.com/FiloSottile/mkcert) 来生成证书。
 
 **配置前端连接**：
 
 1. 打开前端页面
-2. 在登录界面输入后端服务器地址（如 `https://192.168.1.100:8443`）
+2. 在登录界面输入后端服务器地址（如 `http://192.168.1.100:5173`）
 3. 点击「保存并连接」，显示「连接成功」即可
 
 > **如何查看服务器 IP**：Windows 运行 `ipconfig`，macOS/Linux 运行 `ifconfig` 或 `ip addr`，查找局域网 IPv4 地址。
@@ -67,17 +65,19 @@ npm run dev
 
 ---
 
-## HTTPS 与证书
+## HTTPS 与证书（可选）
+
+局域网使用 HTTP 即可，无需配置 HTTPS。以下仅在需要 HTTPS 时参考。
 
 ### 前端
 
-GitHub Pages 自动提供 HTTPS，无需额外配置。PWA Service Worker 离线缓存正常工作。
+GitHub Pages 自动提供 HTTPS，无需额外配置。
 
 ### 后端
 
 后端默认同时监听 HTTP（5173）和 HTTPS（8443）。如果系统安装了 [mkcert](https://github.com/FiloSottile/mkcert)，服务器会自动生成并使用受信任的 HTTPS 证书。
 
-**安装 mkcert**（可选，仅在需要 HTTPS 时）：
+**安装 mkcert**（可选）：
 
 ```bash
 # Windows (winget) - 需要管理员权限
