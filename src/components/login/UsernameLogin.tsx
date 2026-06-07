@@ -22,7 +22,7 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
   const [loading, setLoading] = useState(false);
   const [serverUrl, setServerUrlState] = useState(getServerUrl());
   const [serverStatus, setServerStatus] = useState<"unknown" | "checking" | "ok" | "fail">("unknown");
-  const [showServerConfig, setShowServerConfig] = useState(!getServerUrl());
+  const [showServerConfig, setShowServerConfig] = useState(false);
 
   // 检查服务器状态
   const checkServer = async (url: string) => {
@@ -85,7 +85,7 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
           <BookOpen className="h-10 w-10 text-primary mx-auto mb-2" />
           <CardTitle>AI 小说精读助手</CardTitle>
           <p className="text-sm text-muted-foreground mt-1">
-            {showServerConfig ? "配置后端服务器地址" : "选择已有用户或创建新用户"}
+            {showServerConfig ? "配置后端服务器地址（可选）" : "选择已有用户或创建新用户"}
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -106,17 +106,26 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
               <p className="text-[10px] text-muted-foreground">
                 输入运行后端服务的电脑 IP 地址和端口
               </p>
-              <Button
-                className="w-full"
-                onClick={handleSaveServerUrl}
-                disabled={!serverUrl.trim() || serverStatus === "checking"}
-              >
-                {serverStatus === "checking" ? (
-                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" />检测中...</>
-                ) : (
-                  "保存并连接"
-                )}
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  className="flex-1"
+                  onClick={handleSaveServerUrl}
+                  disabled={!serverUrl.trim() || serverStatus === "checking"}
+                >
+                  {serverStatus === "checking" ? (
+                    <><Loader2 className="h-4 w-4 mr-2 animate-spin" />检测中...</>
+                  ) : (
+                    "保存并连接"
+                  )}
+                </Button>
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => setShowServerConfig(false)}
+                >
+                  跳过
+                </Button>
+              </div>
               {serverStatus === "fail" && (
                 <p className="text-xs text-destructive text-center">无法连接到服务器，请检查地址是否正确</p>
               )}
@@ -130,20 +139,23 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
               <div className="flex items-center justify-between text-xs">
                 <div className="flex items-center gap-1.5 text-muted-foreground">
                   <Server className="h-3 w-3" />
-                  <span className="truncate max-w-[200px]">{getServerUrl()}</span>
+                  {getServerUrl() ? (
+                    <span className="truncate max-w-[200px]">{getServerUrl()}</span>
+                  ) : (
+                    <span className="text-muted-foreground">未配置服务器（离线模式）</span>
+                  )}
                 </div>
                 <div className="flex items-center gap-1.5">
                   {serverStatus === "ok" && <span className="text-green-600">● 已连接</span>}
                   {serverStatus === "fail" && <span className="text-destructive">● 无法连接</span>}
                   {serverStatus === "checking" && <span className="text-muted-foreground">● 检测中</span>}
-                  {serverStatus === "unknown" && <span className="text-muted-foreground">● 未知</span>}
                   <Button
                     variant="ghost"
                     size="sm"
                     className="h-6 px-2 text-[10px]"
                     onClick={() => setShowServerConfig(true)}
                   >
-                    更改
+                    {getServerUrl() ? "更改" : "配置"}
                   </Button>
                 </div>
               </div>
