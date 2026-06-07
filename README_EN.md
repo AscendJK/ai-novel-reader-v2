@@ -35,12 +35,12 @@ npm install
 npm run server
 ```
 
-The terminal will display the server address, e.g., `http://0.0.0.0:3001`.
+The terminal will display the server address, e.g., `http://0.0.0.0:5173`.
 
 **Connect the frontend**:
 
 1. Open the frontend page
-2. Enter the backend server address on the login screen (e.g., `http://192.168.1.100:3001`)
+2. Enter the backend server address on the login screen (e.g., `http://192.168.1.100:5173`)
 3. Click "Save & Connect" — "Connected" means success
 
 > **How to find the server IP**: Windows: run `ipconfig`, macOS/Linux: run `ifconfig` or `ip addr`, look for the LAN IPv4 address.
@@ -57,7 +57,7 @@ npm run server
 npm run dev
 ```
 
-Dev server runs at `http://localhost:5173`, API requests are automatically proxied to the backend at `localhost:3001`.
+Dev server runs at `http://localhost:5173`, API requests are automatically proxied to the backend at `localhost:5173`.
 
 ---
 
@@ -69,7 +69,7 @@ GitHub Pages provides HTTPS automatically. No extra configuration needed. PWA Se
 
 ### Backend
 
-The backend listens on both HTTP (3001) and HTTPS (8443) by default. If [mkcert](https://github.com/FiloSottile/mkcert) is installed on the system, the server will automatically generate and use a trusted HTTPS certificate.
+The backend listens on both HTTP (5173) and HTTPS (8443) by default. If [mkcert](https://github.com/FiloSottile/mkcert) is installed on the system, the server will automatically generate and use a trusted HTTPS certificate.
 
 **Install mkcert** (optional, only needed for HTTPS):
 
@@ -104,7 +104,7 @@ Send `rootCA.pem` to other devices and install:
 - **Android**: Settings → Security → Encryption & credentials → Install certificate → CA certificate
 - **iOS**: Settings → General → Profiles → Install → Settings → General → About → Certificate Trust Settings → Enable
 
-> Without mkcert, the backend is still accessible via HTTP (e.g., `http://192.168.1.100:3001`) with full functionality.
+> Without mkcert, the backend is still accessible via HTTP (e.g., `http://192.168.1.100:5173`) with full functionality.
 
 ---
 
@@ -146,7 +146,7 @@ You can log in while the server is unreachable. Reading, notes, and AI analysis 
 
 On first visit, a login dialog appears:
 
-1. **Configure server address**: Enter the backend server's IP and port (e.g., `http://192.168.1.100:3001`)
+1. **Configure server address**: Enter the backend server's IP and port (e.g., `http://192.168.1.100:5173`)
 2. **Create New**: Enter a username (2-30 chars) to create a local reading space. If the server is online, also registers on the server
 3. **Join Existing**: Enter an existing username. If local data exists, enters directly. If no local data, fetches from the server
 
@@ -453,10 +453,10 @@ MIT License. Built-in models:
 ### Frontend cannot connect to backend
 
 **Checklist**:
-1. Is the backend running? (Terminal shows `[sync] http://0.0.0.0:3001`)
-2. Is the server address correct? (Include protocol and port, e.g., `http://192.168.1.100:3001`)
+1. Is the backend running? (Terminal shows `[sync] http://0.0.0.0:5173`)
+2. Is the server address correct? (Include protocol and port, e.g., `http://192.168.1.100:5173`)
 3. Are the frontend and backend on the same LAN?
-4. Is port 3001 allowed through the firewall?
+4. Is port 5173 allowed through the firewall?
 5. If using HTTPS, have other devices installed the CA root certificate?
 
 ### How to reinstall dependencies

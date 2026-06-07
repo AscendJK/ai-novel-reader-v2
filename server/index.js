@@ -24,7 +24,7 @@ const app = express();
 const ALLOWED_ORIGINS = [
   // 开发环境
   "http://localhost:5173", "http://127.0.0.1:5173",
-  "http://localhost:3001", "http://127.0.0.1:3001",
+  "http://localhost:5173", "http://127.0.0.1:5173",
   "http://localhost:4173", "http://127.0.0.1:4173",
   "https://localhost", "https://127.0.0.1",
   // GitHub Pages
@@ -76,7 +76,7 @@ app.use((err, req, res, _next) => {
 
 // ── Start server ────────────────────────────────────────────
 
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 5173;
 const HTTPS_PORT = process.env.HTTPS_PORT || 8443;
 const dataDir = path.join(__dirname, "data");
 
