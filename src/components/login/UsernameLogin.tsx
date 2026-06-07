@@ -164,6 +164,7 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
               <div className="space-y-2">
                 <select
                   id="user-select" name="user-select"
+                  aria-label="选择用户"
                   className="w-full text-sm border rounded px-3 py-2 bg-background"
                   value={selectedUser}
                   onChange={(e) => setSelectedUser(e.target.value)}
@@ -209,6 +210,7 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
                     className="text-destructive hover:bg-destructive/10"
                     onClick={handleDelete}
                     disabled={loading}
+                    title="删除用户"
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>

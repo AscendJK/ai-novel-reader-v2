@@ -49,8 +49,8 @@ export default defineConfig({
           { src: `${BASE_PATH}icon-512-maskable.png`, sizes: "512x512", type: "image/png", purpose: "maskable" },
         ],
         screenshots: [
-          { src: `${BASE_PATH}screenshot-desktop.png`, sizes: "1280x720", type: "image/png", form_factor: "wide", label: "桌面端阅读界面" },
-          { src: `${BASE_PATH}screenshot-mobile.png`, sizes: "720x1280", type: "image/png", form_factor: "narrow", label: "移动端阅读界面" },
+          { src: `${BASE_PATH}screenshot-desktop.png`, sizes: "1280x720", type: "image/png" },
+          { src: `${BASE_PATH}screenshot-mobile.png`, sizes: "720x1280", type: "image/png" },
         ],
       },
     }),
