@@ -1,0 +1,37 @@
+import { parentPort, workerData } from "node:worker_threads";
+import { pipeline, env } from "@xenova/transformers";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const { chunks, batchSize, modelKey = "Xenova/bge-small-zh-v1.5", modelBasePath } = workerData;
+
+env.allowRemoteModels = false;
+env.localModelPath = modelBasePath || path.resolve(__dirname, "../public/models/builtin/");
+
+async function run() {
+  const pipe = await pipeline("feature-extraction", modelKey, { local_files_only: true });
+  const totalBatches = Math.ceil(chunks.length / batchSize);
+  const vectors = [];
+  let dim = 0;
+
+  for (let b = 0; b < totalBatches; b++) {
+    const batch = chunks.slice(b * batchSize, Math.min((b + 1) * batchSize, chunks.length));
+    // 提取 content 字段（chunks 可能是字符串或对象）
+    const texts = batch.map(c => typeof c === "string" ? c : c.content);
+    const result = await pipe(texts, { pooling: "mean", normalize: true });
+    const arr = await result.tolist();
+    for (const row of arr) vectors.push(row);
+    dim = vectors[0]?.length || dim;
+    parentPort.postMessage({
+      type: "progress",
+      current: Math.min((b + 1) * batchSize, chunks.length),
+      total: chunks.length,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  parentPort.postMessage({ type: "done", vectors, dim });
+}
+
+run().catch((e) => parentPort.postMessage({ type: "error", error: e.message || String(e) }));

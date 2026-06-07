@@ -1,0 +1,63 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+dist-ssr
+
+# Environment & local config
+.env
+.env.local
+.env.*.local
+*.local
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# User data (IndexedDB is in-browser, but just in case)
+*.db
+*.sqlite
+
+# User-added model files (not in Git)
+public/models/custom/Xenova/*
+!public/models/custom/Xenova/.gitkeep
+!public/models/custom/Xenova/*/
+public/models/custom/Xenova/*/onnx/
+public/models/custom/Xenova/*/config.json
+public/models/custom/Xenova/*/tokenizer.json
+public/models/custom/Xenova/*/tokenizer_config.json
+!public/models/custom/Xenova/*/.gitkeep
+
+# Temp files
+*.tmp
+
+# Promotional post (not part of the project)
+POST.md
+
+# Sync server — runtime data (SQLite DB, admin token, user files)
+server/data/
+server/server.log
+
+# Admin token (contains secret)
+server/data/.admin_token
+DEVELOPER_MANUAL.md
+REFACTORING_PLAN.md
+
+# Claude Code memory file
+CLAUDE.md

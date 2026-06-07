@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="1280" viewBox="0 0 720 1280">
+  <rect width="720" height="1280" fill="#0a0a0a"/>
+  <rect x="0" y="0" width="720" height="48" fill="#141414"/>
+  <text x="360" y="30" text-anchor="middle" fill="#863bff" font-family="system-ui" font-size="16" font-weight="600">AI 小说精读助手</text>
+  <rect x="24" y="72" width="672" height="1136" rx="8" fill="#141414"/>
+  <text x="360" y="108" text-anchor="middle" fill="#ccc" font-family="system-ui" font-size="18" font-weight="500">第一章 初入江湖</text>
+  <rect x="48" y="130" width="624" height="1" fill="#333"/>
+  <text x="48" y="168" fill="#aaa" font-family="system-ui" font-size="16">少年背着包袱，踏上了前往</text>
+  <text x="48" y="200" fill="#aaa" font-family="system-ui" font-size="16">青云门的山路。晨雾弥漫，</text>
+  <text x="48" y="232" fill="#aaa" font-family="system-ui" font-size="16">远处的山峰若隐若现。</text>
+  <text x="48" y="264" fill="#aaa" font-family="system-ui" font-size="16">他知道，这一去便是命运的</text>
+  <text x="48" y="296" fill="#aaa" font-family="system-ui" font-size="16">转折...</text>
+  <rect x="0" y="1184" width="720" height="96" fill="#141414"/>
+  <text x="240" y="1236" text-anchor="middle" fill="#888" font-family="system-ui" font-size="14">目录</text>
+  <text x="360" y="1236" text-anchor="middle" fill="#863bff" font-family="system-ui" font-size="14">阅读</text>
+  <text x="480" y="1236" text-anchor="middle" fill="#888" font-family="system-ui" font-size="14">AI</text>
+</svg>

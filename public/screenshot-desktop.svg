@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <rect width="1280" height="720" fill="#0a0a0a"/>
+  <rect x="0" y="0" width="1280" height="48" fill="#141414"/>
+  <text x="640" y="30" text-anchor="middle" fill="#863bff" font-family="system-ui" font-size="18" font-weight="600">AI 小说精读助手</text>
+  <rect x="40" y="72" width="280" height="608" rx="8" fill="#141414"/>
+  <text x="180" y="108" text-anchor="middle" fill="#888" font-family="system-ui" font-size="14">章节目录</text>
+  <rect x="60" y="128" width="240" height="28" rx="4" fill="#1a1a2e"/>
+  <text x="180" y="147" text-anchor="middle" fill="#e0e0e0" font-family="system-ui" font-size="13">第一章 初入江湖</text>
+  <rect x="60" y="168" width="240" height="28" rx="4" fill="transparent"/>
+  <text x="180" y="187" text-anchor="middle" fill="#888" font-family="system-ui" font-size="13">第二章 风云初起</text>
+  <rect x="60" y="208" width="240" height="28" rx="4" fill="transparent"/>
+  <text x="180" y="227" text-anchor="middle" fill="#888" font-family="system-ui" font-size="13">第三章 剑指苍穹</text>
+  <rect x="340" y="72" width="560" height="608" rx="8" fill="#141414"/>
+  <text x="620" y="108" text-anchor="middle" fill="#ccc" font-family="system-ui" font-size="16" font-weight="500">第一章 初入江湖</text>
+  <rect x="370" y="130" width="500" height="1" fill="#333"/>
+  <text x="370" y="160" fill="#aaa" font-family="system-ui" font-size="14">少年背着包袱，踏上了前往青云门的山路...</text>
+  <text x="370" y="190" fill="#aaa" font-family="system-ui" font-size="14">晨雾弥漫，远处的山峰若隐若现。他知道，</text>
+  <text x="370" y="220" fill="#aaa" font-family="system-ui" font-size="14">这一去便是命运的转折...</text>
+  <rect x="920" y="72" width="320" height="608" rx="8" fill="#141414"/>
+  <text x="1080" y="108" text-anchor="middle" fill="#863bff" font-family="system-ui" font-size="14">AI 分析</text>
+  <rect x="940" y="128" width="280" height="80" rx="6" fill="#1a1a2e"/>
+  <text x="1080" y="158" text-anchor="middle" fill="#aaa" font-family="system-ui" font-size="12">人物关系图谱</text>
+  <rect x="940" y="220" width="280" height="80" rx="6" fill="#1a1a2e"/>
+  <text x="1080" y="250" text-anchor="middle" fill="#aaa" font-family="system-ui" font-size="12">章节摘要</text>
+</svg>

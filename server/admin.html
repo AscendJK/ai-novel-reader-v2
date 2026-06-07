@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>管理后台 — AI 小说精读助手</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  body{font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0f0f11;color:#c9c9c9;min-height:100vh}
+  .header{background:#1a1a1f;border-bottom:1px solid #2a2a30;padding:12px 20px;display:flex;align-items:center;justify-content:space-between}
+  .header h1{font-size:16px;font-weight:600;color:#e0e0e0}
+  .tabs{display:flex;gap:4px;background:#1a1a1f;padding:8px 20px;border-bottom:1px solid #2a2a30}
+  .tab{padding:6px 16px;border-radius:6px;border:none;cursor:pointer;background:transparent;color:#888;font-size:13px}
+  .tab.active{background:#2a2a35;color:#e0e0e0;font-weight:500}
+  .content{max-width:1100px;margin:0 auto;padding:20px}
+  table{width:100%;border-collapse:collapse}
+  th{text-align:left;padding:8px 12px;font-size:12px;color:#777;border-bottom:1px solid #2a2a30;font-weight:500}
+  td{padding:10px 12px;font-size:13px;border-bottom:1px solid #1f1f24}
+  tr:hover{background:rgba(255,255,255,0.02)}
+  button.danger{padding:4px 12px;border-radius:4px;border:1px solid #5a2020;background:#3a1515;color:#e55;cursor:pointer;font-size:12px}
+  button.danger:hover{background:#4a2020}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+  .stat{background:#1a1a1f;border:1px solid #2a2a30;border-radius:8px;padding:16px}
+  .stat .v{font-size:24px;font-weight:700;color:#e0e0e0}
+  .stat .l{font-size:12px;color:#777;margin-top:4px}
+  .toast{position:fixed;bottom:20px;right:20px;padding:10px 20px;border-radius:6px;font-size:13px;z-index:99;opacity:0;transition:opacity .3s}
+  .toast.show{opacity:1}
+  .toast.ok{background:#1a3a1a;border:1px solid #2a5a2a;color:#8c8}
+  .toast.err{background:#3a1a1a;border:1px solid #5a2a2a;color:#e88}
+  .rag-ready{color:#4a4;font-size:12px}
+  .rag-building{color:#aa4;font-size:12px}
+  .rag-none{color:#555;font-size:12px}
+  .badge{padding:2px 8px;border-radius:4px;font-size:11px;background:#1a2a3a;color:#89b}
+  .badge-status{padding:2px 8px;border-radius:4px;font-size:11px}
+  .badge-status.ready{background:#1a2a1a;color:#4a4}
+  .badge-status.building{background:#2a2a1a;color:#aa4}
+  .badge-status.error{background:#2a1a1a;color:#a44}
+  .form-group{margin-bottom:16px}
+  .form-group label{display:block;font-size:13px;color:#999;margin-bottom:6px}
+  .form-group input{padding:8px 12px;border-radius:6px;border:1px solid #2a2a30;background:#1a1a1f;color:#e0e0e0;font-size:14px;width:200px}
+  .form-group .hint{font-size:11px;color:#666;margin-top:4px}
+  button.primary{padding:6px 16px;border-radius:6px;border:1px solid #2a4a2a;background:#1a3a1a;color:#8c8;cursor:pointer;font-size:13px}
+  button.primary:hover{background:#2a4a2a}
+  .card{background:#1a1a1f;border:1px solid #2a2a30;border-radius:8px;padding:20px;margin-bottom:16px}
+  .card h3{font-size:14px;color:#e0e0e0;margin-bottom:12px}
+  @media (max-width:600px){.stats{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>📚 AI 小说精读助手 — 管理后台</h1>
+  <span id="tokenHint" style="font-size:11px;color:#555"></span>
+</div>
+<div class="tabs">
+  <button class="tab active" data-tab="overview">概览</button>
+  <button class="tab" data-tab="users">用户</button>
+  <button class="tab" data-tab="novels">小说</button>
+  <button class="tab" data-tab="settings">设置</button>
+</div>
+<div class="content" id="content"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const API = "/api/admin";
+const token = new URLSearchParams(location.search).get("token") || "";
+document.getElementById("tokenHint").textContent = token ? "Token: "+token.slice(0,8)+"..." : "无 token";
+
+function toast(msg, ok) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.className = "toast " + (ok ? "ok" : "err") + " show";
+  setTimeout(() => t.classList.remove("show"), 2000);
+}
+
+function authH() {
+  return { "Authorization": "Bearer " + token, "Content-Type": "application/json" };
+}
+
+async function get(path) {
+  const r = await fetch(API + path, { headers: authH() });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+async function del(path) {
+  const r = await fetch(API + path, { method: "DELETE", headers: authH() });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+// Helpers
+function h(s) { return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
+function fmt(ts) { return ts ? new Date(ts).toLocaleDateString("zh-CN") : "-"; }
+function fmtSize(n) { return n >= 1048576 ? (n/1048576).toFixed(1)+"MB" : n >= 1024 ? Math.round(n/1024)+"KB" : String(n)+"B"; }
+function fmtTime(ms) { if (!ms) return "-"; const s = ms/1000; return s >= 60 ? Math.round(s/60)+"min" : Math.round(s)+"s"; }
+function engineShort(engine) {
+  if (!engine) return "?";
+  if (engine === "tfidf") return "TF-IDF";
+  if (engine === "bge-small-zh") return "BGE";
+  if (engine === "gte-small") return "GTE";
+  if (engine.includes("e5")) return "E5";
+  if (engine.includes("MiniLM")) return "MiniLM";
+  const parts = engine.split("/");
+  return parts[parts.length - 1].replace(/^Xenova-/, "").slice(0, 15);
+}
+function ragBadges(n) {
+  const indices = n.ragIndices || [];
+  if (indices.length === 0) return '<span class="badge-status" style="color:#555">无</span>';
+  return indices.map(ri => {
+    const label = engineShort(ri.engine);
+    const status = ri.status || "none";
+    if (status === "ready") return `<span class="badge-status ready">${label} ${ri.chunkCount||0}片段 ${fmtSize((ri.chunkCount||0)*(ri.dim||512)*4)} ${fmtTime(ri.buildTime)}</span>`;
+    if (status === "building" || status === "loading" || status === "encoding") return `<span class="badge-status building">${label} 构建中</span>`;
+    if (status === "queued") return `<span class="badge-status building">${label} 排队</span>`;
+    if (status === "error") return `<span class="badge-status error">${label} 失败</span>`;
+    return `<span class="badge-status" style="color:#555">${label} 未构建</span>`;
+  }).join(" ");
+}
+
+// Overview
+async function loadOverview() {
+  const s = await get("/stats");
+  document.getElementById("content").innerHTML = `
+    <div class="stats">
+      <div class="stat"><div class="v">${s.userCount}</div><div class="l">用户数</div></div>
+      <div class="stat"><div class="v">${s.novelCount}</div><div class="l">小说数</div></div>
+      <div class="stat"><div class="v">${s.summaryCount}</div><div class="l">AI 总结数</div></div>
+      <div class="stat"><div class="v">${s.mapCount || 0}</div><div class="l">小说地图数</div></div>
+      <div class="stat"><div class="v">${s.graphCount || 0}</div><div class="l">人物图谱数</div></div>
+      <div class="stat"><div class="v">${s.dbSizeMB} MB</div><div class="l">数据库大小</div></div>
+    </div>
+    <p style="color:#555;font-size:12px">数据库: server/data/novels.db</p>
+  `;
+}
+
+// Users
+function fmtLastSeen(ts) {
+  if (!ts) return "-";
+  const d = new Date(ts);
+  const now = Date.now();
+  const diff = now - ts;
+  if (diff < 60000) return "刚刚";
+  if (diff < 3600000) return Math.floor(diff / 60000) + " 分钟前";
+  if (diff < 86400000) return Math.floor(diff / 3600000) + " 小时前";
+  return d.toLocaleDateString("zh-CN") + " " + d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
+async function loadUsers() {
+  const users = await get("/users");
+  const tbody = document.createElement("tbody");
+  for (const u of users) {
+    const tr = document.createElement("tr");
+    const statusDot = u.online
+      ? '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#4a4;margin-right:6px"></span>在线'
+      : '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#555;margin-right:6px"></span>离线';
+    const devicesHtml = (u.devices || []).map(d => `<code style="font-size:10px;background:#f0f0f0;padding:1px 4px;border-radius:3px">${h(d.slice(0, 8))}...</code>`).join(" ") || "-";
+    tr.innerHTML = `<td>${h(u.username)}</td><td>${statusDot}</td><td>${fmtLastSeen(u.lastSeen)}</td><td>${fmt(u.created_at)}</td><td>${u.novel_count}</td><td>${u.summary_count}</td><td>${u.note_count}</td><td>${u.map_count || 0}</td><td>${u.graph_count || 0}</td><td>${devicesHtml}</td>`;
+    const td = document.createElement("td");
+    const btn = document.createElement("button");
+    btn.className = "danger"; btn.textContent = "删除";
+    btn.addEventListener("click", () => delUser(u.username));
+    td.appendChild(btn); tr.appendChild(td); tbody.appendChild(tr);
+  }
+  document.getElementById("content").innerHTML = `<table><thead><tr><th>用户名</th><th>状态</th><th>最后活跃</th><th>创建时间</th><th>小说数</th><th>总结数</th><th>笔记数</th><th>地图数</th><th>图谱数</th><th>设备ID</th><th>操作</th></tr></thead></table>`;
+  document.getElementById("content").querySelector("table").appendChild(tbody);
+}
+
+async function delUser(name) {
+  if (!confirm(`确认删除用户 "${name}" 及其所有数据？此操作不可恢复。`)) return;
+  try { await del("/users/" + encodeURIComponent(name)); toast("已删除", true); loadUsers(); }
+  catch(e) { toast("删除失败", false); }
+}
+
+// Novels
+async function loadNovels() {
+  const novels = await get("/novels");
+  const tbody = document.createElement("tbody");
+  for (const n of novels) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>《${h(n.title)}》</td><td>${h(n.author||"-")}</td><td><span class="badge">${h((n.fileFormat||"?").toUpperCase())}</span></td><td>${n.chapterCount}</td><td>${fmtSize(n.totalChars)}</td><td>${n.joinCount||0}</td><td>${ragBadges(n)}</td><td>${fmt(n.createdAt)}</td>`;
+    const td = document.createElement("td");
+    td.style.cssText = "display:flex;gap:4px;align-items:center;flex-wrap:wrap";
+
+    // Per-engine RAG delete
+    const readyIndices = (n.ragIndices || []).filter(ri => ri.status === "ready");
+    if (readyIndices.length > 0) {
+      const sel = document.createElement("select");
+      sel.className = "rag-select";
+      sel.style.cssText = "padding:3px 6px;border-radius:4px;border:1px solid #2a2a30;background:#1a1a1f;color:#c9c9c9;font-size:11px";
+      for (const ri of readyIndices) {
+        const opt = document.createElement("option");
+        opt.value = ri.engine;
+        opt.textContent = `${engineShort(ri.engine)} (${ri.chunkCount||0}片段)`;
+        sel.appendChild(opt);
+      }
+      const delRagBtn = document.createElement("button");
+      delRagBtn.className = "danger"; delRagBtn.textContent = "删索引";
+      delRagBtn.style.fontSize = "11px";
+      delRagBtn.addEventListener("click", () => delRagIndex(n.id, sel.value, n.title));
+      td.appendChild(sel); td.appendChild(delRagBtn);
+    }
+
+    const btn = document.createElement("button");
+    btn.className = "danger"; btn.textContent = "删小说";
+    btn.addEventListener("click", () => delNovel(n.id));
+    td.appendChild(btn); tr.appendChild(td); tbody.appendChild(tr);
+  }
+  document.getElementById("content").innerHTML = `<table><thead><tr><th>标题</th><th>作者</th><th>格式</th><th>章节</th><th>大小</th><th>加入</th><th>索引构建</th><th>上传</th><th>操作</th></tr></thead></table>`;
+  document.getElementById("content").querySelector("table").appendChild(tbody);
+}
+
+async function delNovel(id) {
+  if (!confirm("确认彻底删除该小说及其所有相关数据？此操作不可恢复。")) return;
+  try { await del("/novels/" + encodeURIComponent(id)); toast("已删除", true); loadNovels(); }
+  catch(e) { toast("删除失败", false); }
+}
+
+async function delRagIndex(novelId, engine, title) {
+  const label = engineShort(engine);
+  if (!confirm(`确认删除《${title}》的 ${label} 索引数据？\n\n小说本身不会被删除。`)) return;
+  try {
+    await del(`/novels/${encodeURIComponent(novelId)}/rag/${encodeURIComponent(engine)}`);
+    toast(`${label} 索引已删除`, true); loadNovels();
+  } catch(e) { toast("删除失败", false); }
+}
+
+// Settings
+async function loadSettings() {
+  const s = await get("/settings");
+  const t = s.timeout;
+  const defaultMin = Math.round(t.minMs / 60000);
+  const defaultMax = Math.round(t.maxMs / 60000);
+  document.getElementById("content").innerHTML = `
+    <div class="card">
+      <h3>RAG 构建超时</h3>
+      <div class="form-group">
+        <label for="perChunkMs">每 chunk 编码时间估算（毫秒）</label>
+        <input type="number" id="perChunkMs" value="${t.perChunkMs}" min="50" max="10000" step="50">
+        <div class="hint">
+          超时 = chunk 数 × 此值。范围：${defaultMin}~${defaultMax} 分钟。<br>
+          默认 400ms。如果构建经常超时，可调大到 500 或 800。
+        </div>
+      </div>
+      <div class="form-group">
+        <label>当前超时估算</label>
+        <div id="timeoutPreview" style="color:#e0e0e0;font-size:14px;padding:8px 0"></div>
+      </div>
+      <button class="primary" onclick="saveTimeout()">保存</button>
+    </div>
+    <div class="card">
+      <h3>说明</h3>
+      <div style="color:#888;font-size:13px;line-height:1.8">
+        <p>超时是动态计算的：<code style="color:#89b">chunk数 × 每chunk时间</code>，最低 ${defaultMin} 分钟，最高 ${defaultMax} 分钟。</p>
+        <p>每 chunk 时间取决于 CPU 性能和模型大小。BGE Small ZH 通常 200-400ms/chunk，GTE Small 稍慢。</p>
+        <p>修改后立即生效，无需重启。</p>
+      </div>
+    </div>
+  `;
+  // Preview timeout for common chunk counts
+  updateTimeoutPreview(t.perChunkMs);
+  document.getElementById("perChunkMs").addEventListener("input", (e) => {
+    updateTimeoutPreview(parseInt(e.target.value, 10) || 400);
+  });
+}
+
+function updateTimeoutPreview(ms) {
+  const min = Math.round(Math.max(600000, 1000 * ms) / 60000);
+  const med = Math.round(Math.max(600000, 5000 * ms) / 60000);
+  const max = Math.round(Math.max(600000, 20000 * ms) / 60000);
+  document.getElementById("timeoutPreview").innerHTML =
+    `1000 chunks → ${min} 分钟 &nbsp;|&nbsp; 5000 chunks → ${med} 分钟 &nbsp;|&nbsp; 20000 chunks → ${max} 分钟`;
+}
+
+async function saveTimeout() {
+  const ms = parseInt(document.getElementById("perChunkMs").value, 10);
+  try {
+    await fetch(API + "/settings/timeout", {
+      method: "PUT", headers: authH(),
+      body: JSON.stringify({ perChunkMs: ms }),
+    });
+    toast("已保存", true);
+    loadSettings();
+  } catch(e) { toast("保存失败", false); }
+}
+
+// Tab switching
+document.querySelectorAll(".tab").forEach(t => {
+  t.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+    t.classList.add("active");
+    const tab = t.dataset.tab;
+    if (tab === "overview") loadOverview();
+    else if (tab === "users") loadUsers();
+    else if (tab === "novels") loadNovels();
+    else if (tab === "settings") loadSettings();
+  });
+});
+
+loadOverview();
+</script>
+</body>
+</html>

@@ -1,0 +1,162 @@
+/**
+ * RAG 相关路由
+ */
+
+import { Router } from "express";
+import { authNovel } from "../middleware/auth.js";
+import { rateLimit } from "../middleware/rateLimit.js";
+import { buildIndex, getProgress, getIndexData, getStatuses, getAllStatuses } from "../rag-builder.js";
+
+const router = Router();
+
+// ── RAG: Cached pipeline for test/encode endpoints ────────
+
+const _cachedPipes = new Map(); // modelKey → pipeline
+
+const ENGINE_MODEL_MAP = {
+  "bge-small-zh": "Xenova/bge-small-zh-v1.5",
+  "gte-small": "Xenova/gte-small",
+  "e5-small": "Xenova/multilingual-e5-small",
+};
+
+function resolveModelKey(engine) {
+  if (ENGINE_MODEL_MAP[engine]) return ENGINE_MODEL_MAP[engine];
+  if (engine && engine.includes("/")) return engine;
+  return "Xenova/bge-small-zh-v1.5";
+}
+
+async function getEncodePipeline(engine) {
+  const modelKey = resolveModelKey(engine);
+  if (_cachedPipes.has(modelKey)) return _cachedPipes.get(modelKey);
+  const { pipeline, env } = await import("@xenova/transformers");
+  env.allowRemoteModels = false;
+  // 判断是内置模型还是自定义模型
+  const isBuiltin = engine && ENGINE_MODEL_MAP[engine];
+  // 或者是内置模型的完整路径
+  const isBuiltinPath = modelKey.startsWith("Xenova/bge-small-zh") ||
+                        modelKey.startsWith("Xenova/gte-small") ||
+                        modelKey.startsWith("Xenova/multilingual-e5-small");
+  env.localModelPath = (isBuiltin || isBuiltinPath) ? "./public/models/builtin/" : "./public/models/custom/";
+  const pipe = await pipeline("feature-extraction", modelKey, { local_files_only: true });
+  _cachedPipes.set(modelKey, pipe);
+  return pipe;
+}
+
+// ── RAG: Quick test endpoint ──────────────────────────────
+
+router.get("/test", rateLimit(5), async (req, res) => {
+  if (!authNovel(req, res)) return;
+  try {
+    const engine = req.query.engine || "bge-small-zh";
+    const t0 = Date.now();
+    const pipe = await getEncodePipeline(engine);
+    const result = await pipe(["测试文本"], { pooling: "mean", normalize: true });
+    const arr = await result.tolist();
+    res.json({ ok: true, dim: arr[0]?.length, time: Date.now() - t0, engine });
+  } catch (e) {
+    console.error("[rag] test error:", e);
+    res.status(500).json({ error: "测试失败" });
+  }
+});
+
+// ── RAG Index API ──────────────────────────────────────────
+
+// POST /api/rag/encode — encode query text (single small batch, max 20 texts)
+router.post("/encode", rateLimit(30), async (req, res) => {
+  if (!authNovel(req, res)) return;
+  try {
+    const { texts, engine } = req.body;
+    if (!texts?.length) return res.status(400).json({ error: "texts required" });
+    if (texts.length > 20) return res.status(400).json({ error: "单次最多编码 20 条文本" });
+    if (texts.some((t) => typeof t !== "string" || t.length > 10000)) {
+      return res.status(400).json({ error: "文本过长或格式错误" });
+    }
+    const pipe = await getEncodePipeline(engine);
+    const result = await pipe(texts, { pooling: "mean", normalize: true });
+    const vectors = await result.tolist();
+    res.json({ vectors });
+  } catch (e) {
+    console.error("[rag] encode error:", e);
+    res.status(500).json({ error: "编码失败" });
+  }
+});
+
+// GET /api/rag/statuses?ids=a,b,c&engine=bge-small-zh
+router.get("/statuses", (req, res) => {
+  if (!authNovel(req, res)) return;
+  try {
+    const ids = (req.query.ids || "").split(",").filter(Boolean);
+    const engine = req.query.engine || "bge-small-zh";
+    res.json(getStatuses(ids, engine));
+  } catch (e) {
+    console.error("[rag] statuses error:", e);
+    res.status(500).json({ error: "查询失败" });
+  }
+});
+
+// GET /api/rag/statuses/all?ids=a,b,c — all engines' statuses
+router.get("/statuses/all", (req, res) => {
+  if (!authNovel(req, res)) return;
+  try {
+    const ids = (req.query.ids || "").split(",").filter(Boolean);
+    res.json(getAllStatuses(ids));
+  } catch (e) {
+    console.error("[rag] all statuses error:", e);
+    res.status(500).json({ error: "查询失败" });
+  }
+});
+
+// GET /api/rag/:novelId/status?engine=bge-small-zh
+router.get("/:novelId/status", (req, res) => {
+  if (!authNovel(req, res)) return;
+  try {
+    const engine = req.query.engine || "bge-small-zh";
+    const progress = getProgress(req.params.novelId, engine);
+    res.json(progress);
+  } catch (e) {
+    console.error("[rag] status error:", e);
+    res.status(500).json({ error: "查询失败" });
+  }
+});
+
+// POST /api/rag/:novelId/build — trigger async build
+router.post("/:novelId/build", rateLimit(5), (req, res) => {
+  if (!authNovel(req, res)) return;
+  try {
+    const engine = req.body?.engine || "bge-small-zh";
+    const result = buildIndex(req.params.novelId, engine);
+    res.json(result);
+  } catch (e) {
+    console.error("[rag] build error:", e);
+    res.status(500).json({ error: "构建失败" });
+  }
+});
+
+// GET /api/rag/:novelId/index?engine=bge-small-zh — download built index (binary)
+router.get("/:novelId/index", (req, res) => {
+  if (!authNovel(req, res)) return;
+  try {
+    const engine = req.query.engine || "bge-small-zh";
+    const data = getIndexData(req.params.novelId, engine);
+    if (!data) return res.status(404).json({ error: "索引未构建" });
+
+    // 返回二进制格式：chunks JSON + vectors ArrayBuffer
+    const chunksBuf = Buffer.from(data.chunks_json, "utf-8");
+    const headerBuf = Buffer.alloc(12);
+    headerBuf.writeUInt32LE(chunksBuf.length, 0);   // chunks JSON 长度
+    headerBuf.writeUInt32LE(data.dim, 4);            // 向量维度
+    headerBuf.writeUInt32LE(data.chunk_count, 8);    // chunk 数量
+
+    // 合并为单个二进制响应
+    const binary = Buffer.concat([headerBuf, chunksBuf, data.vectors_blob]);
+
+    res.setHeader("Content-Type", "application/octet-stream");
+    res.setHeader("Content-Length", binary.length);
+    res.send(binary);
+  } catch (e) {
+    console.error("[rag] get index error:", e);
+    res.status(500).json({ error: "获取索引失败" });
+  }
+});
+
+export default router;
