@@ -13,6 +13,32 @@ const CUSTOM = BASE + "models/custom/";
 
 const ONNX_EXPECTED = "model_quantized.onnx";
 
+// HuggingFace 镜像源配置
+const HF_MIRROR_KEY = "novel-reader-hf-mirror";
+const MIRRORS: Record<string, string> = {
+  "huggingface": "https://huggingface.co/",
+  "hf-mirror": "https://hf-mirror.com/",
+};
+
+export function getMirrorId(): string {
+  try { return localStorage.getItem(HF_MIRROR_KEY) || "huggingface"; } catch { return "huggingface"; }
+}
+
+export function setMirrorId(id: string): void {
+  try { localStorage.setItem(HF_MIRROR_KEY, id); } catch { /* ignore */ }
+}
+
+export function getRemoteHost(): string {
+  return MIRRORS[getMirrorId()] || MIRRORS.huggingface;
+}
+
+export function getMirrorOptions(): { id: string; name: string; url: string }[] {
+  return [
+    { id: "huggingface", name: "HuggingFace（官方）", url: "https://huggingface.co" },
+    { id: "hf-mirror", name: "hf-mirror（国内镜像）", url: "https://hf-mirror.com" },
+  ];
+}
+
 /** Known embedding model architectures supported by Transformers.js */
 const EMBEDDING_MODEL_TYPES = new Set([
   "bert", "distilbert", "albert", "roberta", "xlm-roberta",
@@ -425,6 +451,8 @@ export async function downloadModelFromHuggingFace(
     // Configure for remote download
     env.allowRemoteModels = true;
     env.useBrowserCache = true;
+    env.remoteHost = getRemoteHost();
+    console.log(`[model-loader] 使用镜像源: ${env.remoteHost}`);
 
     let lastProgress = "";
 

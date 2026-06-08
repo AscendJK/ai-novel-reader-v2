@@ -51,7 +51,10 @@ async function getEncoder(engine: string): Promise<any> {
     env.allowRemoteModels = true;
     // Enable browser cache so Transformers.js can use cached responses
     env.useBrowserCache = true;
-    ragLog(`[client-encoder] 加载模型: ${modelPath} (路径: ${env.localModelPath})`);
+    // Use configured mirror for HuggingFace
+    const { getRemoteHost } = await import("./model-loader");
+    env.remoteHost = getRemoteHost();
+    ragLog(`[client-encoder] 加载模型: ${modelPath} (路径: ${env.localModelPath}, 镜像: ${env.remoteHost})`);
     const extractor = await pipeline("feature-extraction", modelPath);
     encoderCache.set(engine, extractor);
     ragLog(`[client-encoder] 模型就绪: ${modelPath}`);

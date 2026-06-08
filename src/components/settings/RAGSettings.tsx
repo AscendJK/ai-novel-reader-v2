@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRAGStore } from "@/stores/rag-store";
 import { useUIStore } from "@/stores/ui-store";
 import { ENGINES } from "@/rag/engines";
-import { scanCustomModels, getBuiltinBGEStatus, getBuiltinGTEStatus, DOWNLOADABLE_MODELS, checkModelCacheStatus, downloadModelToCache, downloadModelFromHuggingFace } from "@/rag/model-loader";
+import { scanCustomModels, getBuiltinBGEStatus, getBuiltinGTEStatus, DOWNLOADABLE_MODELS, checkModelCacheStatus, downloadModelToCache, downloadModelFromHuggingFace, getMirrorId, setMirrorId, getMirrorOptions } from "@/rag/model-loader";
 import type { ScannedModel, ModelStatus, ModelCacheStatus } from "@/rag/model-loader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -215,6 +215,22 @@ export function RAGSettings() {
         </div>
 
         <Separator />
+
+        {/* Download source mirror */}
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-muted-foreground">下载源：</span>
+          {getMirrorOptions().map((mirror) => (
+            <Button
+              key={mirror.id}
+              variant={getMirrorId() === mirror.id ? "default" : "outline"}
+              size="sm"
+              className="h-6 text-[10px] px-2"
+              onClick={() => setMirrorId(mirror.id)}
+            >
+              {mirror.name}
+            </Button>
+          ))}
+        </div>
 
         {/* Downloadable recommended models */}
         <div>

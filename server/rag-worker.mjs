@@ -10,6 +10,11 @@ env.allowRemoteModels = true;
 env.localModelPath = modelBasePath || path.resolve(__dirname, "../public/models/builtin/");
 // Use a project-level cache directory for downloaded models
 env.cacheDir = path.resolve(__dirname, "data/models-cache");
+// Support HuggingFace mirror via environment variable
+if (process.env.HF_MIRROR) {
+  env.remoteHost = process.env.HF_MIRROR;
+  console.log(`[rag-worker] 使用镜像源: ${env.remoteHost}`);
+}
 
 async function run() {
   const pipe = await pipeline("feature-extraction", modelKey);
