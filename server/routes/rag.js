@@ -194,12 +194,17 @@ function toCachePath(subPath) {
 }
 
 // GET /api/rag/model-proxy/{*path} — proxy model file from mirror
+// Only allows Xenova/ model paths to prevent open proxy abuse
+const VALID_MODEL_PATH = /^Xenova\/[^/]+\/resolve\/main\/.+/;
+
 router.get("/model-proxy/{*path}", async (req, res) => {
-  console.log(`[model-proxy] ★ 收到请求: ${req.originalUrl}`);
+  console.log(`[model-proxy] 请求: ${req.originalUrl}`);
   try {
     // Express 5 + path-to-regexp v8: {*path} returns an array of segments
     const subPath = Array.isArray(req.params.path) ? req.params.path.join("/") : req.params.path;
-    if (!subPath) return res.status(400).json({ error: "path required" });
+    if (!subPath || !VALID_MODEL_PATH.test(subPath)) {
+      return res.status(400).json({ error: "invalid model path" });
+    }
 
     const mirrorHost = getMirrorHost();
     const targetUrl = `${mirrorHost}${subPath}`;

@@ -1,6 +1,6 @@
 /**
  * Shared fetch interceptor for proxying HuggingFace model requests through backend.
- * Used by both model-loader.ts and client-encoder.ts.
+ * Uses reference counting to safely handle concurrent installs from multiple callers.
  */
 
 import { getServerUrl } from "@/lib/api-client";
@@ -8,9 +8,11 @@ import { getServerUrl } from "@/lib/api-client";
 // Module-level reference to original fetch (before any interception)
 const _originalFetch = globalThis.fetch;
 
+// Reference count for how many callers have installed the interceptor
+let interceptorRefCount = 0;
+
 /**
  * Intercept fetch to route HuggingFace model requests through backend proxy.
- * Matches URLs like: https://huggingface.co/Xenova/bge-small-zh-v1.5/resolve/main/...
  */
 function proxiedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -30,12 +32,16 @@ function proxiedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Res
   return _originalFetch(input, init);
 }
 
-/** Install the fetch interceptor */
+/** Install the fetch interceptor (reference-counted) */
 export function installFetchInterceptor() {
+  interceptorRefCount++;
   globalThis.fetch = proxiedFetch;
 }
 
-/** Restore the original fetch */
+/** Restore the original fetch (only when no callers remain) */
 export function restoreFetch() {
-  globalThis.fetch = _originalFetch;
+  interceptorRefCount = Math.max(0, interceptorRefCount - 1);
+  if (interceptorRefCount === 0) {
+    globalThis.fetch = _originalFetch;
+  }
 }

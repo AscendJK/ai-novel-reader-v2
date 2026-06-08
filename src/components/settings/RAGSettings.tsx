@@ -37,16 +37,12 @@ export function RAGSettings() {
   }, []);
 
   const handleDownload = async (modelKey: string) => {
-    console.log(`[RAGSettings] handleDownload called: ${modelKey}`);
-    console.log(`[RAGSettings] currentDownload: ${currentDownload}`);
-    console.log(`[RAGSettings] isModelDownloaded: ${useRAGStore.getState().isModelDownloaded(modelKey)}`);
     // Check if another download is in progress
     if (currentDownload && currentDownload !== modelKey) {
       alert(`当前正在下载 ${currentDownload.split("/").pop()}，请等待完成后再下载其他引擎。`);
       return;
     }
-    const result = await downloadModel(modelKey);
-    console.log(`[RAGSettings] downloadModel result: ${result}`);
+    await downloadModel(modelKey);
   };
 
   // Build unified engine list

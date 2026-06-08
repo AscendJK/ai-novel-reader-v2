@@ -133,7 +133,6 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
 
   // Another download in progress — queue or wait for same model
   if (isDownloading) {
-    console.log(`[model-loader] ${modelKey} 排队等待，当前下载: ${store.currentDownload}`);
     if (store.currentDownload === modelKey) {
       // Same model already downloading — wait for it to complete
       return new Promise((resolve) => {
