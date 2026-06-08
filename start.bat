@@ -56,7 +56,7 @@ echo.
 node server/index.js --full
 if %errorlevel% neq 0 (
     echo.
-    echo [ERROR] Server failed to start. Check if ports 443 or 5173 are already in use.
+    echo [ERROR] Server failed to start. Check if ports 8443 or 5173 are already in use.
     echo.
     pause
 )

@@ -639,8 +639,9 @@ export function cleanupDeletedRecords() {
   const cutoff = Date.now() - GC_MAX_AGE_MS;
   const s = db.prepare("DELETE FROM summaries WHERE deleted > 0 AND updated_at < ?").run(cutoff);
   const n = db.prepare("DELETE FROM notes WHERE deleted > 0 AND updated_at < ?").run(cutoff);
+  const m = db.prepare("DELETE FROM maps WHERE deleted > 0 AND updated_at < ?").run(cutoff);
   const g = db.prepare("DELETE FROM graphs WHERE deleted > 0 AND updated_at < ?").run(cutoff);
-  if (s.changes || n.changes || g.changes) {
-    console.log(`[gc] cleaned ${s.changes} summaries, ${n.changes} notes, ${g.changes} graphs (deleted > 30 days ago)`);
+  if (s.changes || n.changes || m.changes || g.changes) {
+    console.log(`[gc] cleaned ${s.changes} summaries, ${n.changes} notes, ${m.changes} maps, ${g.changes} graphs (deleted > 30 days ago)`);
   }
 }

@@ -24,7 +24,6 @@ const app = express();
 const ALLOWED_ORIGINS = [
   // 开发环境
   "http://localhost:5173", "http://127.0.0.1:5173",
-  "http://localhost:5173", "http://127.0.0.1:5173",
   "http://localhost:4173", "http://127.0.0.1:4173",
   "https://localhost", "https://127.0.0.1",
   // GitHub Pages
