@@ -27,27 +27,28 @@
 
 **方式一：下载精简包（推荐）**
 
-从 [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases) 下载 `ai-novel-reader-backend-v2.x.x.zip`（约 36 KB），解压后：
+从 [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases) 下载 `ai-novel-reader-backend-v2.x.x.zip`（约 33 KB），解压后：
 
-```bash
-cd backend
-npm install
-npm run server
-```
+- **Windows**：双击 `start.bat`
+- **macOS / Linux**：`chmod +x start.sh && ./start.sh`
+
+脚本会自动安装依赖并启动后端。
 
 **方式二：Clone 整个仓库**
 
 ```bash
 git clone https://github.com/AscendJK/ai-novel-reader-v2.git
 cd ai-novel-reader-v2
-npm install
-npm run server
 ```
 
-启动后终端会显示两个地址：
+- **Windows**：双击 `start.bat`
+- **macOS / Linux**：`chmod +x start.sh && ./start.sh`
+
+脚本会自动安装依赖、构建前端、启动服务器。
+
+启动后终端会显示地址：
 ```
-[sync] https://0.0.0.0:8443 (api-only)
-[sync] http://0.0.0.0:5173 (api-only)    ← 局域网直接用这个
+[sync] http://0.0.0.0:5173 (api-only)
 ```
 
 **配置前端连接**：
@@ -58,25 +59,19 @@ npm run server
 
 > **如何查看服务器 IP**：Windows 运行 `ipconfig`，macOS/Linux 运行 `ifconfig` 或 `ip addr`，查找局域网 IPv4 地址。
 
-### 开发模式
+### 开发模式（可选）
 
-如需本地开发前端：
+如需本地开发前端，手动分别启动前后端：
 
 ```bash
-# 终端 1：启动后端
-npm run server
+# 终端 1：启动后端（指定端口 3001 避免和 Vite 冲突）
+PORT=3001 npm run server
 
 # 终端 2：启动前端开发服务器
 npm run dev
 ```
 
-开发服务器运行在 `http://localhost:5173`，API 请求自动代理到后端。
-
-> **注意**：后端默认端口也是 5173，会和 Vite 冲突。开发时需要给后端指定别的端口：
-> ```bash
-> PORT=3001 npm run server
-> ```
-> Vite 会自动将 `/api` 请求代理到 `localhost:3001`。
+开发服务器运行在 `http://localhost:5173`，API 请求自动代理到后端 `localhost:3001`。
 
 ---
 

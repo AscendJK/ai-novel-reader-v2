@@ -27,27 +27,28 @@ The backend provides RAG building, data sync, book library management, and other
 
 **Option 1: Download minimal package (Recommended)**
 
-Download `ai-novel-reader-backend-v2.x.x.zip` (~36 KB) from [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases), then:
+Download `ai-novel-reader-backend-v2.x.x.zip` (~33 KB) from [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases), then:
 
-```bash
-cd backend
-npm install
-npm run server
-```
+- **Windows**: Double-click `start.bat`
+- **macOS / Linux**: `chmod +x start.sh && ./start.sh`
+
+The script will auto-install dependencies and start the backend.
 
 **Option 2: Clone the entire repo**
 
 ```bash
 git clone https://github.com/AscendJK/ai-novel-reader-v2.git
 cd ai-novel-reader-v2
-npm install
-npm run server
 ```
 
-The terminal will display two addresses:
+- **Windows**: Double-click `start.bat`
+- **macOS / Linux**: `chmod +x start.sh && ./start.sh`
+
+The script will auto-install dependencies, build the frontend, and start the server.
+
+The terminal will display:
 ```
-[sync] https://0.0.0.0:8443 (api-only)
-[sync] http://0.0.0.0:5173 (api-only)    ← use this for LAN access
+[sync] http://0.0.0.0:5173 (api-only)
 ```
 
 **Connect the frontend**:
@@ -58,19 +59,19 @@ The terminal will display two addresses:
 
 > **How to find the server IP**: Windows: run `ipconfig`, macOS/Linux: run `ifconfig` or `ip addr`, look for the LAN IPv4 address.
 
-### Development Mode
+### Development Mode (Optional)
 
-For local frontend development:
+For local frontend development, start frontend and backend separately:
 
 ```bash
-# Terminal 1: Start backend
-npm run server
+# Terminal 1: Start backend (use port 3001 to avoid conflict with Vite)
+PORT=3001 npm run server
 
 # Terminal 2: Start frontend dev server
 npm run dev
 ```
 
-Dev server runs at `http://localhost:5173`, API requests are automatically proxied to the backend at `localhost:5173`.
+Dev server runs at `http://localhost:5173`, API requests are automatically proxied to the backend at `localhost:3001`.
 
 ---
 
