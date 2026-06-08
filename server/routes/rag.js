@@ -195,6 +195,7 @@ function toCachePath(subPath) {
 
 // GET /api/rag/model-proxy/{*path} — proxy model file from mirror
 router.get("/model-proxy/{*path}", async (req, res) => {
+  console.log(`[model-proxy] ★ 收到请求: ${req.originalUrl}`);
   try {
     // Express 5 + path-to-regexp v8: {*path} returns an array of segments
     const subPath = Array.isArray(req.params.path) ? req.params.path.join("/") : req.params.path;
