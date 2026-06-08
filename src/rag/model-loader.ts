@@ -279,8 +279,8 @@ export async function setupModelLoader(): Promise<void> {
     const { env } = transformers;
     env.allowRemoteModels = true;
     env.useBrowserCache = true;
-    env.remoteHost = getRemoteHost();
-    console.log("[model-loader] 初始化完成，镜像源:", env.remoteHost);
+    // Don't set remoteHost — the fetch interceptor routes requests through backend proxy
+    console.log("[model-loader] 初始化完成");
   } catch (e) {
     console.error("[model-loader] 初始化失败:", e);
   }
