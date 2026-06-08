@@ -275,13 +275,15 @@ export function RAGSettings() {
 
                   <p className="text-xs text-muted-foreground mt-1">{m.description}</p>
 
-                  {/* File path */}
-                  <p className="text-xs text-muted-foreground mt-1.5 font-mono">
-                    public/models/custom/{m.modelKey}/
-                  </p>
+                  {/* File path (only show for manually installed models) */}
+                  {fs.complete && !isHfDownloaded && (
+                    <p className="text-xs text-muted-foreground mt-1.5 font-mono">
+                      public/models/custom/{m.modelKey}/
+                    </p>
+                  )}
 
-                  {/* File status */}
-                  <div className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-0.5">
+                  {/* File status (only show for manually installed models) */}
+                  {fs.complete && !isHfDownloaded && (<div className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-0.5">
                     {files.map(f => (
                       <div key={f.name} className="flex items-center gap-1 text-xs">
                         {f.ok ? (
@@ -294,13 +296,13 @@ export function RAGSettings() {
                         </span>
                       </div>
                     ))}
-                  </div>
+                  </div>)}
 
                   {fs.typeWarning && (
                     <p className="text-xs text-amber-600 mt-1">{fs.typeWarning}</p>
                   )}
 
-                  {fs.complete && !cacheStatuses[m.modelKey]?.cached && (
+                  {fs.complete && !isHfDownloaded && !cacheStatuses[m.modelKey]?.cached && (
                     <div className="flex items-center gap-2 mt-1.5">
                       <p className="text-xs text-blue-500">文件在服务器上，需加载到浏览器</p>
                       <Button variant="outline" size="sm" className="h-5 text-[10px] px-1.5"

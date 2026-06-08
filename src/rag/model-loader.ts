@@ -127,12 +127,13 @@ export interface ScannedModel extends DownloadableModel {
 
 /** Check file status for all recommended downloadable models */
 export async function scanCustomModels(): Promise<ScannedModel[]> {
-  const results: ScannedModel[] = [];
-  for (const m of DOWNLOADABLE_MODELS) {
-    const fileStatus = await checkFileStatus(m.modelKey);
-    results.push({ ...m, fileStatus });
-  }
-  return results;
+  // Custom models are not bundled with the project (not on GitHub Pages).
+  // They can be downloaded from HuggingFace or installed manually.
+  // We don't check GitHub Pages for them to avoid unnecessary 404 requests.
+  return DOWNLOADABLE_MODELS.map((m) => ({
+    ...m,
+    fileStatus: { config: false, tokenizer: false, tokenizerConfig: false, onnx: false, complete: false },
+  }));
 }
 
 // ── Builtin model status (for settings UI) ──────────────────────

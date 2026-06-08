@@ -6,11 +6,11 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { chunks, batchSize, modelKey = "Xenova/bge-small-zh-v1.5", modelBasePath } = workerData;
 
-env.allowRemoteModels = false;
+env.allowRemoteModels = true;
 env.localModelPath = modelBasePath || path.resolve(__dirname, "../public/models/builtin/");
 
 async function run() {
-  const pipe = await pipeline("feature-extraction", modelKey, { local_files_only: true });
+  const pipe = await pipeline("feature-extraction", modelKey);
   const totalBatches = Math.ceil(chunks.length / batchSize);
   const vectors = [];
   let dim = 0;
