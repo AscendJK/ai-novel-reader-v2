@@ -10,13 +10,13 @@ import { GlobalNotes } from "@/components/notes/GlobalNotes";
 import { LocalErrorBoundary } from "@/components/common/LocalErrorBoundary";
 import { useKeyboardShortcuts, type ShortcutBinding } from "@/hooks/useKeyboardShortcuts";
 import { useRAGStore } from "@/stores/rag-store";
-import { setupLocalModelLoader, ensureModelCached } from "@/rag/model-loader";
+import { setupModelLoader, downloadModel } from "@/rag/model-loader";
 import { dedupSummaries } from "@/lib/dedup-utils";
 import { broadcast } from "@/lib/broadcast";
 import { setCurrentNovelIdGetter } from "@/rag/rag-cache-utils";
 
 // Configure Transformers.js to load models from local public/models/
-setupLocalModelLoader();
+setupModelLoader();
 import { useUIStore } from "@/stores/ui-store";
 import { useNovelStore } from "@/stores/novel-store";
 import { loadAllNovels, loadSummaries, deleteNovel, cleanupDeletedRecords, getLocalUsers, addLocalUser, deleteUserData, removeLocalUser } from "@/db/repositories";
@@ -451,13 +451,14 @@ export function AppLayout() {
       novels.forEach((n) => addNovel(n));
     }
 
-    // Pre-cache the current engine's model files (non-blocking)
-    const currentEngine = useRAGStore.getState().engine;
-    ensureModelCached(currentEngine, {
-      onStatus: (status, progress) => {
-        useRAGStore.getState().setModelDownloadStatus(status, progress);
-      },
-    }).catch((e) => console.warn("[AppLayout] ensureModelCached failed:", e));
+    // Auto-download default BGE model in background (non-blocking)
+    const store = useRAGStore.getState();
+    const currentEngine = store.engine;
+    const defaultModelKey = "Xenova/bge-small-zh-v1.5";
+    if (!store.isModelDownloaded(defaultModelKey) && !store.currentDownload) {
+      console.log("[AppLayout] 自动下载默认引擎 BGE...");
+      downloadModel(defaultModelKey).catch((e) => console.warn("[AppLayout] BGE 下载失败:", e));
+    }
 
     setSyncReady(true);
     useUIStore.getState().setDebugMode(false);

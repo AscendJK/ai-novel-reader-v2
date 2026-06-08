@@ -13,7 +13,7 @@ import { useBuildStore } from "@/stores/build-store";
 import { useRAGStore } from "@/stores/rag-store";
 import { useUIStore } from "@/stores/ui-store";
 import { getEngineDisplayName } from "@/rag/engines";
-import { ensureModelCached } from "@/rag/model-loader";
+import { ensureModelReady } from "@/rag/model-loader";
 import { authHeaders } from "@/lib/auth-headers";
 import { apiFetch } from "@/lib/api-client";
 import { buildAndPollRAGIndex, downloadAndCacheIndex } from "@/rag/build-index";
@@ -211,12 +211,12 @@ export function BookSelect() {
     const buildEngine = engine;
 
     try {
-      // Ensure engine model files are cached in browser before building
-      await ensureModelCached(buildEngine, {
-        onStatus: (status, progress) => {
-          useRAGStore.getState().setModelDownloadStatus(status, progress);
-        },
-      });
+      // Ensure engine model is downloaded before building
+      const modelReady = await ensureModelReady(buildEngine);
+      if (!modelReady) {
+        console.warn("[BookSelect] 模型下载失败，无法构建索引");
+        return;
+      }
 
       // 使用新的 build store
       const buildStore = useBuildStore.getState();

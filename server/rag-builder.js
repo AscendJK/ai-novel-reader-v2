@@ -204,16 +204,13 @@ async function _doBuild(novelId, engine, key) {
 
   // Encode in Worker Thread with dynamic timeout (~0.3s per chunk, min 10min, max 60min)
   const modelKey = resolveModelKey(engine);
-  const modelBasePath = ENGINE_MODEL_MAP[engine]
-    ? path.resolve(__dirname, "../public/models/builtin/")
-    : path.resolve(__dirname, "../public/models/custom/");
   const t0 = Date.now();
   const workerTimeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(MIN_TIMEOUT_MS, chunks.length * perChunkMs));
   console.log(`[rag] building ${key}: ${chunks.length} chunks, timeout ${Math.round(workerTimeoutMs / 60000)}min`);
   const vectors = await new Promise((resolve, reject) => {
     const workerPath = path.join(__dirname, "rag-worker.mjs");
     const worker = new Worker(workerPath, {
-      workerData: { chunks, batchSize: BATCH_SIZE, modelKey, modelBasePath },
+      workerData: { chunks, batchSize: BATCH_SIZE, modelKey },
     });
 
     const timeout = setTimeout(() => {

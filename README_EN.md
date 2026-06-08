@@ -25,20 +25,16 @@ The backend provides RAG building, data sync, book library management, and other
 
 > **Node.js 24+ users**: `better-sqlite3` lacks prebuilt binaries for Node 24, requiring Python 3.x and C++ build tools. We recommend **Node.js 22 LTS**.
 
-**Option 1: Download minimal package (Recommended)**
+**Option 1: Download backend package (Recommended)**
 
-Download `ai-novel-reader-backend-v2.x.x.zip` (~37 KB) from [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases), then:
+Download `ai-novel-reader-backend-v2.x.x.zip` (~38 KB) from [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases), then:
 
 - **Windows**: Double-click `start.bat`
 - **macOS / Linux**: `chmod +x start.sh && ./start.sh`
 
-The script will auto-install dependencies and start the backend. Models will be downloaded from HuggingFace on first index build (requires network).
+The script will auto-install dependencies and start the backend. Models will be downloaded from the mirror on first index build (requires network).
 
-**Option 2: Download full package (with built-in models)**
-
-Download `ai-novel-reader-backend-full-v2.x.x.zip` (~39 MB) from [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases). Includes BGE Small ZH and GTE Small models — no download needed for first index build.
-
-**Option 3: Clone the entire repo**
+**Option 2: Clone the entire repo**
 
 ```bash
 git clone https://github.com/AscendJK/ai-novel-reader-v2.git
@@ -236,19 +232,19 @@ Open the AI analysis panel (top-right) in reading view:
 
 ### 6. RAG Engine
 
-Supports **any Transformers.js-compatible ONNX embedding model** for semantic retrieval, with TF-IDF as a zero-config fallback.
+Supports **any Transformers.js-compatible ONNX embedding model** for semantic retrieval, with TF-IDF as a zero-config fallback. All models are downloaded from the network (default: hf-mirror.com for China) and cached in the browser.
 
-| Engine | Size | Description | How to get |
-|--------|------|-------------|------------|
-| TF-IDF | 0 MB | Character-level search, instant | Built-in |
-| BGE Small ZH | ~26 MB | Chinese semantic search, recommended | Auto-download / Full package |
-| GTE Small | ~34 MB | Balanced Chinese + English | Auto-download / Full package |
-| Multilingual E5 Small | ~120 MB | Chinese + English, multilingual | One-click download in settings |
-| All-MiniLM-L6-v2 | ~23 MB | English lightweight, smallest | One-click download in settings |
-| Multilingual MiniLM L12 | ~120 MB | Deep multilingual understanding | One-click download in settings |
+| Engine | Size | Description |
+|--------|------|-------------|
+| TF-IDF | 0 MB | Character-level search, always available, no download |
+| BGE Small ZH | ~26 MB | Chinese semantic search, recommended (**default, auto-downloaded on login**) |
+| GTE Small | ~34 MB | Balanced Chinese + English |
+| Multilingual E5 Small | ~120 MB | Chinese + English, multilingual |
+| All-MiniLM-L6-v2 | ~23 MB | English lightweight, smallest |
+| Multilingual MiniLM L12 | ~120 MB | Deep multilingual understanding |
 
-- **Built-in models**: BGE and GTE are included in the full package; the slim package auto-downloads them from HuggingFace on first build
-- **Recommended models**: E5, MiniLM, etc. can be downloaded from HuggingFace via the "Download" button in settings; cached in browser after first download
+- **BGE auto-downloads on login**: Default engine, silent background download, progress shown in header
+- **Other engines**: Click "Download" in settings, only one download at a time
 - Build index per novel via the "Build" button on the bookshelf card (unavailable offline)
 - **Binary vector transfer**: Server returns Float32Array binary data directly, client loads with zero-copy, no JSON parsing needed
 - Built index downloads to browser IndexedDB cache

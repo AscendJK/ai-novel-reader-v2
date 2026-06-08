@@ -5,11 +5,9 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const { chunks, batchSize, modelKey = "Xenova/bge-small-zh-v1.5", modelBasePath } = workerData;
+const { chunks, batchSize, modelKey = "Xenova/bge-small-zh-v1.5" } = workerData;
 
 env.allowRemoteModels = true;
-env.localModelPath = modelBasePath || path.resolve(__dirname, "../public/models/builtin/");
-// Use a project-level cache directory for downloaded models
 env.cacheDir = path.resolve(__dirname, "data/models-cache");
 
 // Read mirror config from file, fallback to environment variable, then default

@@ -184,27 +184,18 @@ export function Header({ inBook, bookTitle, onBack, onSettings, onNotes }: Heade
 }
 
 function ModelDownloadIndicator() {
-  const { modelDownloadStatus, modelDownloadProgress } = useRAGStore();
+  const { currentDownload, downloadProgress } = useRAGStore();
 
-  if (modelDownloadStatus === "idle" || modelDownloadStatus === "cached") return null;
+  if (!currentDownload) return null;
 
-  if (modelDownloadStatus === "downloading") {
-    return (
-      <div className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs text-blue-500" title={modelDownloadProgress}>
-        <Loader2 className="h-3 w-3 animate-spin" />
-        <span className="hidden md:inline max-w-[120px] truncate">{modelDownloadProgress || "模型下载中..."}</span>
-      </div>
-    );
-  }
+  const engineName = currentDownload.split("/").pop() || currentDownload;
 
-  if (modelDownloadStatus === "error") {
-    return (
-      <div className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs text-destructive" title="模型下载失败，将在下次登录时重试">
-        <Download className="h-3 w-3" />
-        <span className="hidden md:inline">模型下载失败</span>
-      </div>
-    );
-  }
-
-  return null;
+  return (
+    <div className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs text-blue-500" title={downloadProgress}>
+      <Loader2 className="h-3 w-3 animate-spin" />
+      <span className="hidden md:inline max-w-[150px] truncate">
+        {downloadProgress || `下载 ${engineName}...`}
+      </span>
+    </div>
+  );
 }

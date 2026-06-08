@@ -3,9 +3,14 @@
  */
 
 import { Router } from "express";
+import path from "node:path";
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { authNovel } from "../middleware/auth.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import { buildIndex, getProgress, getIndexData, getStatuses, getAllStatuses } from "../rag-builder.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const router = Router();
 
@@ -29,15 +34,18 @@ async function getEncodePipeline(engine) {
   const modelKey = resolveModelKey(engine);
   if (_cachedPipes.has(modelKey)) return _cachedPipes.get(modelKey);
   const { pipeline, env } = await import("@xenova/transformers");
-  env.allowRemoteModels = false;
-  // 判断是内置模型还是自定义模型
-  const isBuiltin = engine && ENGINE_MODEL_MAP[engine];
-  // 或者是内置模型的完整路径
-  const isBuiltinPath = modelKey.startsWith("Xenova/bge-small-zh") ||
-                        modelKey.startsWith("Xenova/gte-small") ||
-                        modelKey.startsWith("Xenova/multilingual-e5-small");
-  env.localModelPath = (isBuiltin || isBuiltinPath) ? "./public/models/builtin/" : "./public/models/custom/";
-  const pipe = await pipeline("feature-extraction", modelKey, { local_files_only: true });
+  env.allowRemoteModels = true;
+  env.cacheDir = path.resolve(__dirname, "../data/models-cache");
+  // Read mirror config
+  try {
+    const configPath = path.resolve(__dirname, "../data/rag-config.json");
+    if (fs.existsSync(configPath)) {
+      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      if (config.mirrorHost) env.remoteHost = config.mirrorHost;
+    }
+  } catch { /* ignore */ }
+  if (!env.remoteHost) env.remoteHost = process.env.HF_MIRROR || "https://hf-mirror.com/";
+  const pipe = await pipeline("feature-extraction", modelKey);
   _cachedPipes.set(modelKey, pipe);
   return pipe;
 }

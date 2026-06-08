@@ -45,12 +45,10 @@ function loadTopKConfig(): { default: number; tiers: TopKTier[] } {
     if (stored) {
       const parsed = JSON.parse(stored);
       if (typeof parsed.default === "number" && Array.isArray(parsed.tiers)) {
-        // Convert 0 back to Infinity (0 is the sentinel for "no limit")
         const tiers = parsed.tiers.map((t: TopKTier) => ({
           ...t,
           maxChunks: t.maxChunks === 0 ? Infinity : t.maxChunks,
         }));
-        // Sort by maxChunks ascending to ensure correct tier matching
         tiers.sort((a: TopKTier, b: TopKTier) => a.maxChunks - b.maxChunks);
         return { default: parsed.default, tiers };
       }
@@ -61,7 +59,6 @@ function loadTopKConfig(): { default: number; tiers: TopKTier[] } {
 
 function saveTopKConfig(config: { default: number; tiers: TopKTier[] }) {
   try {
-    // Convert Infinity to 0 for JSON serialization
     const serializable = {
       ...config,
       tiers: config.tiers.map((t) => ({ ...t, maxChunks: t.maxChunks === Infinity ? 0 : t.maxChunks })),
@@ -70,31 +67,32 @@ function saveTopKConfig(config: { default: number; tiers: TopKTier[] }) {
   } catch { /* ignore */ }
 }
 
-export type ModelDownloadStatus = "idle" | "downloading" | "cached" | "error";
+// ── Downloaded models tracking ──
 
-// Track which custom models have been downloaded from HuggingFace
-function loadHuggingFaceModels(): Set<string> {
+function loadDownloadedModels(): Set<string> {
   try {
-    const stored = localStorage.getItem("novel-reader-hf-models");
+    const stored = localStorage.getItem("novel-reader-downloaded-models");
     return stored ? new Set(JSON.parse(stored)) : new Set();
   } catch { return new Set(); }
 }
 
-function saveHuggingFaceModels(models: Set<string>) {
-  try { localStorage.setItem("novel-reader-hf-models", JSON.stringify([...models])); } catch { /* ignore */ }
+function saveDownloadedModels(models: Set<string>) {
+  try { localStorage.setItem("novel-reader-downloaded-models", JSON.stringify([...models])); } catch { /* ignore */ }
 }
+
+// ── State interface ──
 
 interface RAGState {
   engine: EngineId;
   savedCustomModels: { key: string; name: string; size: string }[];
-  huggingFaceModels: Set<string>;  // models downloaded from HuggingFace
+  downloadedModels: Set<string>;  // models downloaded and cached in browser
+  currentDownload: string | null; // modelKey currently being downloaded, null if idle
+  downloadProgress: string;       // progress text e.g. "tokenizer 0.5/2.1MB (24%)"
   cacheSizeMB: number;
   ragCacheSizeBytes: number;
-  cachedKeys: Set<string>;   // keys in IndexedDB (persistent browser cache)
-  lruKeys: Set<string>;      // keys in LRU memory (ready for immediate retrieval)
-  indexLoadingKeys: Set<string>;  // keys currently loading from IndexedDB to memory
-  modelDownloadStatus: ModelDownloadStatus;
-  modelDownloadProgress: string;  // e.g. "model_quantized.onnx 10.5/24MB (44%)"
+  cachedKeys: Set<string>;
+  lruKeys: Set<string>;
+  indexLoadingKeys: Set<string>;
   topKDefault: number;
   topKTiers: TopKTier[];
   setEngine: (e: EngineId, name?: string, size?: string) => void;
@@ -109,9 +107,10 @@ interface RAGState {
   removeLruKey: (key: string) => void;
   addIndexLoadingKey: (key: string) => void;
   removeIndexLoadingKey: (key: string) => void;
-  setModelDownloadStatus: (status: ModelDownloadStatus, progress?: string) => void;
-  addHuggingFaceModel: (modelKey: string) => void;
-  isHuggingFaceModel: (modelKey: string) => boolean;
+  setCurrentDownload: (modelKey: string | null) => void;
+  setDownloadProgress: (progress: string) => void;
+  addDownloadedModel: (modelKey: string) => void;
+  isModelDownloaded: (modelKey: string) => boolean;
   setTopKDefault: (val: number) => void;
   setTopKTiers: (tiers: TopKTier[]) => void;
   resetTopKConfig: () => void;
@@ -123,20 +122,19 @@ const _topKConfig = loadTopKConfig();
 export const useRAGStore = create<RAGState>((set, get) => ({
   engine: loadPref(),
   savedCustomModels: loadSavedModels(),
-  huggingFaceModels: loadHuggingFaceModels(),
+  downloadedModels: loadDownloadedModels(),
+  currentDownload: null,
+  downloadProgress: "",
   cacheSizeMB: loadCacheSize(),
   ragCacheSizeBytes: 0,
   cachedKeys: new Set<string>(),
   lruKeys: new Set<string>(),
   indexLoadingKeys: new Set<string>(),
-  modelDownloadStatus: "idle" as ModelDownloadStatus,
-  modelDownloadProgress: "",
   topKDefault: _topKConfig.default,
   topKTiers: _topKConfig.tiers,
 
   setEngine: (engine, name, size) => {
     try { localStorage.setItem("novel-reader-rag-engine", engine); } catch { /* ignore */ }
-    // Save custom model to remembered list
     if (name && engine.includes("/")) {
       const models = get().savedCustomModels;
       if (!models.some((m) => m.key === engine)) {
@@ -206,18 +204,17 @@ export const useRAGStore = create<RAGState>((set, get) => ({
     set({ indexLoadingKeys: next });
   },
 
-  setModelDownloadStatus: (status, progress = "") => {
-    set({ modelDownloadStatus: status, modelDownloadProgress: progress });
-  },
+  setCurrentDownload: (modelKey) => set({ currentDownload: modelKey }),
+  setDownloadProgress: (progress) => set({ downloadProgress: progress }),
 
-  addHuggingFaceModel: (modelKey) => {
-    const next = new Set(get().huggingFaceModels);
+  addDownloadedModel: (modelKey) => {
+    const next = new Set(get().downloadedModels);
     next.add(modelKey);
-    saveHuggingFaceModels(next);
-    set({ huggingFaceModels: next });
+    saveDownloadedModels(next);
+    set({ downloadedModels: next });
   },
 
-  isHuggingFaceModel: (modelKey) => get().huggingFaceModels.has(modelKey),
+  isModelDownloaded: (modelKey) => get().downloadedModels.has(modelKey),
 
   setTopKDefault: (val) => {
     const clamped = Math.max(1, Math.min(200, Math.round(val)));
