@@ -126,7 +126,10 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
   const store = useRAGStore.getState();
 
   // Already downloaded
-  if (store.isModelDownloaded(modelKey)) return true;
+  if (store.isModelDownloaded(modelKey)) {
+    console.log(`[model-loader] ${modelKey} 已下载，跳过`);
+    return true;
+  }
 
   // Another download in progress — queue or wait for same model
   if (isDownloading) {
