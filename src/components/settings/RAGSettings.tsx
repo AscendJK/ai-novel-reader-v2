@@ -97,7 +97,7 @@ export function RAGSettings() {
             引擎列表
           </h4>
           {engineList.map((m) => {
-            const isActive = engine === m.key;
+            const isActive = engine === m.key || engine === m.modelKey;
             const isDownloading = currentDownload === m.modelKey;
             const isOtherDownloading = currentDownload !== null && !isDownloading;
             const isDefault = m.key === "bge-small-zh";
@@ -111,7 +111,7 @@ export function RAGSettings() {
                     : "opacity-70"
                 }`}
                 onClick={() => {
-                  if (m.downloaded || m.key === "tfidf") setEngine(m.key);
+                  if (m.downloaded || m.key === "tfidf") setEngine(m.modelKey || m.key);
                 }}
               >
                 <div className="flex items-center justify-between">
