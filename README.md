@@ -27,14 +27,18 @@
 
 **方式一：下载精简包（推荐）**
 
-从 [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases) 下载最新的 `ai-novel-reader-backend-v2.x.x.zip`（约 33 KB），解压后：
+从 [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases) 下载 `ai-novel-reader-backend-v2.x.x.zip`（约 37 KB），解压后：
 
 - **Windows**：双击 `start.bat`
 - **macOS / Linux**：`chmod +x start.sh && ./start.sh`
 
-脚本会自动安装依赖并启动后端。
+脚本会自动安装依赖并启动后端。首次构建索引时会自动从 HuggingFace 下载模型（需要网络）。
 
-**方式二：Clone 整个仓库**
+**方式二：下载完整包（含内置模型）**
+
+从 [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases) 下载 `ai-novel-reader-backend-full-v2.x.x.zip`（约 39 MB），解压后同样操作。内置 BGE Small ZH 和 GTE Small 模型，首次构建索引无需下载。
+
+**方式三：Clone 整个仓库**
 
 ```bash
 git clone https://github.com/AscendJK/ai-novel-reader-v2.git
@@ -234,15 +238,17 @@ mkcert -CAROOT     # 获取 CA 根证书路径
 
 项目支持**任意 Transformers.js 兼容的 ONNX 嵌入模型**作为语义检索引擎，同时内置 TF-IDF 作为零配置回退。
 
-| 引擎 | 大小 | 说明 |
-|------|------|------|
-| TF-IDF | 0 MB | 纯字符级检索，瞬间可用，无需构建 |
-| BGE Small ZH（内置） | ~26 MB | 中文语义检索，精度高，推荐中文小说使用 |
-| GTE Small（内置） | ~34 MB | 中英文均衡，阿里通义实验室出品 |
-| Multilingual E5 Small | ~120 MB | 中英文兼顾，多语言场景 |
-| All-MiniLM-L6-v2 | ~23 MB | 英文轻量，体积最小 |
-| Multilingual MiniLM L12 | ~120 MB | 多语言深度理解 |
+| 引擎 | 大小 | 说明 | 获取方式 |
+|------|------|------|---------|
+| TF-IDF | 0 MB | 纯字符级检索，瞬间可用 | 内置 |
+| BGE Small ZH | ~26 MB | 中文语义检索，推荐中文小说 | 精简包自动下载 / 完整包内置 |
+| GTE Small | ~34 MB | 中英文均衡 | 精简包自动下载 / 完整包内置 |
+| Multilingual E5 Small | ~120 MB | 中英文兼顾，多语言场景 | 设置页一键下载 |
+| All-MiniLM-L6-v2 | ~23 MB | 英文轻量，体积最小 | 设置页一键下载 |
+| Multilingual MiniLM L12 | ~120 MB | 多语言深度理解 | 设置页一键下载 |
 
+- **内置模型**：BGE 和 GTE 随完整包提供，精简包首次构建时自动从 HuggingFace 下载
+- **推荐模型**：E5、MiniLM 等在设置页点击「下载」从 HuggingFace 获取，首次下载后缓存到浏览器
 - **每本书使用前需手动构建**：书架卡片点击"构建"按钮，服务端异步处理（离线时不可用）
 - **二进制向量传输**：服务端直接返回 Float32Array 二进制数据，客户端零拷贝加载，无需 JSON 解析
 - 构建完成后自动下载到浏览器 IndexedDB 缓存

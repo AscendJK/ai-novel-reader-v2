@@ -27,14 +27,18 @@ The backend provides RAG building, data sync, book library management, and other
 
 **Option 1: Download minimal package (Recommended)**
 
-Download the latest `ai-novel-reader-backend-v2.x.x.zip` (~33 KB) from [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases), then:
+Download `ai-novel-reader-backend-v2.x.x.zip` (~37 KB) from [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases), then:
 
 - **Windows**: Double-click `start.bat`
 - **macOS / Linux**: `chmod +x start.sh && ./start.sh`
 
-The script will auto-install dependencies and start the backend.
+The script will auto-install dependencies and start the backend. Models will be downloaded from HuggingFace on first index build (requires network).
 
-**Option 2: Clone the entire repo**
+**Option 2: Download full package (with built-in models)**
+
+Download `ai-novel-reader-backend-full-v2.x.x.zip` (~39 MB) from [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases). Includes BGE Small ZH and GTE Small models — no download needed for first index build.
+
+**Option 3: Clone the entire repo**
 
 ```bash
 git clone https://github.com/AscendJK/ai-novel-reader-v2.git
@@ -234,15 +238,17 @@ Open the AI analysis panel (top-right) in reading view:
 
 Supports **any Transformers.js-compatible ONNX embedding model** for semantic retrieval, with TF-IDF as a zero-config fallback.
 
-| Engine | Size | Description |
-|--------|------|-------------|
-| TF-IDF | 0 MB | Character-level search, instant, no build required |
-| BGE Small ZH (built-in) | ~26 MB | Chinese semantic search, recommended for Chinese novels |
-| GTE Small (built-in) | ~34 MB | Balanced Chinese + English, from Alibaba |
-| Multilingual E5 Small | ~120 MB | Chinese + English, multilingual use |
-| All-MiniLM-L6-v2 | ~23 MB | English lightweight, smallest footprint |
-| Multilingual MiniLM L12 | ~120 MB | Deep multilingual understanding |
+| Engine | Size | Description | How to get |
+|--------|------|-------------|------------|
+| TF-IDF | 0 MB | Character-level search, instant | Built-in |
+| BGE Small ZH | ~26 MB | Chinese semantic search, recommended | Auto-download / Full package |
+| GTE Small | ~34 MB | Balanced Chinese + English | Auto-download / Full package |
+| Multilingual E5 Small | ~120 MB | Chinese + English, multilingual | One-click download in settings |
+| All-MiniLM-L6-v2 | ~23 MB | English lightweight, smallest | One-click download in settings |
+| Multilingual MiniLM L12 | ~120 MB | Deep multilingual understanding | One-click download in settings |
 
+- **Built-in models**: BGE and GTE are included in the full package; the slim package auto-downloads them from HuggingFace on first build
+- **Recommended models**: E5, MiniLM, etc. can be downloaded from HuggingFace via the "Download" button in settings; cached in browser after first download
 - Build index per novel via the "Build" button on the bookshelf card (unavailable offline)
 - **Binary vector transfer**: Server returns Float32Array binary data directly, client loads with zero-copy, no JSON parsing needed
 - Built index downloads to browser IndexedDB cache
