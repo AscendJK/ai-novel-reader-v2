@@ -216,7 +216,7 @@ router.get("/model-proxy/{*path}", async (req, res) => {
       res.setHeader("Content-Type", contentType);
       res.setHeader("Content-Length", data.length);
       res.setHeader("Access-Control-Allow-Origin", "*");
-      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      res.setHeader("Cache-Control", "no-cache");
       return res.send(data);
     }
 
@@ -238,7 +238,7 @@ router.get("/model-proxy/{*path}", async (req, res) => {
     res.setHeader("Content-Type", contentType);
     if (contentLength) res.setHeader("Content-Length", contentLength);
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    res.setHeader("Cache-Control", "no-cache");
 
     // Read body and send
     const buffer = Buffer.from(await response.arrayBuffer());
