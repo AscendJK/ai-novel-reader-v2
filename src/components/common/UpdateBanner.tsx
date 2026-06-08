@@ -31,7 +31,14 @@ export function UpdateBanner() {
         <>
           <RefreshCw className="h-4 w-4 text-primary shrink-0" />
           <span>有新版本可用</span>
-          <Button size="sm" className="h-7 text-xs" onClick={() => _updateSW?.(true)}>
+          <Button size="sm" className="h-7 text-xs" onClick={async () => {
+            if (_updateSW) {
+              await _updateSW(true);
+            } else {
+              // Fallback: just reload the page
+              window.location.reload();
+            }
+          }}>
             更新
           </Button>
           <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setNeedRefresh(false)}>
