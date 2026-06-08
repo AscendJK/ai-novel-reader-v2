@@ -69,6 +69,8 @@ export function RAGSettings() {
           setDownloadProgress(prev => ({ ...prev, [modelKey]: progress }));
         }
         if (status === "cached") {
+          // Mark as downloaded from HuggingFace
+          useRAGStore.getState().addHuggingFaceModel(modelKey);
           // Refresh file status after download
           scanCustomModels().then((m) => { if (mountedRef.current) setScannedModels(m); });
           checkAllCacheStatuses();
@@ -231,22 +233,24 @@ export function RAGSettings() {
             {(scannedModels.length > 0 ? scannedModels : DOWNLOADABLE_MODELS.map(m => ({ ...m, fileStatus: { config: false, tokenizer: false, tokenizerConfig: false, onnx: false, complete: false } }))).map((m) => {
               const isActive = engine === m.modelKey;
               const fs = m.fileStatus;
+              const isHfDownloaded = useRAGStore.getState().isHuggingFaceModel(m.modelKey);
+              const isAvailable = fs.complete || isHfDownloaded;
               const files = [
-                { name: "config.json", ok: fs.config },
-                { name: "tokenizer.json", ok: fs.tokenizer },
-                { name: "tokenizer_config.json", ok: fs.tokenizerConfig },
-                { name: "onnx/model_quantized.onnx", ok: fs.onnx },
+                { name: "config.json", ok: fs.config || isHfDownloaded },
+                { name: "tokenizer.json", ok: fs.tokenizer || isHfDownloaded },
+                { name: "tokenizer_config.json", ok: fs.tokenizerConfig || isHfDownloaded },
+                { name: "onnx/model_quantized.onnx", ok: fs.onnx || isHfDownloaded },
               ];
 
               return (
                 <div
                   key={m.modelKey}
                   className={`p-2.5 rounded-lg border transition-colors ${
-                    fs.complete
+                    isAvailable
                       ? "cursor-pointer " + (isActive ? "border-primary bg-primary/5" : "hover:border-primary/50 hover:bg-accent/50")
                       : "opacity-70"
                   }`}
-                  onClick={() => fs.complete && setEngine(m.modelKey)}
+                  onClick={() => isAvailable && setEngine(m.modelKey)}
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 min-w-0">
@@ -254,8 +258,9 @@ export function RAGSettings() {
                       <Badge variant="outline" className="text-xs">{m.size}</Badge>
                       {m.fileStatus?.modelType && <Badge variant="outline" className="text-xs font-mono">{m.fileStatus.modelType}</Badge>}
                       {isActive && <Badge className="text-xs bg-primary">当前</Badge>}
-                      {fs.complete && cacheStatuses[m.modelKey]?.cached && <CheckCircle2 className="h-3.5 w-3.5 text-green-500" title="已缓存到浏览器" />}
-                      {fs.complete && !cacheStatuses[m.modelKey]?.cached && <CheckCircle2 className="h-3.5 w-3.5 text-blue-500" title="服务器有文件，未缓存到浏览器" />}
+                      {isHfDownloaded && <CheckCircle2 className="h-3.5 w-3.5 text-green-500" title="已从 HuggingFace 下载" />}
+                      {!isHfDownloaded && fs.complete && cacheStatuses[m.modelKey]?.cached && <CheckCircle2 className="h-3.5 w-3.5 text-green-500" title="已缓存到浏览器" />}
+                      {!isHfDownloaded && fs.complete && !cacheStatuses[m.modelKey]?.cached && <CheckCircle2 className="h-3.5 w-3.5 text-blue-500" title="服务器有文件，未缓存到浏览器" />}
                     </div>
                     <a
                       href={m.url}
@@ -307,7 +312,7 @@ export function RAGSettings() {
                     </div>
                   )}
 
-                  {!fs.complete && (
+                  {!fs.complete && !isHfDownloaded && (
                     <div className="flex items-center gap-2 mt-1.5">
                       <p className="text-xs text-muted-foreground">需要网络，从 HuggingFace 下载</p>
                       <Button variant="outline" size="sm" className="h-5 text-[10px] px-1.5"

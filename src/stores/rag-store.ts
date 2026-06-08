@@ -72,9 +72,22 @@ function saveTopKConfig(config: { default: number; tiers: TopKTier[] }) {
 
 export type ModelDownloadStatus = "idle" | "downloading" | "cached" | "error";
 
+// Track which custom models have been downloaded from HuggingFace
+function loadHuggingFaceModels(): Set<string> {
+  try {
+    const stored = localStorage.getItem("novel-reader-hf-models");
+    return stored ? new Set(JSON.parse(stored)) : new Set();
+  } catch { return new Set(); }
+}
+
+function saveHuggingFaceModels(models: Set<string>) {
+  try { localStorage.setItem("novel-reader-hf-models", JSON.stringify([...models])); } catch { /* ignore */ }
+}
+
 interface RAGState {
   engine: EngineId;
   savedCustomModels: { key: string; name: string; size: string }[];
+  huggingFaceModels: Set<string>;  // models downloaded from HuggingFace
   cacheSizeMB: number;
   ragCacheSizeBytes: number;
   cachedKeys: Set<string>;   // keys in IndexedDB (persistent browser cache)
@@ -97,6 +110,8 @@ interface RAGState {
   addIndexLoadingKey: (key: string) => void;
   removeIndexLoadingKey: (key: string) => void;
   setModelDownloadStatus: (status: ModelDownloadStatus, progress?: string) => void;
+  addHuggingFaceModel: (modelKey: string) => void;
+  isHuggingFaceModel: (modelKey: string) => boolean;
   setTopKDefault: (val: number) => void;
   setTopKTiers: (tiers: TopKTier[]) => void;
   resetTopKConfig: () => void;
@@ -108,6 +123,7 @@ const _topKConfig = loadTopKConfig();
 export const useRAGStore = create<RAGState>((set, get) => ({
   engine: loadPref(),
   savedCustomModels: loadSavedModels(),
+  huggingFaceModels: loadHuggingFaceModels(),
   cacheSizeMB: loadCacheSize(),
   ragCacheSizeBytes: 0,
   cachedKeys: new Set<string>(),
@@ -193,6 +209,15 @@ export const useRAGStore = create<RAGState>((set, get) => ({
   setModelDownloadStatus: (status, progress = "") => {
     set({ modelDownloadStatus: status, modelDownloadProgress: progress });
   },
+
+  addHuggingFaceModel: (modelKey) => {
+    const next = new Set(get().huggingFaceModels);
+    next.add(modelKey);
+    saveHuggingFaceModels(next);
+    set({ huggingFaceModels: next });
+  },
+
+  isHuggingFaceModel: (modelKey) => get().huggingFaceModels.has(modelKey),
 
   setTopKDefault: (val) => {
     const clamped = Math.max(1, Math.min(200, Math.round(val)));
