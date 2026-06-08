@@ -515,9 +515,46 @@ export function AppLayout() {
         console.warn("[AppLayout] load local novels failed:", e);
         return [];
       });
+      // Build title→serverId map for deduplication
+      const serverTitleMap = new Map<string, string>();
+      for (const n of list) {
+        serverTitleMap.set(n.title, n.id);
+      }
+
       for (const local of localNovels) {
         if (serverNovelIds.has(local.id)) continue;
         try {
+          // Deduplicate: if a novel with the same title exists on server, merge instead of uploading
+          const serverId = serverTitleMap.get(local.title);
+          if (serverId) {
+            console.log(`[sync] 小说 "${local.title}" 本地ID ${local.id.slice(0,8)} 与服务器ID ${serverId.slice(0,8)} 重复，合并为服务器版本`);
+            // Update local novel ID to match server
+            const oldId = local.id;
+            const chapters = await udb.chapters.where("novelId").equals(oldId).toArray();
+            const summaries = await udb.summaries.where("novelId").equals(oldId).toArray();
+            const notes = await udb.notes.where("novelId").equals(oldId).toArray();
+            const maps = await udb.maps.where("novelId").equals(oldId).toArray();
+            const graphs = await udb.graphs.where("novelId").equals(oldId).toArray();
+            await udb.transaction("rw", udb.novels, udb.chapters, udb.summaries, udb.notes, udb.maps, udb.graphs, async () => {
+              // Delete old local novel
+              await udb.novels.delete(oldId);
+              await udb.chapters.where("novelId").equals(oldId).delete();
+              // Re-save chapters with server ID
+              for (const ch of chapters) {
+                await udb.chapters.put({ ...ch, novelId: serverId, id: `${serverId}-ch${ch.index}` });
+              }
+              // Update related data to use server ID
+              for (const s of summaries) { await udb.summaries.put({ ...s, novelId: serverId }); }
+              for (const n of notes) { await udb.notes.put({ ...n, novelId: serverId }); }
+              for (const m of maps) { await udb.maps.put({ ...m, novelId: serverId }); }
+              for (const g of graphs) { await udb.graphs.put({ ...g, novelId: serverId }); }
+            });
+            // Join server novel
+            await apiFetch(`/api/novels/${serverId}/join`, { method: "POST" })
+              .catch((e) => console.warn("[AppLayout] join novel failed:", e));
+            continue;
+          }
+
           const chapters = await udb.chapters.where("novelId").equals(local.id).sortBy("index");
           const resp = await apiFetch("/api/novels", {
             method: "POST",
