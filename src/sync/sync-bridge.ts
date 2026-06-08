@@ -19,21 +19,20 @@ export async function gatherChanges(lastSyncTime: number): Promise<Partial<SyncD
     ? await udb.notes.where("updatedAt").above(lastSyncTime).toArray()
     : await udb.notes.toArray();
 
-  // maps/graphs: filter by updatedAt and exclude soft-deleted
-  // Note: deleted field is undefined (not 0) for non-deleted records, so we filter in JS
-  const filteredMaps = lastSyncTime > 0
-    ? (await udb.maps.where("updatedAt").above(lastSyncTime).toArray()).filter((m) => !m.deleted)
-    : (await udb.maps.toArray()).filter((m) => !m.deleted);
+  // maps/graphs: filter by updatedAt and exclude soft-deleted, limit to BATCH_SIZE
+  const mapQuery = lastSyncTime > 0
+    ? udb.maps.where("updatedAt").above(lastSyncTime)
+    : udb.maps.toCollection();
+  const maps = await mapQuery.filter((m) => !m.deleted).limit(BATCH_SIZE).toArray();
 
-  const filteredGraphs = lastSyncTime > 0
-    ? (await udb.graphs.where("updatedAt").above(lastSyncTime).toArray()).filter((g) => !g.deleted)
-    : (await udb.graphs.toArray()).filter((g) => !g.deleted);
+  const graphQuery = lastSyncTime > 0
+    ? udb.graphs.where("updatedAt").above(lastSyncTime)
+    : udb.graphs.toCollection();
+  const graphs = await graphQuery.filter((g) => !g.deleted).limit(BATCH_SIZE).toArray();
 
   // 分批：只取前 BATCH_SIZE 条记录
   const summaries = filteredSummaries.slice(0, BATCH_SIZE);
   const notes = filteredNotes.slice(0, BATCH_SIZE);
-  const maps = filteredMaps.slice(0, BATCH_SIZE);
-  const graphs = filteredGraphs.slice(0, BATCH_SIZE);
 
   // 如果有更多数据，记录日志
   if (filteredSummaries.length > BATCH_SIZE) {
@@ -90,29 +89,37 @@ export async function gatherChanges(lastSyncTime: number): Promise<Partial<SyncD
 
 /**
  * 检查是否还有更多数据需要同步
+ * 优化：只加载 BATCH_SIZE + 1 条记录判断是否超过，不加载全表
  */
 export async function hasMoreChanges(lastSyncTime: number): Promise<boolean> {
   const udb = getUserDB();
+  const limit = BATCH_SIZE + 1;
 
-  // Use count queries instead of loading all data
+  // Summaries/notes: use count query (efficient)
   const summaryCount = lastSyncTime > 0
     ? await udb.summaries.where("updatedAt").above(lastSyncTime).count()
     : await udb.summaries.count();
+  if (summaryCount > BATCH_SIZE) return true;
 
   const noteCount = lastSyncTime > 0
     ? await udb.notes.where("updatedAt").above(lastSyncTime).count()
     : await udb.notes.count();
+  if (noteCount > BATCH_SIZE) return true;
 
-  // maps/graphs: filter in JS because deleted is undefined (not 0) for non-deleted records
-  const mapCount = lastSyncTime > 0
-    ? (await udb.maps.where("updatedAt").above(lastSyncTime).toArray()).filter((m) => !m.deleted).length
-    : (await udb.maps.toArray()).filter((m) => !m.deleted).length;
+  // Maps/graphs: load only first BATCH_SIZE+1 non-deleted records
+  const mapQuery = lastSyncTime > 0
+    ? udb.maps.where("updatedAt").above(lastSyncTime)
+    : udb.maps.toCollection();
+  const mapSample = await mapQuery.filter((m) => !m.deleted).limit(limit).toArray();
+  if (mapSample.length > BATCH_SIZE) return true;
 
-  const graphCount = lastSyncTime > 0
-    ? (await udb.graphs.where("updatedAt").above(lastSyncTime).toArray()).filter((g) => !g.deleted).length
-    : (await udb.graphs.toArray()).filter((g) => !g.deleted).length;
+  const graphQuery = lastSyncTime > 0
+    ? udb.graphs.where("updatedAt").above(lastSyncTime)
+    : udb.graphs.toCollection();
+  const graphSample = await graphQuery.filter((g) => !g.deleted).limit(limit).toArray();
+  if (graphSample.length > BATCH_SIZE) return true;
 
-  return summaryCount > BATCH_SIZE || noteCount > BATCH_SIZE || mapCount > BATCH_SIZE || graphCount > BATCH_SIZE;
+  return false;
 }
 
 /** Apply server data to local storage (after sync pull) */

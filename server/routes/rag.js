@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { authNovel } from "../middleware/auth.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import { buildIndex, getProgress, getIndexData, getStatuses, getAllStatuses } from "../rag-builder.js";
+import { resolveModelKey } from "../lib/engine-config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -17,20 +18,6 @@ const router = Router();
 // ── RAG: Cached pipeline for test/encode endpoints ────────
 
 const _cachedPipes = new Map(); // modelKey → pipeline
-
-const ENGINE_MODEL_MAP = {
-  "Xenova/bge-small-zh-v1.5": "Xenova/bge-small-zh-v1.5",
-  "Xenova/gte-small": "Xenova/gte-small",
-  "Xenova/multilingual-e5-small": "Xenova/multilingual-e5-small",
-  "Xenova/all-MiniLM-L6-v2": "Xenova/all-MiniLM-L6-v2",
-  "Xenova/paraphrase-multilingual-MiniLM-L12-v2": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
-};
-
-function resolveModelKey(engine) {
-  if (ENGINE_MODEL_MAP[engine]) return ENGINE_MODEL_MAP[engine];
-  if (engine && engine.includes("/")) return engine;
-  return "Xenova/bge-small-zh-v1.5";
-}
 
 async function getEncodePipeline(engine) {
   const modelKey = resolveModelKey(engine);

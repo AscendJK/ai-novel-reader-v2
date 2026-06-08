@@ -36,21 +36,7 @@ setInterval(() => {
 const queue = [];
 let running = false;
 
-// ── Engine to model key mapping ──
-
-const ENGINE_MODEL_MAP = {
-  "Xenova/bge-small-zh-v1.5": "Xenova/bge-small-zh-v1.5",
-  "Xenova/gte-small": "Xenova/gte-small",
-  "Xenova/multilingual-e5-small": "Xenova/multilingual-e5-small",
-  "Xenova/all-MiniLM-L6-v2": "Xenova/all-MiniLM-L6-v2",
-  "Xenova/paraphrase-multilingual-MiniLM-L12-v2": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
-};
-
-function resolveModelKey(engine) {
-  if (ENGINE_MODEL_MAP[engine]) return ENGINE_MODEL_MAP[engine];
-  if (engine && engine.includes("/")) return engine;
-  return "Xenova/bge-small-zh-v1.5";
-}
+import { resolveModelKey } from "./lib/engine-config.js";
 
 // ── Public API ──
 
