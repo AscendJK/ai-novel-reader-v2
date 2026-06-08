@@ -226,10 +226,15 @@ async function delRagIndex(novelId, engine, title) {
 
 // Settings
 async function loadSettings() {
-  const s = await get("/settings");
+  const [s, mirrorData] = await Promise.all([
+    get("/settings"),
+    get("/settings/mirror"),
+  ]);
   const t = s.timeout;
   const defaultMin = Math.round(t.minMs / 60000);
   const defaultMax = Math.round(t.maxMs / 60000);
+  const currentMirror = mirrorData.mirrorHost;
+  const mirrorOptions = mirrorData.options;
   document.getElementById("content").innerHTML = `
     <div class="card">
       <h3>RAG 构建超时</h3>
@@ -246,6 +251,21 @@ async function loadSettings() {
         <div id="timeoutPreview" style="color:#e0e0e0;font-size:14px;padding:8px 0"></div>
       </div>
       <button class="primary" onclick="saveTimeout()">保存</button>
+    </div>
+    <div class="card">
+      <h3>模型下载源</h3>
+      <p style="color:#888;font-size:13px;margin-bottom:12px">构建 RAG 索引时，服务端下载嵌入模型使用的镜像源。</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${Object.entries(mirrorOptions).map(([id, url]) => `
+          <button class="${currentMirror === url ? 'primary' : ''}"
+            style="padding:6px 16px;border-radius:6px;border:1px solid ${currentMirror === url ? '#2a4a2a' : '#2a2a30'};background:${currentMirror === url ? '#1a3a1a' : 'transparent'};color:${currentMirror === url ? '#8c8' : '#888'};cursor:pointer;font-size:13px"
+            onclick="saveMirror('${url}')">
+            ${id === 'hf-mirror' ? 'hf-mirror（国内镜像）' : 'HuggingFace（官方）'}<br>
+            <span style="font-size:10px;opacity:0.7">${url}</span>
+          </button>
+        `).join('')}
+      </div>
+      <p style="color:#666;font-size:11px;margin-top:8px">修改后下次构建索引时生效。</p>
     </div>
     <div class="card">
       <h3>说明</h3>
@@ -277,6 +297,17 @@ async function saveTimeout() {
     await fetch(API + "/settings/timeout", {
       method: "PUT", headers: authH(),
       body: JSON.stringify({ perChunkMs: ms }),
+    });
+    toast("已保存", true);
+    loadSettings();
+  } catch(e) { toast("保存失败", false); }
+}
+
+async function saveMirror(mirrorHost) {
+  try {
+    await fetch(API + "/settings/mirror", {
+      method: "PUT", headers: authH(),
+      body: JSON.stringify({ mirrorHost }),
     });
     toast("已保存", true);
     loadSettings();

@@ -1,6 +1,7 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { pipeline, env } from "@xenova/transformers";
 import path from "node:path";
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -10,11 +11,21 @@ env.allowRemoteModels = true;
 env.localModelPath = modelBasePath || path.resolve(__dirname, "../public/models/builtin/");
 // Use a project-level cache directory for downloaded models
 env.cacheDir = path.resolve(__dirname, "data/models-cache");
-// Support HuggingFace mirror via environment variable
-if (process.env.HF_MIRROR) {
-  env.remoteHost = process.env.HF_MIRROR;
-  console.log(`[rag-worker] 使用镜像源: ${env.remoteHost}`);
+
+// Read mirror config from file, fallback to environment variable, then default
+function getMirrorHost() {
+  try {
+    const configPath = path.resolve(__dirname, "data/rag-config.json");
+    if (fs.existsSync(configPath)) {
+      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      if (config.mirrorHost) return config.mirrorHost;
+    }
+  } catch { /* ignore */ }
+  return process.env.HF_MIRROR || "https://hf-mirror.com/";
 }
+
+env.remoteHost = getMirrorHost();
+console.log(`[rag-worker] 使用镜像源: ${env.remoteHost}`);
 
 async function run() {
   const pipe = await pipeline("feature-extraction", modelKey);

@@ -136,6 +136,46 @@ export function mountAdminRoutes(app) {
     res.json({ ok: true, perChunkMs: val });
   });
 
+  // ── Mirror Config ──
+
+  const RAG_CONFIG_FILE = path.join(__dirname, "data", "rag-config.json");
+  const DEFAULT_MIRROR = "https://hf-mirror.com/";
+  const MIRRORS = {
+    "huggingface": "https://huggingface.co/",
+    "hf-mirror": "https://hf-mirror.com/",
+  };
+
+  function getMirrorConfig() {
+    try {
+      if (fs.existsSync(RAG_CONFIG_FILE)) {
+        const config = JSON.parse(fs.readFileSync(RAG_CONFIG_FILE, "utf-8"));
+        return config.mirrorHost || DEFAULT_MIRROR;
+      }
+    } catch { /* ignore */ }
+    return DEFAULT_MIRROR;
+  }
+
+  app.get("/api/admin/settings/mirror", (req, res) => {
+    if (!auth(req, res)) return;
+    const mirrorHost = getMirrorConfig();
+    res.json({ mirrorHost, options: MIRRORS });
+  });
+
+  app.put("/api/admin/settings/mirror", (req, res) => {
+    if (!auth(req, res)) return;
+    const { mirrorHost } = req.body;
+    if (!mirrorHost || !Object.values(MIRRORS).includes(mirrorHost)) {
+      return res.status(400).json({ error: "无效的镜像地址" });
+    }
+    try {
+      let config = {};
+      try { config = JSON.parse(fs.readFileSync(RAG_CONFIG_FILE, "utf-8")); } catch { /* ignore */ }
+      config.mirrorHost = mirrorHost;
+      fs.writeFileSync(RAG_CONFIG_FILE, JSON.stringify(config, null, 2), "utf-8");
+      res.json({ ok: true, mirrorHost });
+    } catch (e) { res.status(500).json({ error: "保存失败" }); }
+  });
+
   // ── Backups ──
 
   app.get("/api/admin/backups", (req, res) => {

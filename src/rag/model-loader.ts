@@ -21,7 +21,7 @@ const MIRRORS: Record<string, string> = {
 };
 
 export function getMirrorId(): string {
-  try { return localStorage.getItem(HF_MIRROR_KEY) || "huggingface"; } catch { return "huggingface"; }
+  try { return localStorage.getItem(HF_MIRROR_KEY) || "hf-mirror"; } catch { return "hf-mirror"; }
 }
 
 export function setMirrorId(id: string): void {
