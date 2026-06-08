@@ -212,7 +212,11 @@ export function BookSelect() {
 
     try {
       // Ensure engine model files are cached in browser before building
-      await ensureModelCached(buildEngine);
+      await ensureModelCached(buildEngine, {
+        onStatus: (status, progress) => {
+          useRAGStore.getState().setModelDownloadStatus(status, progress);
+        },
+      });
 
       // 使用新的 build store
       const buildStore = useBuildStore.getState();

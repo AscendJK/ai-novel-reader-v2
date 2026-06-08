@@ -453,7 +453,11 @@ export function AppLayout() {
 
     // Pre-cache the current engine's model files (non-blocking)
     const currentEngine = useRAGStore.getState().engine;
-    ensureModelCached(currentEngine).catch((e) => console.warn("[AppLayout] ensureModelCached failed:", e));
+    ensureModelCached(currentEngine, {
+      onStatus: (status, progress) => {
+        useRAGStore.getState().setModelDownloadStatus(status, progress);
+      },
+    }).catch((e) => console.warn("[AppLayout] ensureModelCached failed:", e));
 
     setSyncReady(true);
     useUIStore.getState().setDebugMode(false);

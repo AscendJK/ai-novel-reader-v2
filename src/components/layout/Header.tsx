@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { ArrowLeft, Book, Settings, Moon, Sun, LogOut, User, StickyNote, WifiOff, Wifi } from "lucide-react";
+import { ArrowLeft, Book, Settings, Moon, Sun, LogOut, User, StickyNote, WifiOff, Wifi, Download, CheckCircle2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useUIStore } from "@/stores/ui-store";
+import { useRAGStore } from "@/stores/rag-store";
 import { syncClient } from "@/sync/sync-client";
 
 interface HeaderProps {
@@ -121,6 +122,9 @@ export function Header({ inBook, bookTitle, onBack, onSettings, onNotes }: Heade
           </div>
         )}
 
+        {/* 模型下载状态 */}
+        <ModelDownloadIndicator />
+
         {/* 在线状态（可点击切换到离线） */}
         {!offlineMode && (
           <Button
@@ -177,4 +181,30 @@ export function Header({ inBook, bookTitle, onBack, onSettings, onNotes }: Heade
       </div>
     </header>
   );
+}
+
+function ModelDownloadIndicator() {
+  const { modelDownloadStatus, modelDownloadProgress } = useRAGStore();
+
+  if (modelDownloadStatus === "idle" || modelDownloadStatus === "cached") return null;
+
+  if (modelDownloadStatus === "downloading") {
+    return (
+      <div className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs text-blue-500" title={modelDownloadProgress}>
+        <Loader2 className="h-3 w-3 animate-spin" />
+        <span className="hidden md:inline max-w-[120px] truncate">{modelDownloadProgress || "模型下载中..."}</span>
+      </div>
+    );
+  }
+
+  if (modelDownloadStatus === "error") {
+    return (
+      <div className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs text-destructive" title="模型下载失败，将在下次登录时重试">
+        <Download className="h-3 w-3" />
+        <span className="hidden md:inline">模型下载失败</span>
+      </div>
+    );
+  }
+
+  return null;
 }

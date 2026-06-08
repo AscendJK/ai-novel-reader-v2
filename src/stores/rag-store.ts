@@ -70,6 +70,8 @@ function saveTopKConfig(config: { default: number; tiers: TopKTier[] }) {
   } catch { /* ignore */ }
 }
 
+export type ModelDownloadStatus = "idle" | "downloading" | "cached" | "error";
+
 interface RAGState {
   engine: EngineId;
   savedCustomModels: { key: string; name: string; size: string }[];
@@ -78,6 +80,8 @@ interface RAGState {
   cachedKeys: Set<string>;   // keys in IndexedDB (persistent browser cache)
   lruKeys: Set<string>;      // keys in LRU memory (ready for immediate retrieval)
   indexLoadingKeys: Set<string>;  // keys currently loading from IndexedDB to memory
+  modelDownloadStatus: ModelDownloadStatus;
+  modelDownloadProgress: string;  // e.g. "model_quantized.onnx 10.5/24MB (44%)"
   topKDefault: number;
   topKTiers: TopKTier[];
   setEngine: (e: EngineId, name?: string, size?: string) => void;
@@ -92,6 +96,7 @@ interface RAGState {
   removeLruKey: (key: string) => void;
   addIndexLoadingKey: (key: string) => void;
   removeIndexLoadingKey: (key: string) => void;
+  setModelDownloadStatus: (status: ModelDownloadStatus, progress?: string) => void;
   setTopKDefault: (val: number) => void;
   setTopKTiers: (tiers: TopKTier[]) => void;
   resetTopKConfig: () => void;
@@ -108,6 +113,8 @@ export const useRAGStore = create<RAGState>((set, get) => ({
   cachedKeys: new Set<string>(),
   lruKeys: new Set<string>(),
   indexLoadingKeys: new Set<string>(),
+  modelDownloadStatus: "idle" as ModelDownloadStatus,
+  modelDownloadProgress: "",
   topKDefault: _topKConfig.default,
   topKTiers: _topKConfig.tiers,
 
@@ -181,6 +188,10 @@ export const useRAGStore = create<RAGState>((set, get) => ({
     const next = new Set(get().indexLoadingKeys);
     next.delete(key);
     set({ indexLoadingKeys: next });
+  },
+
+  setModelDownloadStatus: (status, progress = "") => {
+    set({ modelDownloadStatus: status, modelDownloadProgress: progress });
   },
 
   setTopKDefault: (val) => {

@@ -334,18 +334,51 @@ export async function downloadModelToCache(modelKey: string, onProgress?: (file:
 
 /**
  * Ensure model files are cached in the browser. Checks first, downloads if missing.
- * Skips silently for TF-IDF or if offline.
+ * Reports progress via callback. Retries up to 3 times on failure.
  */
-export async function ensureModelCached(engine: string): Promise<void> {
+export async function ensureModelCached(
+  engine: string,
+  opts?: { onStatus?: (status: "downloading" | "cached" | "error", progress?: string) => void; maxRetries?: number }
+): Promise<void> {
   if (!engine || engine === "tfidf") return;
   const modelKey = resolveModelKey(engine);
   if (!modelKey) return;
+  const maxRetries = opts?.maxRetries ?? 3;
+
   try {
     const status = await checkModelCacheStatus(modelKey);
-    if (!status.cached) {
-      console.log(`[model-loader] 引擎 ${engine} 模型文件未缓存，从服务器下载...`);
-      const ok = await downloadModelToCache(modelKey);
-      console.log(`[model-loader] 下载${ok ? "成功" : "失败"}: ${engine}`);
+    if (status.cached) {
+      console.log(`[model-loader] 引擎 ${engine} 模型已缓存`);
+      opts?.onStatus?.("cached");
+      return;
     }
-  } catch { /* server unreachable, skip */ }
+  } catch { /* ignore */ }
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`[model-loader] 下载引擎 ${engine} 模型文件 (${attempt}/${maxRetries})...`);
+      opts?.onStatus?.("downloading", `下载中 (${attempt}/${maxRetries})...`);
+      const ok = await downloadModelToCache(modelKey, (file, loaded, total) => {
+        const loadedMB = (loaded / 1024 / 1024).toFixed(1);
+        const totalMB = total > 0 ? (total / 1024 / 1024).toFixed(0) : "?";
+        const pct = total > 0 ? Math.round(loaded / total * 100) : 0;
+        const progress = `${file.split("/").pop()} ${loadedMB}/${totalMB}MB (${pct}%)`;
+        opts?.onStatus?.("downloading", progress);
+      });
+      if (ok) {
+        console.log(`[model-loader] 引擎 ${engine} 模型下载成功`);
+        opts?.onStatus?.("cached");
+        return;
+      }
+      console.warn(`[model-loader] 引擎 ${engine} 模型下载失败 (${attempt}/${maxRetries})`);
+    } catch (e) {
+      console.warn(`[model-loader] 引擎 ${engine} 模型下载异常 (${attempt}/${maxRetries}):`, e);
+    }
+    // Wait before retry (exponential backoff)
+    if (attempt < maxRetries) {
+      await new Promise((r) => setTimeout(r, attempt * 2000));
+    }
+  }
+  console.error(`[model-loader] 引擎 ${engine} 模型下载最终失败`);
+  opts?.onStatus?.("error", "下载失败");
 }
