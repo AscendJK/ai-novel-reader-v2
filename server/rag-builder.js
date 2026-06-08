@@ -220,7 +220,9 @@ async function _doBuild(novelId, engine, key) {
     }, workerTimeoutMs);
 
     worker.on("message", (msg) => {
-      if (msg.type === "progress") {
+      if (msg.type === "downloading") {
+        buildProgress.set(key, { status: "downloading", current: 0, total: 0, message: `下载模型: ${msg.model}` });
+      } else if (msg.type === "progress") {
         buildProgress.set(key, { status: "encoding", current: msg.current, total: msg.total });
       } else if (msg.type === "done") {
         clearTimeout(timeout);

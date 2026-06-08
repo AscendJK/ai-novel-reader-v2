@@ -23,7 +23,7 @@ const activeBuilds = new Map<string, Promise<DownloadResult>>();
 // 类型定义
 // ============================================================
 
-export type BuildStatus = "none" | "queued" | "loading" | "building" | "encoding" | "ready" | "error";
+export type BuildStatus = "none" | "queued" | "loading" | "building" | "encoding" | "downloading" | "ready" | "error";
 
 export interface BuildProgress {
   status: BuildStatus;
@@ -389,8 +389,10 @@ async function doBuild(options: BuildOptions & { buildKey: string }): Promise<Do
         let message: string;
         let displayStatus = result.status;
 
-        if (result.status === "queued" && hasBeenBuilding) {
-          // 已经开始构建后，queued 状态视为仍在构建中
+        if (result.status === "downloading") {
+          message = result.message || "正在下载嵌入模型...";
+          displayStatus = "loading";
+        } else if (result.status === "queued" && hasBeenBuilding) {
           displayStatus = "building";
           message = `正在编码 (${result.current ?? 0}/${result.total ?? "?"})`;
         } else if (result.status === "queued") {

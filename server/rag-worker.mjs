@@ -26,6 +26,8 @@ env.remoteHost = getMirrorHost();
 console.log(`[rag-worker] 使用镜像源: ${env.remoteHost}`);
 
 async function run() {
+  // Report model download phase
+  parentPort.postMessage({ type: "downloading", model: modelKey });
   const pipe = await pipeline("feature-extraction", modelKey);
   const totalBatches = Math.ceil(chunks.length / batchSize);
   const vectors = [];
