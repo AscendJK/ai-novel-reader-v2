@@ -167,4 +167,83 @@ router.get("/:novelId/index", (req, res) => {
   }
 });
 
+// ── Model Proxy ────────────────────────────────────────────
+// Proxies model file requests to HuggingFace mirror (bypasses browser CORS)
+
+const MODEL_CACHE_DIR = path.resolve(__dirname, "../data/models-cache");
+
+function getMirrorHost() {
+  try {
+    const configPath = path.resolve(__dirname, "../data/rag-config.json");
+    if (fs.existsSync(configPath)) {
+      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      if (config.mirrorHost) return config.mirrorHost;
+    }
+  } catch { /* ignore */ }
+  return process.env.HF_MIRROR || "https://hf-mirror.com/";
+}
+
+// GET /api/rag/model-proxy/:modelId/... — proxy model file from mirror
+router.get("/model-proxy/*", async (req, res) => {
+  try {
+    const subPath = req.params[0]; // e.g. "Xenova/bge-small-zh-v1.5/resolve/main/config.json"
+    if (!subPath) return res.status(400).json({ error: "path required" });
+
+    const mirrorHost = getMirrorHost();
+    const targetUrl = `${mirrorHost}${subPath}`;
+
+    // Check local cache first
+    const cachePath = path.join(MODEL_CACHE_DIR, subPath);
+    if (fs.existsSync(cachePath)) {
+      console.log(`[model-proxy] cache hit: ${subPath}`);
+      const data = fs.readFileSync(cachePath);
+      const ext = path.extname(subPath);
+      const contentType = ext === ".json" ? "application/json"
+        : ext === ".onnx" ? "application/octet-stream"
+        : ext === ".txt" || ext === ".proto" ? "text/plain"
+        : "application/octet-stream";
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Length", data.length);
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      return res.send(data);
+    }
+
+    // Fetch from mirror
+    console.log(`[model-proxy] fetching: ${targetUrl}`);
+    const response = await fetch(targetUrl, {
+      headers: { "User-Agent": "ai-novel-reader" },
+      redirect: "follow",
+    });
+
+    if (!response.ok) {
+      console.error(`[model-proxy] upstream error: ${response.status} ${response.statusText}`);
+      return res.status(response.status).json({ error: `upstream error: ${response.status}` });
+    }
+
+    // Stream response to client
+    const contentType = response.headers.get("content-type") || "application/octet-stream";
+    const contentLength = response.headers.get("content-length");
+    res.setHeader("Content-Type", contentType);
+    if (contentLength) res.setHeader("Content-Length", contentLength);
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+
+    // Read body and send
+    const buffer = Buffer.from(await response.arrayBuffer());
+    res.send(buffer);
+
+    // Cache to disk (async, don't block response)
+    const dir = path.dirname(cachePath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFile(cachePath, buffer, (err) => {
+      if (err) console.warn(`[model-proxy] cache write failed: ${err.message}`);
+      else console.log(`[model-proxy] cached: ${subPath} (${(buffer.length / 1024 / 1024).toFixed(1)} MB)`);
+    });
+  } catch (e) {
+    console.error("[model-proxy] error:", e);
+    res.status(500).json({ error: "代理请求失败" });
+  }
+});
+
 export default router;

@@ -6,31 +6,52 @@
 import { resolveModelKey } from "./engines";
 import { useRAGStore } from "@/stores/rag-store";
 import { broadcast } from "@/lib/broadcast";
+import { getServerUrl } from "@/lib/api-client";
 
-// HuggingFace mirror configuration
+// Mirror configuration
 const HF_MIRROR_KEY = "novel-reader-hf-mirror";
-const MIRRORS: Record<string, string> = {
+
+// Built-in mirror options (direct, may have CORS issues from GitHub Pages)
+const DIRECT_MIRRORS: Record<string, string> = {
   "huggingface": "https://huggingface.co/",
   "hf-mirror": "https://hf-mirror.com/",
 };
 
 export function getMirrorId(): string {
-  try { return localStorage.getItem(HF_MIRROR_KEY) || "hf-mirror"; } catch { return "hf-mirror"; }
+  try { return localStorage.getItem(HF_MIRROR_KEY) || "backend-proxy"; } catch { return "backend-proxy"; }
 }
 
 export function setMirrorId(id: string): void {
   try { localStorage.setItem(HF_MIRROR_KEY, id); } catch { /* ignore */ }
 }
 
+/**
+ * Get the remote host URL for model downloads.
+ * - "backend-proxy": uses the user's backend server as proxy (bypasses CORS)
+ * - "huggingface" / "hf-mirror": direct download (may have CORS issues)
+ */
 export function getRemoteHost(): string {
-  return MIRRORS[getMirrorId()] || MIRRORS["hf-mirror"];
+  const mirrorId = getMirrorId();
+  if (mirrorId === "backend-proxy") {
+    const serverUrl = getServerUrl();
+    if (serverUrl) return `${serverUrl}/api/rag/model-proxy/`;
+    // Fallback to hf-mirror if no server configured
+    return DIRECT_MIRRORS["hf-mirror"];
+  }
+  return DIRECT_MIRRORS[mirrorId] || DIRECT_MIRRORS["hf-mirror"];
 }
 
 export function getMirrorOptions(): { id: string; name: string; url: string }[] {
-  return [
+  const serverUrl = getServerUrl();
+  const options: { id: string; name: string; url: string }[] = [];
+  if (serverUrl) {
+    options.push({ id: "backend-proxy", name: "后端代理（推荐）", url: `${serverUrl}/api/rag/model-proxy/` });
+  }
+  options.push(
     { id: "huggingface", name: "HuggingFace（官方）", url: "https://huggingface.co" },
     { id: "hf-mirror", name: "hf-mirror（国内镜像）", url: "https://hf-mirror.com" },
-  ];
+  );
+  return options;
 }
 
 // ── Engine list (unified, no builtin/custom distinction) ──
