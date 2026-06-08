@@ -39,11 +39,11 @@ let running = false;
 // ── Engine to model key mapping ──
 
 const ENGINE_MODEL_MAP = {
-  "bge-small-zh": "Xenova/bge-small-zh-v1.5",
-  "gte-small": "Xenova/gte-small",
-  "multilingual-e5-small": "Xenova/multilingual-e5-small",
-  "all-MiniLM-L6-v2": "Xenova/all-MiniLM-L6-v2",
-  "multilingual-MiniLM-L12-v2": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
+  "Xenova/bge-small-zh-v1.5": "Xenova/bge-small-zh-v1.5",
+  "Xenova/gte-small": "Xenova/gte-small",
+  "Xenova/multilingual-e5-small": "Xenova/multilingual-e5-small",
+  "Xenova/all-MiniLM-L6-v2": "Xenova/all-MiniLM-L6-v2",
+  "Xenova/paraphrase-multilingual-MiniLM-L12-v2": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
 };
 
 function resolveModelKey(engine) {
@@ -57,7 +57,7 @@ function resolveModelKey(engine) {
 const MAX_QUEUE = 10;
 
 /** Add a novel to the build queue */
-export function buildIndex(novelId, engine = "bge-small-zh") {
+export function buildIndex(novelId, engine = "Xenova/bge-small-zh-v1.5") {
   const key = `${novelId}-${engine}`;
 
   // Check DB status
@@ -136,7 +136,7 @@ export function getAllStatuses(novelIds) {
 }
 
 /** Get build statuses for multiple novels */
-export function getStatuses(novelIds, engine = "bge-small-zh") {
+export function getStatuses(novelIds, engine = "Xenova/bge-small-zh-v1.5") {
   const result = {};
   for (const nid of novelIds) {
     const key = `${nid}-${engine}`;
@@ -153,7 +153,7 @@ export function getStatuses(novelIds, engine = "bge-small-zh") {
 }
 
 /** Get single build progress */
-export function getProgress(novelId, engine = "bge-small-zh") {
+export function getProgress(novelId, engine = "Xenova/bge-small-zh-v1.5") {
   const key = `${novelId}-${engine}`;
   const mem = buildProgress.get(key);
   if (mem) {
@@ -168,7 +168,7 @@ export function getProgress(novelId, engine = "bge-small-zh") {
   return dbRow ? { status: dbRow.status, chunkCount: dbRow.chunk_count, buildTime: dbRow.build_time, error: dbRow.error_msg, dim: dbRow.dim } : { status: "none" };
 }
 
-export function getIndexData(novelId, engine = "bge-small-zh") {
+export function getIndexData(novelId, engine = "Xenova/bge-small-zh-v1.5") {
   return db.db.prepare(
     "SELECT chunks_json, vectors_blob, dim, chunk_count FROM rag_indices WHERE novel_id = ? AND engine = ? AND status = 'ready'"
   ).get(novelId, engine) || null;

@@ -96,7 +96,7 @@ function fmtTime(ms) { if (!ms) return "-"; const s = ms/1000; return s >= 60 ? 
 function engineShort(engine) {
   if (!engine) return "?";
   if (engine === "tfidf") return "TF-IDF";
-  if (engine === "bge-small-zh") return "BGE";
+  if (engine === "Xenova/bge-small-zh-v1.5") return "BGE";
   if (engine === "gte-small") return "GTE";
   if (engine.includes("e5")) return "E5";
   if (engine.includes("MiniLM")) return "MiniLM";

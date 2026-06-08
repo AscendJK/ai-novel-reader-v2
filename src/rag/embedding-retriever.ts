@@ -70,7 +70,7 @@ export class EmbeddingRetriever {
   private dim = 0;
   private engine: string;
 
-  constructor(engine: string = "bge-small-zh") {
+  constructor(engine: string = "Xenova/bge-small-zh-v1.5") {
     this.engine = engine;
   }
 
@@ -81,7 +81,7 @@ export class EmbeddingRetriever {
     return { vectors: this.vectors.map((v) => Array.from(v)), chunks: this.chunks, dim: this.dim };
   }
 
-  static fromData(data: EmbeddingRetrieverData, engine: string = "bge-small-zh"): EmbeddingRetriever {
+  static fromData(data: EmbeddingRetrieverData, engine: string = "Xenova/bge-small-zh-v1.5"): EmbeddingRetriever {
     const r = new EmbeddingRetriever(engine);
     r.vectors = data.vectors.map((v) => new Float32Array(v));
     r.chunks = data.chunks;
@@ -93,7 +93,7 @@ export class EmbeddingRetriever {
    * 从 ArrayBuffer 零拷贝创建实例
    * 使用 Float32Array.subarray 创建视图，不复制数据
    */
-  static fromArrayBuffer(buffer: ArrayBuffer, chunks: Chunk[], dim: number, engine: string = "bge-small-zh"): EmbeddingRetriever {
+  static fromArrayBuffer(buffer: ArrayBuffer, chunks: Chunk[], dim: number, engine: string = "Xenova/bge-small-zh-v1.5"): EmbeddingRetriever {
     const r = new EmbeddingRetriever(engine);
     r.loadFromBuffer(buffer, chunks, dim);
     return r;

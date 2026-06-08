@@ -9,7 +9,7 @@ describe("rag-store", () => {
   beforeEach(() => {
     // 重置 store
     useRAGStore.setState({
-      engine: "bge-small-zh",
+      engine: "Xenova/bge-small-zh-v1.5",
       cachedKeys: new Set(),
       lruKeys: new Set(),
       ragCacheSizeBytes: 0,
@@ -20,8 +20,8 @@ describe("rag-store", () => {
 
   describe("setEngine", () => {
     it("应该设置引擎", () => {
-      useRAGStore.getState().setEngine("gte-small");
-      expect(useRAGStore.getState().engine).toBe("gte-small");
+      useRAGStore.getState().setEngine("Xenova/gte-small");
+      expect(useRAGStore.getState().engine).toBe("Xenova/gte-small");
     });
   });
 

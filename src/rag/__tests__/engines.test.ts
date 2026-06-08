@@ -11,11 +11,11 @@ describe("isEmbeddingEngine", () => {
   });
 
   it("应该返回 true（bge-small-zh 是嵌入引擎）", () => {
-    expect(isEmbeddingEngine("bge-small-zh")).toBe(true);
+    expect(isEmbeddingEngine("Xenova/bge-small-zh-v1.5")).toBe(true);
   });
 
   it("应该返回 true（gte-small 是嵌入引擎）", () => {
-    expect(isEmbeddingEngine("gte-small")).toBe(true);
+    expect(isEmbeddingEngine("Xenova/gte-small")).toBe(true);
   });
 
   it("应该返回 true（自定义引擎是嵌入引擎）", () => {
@@ -29,7 +29,7 @@ describe("resolveModelKey", () => {
   });
 
   it("应该返回已知引擎的 modelKey", () => {
-    expect(resolveModelKey("bge-small-zh")).toBe("Xenova/bge-small-zh-v1.5");
+    expect(resolveModelKey("Xenova/bge-small-zh-v1.5")).toBe("Xenova/bge-small-zh-v1.5");
   });
 
   it("应该返回未知引擎的原始 id", () => {
@@ -37,7 +37,7 @@ describe("resolveModelKey", () => {
   });
 
   it("应该返回 GTE 的 modelKey", () => {
-    expect(resolveModelKey("gte-small")).toBe("Xenova/gte-small");
+    expect(resolveModelKey("Xenova/gte-small")).toBe("Xenova/gte-small");
   });
 });
 
@@ -55,9 +55,9 @@ describe("getEngineInfo", () => {
   });
 
   it("应该返回 BGE 的信息", () => {
-    const info = getEngineInfo("bge-small-zh");
+    const info = getEngineInfo("Xenova/bge-small-zh-v1.5");
     expect(info).toBeDefined();
-    expect(info?.id).toBe("bge-small-zh");
+    expect(info?.id).toBe("Xenova/bge-small-zh-v1.5");
     expect(info?.name).toContain("BGE");
   });
 });
@@ -76,7 +76,7 @@ describe("getEngineDisplayName", () => {
   });
 
   it("应该返回 BGE 的显示名称", () => {
-    expect(getEngineDisplayName("bge-small-zh")).toContain("BGE");
+    expect(getEngineDisplayName("Xenova/bge-small-zh-v1.5")).toContain("BGE");
   });
 });
 
@@ -85,12 +85,12 @@ describe("ENGINES 常量", () => {
     expect(ENGINES.tfidf).toBeDefined();
   });
 
-  it("应该包含 bge-small-zh 引擎", () => {
-    expect(ENGINES["bge-small-zh"]).toBeDefined();
+  it("应该包含 bge 引擎", () => {
+    expect(ENGINES["Xenova/bge-small-zh-v1.5"]).toBeDefined();
   });
 
-  it("应该包含 gte-small 引擎", () => {
-    expect(ENGINES["gte-small"]).toBeDefined();
+  it("应该包含 gte 引擎", () => {
+    expect(ENGINES["Xenova/gte-small"]).toBeDefined();
   });
 
   it("每个引擎都应该有必要的字段", () => {

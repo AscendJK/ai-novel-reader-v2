@@ -28,9 +28,9 @@ export const ENGINES: Record<string, EngineInfo> = {
       "不能理解隐喻、成语和古文",
     ],
   },
-  "bge-small-zh": {
-    id: "bge-small-zh",
-    name: "BGE Small 中文专精（内置·推荐）",
+  "Xenova/bge-small-zh-v1.5": {
+    id: "Xenova/bge-small-zh-v1.5",
+    name: "BGE Small 中文专精（推荐）",
     description: "北京智源出品，专为中文优化的嵌入模型，中文场景最佳",
     size: "约 26 MB",
     modelKey: "Xenova/bge-small-zh-v1.5",
@@ -61,9 +61,9 @@ export const ENGINES: Record<string, EngineInfo> = {
       "中文成语、古文理解不如 BGE",
     ],
   },
-  "gte-small": {
-    id: "gte-small",
-    name: "GTE Small（内置·推荐）",
+  "Xenova/gte-small": {
+    id: "Xenova/gte-small",
+    name: "GTE Small（推荐）",
     description: "阿里通义实验室出品，中英文均衡，检索评测表现优秀",
     size: "约 34 MB",
     modelKey: "Xenova/gte-small",

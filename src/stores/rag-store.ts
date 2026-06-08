@@ -6,7 +6,7 @@ function loadPref(): EngineId {
     const stored = localStorage.getItem("novel-reader-rag-engine");
     if (stored && stored.length > 0) return stored;
   } catch { /* ignore */ }
-  return "bge-small-zh";
+  return "Xenova/bge-small-zh-v1.5";
 }
 
 function loadSavedModels(): { key: string; name: string; size: string }[] {

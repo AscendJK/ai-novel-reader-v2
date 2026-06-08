@@ -101,7 +101,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS rag_indices (
     novel_id TEXT NOT NULL,
-    engine TEXT NOT NULL DEFAULT 'bge-small-zh',
+    engine TEXT NOT NULL DEFAULT 'Xenova/bge-small-zh-v1.5',
     status TEXT NOT NULL DEFAULT 'none',
     chunks_json TEXT NOT NULL DEFAULT '[]',
     vectors_blob BLOB,

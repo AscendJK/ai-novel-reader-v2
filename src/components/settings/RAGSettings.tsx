@@ -100,7 +100,7 @@ export function RAGSettings() {
             const isActive = engine === m.key;
             const isDownloading = currentDownload === m.modelKey;
             const isOtherDownloading = currentDownload !== null && !isDownloading;
-            const isDefault = m.key === "bge-small-zh";
+            const isDefault = m.key === "Xenova/bge-small-zh-v1.5";
 
             return (
               <div

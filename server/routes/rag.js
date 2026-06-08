@@ -19,11 +19,11 @@ const router = Router();
 const _cachedPipes = new Map(); // modelKey → pipeline
 
 const ENGINE_MODEL_MAP = {
-  "bge-small-zh": "Xenova/bge-small-zh-v1.5",
-  "gte-small": "Xenova/gte-small",
-  "multilingual-e5-small": "Xenova/multilingual-e5-small",
-  "all-MiniLM-L6-v2": "Xenova/all-MiniLM-L6-v2",
-  "multilingual-MiniLM-L12-v2": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
+  "Xenova/bge-small-zh-v1.5": "Xenova/bge-small-zh-v1.5",
+  "Xenova/gte-small": "Xenova/gte-small",
+  "Xenova/multilingual-e5-small": "Xenova/multilingual-e5-small",
+  "Xenova/all-MiniLM-L6-v2": "Xenova/all-MiniLM-L6-v2",
+  "Xenova/paraphrase-multilingual-MiniLM-L12-v2": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
 };
 
 function resolveModelKey(engine) {
@@ -57,7 +57,7 @@ async function getEncodePipeline(engine) {
 router.get("/test", rateLimit(5), async (req, res) => {
   if (!authNovel(req, res)) return;
   try {
-    const engine = req.query.engine || "bge-small-zh";
+    const engine = req.query.engine || "Xenova/bge-small-zh-v1.5";
     const t0 = Date.now();
     const pipe = await getEncodePipeline(engine);
     const result = await pipe(["测试文本"], { pooling: "mean", normalize: true });
@@ -96,7 +96,7 @@ router.get("/statuses", (req, res) => {
   if (!authNovel(req, res)) return;
   try {
     const ids = (req.query.ids || "").split(",").filter(Boolean);
-    const engine = req.query.engine || "bge-small-zh";
+    const engine = req.query.engine || "Xenova/bge-small-zh-v1.5";
     res.json(getStatuses(ids, engine));
   } catch (e) {
     console.error("[rag] statuses error:", e);
@@ -120,7 +120,7 @@ router.get("/statuses/all", (req, res) => {
 router.get("/:novelId/status", (req, res) => {
   if (!authNovel(req, res)) return;
   try {
-    const engine = req.query.engine || "bge-small-zh";
+    const engine = req.query.engine || "Xenova/bge-small-zh-v1.5";
     const progress = getProgress(req.params.novelId, engine);
     res.json(progress);
   } catch (e) {
@@ -133,7 +133,7 @@ router.get("/:novelId/status", (req, res) => {
 router.post("/:novelId/build", rateLimit(5), (req, res) => {
   if (!authNovel(req, res)) return;
   try {
-    const engine = req.body?.engine || "bge-small-zh";
+    const engine = req.body?.engine || "Xenova/bge-small-zh-v1.5";
     const result = buildIndex(req.params.novelId, engine);
     res.json(result);
   } catch (e) {
@@ -146,7 +146,7 @@ router.post("/:novelId/build", rateLimit(5), (req, res) => {
 router.get("/:novelId/index", (req, res) => {
   if (!authNovel(req, res)) return;
   try {
-    const engine = req.query.engine || "bge-small-zh";
+    const engine = req.query.engine || "Xenova/bge-small-zh-v1.5";
     const data = getIndexData(req.params.novelId, engine);
     if (!data) return res.status(404).json({ error: "索引未构建" });
 

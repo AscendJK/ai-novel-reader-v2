@@ -97,10 +97,10 @@ export interface EngineInfo {
   url: string;
 }
 
-// key === modelKey, 与 engines.ts 的 ENGINES ID 保持一致
+// key === modelKey，与 engines.ts 的 ENGINES ID 完全一致
 export const ALL_ENGINES: EngineInfo[] = [
   {
-    key: "bge-small-zh",
+    key: "Xenova/bge-small-zh-v1.5",
     modelKey: "Xenova/bge-small-zh-v1.5",
     name: "BGE Small ZH",
     size: "~26 MB",
@@ -108,7 +108,7 @@ export const ALL_ENGINES: EngineInfo[] = [
     url: "https://huggingface.co/Xenova/bge-small-zh-v1.5",
   },
   {
-    key: "gte-small",
+    key: "Xenova/gte-small",
     modelKey: "Xenova/gte-small",
     name: "GTE Small",
     size: "~34 MB",
