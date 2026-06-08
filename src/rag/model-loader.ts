@@ -285,7 +285,7 @@ export async function checkModelCacheStatus(modelKey: string): Promise<ModelCach
 }
 
 /** Download model files from server into our Cache API */
-export async function downloadModelToCache(modelKey: string, onProgress?: (file: string, loaded: number, total: number) => void): Promise<boolean> {
+export async function downloadModelToCache(modelKey: string, onProgress?: (file: string, loaded: number, total: number, speed?: number) => void): Promise<boolean> {
   const base = getModelBasePath(modelKey);
   try {
     const cache = await caches.open(MODEL_CACHE_NAME);
@@ -310,12 +310,23 @@ export async function downloadModelToCache(modelKey: string, onProgress?: (file:
       }
       const chunks: Uint8Array[] = [];
       let loaded = 0;
+      const startTime = Date.now();
+      let lastTime = startTime;
+      let lastLoaded = 0;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         chunks.push(value);
         loaded += value.length;
-        onProgress?.(file, loaded, contentLength);
+        // Calculate speed every ~500ms
+        const now = Date.now();
+        if (now - lastTime >= 500) {
+          const elapsed = (now - lastTime) / 1000;
+          const speed = (loaded - lastLoaded) / elapsed; // bytes per second
+          onProgress?.(file, loaded, contentLength, speed);
+          lastTime = now;
+          lastLoaded = loaded;
+        }
       }
       const body = new Uint8Array(loaded);
       let offset = 0;
@@ -360,12 +371,14 @@ export async function ensureModelCached(
     try {
       console.log(`[model-loader] 下载引擎 ${engine} 模型文件 (${attempt}/${maxRetries})...`);
       opts?.onStatus?.("downloading", `下载中 (${attempt}/${maxRetries})...`);
-      const ok = await downloadModelToCache(modelKey, (file, loaded, total) => {
+      const ok = await downloadModelToCache(modelKey, (file, loaded, total, speed) => {
         const loadedMB = (loaded / 1024 / 1024).toFixed(1);
+        const speedMB = speed ? (speed / 1024 / 1024).toFixed(1) : null;
         const progress = total > 0
           ? `${loadedMB}/${(total / 1024 / 1024).toFixed(0)}MB (${Math.round(loaded / total * 100)}%)`
           : `${loadedMB}MB`;
-        opts?.onStatus?.("downloading", `${file.split("/").pop()} ${progress}`);
+        const speedStr = speedMB ? ` · ${speedMB}MB/s` : "";
+        opts?.onStatus?.("downloading", `${file.split("/").pop()} ${progress}${speedStr}`);
       });
       if (ok) {
         console.log(`[model-loader] 引擎 ${engine} 模型下载成功`);
