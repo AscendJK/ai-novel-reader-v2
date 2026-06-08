@@ -250,7 +250,7 @@ export async function downloadAndCacheIndex(options: DownloadOptions): Promise<D
  * ```ts
  * await buildAndPollRAGIndex({
  *   novelId: "xxx",
- *   engine: "bge-small-zh",
+ *   engine: "Xenova/bge-small-zh-v1.5",
  *   onProgress: (p) => console.log(p.message),
  * });
  * ```

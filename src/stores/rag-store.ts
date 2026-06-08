@@ -1,10 +1,23 @@
 import { create } from "zustand";
 import type { EngineId } from "@/rag/engines";
 
+// Migration: old short engine IDs → new full Xenova paths
+const ENGINE_ID_MIGRATION: Record<string, string> = {
+  "bge-small-zh": "Xenova/bge-small-zh-v1.5",
+  "gte-small": "Xenova/gte-small",
+};
+
 function loadPref(): EngineId {
   try {
     const stored = localStorage.getItem("novel-reader-rag-engine");
-    if (stored && stored.length > 0) return stored;
+    if (stored && stored.length > 0) {
+      // Migrate old short keys to new full paths
+      const migrated = ENGINE_ID_MIGRATION[stored] || stored;
+      if (migrated !== stored) {
+        localStorage.setItem("novel-reader-rag-engine", migrated);
+      }
+      return migrated;
+    }
   } catch { /* ignore */ }
   return "Xenova/bge-small-zh-v1.5";
 }

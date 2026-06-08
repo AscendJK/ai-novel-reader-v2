@@ -5,41 +5,15 @@
 
 import { ragLog } from "@/lib/logger";
 import { resolveModelKey } from "./engines";
-import { getServerUrl } from "@/lib/api-client";
+import { installFetchInterceptor, restoreFetch } from "./fetch-proxy";
 
 // Resolve engine ID to the model key Transformers.js expects
 function toModelPath(engine: string): string {
-  const key = resolveModelKey(engine);
-  // resolveModelKey already returns the full Xenova path for known engines
-  // For unknown engines, return as-is (Transformers.js will try to resolve it)
-  return key;
+  return resolveModelKey(engine);
 }
 
 const encoderCache = new Map<string, any>();
 let encoderLock: Promise<void> = Promise.resolve();
-
-// Module-level reference to original fetch
-const _originalFetch = globalThis.fetch;
-
-// Intercept fetch to route HuggingFace model requests through backend proxy
-function proxiedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-
-  // Intercept HuggingFace model file requests (both Xenova/xxx and plain xxx)
-  const hfPattern = /https?:\/\/huggingface\.co\/([^/]+(?:\/[^/]+)?)\/resolve\/main\/.+/;
-  const match = url.match(hfPattern);
-  if (match) {
-    const serverUrl = getServerUrl();
-    if (serverUrl) {
-      const pathAfterHost = url.split("huggingface.co/")[1];
-      const proxyUrl = `${serverUrl}/api/rag/model-proxy/${pathAfterHost}`;
-      ragLog(`[client-encoder] 代理: ${url} → ${proxyUrl}`);
-      return _originalFetch(proxyUrl, init);
-    }
-  }
-
-  return _originalFetch(input, init);
-}
 
 async function getEncoder(engine: string): Promise<any> {
   const cached = encoderCache.get(engine);
@@ -62,7 +36,7 @@ async function getEncoder(engine: string): Promise<any> {
     env.useBrowserCache = true;
 
     // Install fetch interceptor
-    globalThis.fetch = proxiedFetch;
+    installFetchInterceptor();
 
     ragLog(`[client-encoder] 加载模型: ${modelPath}`);
     try {
@@ -71,8 +45,7 @@ async function getEncoder(engine: string): Promise<any> {
       ragLog(`[client-encoder] 模型就绪: ${modelPath}`);
       return extractor;
     } finally {
-      // Restore original fetch
-      globalThis.fetch = _originalFetch;
+      restoreFetch();
     }
   } finally {
     releaseLock();
