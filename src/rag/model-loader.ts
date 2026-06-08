@@ -97,6 +97,7 @@ export interface EngineInfo {
   url: string;
 }
 
+// key === modelKey, 与 engines.ts 的 ENGINES ID 保持一致
 export const ALL_ENGINES: EngineInfo[] = [
   {
     key: "bge-small-zh",
@@ -115,7 +116,7 @@ export const ALL_ENGINES: EngineInfo[] = [
     url: "https://huggingface.co/Xenova/gte-small",
   },
   {
-    key: "multilingual-e5-small",
+    key: "Xenova/multilingual-e5-small",
     modelKey: "Xenova/multilingual-e5-small",
     name: "Multilingual E5 Small",
     size: "~120 MB",
@@ -123,7 +124,7 @@ export const ALL_ENGINES: EngineInfo[] = [
     url: "https://huggingface.co/Xenova/multilingual-e5-small",
   },
   {
-    key: "all-MiniLM-L6-v2",
+    key: "Xenova/all-MiniLM-L6-v2",
     modelKey: "Xenova/all-MiniLM-L6-v2",
     name: "All-MiniLM-L6-v2",
     size: "~23 MB",
@@ -131,7 +132,7 @@ export const ALL_ENGINES: EngineInfo[] = [
     url: "https://huggingface.co/Xenova/all-MiniLM-L6-v2",
   },
   {
-    key: "multilingual-MiniLM-L12-v2",
+    key: "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
     modelKey: "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
     name: "Multilingual MiniLM L12",
     size: "~120 MB",
