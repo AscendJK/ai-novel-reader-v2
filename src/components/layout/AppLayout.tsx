@@ -27,7 +27,7 @@ import { syncClient } from "@/sync/sync-client";
 import { gatherChanges, applyServerData } from "@/sync/sync-bridge";
 import type { SyncData } from "@/sync/types";
 import { authHeaders } from "@/lib/auth-headers";
-import { apiFetch } from "@/lib/api-client";
+import { apiFetch, getServerUrl } from "@/lib/api-client";
 import { getAiRunning } from "@/lib/ai-state";
 
 export function AppLayout() {
