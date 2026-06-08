@@ -186,7 +186,8 @@ function getMirrorHost() {
 // GET /api/rag/model-proxy/{*path} — proxy model file from mirror
 router.get("/model-proxy/{*path}", async (req, res) => {
   try {
-    const subPath = req.params.path; // e.g. "Xenova/bge-small-zh-v1.5/resolve/main/config.json"
+    // Express 5 + path-to-regexp v8: {*path} returns an array of segments
+    const subPath = Array.isArray(req.params.path) ? req.params.path.join("/") : req.params.path;
     if (!subPath) return res.status(400).json({ error: "path required" });
 
     const mirrorHost = getMirrorHost();
