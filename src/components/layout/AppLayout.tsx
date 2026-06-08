@@ -452,12 +452,15 @@ export function AppLayout() {
     }
 
     // Auto-download default BGE model in background (non-blocking)
+    // Only if server is configured (needed for backend proxy)
     const store = useRAGStore.getState();
-    const currentEngine = store.engine;
     const defaultModelKey = "Xenova/bge-small-zh-v1.5";
-    if (!store.isModelDownloaded(defaultModelKey) && !store.currentDownload) {
+    const hasServer = !!getServerUrl();
+    if (hasServer && !store.isModelDownloaded(defaultModelKey) && !store.currentDownload) {
       console.log("[AppLayout] 自动下载默认引擎 BGE...");
       downloadModel(defaultModelKey).catch((e) => console.warn("[AppLayout] BGE 下载失败:", e));
+    } else if (!hasServer) {
+      console.log("[AppLayout] 未配置服务器，跳过模型自动下载");
     }
 
     setSyncReady(true);
