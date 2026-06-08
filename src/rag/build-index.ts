@@ -6,7 +6,7 @@
 import { apiFetch } from "@/lib/api-client";
 import { sharedDB } from "@/db/database";
 import { normalizeChunks } from "./chunk-utils";
-import { enforceIndexedDBQuota, ensureCacheSpace, updateAccessTime } from "./rag-cache-utils";
+import { enforceIndexedDBQuota } from "./rag-cache-utils";
 import { ragLog } from "@/lib/logger";
 
 /** API 错误响应格式 */
