@@ -348,11 +348,93 @@ export function AppLayout() {
       // 登录成功说明服务器可达，清除自动离线状态
       syncClient.resetAutoOffline();
       if (offlineMode) useUIStore.getState().setOfflineMode(false);
+
+      // ── 检查服务器和本地是否都有数据（冲突检测）──
+      const localNovelCount = await getUserDB().novels.count().catch(() => 0);
+      let serverNovelCount = 0;
       try {
-        await syncClient.syncOnce();
-        await syncJoinedNovels();
-        serverSynced = true;
-      } catch { /* syncOnce 内部已处理错误 */ }
+        const resp = await apiFetch(`/api/novels?username=${encodeURIComponent(username)}`);
+        if (resp.ok) {
+          const list = await resp.json();
+          serverNovelCount = list.length;
+        }
+      } catch { /* ignore */ }
+
+      if (localNovelCount > 0 && serverNovelCount > 0) {
+        // 两边都有数据，让用户选择
+        const choice = window.prompt(
+          `服务器上已有用户 "${username}" 的数据（${serverNovelCount} 本小说），本地也有数据（${localNovelCount} 本小说）。\n\n` +
+          `请选择处理方式（输入数字）：\n` +
+          `1 - 合并：两边数据合并（推荐）\n` +
+          `2 - 覆盖：用服务器数据覆盖本地\n` +
+          `3 - 改名：本地数据改名存为新用户`,
+          "1"
+        );
+
+        if (choice === "2") {
+          // 覆盖：清除本地数据，拉取服务器数据
+          await clearLocalData();
+          useNovelStore.setState({ novels: [], currentNovel: null });
+          try {
+            await syncClient.syncOnce();
+            await syncJoinedNovels();
+            serverSynced = true;
+          } catch { /* syncOnce 内部已处理错误 */ }
+        } else if (choice === "3") {
+          // 改名：本地数据迁移到新用户名
+          const newName = window.prompt("请输入新的用户名：", username + "-local");
+          if (newName && newName.trim() && newName.trim() !== username) {
+            const trimmedName = newName.trim();
+            try {
+              const oldDb = getUserDB();
+              const [novels, chapters, summaries, notes] = await Promise.all([
+                oldDb.novels.toArray(),
+                oldDb.chapters.toArray(),
+                oldDb.summaries.toArray(),
+                oldDb.notes.toArray(),
+              ]);
+              syncClient.setUsername(trimmedName);
+              setCurrentUser(trimmedName);
+              localStorage.setItem("sync-username", trimmedName);
+              addLocalUser(trimmedName);
+              const newDb = getUserDB();
+              await newDb.transaction("rw", newDb.novels, newDb.chapters, newDb.summaries, newDb.notes, async () => {
+                if (novels.length) await newDb.novels.bulkPut(novels);
+                if (chapters.length) await newDb.chapters.bulkPut(chapters);
+                if (summaries.length) await newDb.summaries.bulkPut(summaries);
+                if (notes.length) await newDb.notes.bulkPut(notes);
+              });
+              await deleteUserDB(username).catch((e) => console.warn("[AppLayout] deleteUserDB failed:", e));
+              removeLocalUser(username);
+              // 以新用户名注册到服务器
+              try {
+                const regResult = await syncClient.login(trimmedName, "create");
+                if (regResult.success) {
+                  await syncClient.syncOnce();
+                  await syncJoinedNovels();
+                  serverSynced = true;
+                }
+              } catch { /* server unreachable */ }
+            } catch (e) {
+              console.error("[AppLayout] data migration failed:", e);
+            }
+          }
+        } else {
+          // 合并（默认）：两边数据合并
+          try {
+            await syncClient.syncOnce();
+            await syncJoinedNovels();
+            serverSynced = true;
+          } catch { /* syncOnce 内部已处理错误 */ }
+        }
+      } else {
+        // 只有一边有数据或都没有，正常同步
+        try {
+          await syncClient.syncOnce();
+          await syncJoinedNovels();
+          serverSynced = true;
+        } catch { /* syncOnce 内部已处理错误 */ }
+      }
     }
 
     // Load novels from local DB (in case sync didn't bring any)
