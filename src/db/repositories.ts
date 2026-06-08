@@ -421,12 +421,12 @@ export async function cleanupDeletedRecords() {
   const db = getUserDB();
   const cutoff = Date.now() - GC_MAX_AGE_MS;
   try {
-    // Use composite index [deleted+updatedAt] for maps/graphs to avoid loading all records
-    const oldMaps = await db.maps.where("[deleted+updatedAt]").between([1, 0], [1, cutoff]).toArray();
-    const oldGraphs = await db.graphs.where("[deleted+updatedAt]").between([1, 0], [1, cutoff]).toArray();
-    // summaries/notes don't have composite index, use filter
-    const oldSummaries = (await db.summaries.where("deleted").above(0).toArray()).filter(s => (s.updatedAt || 0) < cutoff);
-    const oldNotes = (await db.notes.where("deleted").above(0).toArray()).filter(n => (n.updatedAt || 0) < cutoff);
+    // deleted field is a timestamp (Date.now()) when soft-deleted, undefined when not deleted
+    // Filter in JS because compound index queries don't work well with undefined values
+    const oldMaps = (await db.maps.toArray()).filter(m => m.deleted && m.deleted < cutoff);
+    const oldGraphs = (await db.graphs.toArray()).filter(g => g.deleted && g.deleted < cutoff);
+    const oldSummaries = (await db.summaries.toArray()).filter(s => s.deleted && s.deleted < cutoff);
+    const oldNotes = (await db.notes.toArray()).filter(n => n.deleted && n.deleted < cutoff);
     let sCount = 0, nCount = 0, gCount = 0, mCount = 0;
     for (const s of oldSummaries) {
       await db.summaries.delete(s.id); sCount++;

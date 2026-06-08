@@ -8,6 +8,8 @@ const { chunks, batchSize, modelKey = "Xenova/bge-small-zh-v1.5", modelBasePath 
 
 env.allowRemoteModels = true;
 env.localModelPath = modelBasePath || path.resolve(__dirname, "../public/models/builtin/");
+// Use a project-level cache directory for downloaded models
+env.cacheDir = path.resolve(__dirname, "data/models-cache");
 
 async function run() {
   const pipe = await pipeline("feature-extraction", modelKey);
