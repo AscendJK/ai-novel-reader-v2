@@ -34,8 +34,13 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
 
   // 保存服务器地址
   const handleSaveServerUrl = async () => {
-    const url = serverUrl.trim().replace(/\/+$/, "");
+    let url = serverUrl.trim().replace(/\/+$/, "");
     if (!url) return;
+    // 自动补全协议头
+    if (!/^https?:\/\//i.test(url)) {
+      url = "http://" + url;
+    }
+    setServerUrlState(url);
     setServerUrl(url);
     await checkServer(url);
     setShowServerConfig(false);

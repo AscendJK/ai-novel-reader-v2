@@ -20,6 +20,10 @@ export function getServerUrl(): string {
  * @param url 服务器地址（如 "http://192.168.1.100:8443"）
  */
 export function setServerUrl(url: string): void {
+  // 确保 URL 有协议头
+  if (!/^https?:\/\//i.test(url)) {
+    url = "http://" + url;
+  }
   localStorage.setItem(SERVER_URL_KEY, url.replace(/\/+$/, "")); // 移除末尾斜杠
 }
 
@@ -73,6 +77,10 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
  */
 export async function checkServerReachable(url: string): Promise<boolean> {
   try {
+    // 确保 URL 有协议头
+    if (!/^https?:\/\//i.test(url)) {
+      url = "http://" + url;
+    }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000); // 5秒超时
 
