@@ -44,9 +44,10 @@ export function RAGSettings() {
     setDownloadProgress(prev => ({ ...prev, [modelKey]: "准备下载..." }));
     const ok = await downloadModelToCache(modelKey, (file, loaded, total) => {
       const loadedMB = (loaded / 1024 / 1024).toFixed(1);
-      const totalMB = total > 0 ? (total / 1024 / 1024).toFixed(0) : "?";
-      const pct = total > 0 ? Math.round(loaded / total * 100) : 0;
-      setDownloadProgress(prev => ({ ...prev, [modelKey]: `${file.split("/").pop()} ${loadedMB}/${totalMB}MB (${pct}%)` }));
+      const progress = total > 0
+        ? `${loadedMB}/${(total / 1024 / 1024).toFixed(0)}MB (${Math.round(loaded / total * 100)}%)`
+        : `${loadedMB}MB`;
+      setDownloadProgress(prev => ({ ...prev, [modelKey]: `${file.split("/").pop()} ${progress}` }));
     });
     if (ok) {
       const status = await checkModelCacheStatus(modelKey);

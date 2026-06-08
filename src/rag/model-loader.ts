@@ -298,7 +298,9 @@ export async function downloadModelToCache(modelKey: string, onProgress?: (file:
         return false;
       }
       // Read with progress tracking
-      const contentLength = parseInt(r.headers.get("Content-Length") || "0", 10);
+      // Content-Length is compressed size; if Content-Encoding is set, the actual decompressed size is larger
+      const isCompressed = !!r.headers.get("Content-Encoding");
+      const contentLength = isCompressed ? 0 : parseInt(r.headers.get("Content-Length") || "0", 10);
       const reader = r.body?.getReader();
       if (!reader) {
         // Fallback: no streaming support
@@ -360,10 +362,10 @@ export async function ensureModelCached(
       opts?.onStatus?.("downloading", `下载中 (${attempt}/${maxRetries})...`);
       const ok = await downloadModelToCache(modelKey, (file, loaded, total) => {
         const loadedMB = (loaded / 1024 / 1024).toFixed(1);
-        const totalMB = total > 0 ? (total / 1024 / 1024).toFixed(0) : "?";
-        const pct = total > 0 ? Math.round(loaded / total * 100) : 0;
-        const progress = `${file.split("/").pop()} ${loadedMB}/${totalMB}MB (${pct}%)`;
-        opts?.onStatus?.("downloading", progress);
+        const progress = total > 0
+          ? `${loadedMB}/${(total / 1024 / 1024).toFixed(0)}MB (${Math.round(loaded / total * 100)}%)`
+          : `${loadedMB}MB`;
+        opts?.onStatus?.("downloading", `${file.split("/").pop()} ${progress}`);
       });
       if (ok) {
         console.log(`[model-loader] 引擎 ${engine} 模型下载成功`);
