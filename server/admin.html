@@ -369,13 +369,16 @@ async function createBackup() {
 }
 
 async function restoreBackup(filename) {
-  if (!confirm(`确认恢复备份 "${filename}"？\n\n当前数据库会被替换（系统会先自动备份）。恢复后需要重启服务器。`)) return;
+  if (!confirm(`确认恢复备份 "${filename}"？\n\n当前数据库会被替换（系统会先自动备份）。\n服务器将自动重启，页面会断开连接。`)) return;
   try {
     const r = await fetch(API + "/backups/" + encodeURIComponent(filename) + "/restore", {
       method: "POST", headers: authH(),
     });
     const data = await r.json();
-    if (r.ok) { toast(data.message || "已恢复，请重启服务器", true); }
+    if (r.ok) {
+      toast("备份已恢复，服务器正在重启...", true);
+      setTimeout(() => { document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#888;font-size:16px">服务器正在重启，请稍后刷新页面...</div>'; }, 1500);
+    }
     else { toast(data.error || "恢复失败", false); }
   } catch(e) { toast("恢复失败", false); }
 }

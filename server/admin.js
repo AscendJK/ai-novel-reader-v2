@@ -69,6 +69,8 @@ export function mountAdminRoutes(app) {
     db.db.transaction(() => {
       db.db.prepare("DELETE FROM summaries WHERE username = ?").run(name);
       db.db.prepare("DELETE FROM notes WHERE username = ?").run(name);
+      db.db.prepare("DELETE FROM maps WHERE username = ?").run(name);
+      db.db.prepare("DELETE FROM graphs WHERE username = ?").run(name);
       db.db.prepare("DELETE FROM reading_progress WHERE username = ?").run(name);
       db.db.prepare("DELETE FROM user_settings WHERE username = ?").run(name);
       db.db.prepare("DELETE FROM user_novels WHERE username = ?").run(name);

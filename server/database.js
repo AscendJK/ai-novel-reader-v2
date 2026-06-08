@@ -245,6 +245,7 @@ export function leaveNovel(username, novelId) {
     db.prepare("DELETE FROM user_novels WHERE username = ? AND novel_id = ?").run(username, novelId);
     db.prepare("DELETE FROM summaries WHERE username = ? AND novel_id = ?").run(username, novelId);
     db.prepare("DELETE FROM notes WHERE username = ? AND novel_id = ?").run(username, novelId);
+    db.prepare("DELETE FROM maps WHERE username = ? AND novel_id = ?").run(username, novelId);
     db.prepare("DELETE FROM graphs WHERE username = ? AND novel_id = ?").run(username, novelId);
     db.prepare("DELETE FROM reading_progress WHERE username = ? AND novel_id = ?").run(username, novelId);
   })();
@@ -572,23 +573,28 @@ export function createBackup() {
 }
 
 export function restoreBackup(filename) {
-  const backupPath = path.join(BACKUP_DIR, filename);
-  if (!fs.existsSync(backupPath)) throw new Error("备份文件不存在");
+  // Validate filename FIRST before constructing path
   if (!filename.endsWith(".db") || filename.includes("..") || filename.includes("/") || filename.includes("\\")) {
     throw new Error("无效的文件名");
   }
+  const backupPath = path.join(BACKUP_DIR, filename);
+  if (!fs.existsSync(backupPath)) throw new Error("备份文件不存在");
   // Create a pre-restore backup first
   createBackup();
-  // Close current connection, replace DB, reopen
+  // Close current connection, replace DB
   db.close();
   fs.copyFileSync(backupPath, DB_PATH);
-  // Reopen by re-creating the Database instance
-  // Note: This requires re-importing, so we use a simpler approach
-  // The caller should restart the server after restore
-  return { ok: true, message: "备份已恢复，请重启服务器使更改生效" };
+  console.log(`[backup] restored: ${filename}`);
+  // Schedule graceful shutdown so the response can be sent first
+  setTimeout(() => {
+    console.log("[backup] shutting down for restore...");
+    process.exit(0);
+  }, 500);
+  return { ok: true, message: "备份已恢复，服务器即将重启..." };
 }
 
 export function deleteBackup(filename) {
+  // Validate filename FIRST before constructing path
   if (!filename.endsWith(".db") || filename.includes("..") || filename.includes("/") || filename.includes("\\")) {
     throw new Error("无效的文件名");
   }
@@ -604,11 +610,12 @@ export function cleanOldBackups() {
   const cutoff = Date.now() - config.retainDays * 24 * 60 * 60 * 1000;
   const files = fs.readdirSync(BACKUP_DIR)
     .filter((f) => f.endsWith(".db"))
-    .map((f) => ({
-      name: f,
-      path: path.join(BACKUP_DIR, f),
-      mtime: fs.statSync(path.join(BACKUP_DIR, f)).mtimeMs,
-    }))
+    .map((f) => {
+      try {
+        return { name: f, path: path.join(BACKUP_DIR, f), mtime: fs.statSync(path.join(BACKUP_DIR, f)).mtimeMs };
+      } catch { return null; } // File may have been deleted between readdir and stat
+    })
+    .filter(Boolean)
     .sort((a, b) => b.mtime - a.mtime); // newest first
 
   let cleaned = 0;
@@ -617,8 +624,7 @@ export function cleanOldBackups() {
     const tooOld = f.mtime < cutoff;
     const overLimit = i >= config.maxCount;
     if (tooOld || overLimit) {
-      fs.unlinkSync(f.path);
-      cleaned++;
+      try { fs.unlinkSync(f.path); cleaned++; } catch { /* already deleted */ }
     }
   }
   if (cleaned > 0) console.log(`[backup] cleaned ${cleaned} old backup(s)`);
