@@ -176,7 +176,7 @@ export class EmbeddingRetriever {
 
     // 触发构建并轮询
     ragLog("触发服务器构建...");
-    useBuildStore.getState().start();
+    useBuildStore.getState().startBuild(novelId, this.engine);
 
     try {
       await buildAndPollRAGIndex({
@@ -184,12 +184,10 @@ export class EmbeddingRetriever {
         engine: this.engine,
         signal,
         onProgress: (progress) => {
-          useBuildStore.getState().setProgress({
-            message: progress.message,
+          useBuildStore.getState().updateProgress(novelId, this.engine, {
+            message: progress.message || "",
             current: progress.current || 0,
             total: progress.total || _allChunks.length,
-            novelId,
-            engine: this.engine,
             status: progress.status,
             queuePosition: progress.queuePosition,
           });
@@ -199,7 +197,7 @@ export class EmbeddingRetriever {
         },
       });
 
-      useBuildStore.getState().finish();
+      useBuildStore.getState().finishBuild(novelId, this.engine);
 
       // 从 IndexedDB 加载到内存
       const cached = await db.ragCache.get(memCacheKey);
@@ -212,7 +210,7 @@ export class EmbeddingRetriever {
 
     } catch (err) {
       const message = err instanceof Error ? err.message : "构建失败";
-      useBuildStore.getState().fail(message);
+      useBuildStore.getState().failBuild(novelId, this.engine, message);
       throw err;
     }
   }

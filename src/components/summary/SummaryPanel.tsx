@@ -146,25 +146,25 @@ export function SummaryPanel({ defaultTab = "chapter" }: { defaultTab?: string }
 
     // 使用公共函数触发构建 + 轮询 + 下载
     try {
-      useBuildStore.getState().start();
+      useBuildStore.getState().startBuild(currentNovel.id, buildEngine);
       await buildAndPollRAGIndex({
         novelId: currentNovel.id,
         engine: buildEngine,
         onProgress: (progress) => {
-          useBuildStore.getState().setProgress({
+          useBuildStore.getState().updateProgress(currentNovel.id, buildEngine, {
             status: progress.status,
-            message: progress.message,
+            message: progress.message || "",
             current: progress.current || 0,
             total: progress.total || 0,
             queuePosition: progress.queuePosition,
           });
         },
       });
-      useBuildStore.getState().finish();
+      useBuildStore.getState().finishBuild(currentNovel.id, buildEngine);
       setIndexReady(true);
     } catch (err) {
       const message = err instanceof Error ? err.message : "构建失败";
-      useBuildStore.getState().fail(message);
+      useBuildStore.getState().failBuild(currentNovel.id, buildEngine, message);
     }
   };
 
