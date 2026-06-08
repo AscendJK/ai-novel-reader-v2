@@ -150,6 +150,14 @@ async function startServers() {
       cert: fs.readFileSync(certPath),
       key: fs.readFileSync(keyPath),
     }, app);
+    httpsServer.on("error", (err) => {
+      if (err.code === "EADDRINUSE") {
+        console.error(`[ssl] HTTPS port ${HTTPS_PORT} is already in use. Another instance may be running.`);
+        console.error(`[ssl] Stop the other instance first, or set HTTPS_PORT env to use a different port.`);
+      } else {
+        console.error("[ssl] HTTPS server error:", err.message);
+      }
+    });
     httpsServer.listen(HTTPS_PORT, "0.0.0.0", () => {
       console.log(`[sync] https://0.0.0.0:${HTTPS_PORT} (${isFullMode ? "full" : "api-only"})`);
     });
