@@ -66,6 +66,14 @@ export function RAGSettings() {
     return () => { cancelled = true; };
   }, []);
 
+  // Refresh cache statuses when model download completes (from auto-download or manual)
+  const { modelDownloadStatus } = useRAGStore();
+  useEffect(() => {
+    if (modelDownloadStatus === "cached") {
+      checkAllCacheStatuses();
+    }
+  }, [modelDownloadStatus]);
+
   const handleScan = async () => {
     setScanning(true);
     const [bge, gte, models] = await Promise.all([
