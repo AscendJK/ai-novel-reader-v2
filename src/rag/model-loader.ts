@@ -173,10 +173,13 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
           if (data.status === "progress" && data.file) {
             const loaded = data.loaded || 0;
             const total = data.total || 0;
-            const pct = total > 0 ? Math.round(loaded / total * 100) : 0;
-            const loadedMB = (loaded / 1024 / 1024).toFixed(1);
-            const totalMB = total > 0 ? (total / 1024 / 1024).toFixed(0) : "?";
-            store.setDownloadProgress(`tokenizer ${loadedMB}/${totalMB}MB (${pct}%)`);
+            if (total > 0 && loaded < total) {
+              const loadedMB = (loaded / 1024 / 1024).toFixed(1);
+              const totalMB = (total / 1024 / 1024).toFixed(0);
+              store.setDownloadProgress(`tokenizer ${loadedMB}/${totalMB}MB`);
+            } else if (total > 0 && loaded >= total) {
+              store.setDownloadProgress("tokenizer ✓");
+            }
           }
         },
       });
@@ -188,10 +191,13 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
           if (data.status === "progress" && data.file) {
             const loaded = data.loaded || 0;
             const total = data.total || 0;
-            const pct = total > 0 ? Math.round(loaded / total * 100) : 0;
-            const loadedMB = (loaded / 1024 / 1024).toFixed(1);
-            const totalMB = total > 0 ? (total / 1024 / 1024).toFixed(0) : "?";
-            store.setDownloadProgress(`model ${loadedMB}/${totalMB}MB (${pct}%)`);
+            if (total > 0 && loaded < total) {
+              const loadedMB = (loaded / 1024 / 1024).toFixed(1);
+              const totalMB = (total / 1024 / 1024).toFixed(0);
+              store.setDownloadProgress(`model ${loadedMB}/${totalMB}MB`);
+            } else if (total > 0 && loaded >= total) {
+              store.setDownloadProgress("model ✓");
+            }
           }
         },
       });
