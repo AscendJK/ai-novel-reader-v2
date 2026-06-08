@@ -9,6 +9,8 @@ const { chunks, batchSize, modelKey = "Xenova/bge-small-zh-v1.5" } = workerData;
 
 env.allowRemoteModels = true;
 env.cacheDir = path.resolve(__dirname, "data/models-cache");
+// Check proxy cache first (frontend downloads cache here)
+env.localModelPath = path.resolve(__dirname, "data/models-cache");
 
 // Read mirror config from file, fallback to environment variable, then default
 function getMirrorHost() {

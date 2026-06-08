@@ -187,6 +187,12 @@ function getMirrorHost() {
   return host.endsWith("/") ? host : host + "/";
 }
 
+// Normalize cache path: strip "resolve/main/" to match Transformers.js directory structure
+// e.g., "Xenova/bge-small-zh-v1.5/resolve/main/config.json" → "Xenova/bge-small-zh-v1.5/config.json"
+function toCachePath(subPath) {
+  return subPath.replace(/\/resolve\/main\//, "/");
+}
+
 // GET /api/rag/model-proxy/{*path} — proxy model file from mirror
 router.get("/model-proxy/{*path}", async (req, res) => {
   try {
@@ -197,10 +203,10 @@ router.get("/model-proxy/{*path}", async (req, res) => {
     const mirrorHost = getMirrorHost();
     const targetUrl = `${mirrorHost}${subPath}`;
 
-    // Check local cache first
-    const cachePath = path.join(MODEL_CACHE_DIR, subPath);
+    // Check local cache first (use normalized path for Transformers.js compatibility)
+    const cachePath = path.join(MODEL_CACHE_DIR, toCachePath(subPath));
     if (fs.existsSync(cachePath)) {
-      console.log(`[model-proxy] cache hit: ${subPath}`);
+      console.log(`[model-proxy] cache hit: ${toCachePath(subPath)}`);
       const data = fs.readFileSync(cachePath);
       const ext = path.extname(subPath);
       const contentType = ext === ".json" ? "application/json"
@@ -238,12 +244,12 @@ router.get("/model-proxy/{*path}", async (req, res) => {
     const buffer = Buffer.from(await response.arrayBuffer());
     res.send(buffer);
 
-    // Cache to disk (async, don't block response)
+    // Cache to disk with normalized path (async, don't block response)
     const dir = path.dirname(cachePath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFile(cachePath, buffer, (err) => {
       if (err) console.warn(`[model-proxy] cache write failed: ${err.message}`);
-      else console.log(`[model-proxy] cached: ${subPath} (${(buffer.length / 1024 / 1024).toFixed(1)} MB)`);
+      else console.log(`[model-proxy] cached: ${toCachePath(subPath)} (${(buffer.length / 1024 / 1024).toFixed(1)} MB)`);
     });
   } catch (e) {
     console.error("[model-proxy] error:", e);
