@@ -14,6 +14,7 @@ import { useRAGStore } from "@/stores/rag-store";
 import { useUIStore } from "@/stores/ui-store";
 import { getEngineDisplayName } from "@/rag/engines";
 import { ensureModelReady } from "@/rag/model-loader";
+import { resolveModelKey } from "@/rag/engines";
 import { authHeaders } from "@/lib/auth-headers";
 import { apiFetch } from "@/lib/api-client";
 import { buildAndPollRAGIndex, downloadAndCacheIndex } from "@/rag/build-index";
@@ -212,7 +213,8 @@ export function BookSelect() {
 
     try {
       // Ensure engine model is downloaded before building
-      const modelReady = await ensureModelReady(buildEngine);
+      const modelKey = resolveModelKey(buildEngine);
+      const modelReady = modelKey ? await ensureModelReady(modelKey) : true;
       if (!modelReady) {
         console.warn("[BookSelect] 模型下载失败，无法构建索引");
         return;

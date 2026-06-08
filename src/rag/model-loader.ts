@@ -15,13 +15,15 @@ const _originalFetch = globalThis.fetch;
 function proxiedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 
-  // Intercept HuggingFace model file requests
-  const hfPattern = /https?:\/\/huggingface\.co\/(Xenova\/[^/]+\/resolve\/main\/.+)/;
+  // Intercept HuggingFace model file requests (both Xenova/xxx and plain xxx)
+  const hfPattern = /https?:\/\/huggingface\.co\/([^/]+(?:\/[^/]+)?)\/resolve\/main\/.+/;
   const match = url.match(hfPattern);
   if (match) {
     const serverUrl = getServerUrl();
     if (serverUrl) {
-      const proxyUrl = `${serverUrl}/api/rag/model-proxy/${match[1]}`;
+      // Extract the path after huggingface.co/
+      const pathAfterHost = url.split("huggingface.co/")[1];
+      const proxyUrl = `${serverUrl}/api/rag/model-proxy/${pathAfterHost}`;
       console.log(`[model-loader] 代理: ${url} → ${proxyUrl}`);
       return _originalFetch(proxyUrl, init);
     }
