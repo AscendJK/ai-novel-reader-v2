@@ -125,8 +125,12 @@ const downloadWaiters = new Map<string, Array<(ok: boolean) => void>>();
 export async function downloadModel(modelKey: string): Promise<boolean> {
   const store = useRAGStore.getState();
 
-  // Already downloaded
-  if (store.isModelDownloaded(modelKey)) return true;
+  // Already downloaded — verify it's actually in browser cache
+  if (store.isModelDownloaded(modelKey)) {
+    const verified = await verifyModelDownloaded(modelKey);
+    if (verified) return true;
+    // Not in cache, continue to download
+  }
 
   // Another download in progress — queue or wait for same model
   if (isDownloading) {
@@ -266,6 +270,30 @@ export async function ensureModelReady(modelKey: string): Promise<boolean> {
 
 /**
  * Check if a model is downloaded.
+ * Verifies both localStorage tracking AND actual browser cache.
+ */
+export async function verifyModelDownloaded(modelKey: string): Promise<boolean> {
+  const store = useRAGStore.getState();
+  if (!store.isModelDownloaded(modelKey)) return false;
+
+  // Verify the model is actually in the browser cache
+  try {
+    const cache = await caches.open("transformers-cache");
+    // Check if config.json exists in cache (Transformers.js caches all model files)
+    const testUrl = `https://huggingface.co/${modelKey}/resolve/main/config.json`;
+    const cached = await cache.match(testUrl);
+    if (cached) return true;
+  } catch { /* Cache API not available */ }
+
+  // Not in cache — remove stale entry from localStorage
+  console.log(`[model-loader] ${modelKey} 不在浏览器缓存中，清除下载状态`);
+  store.removeDownloadedModel(modelKey);
+  return false;
+}
+
+/**
+ * Synchronous check (for UI rendering) — only checks localStorage.
+ * Use verifyModelDownloaded() for actual verification.
  */
 export function isModelDownloaded(modelKey: string): boolean {
   return useRAGStore.getState().isModelDownloaded(modelKey);

@@ -123,6 +123,7 @@ interface RAGState {
   setCurrentDownload: (modelKey: string | null) => void;
   setDownloadProgress: (progress: string) => void;
   addDownloadedModel: (modelKey: string) => void;
+  removeDownloadedModel: (modelKey: string) => void;
   isModelDownloaded: (modelKey: string) => boolean;
   setTopKDefault: (val: number) => void;
   setTopKTiers: (tiers: TopKTier[]) => void;
@@ -223,6 +224,13 @@ export const useRAGStore = create<RAGState>((set, get) => ({
   addDownloadedModel: (modelKey) => {
     const next = new Set(get().downloadedModels);
     next.add(modelKey);
+    saveDownloadedModels(next);
+    set({ downloadedModels: next });
+  },
+
+  removeDownloadedModel: (modelKey) => {
+    const next = new Set(get().downloadedModels);
+    next.delete(modelKey);
     saveDownloadedModels(next);
     set({ downloadedModels: next });
   },
