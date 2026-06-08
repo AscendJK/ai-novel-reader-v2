@@ -41,7 +41,9 @@ let running = false;
 const ENGINE_MODEL_MAP = {
   "bge-small-zh": "Xenova/bge-small-zh-v1.5",
   "gte-small": "Xenova/gte-small",
-  "e5-small": "Xenova/multilingual-e5-small",
+  "multilingual-e5-small": "Xenova/multilingual-e5-small",
+  "all-MiniLM-L6-v2": "Xenova/all-MiniLM-L6-v2",
+  "multilingual-MiniLM-L12-v2": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
 };
 
 function resolveModelKey(engine) {

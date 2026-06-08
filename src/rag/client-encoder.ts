@@ -10,9 +10,8 @@ import { getServerUrl } from "@/lib/api-client";
 // Resolve engine ID to the model key Transformers.js expects
 function toModelPath(engine: string): string {
   const key = resolveModelKey(engine);
-  if (key.startsWith("Xenova/")) return key;
-  if (key === "bge-small-zh") return "Xenova/bge-small-zh-v1.5";
-  if (key === "gte-small") return "Xenova/gte-small";
+  // resolveModelKey already returns the full Xenova path for known engines
+  // For unknown engines, return as-is (Transformers.js will try to resolve it)
   return key;
 }
 

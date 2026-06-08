@@ -144,6 +144,8 @@ export const ALL_ENGINES: EngineInfo[] = [
 
 let downloadQueue: Array<{ modelKey: string; resolve: (ok: boolean) => void }> = [];
 let isDownloading = false;
+// Waiters for in-progress downloads: modelKey → resolve functions
+const downloadWaiters = new Map<string, Array<(ok: boolean) => void>>();
 
 /**
  * Download a model from HuggingFace Hub. One at a time — if another download
@@ -157,9 +159,17 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
   // Already downloaded
   if (store.isModelDownloaded(modelKey)) return true;
 
-  // Another download in progress — queue or reject
+  // Another download in progress — queue or wait for same model
   if (isDownloading) {
-    if (store.currentDownload === modelKey) return false; // already downloading this one
+    if (store.currentDownload === modelKey) {
+      // Same model already downloading — wait for it to complete
+      return new Promise((resolve) => {
+        const waiters = downloadWaiters.get(modelKey) || [];
+        waiters.push(resolve);
+        downloadWaiters.set(modelKey, waiters);
+      });
+    }
+    // Different model — queue it
     return new Promise((resolve) => {
       downloadQueue.push({ modelKey, resolve });
     });
@@ -243,6 +253,13 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
   if (!success) {
     console.error(`[model-loader] 模型下载最终失败: ${modelKey}`);
     store.setDownloadProgress("下载失败");
+  }
+
+  // Resolve all waiters for this model
+  const waiters = downloadWaiters.get(modelKey);
+  if (waiters) {
+    waiters.forEach((resolve) => resolve(success));
+    downloadWaiters.delete(modelKey);
   }
 
   // Clear download state

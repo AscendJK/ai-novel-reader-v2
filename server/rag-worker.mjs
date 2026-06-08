@@ -12,14 +12,15 @@ env.cacheDir = path.resolve(__dirname, "data/models-cache");
 
 // Read mirror config from file, fallback to environment variable, then default
 function getMirrorHost() {
+  let host = process.env.HF_MIRROR || "https://hf-mirror.com/";
   try {
     const configPath = path.resolve(__dirname, "data/rag-config.json");
     if (fs.existsSync(configPath)) {
       const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-      if (config.mirrorHost) return config.mirrorHost;
+      if (config.mirrorHost) host = config.mirrorHost;
     }
   } catch { /* ignore */ }
-  return process.env.HF_MIRROR || "https://hf-mirror.com/";
+  return host.endsWith("/") ? host : host + "/";
 }
 
 env.remoteHost = getMirrorHost();

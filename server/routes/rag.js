@@ -21,7 +21,9 @@ const _cachedPipes = new Map(); // modelKey → pipeline
 const ENGINE_MODEL_MAP = {
   "bge-small-zh": "Xenova/bge-small-zh-v1.5",
   "gte-small": "Xenova/gte-small",
-  "e5-small": "Xenova/multilingual-e5-small",
+  "multilingual-e5-small": "Xenova/multilingual-e5-small",
+  "all-MiniLM-L6-v2": "Xenova/all-MiniLM-L6-v2",
+  "multilingual-MiniLM-L12-v2": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
 };
 
 function resolveModelKey(engine) {
@@ -173,14 +175,16 @@ router.get("/:novelId/index", (req, res) => {
 const MODEL_CACHE_DIR = path.resolve(__dirname, "../data/models-cache");
 
 function getMirrorHost() {
+  let host = process.env.HF_MIRROR || "https://hf-mirror.com/";
   try {
     const configPath = path.resolve(__dirname, "../data/rag-config.json");
     if (fs.existsSync(configPath)) {
       const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-      if (config.mirrorHost) return config.mirrorHost;
+      if (config.mirrorHost) host = config.mirrorHost;
     }
   } catch { /* ignore */ }
-  return process.env.HF_MIRROR || "https://hf-mirror.com/";
+  // Normalize trailing slash
+  return host.endsWith("/") ? host : host + "/";
 }
 
 // GET /api/rag/model-proxy/{*path} — proxy model file from mirror
