@@ -404,3 +404,69 @@ export async function ensureModelCached(
   console.error(`[model-loader] 引擎 ${engine} 模型下载最终失败`);
   opts?.onStatus?.("error", "下载失败");
 }
+
+/**
+ * Download a model from HuggingFace Hub with progress tracking.
+ * Uses Transformers.js AutoModel/AutoTokenizer with progress_callback.
+ * After download, the model is cached in the browser for subsequent use.
+ */
+export async function downloadModelFromHuggingFace(
+  modelKey: string,
+  opts?: { onStatus?: (status: "downloading" | "cached" | "error", progress?: string) => void }
+): Promise<boolean> {
+  try {
+    console.log(`[model-loader] 从 HuggingFace 下载模型: ${modelKey}`);
+    opts?.onStatus?.("downloading", "正在加载 Transformers.js...");
+
+    const transformers = await import("@xenova/transformers");
+    const { AutoModel, AutoTokenizer, env } = transformers;
+
+    // Configure for remote download
+    env.allowRemoteModels = true;
+    env.useBrowserCache = true;
+
+    let lastProgress = "";
+
+    // Download tokenizer
+    opts?.onStatus?.("downloading", "下载 tokenizer...");
+    console.log(`[model-loader] 下载 tokenizer: ${modelKey}`);
+    await AutoTokenizer.from_pretrained(modelKey, {
+      progress_callback: (data: any) => {
+        if (data.status === "progress" && data.file) {
+          const loaded = data.loaded || 0;
+          const total = data.total || 0;
+          const pct = total > 0 ? Math.round(loaded / total * 100) : 0;
+          const loadedMB = (loaded / 1024 / 1024).toFixed(1);
+          const totalMB = total > 0 ? (total / 1024 / 1024).toFixed(0) : "?";
+          lastProgress = `tokenizer ${loadedMB}/${totalMB}MB (${pct}%)`;
+          opts?.onStatus?.("downloading", lastProgress);
+        }
+      },
+    });
+
+    // Download model
+    opts?.onStatus?.("downloading", "下载模型...");
+    console.log(`[model-loader] 下载模型: ${modelKey}`);
+    await AutoModel.from_pretrained(modelKey, {
+      progress_callback: (data: any) => {
+        if (data.status === "progress" && data.file) {
+          const loaded = data.loaded || 0;
+          const total = data.total || 0;
+          const pct = total > 0 ? Math.round(loaded / total * 100) : 0;
+          const loadedMB = (loaded / 1024 / 1024).toFixed(1);
+          const totalMB = total > 0 ? (total / 1024 / 1024).toFixed(0) : "?";
+          lastProgress = `model ${loadedMB}/${totalMB}MB (${pct}%)`;
+          opts?.onStatus?.("downloading", lastProgress);
+        }
+      },
+    });
+
+    console.log(`[model-loader] 模型下载完成: ${modelKey}`);
+    opts?.onStatus?.("cached");
+    return true;
+  } catch (e) {
+    console.error(`[model-loader] HuggingFace 下载失败: ${modelKey}`, e);
+    opts?.onStatus?.("error", "下载失败");
+    return false;
+  }
+}

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRAGStore } from "@/stores/rag-store";
 import { useUIStore } from "@/stores/ui-store";
 import { ENGINES } from "@/rag/engines";
-import { scanCustomModels, getBuiltinBGEStatus, getBuiltinGTEStatus, DOWNLOADABLE_MODELS, checkModelCacheStatus, downloadModelToCache } from "@/rag/model-loader";
+import { scanCustomModels, getBuiltinBGEStatus, getBuiltinGTEStatus, DOWNLOADABLE_MODELS, checkModelCacheStatus, downloadModelToCache, downloadModelFromHuggingFace } from "@/rag/model-loader";
 import type { ScannedModel, ModelStatus, ModelCacheStatus } from "@/rag/model-loader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -55,6 +55,26 @@ export function RAGSettings() {
       const status = await checkModelCacheStatus(modelKey);
       setCacheStatuses(prev => ({ ...prev, [modelKey]: status }));
     }
+    setDownloading(prev => { const n = new Set(prev); n.delete(modelKey); return n; });
+    setDownloadProgress(prev => { const n = { ...prev }; delete n[modelKey]; return n; });
+  };
+
+  // Download model from HuggingFace Hub (for custom models not bundled locally)
+  const handleHuggingFaceDownload = async (modelKey: string) => {
+    setDownloading(prev => new Set(prev).add(modelKey));
+    setDownloadProgress(prev => ({ ...prev, [modelKey]: "准备下载..." }));
+    const ok = await downloadModelFromHuggingFace(modelKey, {
+      onStatus: (status, progress) => {
+        if (status === "downloading" && progress) {
+          setDownloadProgress(prev => ({ ...prev, [modelKey]: progress }));
+        }
+        if (status === "cached") {
+          // Refresh file status after download
+          scanCustomModels().then((m) => { if (mountedRef.current) setScannedModels(m); });
+          checkAllCacheStatuses();
+        }
+      },
+    });
     setDownloading(prev => { const n = new Set(prev); n.delete(modelKey); return n; });
     setDownloadProgress(prev => { const n = { ...prev }; delete n[modelKey]; return n; });
   };
@@ -288,9 +308,15 @@ export function RAGSettings() {
                   )}
 
                   {!fs.complete && (
-                    <p className="text-xs text-muted-foreground mt-1.5">
-                      下载 4 个文件放入上方目录后，点击"检测"
-                    </p>
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <p className="text-xs text-muted-foreground">需要网络，从 HuggingFace 下载</p>
+                      <Button variant="outline" size="sm" className="h-5 text-[10px] px-1.5"
+                        disabled={downloading.has(m.modelKey)}
+                        onClick={(e) => { e.stopPropagation(); handleHuggingFaceDownload(m.modelKey); }}>
+                        {downloading.has(m.modelKey) ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+                        {downloading.has(m.modelKey) ? (downloadProgress[m.modelKey] || "下载中") : "下载"}
+                      </Button>
+                    </div>
                   )}
                 </div>
               );
@@ -314,10 +340,12 @@ export function RAGSettings() {
           {showHelp && (
             <div className="mt-2 p-3 rounded bg-muted/50 text-xs space-y-3">
               <div className="space-y-2">
-                <p className="font-medium">安装步骤</p>
+                <p className="font-medium">方式一：在线下载（推荐）</p>
+                <p className="text-muted-foreground">点击模型卡片上的「下载」按钮，自动从 HuggingFace 下载并缓存到浏览器。<strong>需要网络连接</strong>，首次下载后会缓存，后续使用无需重复下载。</p>
 
+                <p className="font-medium mt-2">方式二：手动安装</p>
                 <p className="font-medium text-foreground/80">第一步：下载 4 个文件</p>
-                <p>从 Xenova 转换版页面下载（点击上方模型卡片的"下载"链接）：</p>
+                <p>从 Xenova 转换版页面下载（点击上方模型卡片的"HuggingFace"链接）：</p>
                 <ol className="list-decimal pl-4 space-y-0.5 text-muted-foreground">
                   <li><code className="px-1 bg-muted rounded text-xs">config.json</code></li>
                   <li><code className="px-1 bg-muted rounded text-xs">tokenizer.json</code></li>
