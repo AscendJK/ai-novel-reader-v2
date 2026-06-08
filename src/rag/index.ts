@@ -60,7 +60,7 @@ export async function buildIndex(
         if (cached.vectorsBuffer.byteLength !== expectedBytes) {
           ragLog(`缓存数据损坏: 期望 ${expectedBytes} 字节, 实际 ${cached.vectorsBuffer.byteLength} 字节`);
           await db.ragCache.delete(cacheKey);
-          return null;
+          throw new Error("缓存数据损坏，已清除");
         }
 
         const chunks = normalizeChunks(cached.chunks);
