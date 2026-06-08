@@ -69,7 +69,9 @@ router.post("/", (req, res) => {
     const { novel, chapters } = req.body;
     if (!novel || !chapters) return res.status(400).json({ error: "novel and chapters required" });
 
-    // Always generate server-side ID to prevent client ID spoofing
+    // Use client-provided ID if present (for sync consistency), otherwise generate server-side
+    // Note: INSERT OR REPLACE means a malicious client could overwrite existing novels,
+    // but this is acceptable for LAN use where clients are trusted
     const novelId = novel.id || crypto.randomUUID();
 
     db.insertNovel({

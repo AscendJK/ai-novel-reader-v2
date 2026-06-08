@@ -15,9 +15,6 @@ export function getSessionUsername(req) {
   if (auth?.startsWith("Bearer ")) {
     return validateSession(auth.slice(7));
   }
-  // Fallback: body or query (for backward compat during migration)
-  const t = req.query.token || req.body?.token;
-  if (t) return validateSession(t);
   return null;
 }
 

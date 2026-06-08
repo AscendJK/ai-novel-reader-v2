@@ -97,8 +97,10 @@ router.post("/heartbeat", (req, res) => {
   if (activeCount > 0) {
     return res.json({ activeCount });
   }
-  // Unknown device — require valid token
-  if (!token || !validateSession(token)) return res.status(401).json({ error: "session expired" });
+  // Unknown device — require valid token belonging to this user
+  if (!token) return res.status(401).json({ error: "token required" });
+  const sessionUser = validateSession(token);
+  if (!sessionUser || sessionUser !== username) return res.status(401).json({ error: "session expired" });
   res.json({ activeCount: 1 });
 });
 
@@ -107,7 +109,11 @@ router.post("/push", (req, res) => {
   try {
     const { username, clientId, token, changes, lastSyncTime } = req.body;
     if (!username || !clientId) return res.status(400).json({ error: "username and clientId required" });
-    if (token && !validateSession(token)) return res.status(401).json({ error: "session expired" });
+    // Validate token and verify it belongs to this user
+    if (!token) return res.status(401).json({ error: "token required" });
+    const sessionUser = validateSession(token);
+    if (!sessionUser) return res.status(401).json({ error: "session expired" });
+    if (sessionUser !== username) return res.status(403).json({ error: "token username mismatch" });
     if (!isActive(username, clientId)) return res.status(403).json({ error: "kicked", kicked: true });
     if (!changes) {
       const now = Date.now();
@@ -127,8 +133,12 @@ router.post("/push", (req, res) => {
 // POST /api/sync/disconnect
 router.post("/disconnect", (req, res) => {
   const { username, clientId, token } = req.body;
-  if (username && clientId) disconnect(username, clientId);
-  if (token) removeSession(token);
+  if (!username || !clientId || !token) return res.status(400).json({ error: "username, clientId, and token required" });
+  // Validate token belongs to this user
+  const sessionUser = validateSession(token);
+  if (!sessionUser || sessionUser !== username) return res.status(401).json({ error: "invalid token" });
+  disconnect(username, clientId);
+  removeSession(token);
   res.json({ ok: true });
 });
 

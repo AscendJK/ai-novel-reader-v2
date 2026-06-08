@@ -19,6 +19,17 @@ const RATE_WINDOW = 60_000; // 1 minute
 export function rateLimit(maxPerMinute) {
   const limits = new Map(); // ip → { count, resetAt }
 
+  // Periodically sweep stale entries to prevent memory leak
+  const sweepInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [ip, entry] of limits) {
+      if (now > entry.resetAt) limits.delete(ip);
+    }
+  }, RATE_WINDOW * 2); // Sweep every 2 minutes
+
+  // Allow the interval to not prevent process exit
+  sweepInterval.unref();
+
   return (req, res, next) => {
     const ip = req.ip || req.connection.remoteAddress;
     const now = Date.now();

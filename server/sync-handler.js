@@ -92,16 +92,22 @@ export function heartbeat(username, clientId, token) {
   const devices = knownDevices.get(username);
   if (!devices || !devices.has(clientId)) return 0;
 
-  // Check if the session is still valid (not kicked by another device)
-  if (token && !sessions.has(token)) {
-    // Session was deleted (kicked by another device)
-    console.log(`[sync] heartbeat rejected: session expired for ${username} (${clientId.slice(0, 8)})`);
-    return -1; // Indicate kicked
+  // Verify token belongs to this user
+  if (token) {
+    const session = sessions.get(token);
+    if (!session) {
+      console.log(`[sync] heartbeat rejected: session expired for ${username} (${clientId.slice(0, 8)})`);
+      return -1; // Session was deleted (kicked by another device)
+    }
+    if (session.username !== username) {
+      console.log(`[sync] heartbeat rejected: token username mismatch for ${username}`);
+      return 0; // Token belongs to a different user
+    }
   }
 
   const now = Date.now();
   connectionLastSeen.set(username, now);
-  knownDevicesLastSeen.set(username, now); // 更新已知设备的最后活跃时间
+  knownDevicesLastSeen.set(username, now);
   return 1;
 }
 
