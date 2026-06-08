@@ -515,28 +515,113 @@ export function checkpointWAL() {
   db.pragma("wal_checkpoint(TRUNCATE)");
 }
 
+// ── Backup management ──
+
+const BACKUP_DIR = path.join(__dirname, "data", "backups");
+const BACKUP_CONFIG_FILE = path.join(__dirname, "data", "backup-config.json");
+
+const DEFAULT_BACKUP_CONFIG = {
+  maxCount: 5,
+  retainDays: 7,
+  intervalHours: 24,
+};
+
+export function getBackupConfig() {
+  try {
+    if (fs.existsSync(BACKUP_CONFIG_FILE)) {
+      const raw = JSON.parse(fs.readFileSync(BACKUP_CONFIG_FILE, "utf-8"));
+      return { ...DEFAULT_BACKUP_CONFIG, ...raw };
+    }
+  } catch { /* ignore */ }
+  return { ...DEFAULT_BACKUP_CONFIG };
+}
+
+export function setBackupConfig(config) {
+  const current = getBackupConfig();
+  const updated = {
+    maxCount: Math.max(1, Math.min(50, parseInt(config.maxCount, 10) || current.maxCount)),
+    retainDays: Math.max(1, Math.min(365, parseInt(config.retainDays, 10) || current.retainDays)),
+    intervalHours: Math.max(1, Math.min(720, parseInt(config.intervalHours, 10) || current.intervalHours)),
+  };
+  fs.writeFileSync(BACKUP_CONFIG_FILE, JSON.stringify(updated, null, 2), "utf-8");
+  return updated;
+}
+
+export function listBackups() {
+  if (!fs.existsSync(BACKUP_DIR)) return [];
+  return fs.readdirSync(BACKUP_DIR)
+    .filter((f) => f.endsWith(".db"))
+    .map((f) => {
+      const stat = fs.statSync(path.join(BACKUP_DIR, f));
+      return {
+        filename: f,
+        size: stat.size,
+        createdAt: stat.mtimeMs,
+      };
+    })
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
 export function createBackup() {
-  const backupDir = path.join(__dirname, "data", "backups");
-  if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+  if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const backupPath = path.join(backupDir, `novels-${timestamp}.db`);
+  const backupPath = path.join(BACKUP_DIR, `novels-${timestamp}.db`);
   db.backup(backupPath);
   console.log(`[backup] created: ${backupPath}`);
   cleanOldBackups();
 }
 
-function cleanOldBackups() {
-  const backupDir = path.join(__dirname, "data", "backups");
-  if (!fs.existsSync(backupDir)) return;
-  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  for (const f of fs.readdirSync(backupDir)) {
-    if (!f.endsWith(".db")) continue;
-    const stat = fs.statSync(path.join(backupDir, f));
-    if (stat.mtimeMs < cutoff) {
-      fs.unlinkSync(path.join(backupDir, f));
-      console.log(`[backup] cleaned: ${f}`);
+export function restoreBackup(filename) {
+  const backupPath = path.join(BACKUP_DIR, filename);
+  if (!fs.existsSync(backupPath)) throw new Error("备份文件不存在");
+  if (!filename.endsWith(".db") || filename.includes("..") || filename.includes("/") || filename.includes("\\")) {
+    throw new Error("无效的文件名");
+  }
+  // Create a pre-restore backup first
+  createBackup();
+  // Close current connection, replace DB, reopen
+  db.close();
+  fs.copyFileSync(backupPath, DB_PATH);
+  // Reopen by re-creating the Database instance
+  // Note: This requires re-importing, so we use a simpler approach
+  // The caller should restart the server after restore
+  return { ok: true, message: "备份已恢复，请重启服务器使更改生效" };
+}
+
+export function deleteBackup(filename) {
+  if (!filename.endsWith(".db") || filename.includes("..") || filename.includes("/") || filename.includes("\\")) {
+    throw new Error("无效的文件名");
+  }
+  const backupPath = path.join(BACKUP_DIR, filename);
+  if (!fs.existsSync(backupPath)) throw new Error("备份文件不存在");
+  fs.unlinkSync(backupPath);
+  console.log(`[backup] deleted: ${filename}`);
+}
+
+export function cleanOldBackups() {
+  if (!fs.existsSync(BACKUP_DIR)) return;
+  const config = getBackupConfig();
+  const cutoff = Date.now() - config.retainDays * 24 * 60 * 60 * 1000;
+  const files = fs.readdirSync(BACKUP_DIR)
+    .filter((f) => f.endsWith(".db"))
+    .map((f) => ({
+      name: f,
+      path: path.join(BACKUP_DIR, f),
+      mtime: fs.statSync(path.join(BACKUP_DIR, f)).mtimeMs,
+    }))
+    .sort((a, b) => b.mtime - a.mtime); // newest first
+
+  let cleaned = 0;
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    const tooOld = f.mtime < cutoff;
+    const overLimit = i >= config.maxCount;
+    if (tooOld || overLimit) {
+      fs.unlinkSync(f.path);
+      cleaned++;
     }
   }
+  if (cleaned > 0) console.log(`[backup] cleaned ${cleaned} old backup(s)`);
 }
 
 // ── Garbage collection for soft-deleted records ──

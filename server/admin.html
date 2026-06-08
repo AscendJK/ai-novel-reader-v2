@@ -55,6 +55,7 @@
   <button class="tab active" data-tab="overview">概览</button>
   <button class="tab" data-tab="users">用户</button>
   <button class="tab" data-tab="novels">小说</button>
+  <button class="tab" data-tab="backups">备份</button>
   <button class="tab" data-tab="settings">设置</button>
 </div>
 <div class="content" id="content"></div>
@@ -282,6 +283,120 @@ async function saveTimeout() {
   } catch(e) { toast("保存失败", false); }
 }
 
+// Backups
+async function loadBackups() {
+  const [backupData, config] = await Promise.all([
+    get("/backups"),
+    get("/backups/config"),
+  ]);
+  const backups = backupData.backups || [];
+  const rows = backups.map(b => {
+    const date = new Date(b.createdAt).toLocaleString("zh-CN");
+    return `<tr>
+      <td>${h(b.filename)}</td>
+      <td>${fmtSize(b.size)}</td>
+      <td>${date}</td>
+      <td style="display:flex;gap:4px">
+        <button class="primary" style="font-size:12px" onclick="restoreBackup('${h(b.filename)}')">恢复</button>
+        <button class="danger" onclick="deleteBackup('${h(b.filename)}')">删除</button>
+      </td>
+    </tr>`;
+  }).join("");
+
+  document.getElementById("content").innerHTML = `
+    <div class="card">
+      <h3>备份设置</h3>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px">
+        <div class="form-group" style="margin-bottom:0">
+          <label>最大备份数量</label>
+          <input type="number" id="backupMaxCount" value="${config.maxCount}" min="1" max="50" style="width:100px">
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label>保留天数</label>
+          <input type="number" id="backupRetainDays" value="${config.retainDays}" min="1" max="365" style="width:100px">
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label>备份间隔（小时）</label>
+          <input type="number" id="backupIntervalHours" value="${config.intervalHours}" min="1" max="720" style="width:100px">
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:12px">
+        <button class="primary" onclick="saveBackupConfig()">保存设置</button>
+        <button class="primary" style="background:#1a2a3a;border-color:#2a4a6a;color:#89b" onclick="createBackup()">立即备份</button>
+        <button class="primary" style="background:#2a2a1a;border-color:#4a4a2a;color:#aa8" onclick="cleanBackups()">清理旧备份</button>
+        <span style="color:#777;font-size:12px;margin-left:8px">总计: ${backupData.totalSizeMB} MB</span>
+      </div>
+    </div>
+    <div class="card">
+      <h3>备份列表</h3>
+      ${backups.length === 0
+        ? '<p style="color:#555">暂无备份</p>'
+        : `<table><thead><tr><th>文件名</th><th>大小</th><th>创建时间</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>`
+      }
+    </div>
+    <div class="card">
+      <h3>⚠️ 注意</h3>
+      <div style="color:#888;font-size:13px;line-height:1.8">
+        <p>恢复备份会<strong style="color:#e55">替换当前数据库</strong>，系统会先自动创建一个恢复前的快照。</p>
+        <p>恢复后需要<strong>重启服务器</strong>才能生效。</p>
+      </div>
+    </div>
+  `;
+}
+
+async function saveBackupConfig() {
+  const config = {
+    maxCount: parseInt(document.getElementById("backupMaxCount").value, 10),
+    retainDays: parseInt(document.getElementById("backupRetainDays").value, 10),
+    intervalHours: parseInt(document.getElementById("backupIntervalHours").value, 10),
+  };
+  try {
+    await fetch(API + "/backups/config", {
+      method: "PUT", headers: authH(),
+      body: JSON.stringify(config),
+    });
+    toast("已保存", true);
+    loadBackups();
+  } catch(e) { toast("保存失败", false); }
+}
+
+async function createBackup() {
+  try {
+    await fetch(API + "/backups/create", { method: "POST", headers: authH() });
+    toast("备份已创建", true);
+    loadBackups();
+  } catch(e) { toast("备份失败", false); }
+}
+
+async function restoreBackup(filename) {
+  if (!confirm(`确认恢复备份 "${filename}"？\n\n当前数据库会被替换（系统会先自动备份）。恢复后需要重启服务器。`)) return;
+  try {
+    const r = await fetch(API + "/backups/" + encodeURIComponent(filename) + "/restore", {
+      method: "POST", headers: authH(),
+    });
+    const data = await r.json();
+    if (r.ok) { toast(data.message || "已恢复，请重启服务器", true); }
+    else { toast(data.error || "恢复失败", false); }
+  } catch(e) { toast("恢复失败", false); }
+}
+
+async function deleteBackup(filename) {
+  if (!confirm(`确认删除备份 "${filename}"？此操作不可恢复。`)) return;
+  try {
+    await del("/backups/" + encodeURIComponent(filename));
+    toast("已删除", true);
+    loadBackups();
+  } catch(e) { toast("删除失败", false); }
+}
+
+async function cleanBackups() {
+  try {
+    await fetch(API + "/backups/clean", { method: "POST", headers: authH() });
+    toast("清理完成", true);
+    loadBackups();
+  } catch(e) { toast("清理失败", false); }
+}
+
 // Tab switching
 document.querySelectorAll(".tab").forEach(t => {
   t.addEventListener("click", () => {
@@ -291,6 +406,7 @@ document.querySelectorAll(".tab").forEach(t => {
     if (tab === "overview") loadOverview();
     else if (tab === "users") loadUsers();
     else if (tab === "novels") loadNovels();
+    else if (tab === "backups") loadBackups();
     else if (tab === "settings") loadSettings();
   });
 });

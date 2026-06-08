@@ -134,6 +134,62 @@ export function mountAdminRoutes(app) {
     res.json({ ok: true, perChunkMs: val });
   });
 
+  // ── Backups ──
+
+  app.get("/api/admin/backups", (req, res) => {
+    if (!auth(req, res)) return;
+    try {
+      const backups = db.listBackups();
+      const totalSize = backups.reduce((sum, b) => sum + b.size, 0);
+      res.json({ backups, totalSize, totalSizeMB: (totalSize / 1048576).toFixed(1) });
+    } catch (e) { res.status(500).json({ error: "获取备份列表失败" }); }
+  });
+
+  app.get("/api/admin/backups/config", (req, res) => {
+    if (!auth(req, res)) return;
+    res.json(db.getBackupConfig());
+  });
+
+  app.put("/api/admin/backups/config", (req, res) => {
+    if (!auth(req, res)) return;
+    try {
+      const config = db.setBackupConfig(req.body);
+      res.json({ ok: true, config });
+    } catch (e) { res.status(500).json({ error: "保存配置失败" }); }
+  });
+
+  app.post("/api/admin/backups/create", (req, res) => {
+    if (!auth(req, res)) return;
+    try {
+      db.createBackup();
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ error: "创建备份失败" }); }
+  });
+
+  app.post("/api/admin/backups/:filename/restore", (req, res) => {
+    if (!auth(req, res)) return;
+    try {
+      const result = db.restoreBackup(req.params.filename);
+      res.json(result);
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+
+  app.delete("/api/admin/backups/:filename", (req, res) => {
+    if (!auth(req, res)) return;
+    try {
+      db.deleteBackup(req.params.filename);
+      res.json({ ok: true });
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+
+  app.post("/api/admin/backups/clean", (req, res) => {
+    if (!auth(req, res)) return;
+    try {
+      db.cleanOldBackups();
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ error: "清理失败" }); }
+  });
+
   // ── Token ──
 
   app.get("/api/admin/token", (req, res) => {

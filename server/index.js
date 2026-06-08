@@ -11,7 +11,7 @@ import path from "node:path";
 import fs from "node:fs";
 import https from "node:https";
 import { fileURLToPath } from "node:url";
-import { checkpointWAL, createBackup, cleanupDeletedRecords } from "./database.js";
+import { checkpointWAL, createBackup, cleanupDeletedRecords, getBackupConfig } from "./database.js";
 import { novelsRouter, ragRouter, syncRouter, proxyRouter } from "./routes/index.js";
 
 import { mountAdminRoutes } from "./admin.js";
@@ -177,10 +177,16 @@ setInterval(() => {
   try { checkpointWAL(); } catch { /* ignore */ }
 }, 30 * 60 * 1000);
 
-// Backup every 24 hours
-setInterval(() => {
-  try { createBackup(); } catch { /* ignore */ }
-}, 24 * 60 * 60 * 1000);
+// Backup at configured interval
+function scheduleBackup() {
+  const config = getBackupConfig();
+  const intervalMs = config.intervalHours * 60 * 60 * 1000;
+  setInterval(() => {
+    try { createBackup(); } catch { /* ignore */ }
+  }, intervalMs);
+  console.log(`[backup] interval: ${config.intervalHours}h, max: ${config.maxCount} files, retain: ${config.retainDays} days`);
+}
+scheduleBackup();
 
 // Cleanup deleted records every 24 hours
 setInterval(() => {
