@@ -19,41 +19,16 @@ if !NODE_VER! geq 24 (
     exit /b 1
 )
 
-:menu
-echo Select launch mode:
-echo   [1] Dev mode
-echo   [2] Prod mode
-echo   [0] Exit
-echo.
-set "mode="
-set /p "mode=Enter choice: "
-if not defined mode set "mode=1"
-
-if "%mode%"=="0" exit /b
-if "%mode%"=="1" goto dev
-if "%mode%"=="2" goto prod
-goto menu
-
-:dev
 if not exist "node_modules\" (
     echo Installing dependencies...
     call npm install
+    if %errorlevel% neq 0 (
+        echo [ERROR] npm install failed.
+        pause
+        exit /b 1
+    )
 )
 
-start "Server" /MIN node server/index.js
-timeout /t 2 /nobreak >nul
-start "Vite" /MIN npx vite --host 0.0.0.0
-echo.
-echo Dev running: http://localhost:5173
-echo.
-pause
-exit /b
-
-:prod
-if not exist "node_modules\" (
-    echo Installing dependencies...
-    call npm install
-)
 echo Building for production...
 call npm run build
 if %errorlevel% neq 0 (
