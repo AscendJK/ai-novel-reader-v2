@@ -15,7 +15,6 @@ import { useUIStore } from "@/stores/ui-store";
 import { getEngineDisplayName } from "@/rag/engines";
 import { ensureModelReady } from "@/rag/model-loader";
 import { resolveModelKey } from "@/rag/engines";
-import { authHeaders } from "@/lib/auth-headers";
 import { apiFetch } from "@/lib/api-client";
 import { buildAndPollRAGIndex, downloadAndCacheIndex } from "@/rag/build-index";
 import { NovelBuildWindow } from "@/components/common/NovelBuildWindow";

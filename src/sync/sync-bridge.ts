@@ -41,11 +41,11 @@ export async function gatherChanges(lastSyncTime: number): Promise<Partial<SyncD
   if (filteredNotes.length > BATCH_SIZE) {
     console.log(`[sync] notes batch: ${notes.length}/${filteredNotes.length}`);
   }
-  if (filteredMaps.length > BATCH_SIZE) {
-    console.log(`[sync] maps batch: ${maps.length}/${filteredMaps.length}`);
+  if (maps.length === BATCH_SIZE) {
+    console.log(`[sync] maps batch: ${maps.length}+ (可能还有更多)`);
   }
-  if (filteredGraphs.length > BATCH_SIZE) {
-    console.log(`[sync] graphs batch: ${graphs.length}/${filteredGraphs.length}`);
+  if (graphs.length === BATCH_SIZE) {
+    console.log(`[sync] graphs batch: ${graphs.length}+ (可能还有更多)`);
   }
 
   // Gather settings (RAG) — never sync API keys, character graphs moved to UserDB

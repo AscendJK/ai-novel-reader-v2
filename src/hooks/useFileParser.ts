@@ -4,7 +4,6 @@ import { parseEpub } from "@/parsers/epub";
 import { createNovel } from "@/parsers/utils";
 import { saveNovel } from "@/db/repositories";
 import { useNovelStore } from "@/stores/novel-store";
-import { authHeaders } from "@/lib/auth-headers";
 import { apiFetch } from "@/lib/api-client";
 import type { Novel } from "@/parsers/types";
 

@@ -3,7 +3,6 @@
  * 消除 embedding-retriever.ts、SummaryPanel.tsx、BookSelect.tsx 中的重复代码
  */
 
-import { authHeaders } from "@/lib/auth-headers";
 import { apiFetch } from "@/lib/api-client";
 import { sharedDB } from "@/db/database";
 import { normalizeChunks } from "./chunk-utils";

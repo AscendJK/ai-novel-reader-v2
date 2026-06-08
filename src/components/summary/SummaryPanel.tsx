@@ -4,7 +4,6 @@ import { useRAGStore } from "@/stores/rag-store";
 import { useBuildStore } from "@/stores/build-store";
 import { useUIStore } from "@/stores/ui-store";
 import { getEngineDisplayName, isEmbeddingEngine } from "@/rag/engines";
-import { authHeaders } from "@/lib/auth-headers";
 import { apiFetch } from "@/lib/api-client";
 import { useSummaryStore } from "@/stores/summary-store";
 import { useSummarizer } from "@/hooks/useSummarizer";

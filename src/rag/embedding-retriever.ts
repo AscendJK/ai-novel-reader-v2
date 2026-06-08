@@ -3,7 +3,6 @@ import { ragLog } from "@/lib/logger";
 import { sharedDB as db } from "@/db/database";
 import { useRAGStore } from "@/stores/rag-store";
 import { useBuildStore } from "@/stores/build-store";
-import { authHeaders } from "@/lib/auth-headers";
 import { apiFetch } from "@/lib/api-client";
 import { encodeQuery } from "./client-encoder";
 import { enforceIndexedDBQuota, updateAccessTime } from "./rag-cache-utils";
