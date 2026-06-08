@@ -15,23 +15,8 @@ export default defineConfig({
       workbox: {
         globPatterns: ["**/*.{js,css,html,svg,woff2}"],
         runtimeCaching: [
-          {
-            urlPattern: /\/models\/.*\.onnx$/,
-            handler: "CacheFirst",
-            options: {
-              cacheName: "model-cache",
-              expiration: { maxEntries: 10, maxAgeSeconds: 365 * 24 * 3600 },
-            },
-          },
-          {
-            urlPattern: /\/models\/.*\.json$/,
-            handler: "CacheFirst",
-            options: {
-              cacheName: "model-json-cache",
-              expiration: { maxEntries: 50, maxAgeSeconds: 365 * 24 * 3600 },
-            },
-          },
-          // API 缓存规则已移除 — 前后端分离后 API 请求发往不同域名
+          // Model files are downloaded through backend proxy, not from GitHub Pages
+          // Don't cache /models/ paths to avoid interfering with the fetch interceptor
         ],
         cleanupOutdatedCaches: true,
       },
