@@ -180,7 +180,9 @@ export async function applyServerData(data: SyncData): Promise<void> {
     for (const [key, value] of Object.entries(data.settings)) {
       if (value !== null && value !== undefined) {
         // API provider settings already have username in key; others need prefix
-        const needsPrefix = !key.startsWith("api-providers:") && !key.startsWith("api-active-provider:");
+        // Skip if key already ends with :username (prevents double-prefixing)
+        const alreadyPrefixed = username && key.endsWith(`:${username}`);
+        const needsPrefix = !key.startsWith("api-providers:") && !key.startsWith("api-active-provider:") && !alreadyPrefixed;
         const storeKey = needsPrefix && username ? `${key}:${username}` : key;
         await sharedDB.settings.put({ key: storeKey, value });
       }
