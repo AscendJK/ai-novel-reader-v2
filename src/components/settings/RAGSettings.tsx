@@ -25,6 +25,7 @@ export function RAGSettings() {
   const [scannedModels, setScannedModels] = useState<ScannedModel[]>([]);
   const [cacheStatuses, setCacheStatuses] = useState<Record<string, ModelCacheStatus>>({});
   const [downloading, setDownloading] = useState<Set<string>>(new Set());
+  const [downloadProgress, setDownloadProgress] = useState<Record<string, string>>({});
   const mountedRef = useRef(true);
   useEffect(() => { return () => { mountedRef.current = false; }; }, []);
 
@@ -40,12 +41,19 @@ export function RAGSettings() {
 
   const handleDownload = async (modelKey: string) => {
     setDownloading(prev => new Set(prev).add(modelKey));
-    const ok = await downloadModelToCache(modelKey);
+    setDownloadProgress(prev => ({ ...prev, [modelKey]: "准备下载..." }));
+    const ok = await downloadModelToCache(modelKey, (file, loaded, total) => {
+      const loadedMB = (loaded / 1024 / 1024).toFixed(1);
+      const totalMB = total > 0 ? (total / 1024 / 1024).toFixed(0) : "?";
+      const pct = total > 0 ? Math.round(loaded / total * 100) : 0;
+      setDownloadProgress(prev => ({ ...prev, [modelKey]: `${file.split("/").pop()} ${loadedMB}/${totalMB}MB (${pct}%)` }));
+    });
     if (ok) {
       const status = await checkModelCacheStatus(modelKey);
       setCacheStatuses(prev => ({ ...prev, [modelKey]: status }));
     }
     setDownloading(prev => { const n = new Set(prev); n.delete(modelKey); return n; });
+    setDownloadProgress(prev => { const n = { ...prev }; delete n[modelKey]; return n; });
   };
 
   // Load builtin status on mount
@@ -155,7 +163,7 @@ export function RAGSettings() {
                         disabled={downloading.has(m.modelKey)}
                         onClick={(e) => { e.stopPropagation(); handleDownload(m.modelKey); }}>
                         {downloading.has(m.modelKey) ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
-                        {downloading.has(m.modelKey) ? "下载中" : "下载"}
+                        {downloading.has(m.modelKey) ? (downloadProgress[m.modelKey] || "下载中") : "下载"}
                       </Button>
                     </div>
                   )}
@@ -263,7 +271,7 @@ export function RAGSettings() {
                         disabled={downloading.has(m.modelKey)}
                         onClick={(e) => { e.stopPropagation(); handleDownload(m.modelKey); }}>
                         {downloading.has(m.modelKey) ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
-                        {downloading.has(m.modelKey) ? "下载中" : "下载到浏览器"}
+                        {downloading.has(m.modelKey) ? (downloadProgress[m.modelKey] || "下载中") : "下载到浏览器"}
                       </Button>
                     </div>
                   )}

@@ -285,19 +285,51 @@ export async function checkModelCacheStatus(modelKey: string): Promise<ModelCach
 }
 
 /** Download model files from server into our Cache API */
-export async function downloadModelToCache(modelKey: string): Promise<boolean> {
+export async function downloadModelToCache(modelKey: string, onProgress?: (file: string, loaded: number, total: number) => void): Promise<boolean> {
   const base = getModelBasePath(modelKey);
   try {
     const cache = await caches.open(MODEL_CACHE_NAME);
     for (const file of REQUIRED_FILES) {
       const url = base + file;
+      console.log(`[model-loader] downloading: ${url}`);
       const r = await fetch(url);
-      if (!r.ok) return false;
-      await cache.put(url, r.clone());
-      await r.arrayBuffer(); // consume body
+      if (!r.ok) {
+        console.error(`[model-loader] download failed: ${file} → HTTP ${r.status}`);
+        return false;
+      }
+      // Read with progress tracking
+      const contentLength = parseInt(r.headers.get("Content-Length") || "0", 10);
+      const reader = r.body?.getReader();
+      if (!reader) {
+        // Fallback: no streaming support
+        await cache.put(url, r.clone());
+        await r.arrayBuffer();
+        continue;
+      }
+      const chunks: Uint8Array[] = [];
+      let loaded = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        loaded += value.length;
+        onProgress?.(file, loaded, contentLength);
+      }
+      const body = new Uint8Array(loaded);
+      let offset = 0;
+      for (const chunk of chunks) {
+        body.set(chunk, offset);
+        offset += chunk.length;
+      }
+      const response = new Response(body, { headers: r.headers });
+      await cache.put(url, response);
+      console.log(`[model-loader] cached: ${file} (${(loaded / 1024 / 1024).toFixed(1)} MB)`);
     }
     return true;
-  } catch { return false; }
+  } catch (e) {
+    console.error(`[model-loader] download error for ${modelKey}:`, e);
+    return false;
+  }
 }
 
 /**
