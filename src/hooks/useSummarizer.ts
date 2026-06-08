@@ -450,7 +450,6 @@ export function useSummarizer() {
         const count = toChapter - fromChapter + 1;
         const rangeChapters = await loadChapters(currentNovel.id, startIndex, count);
         // 根据模型 Token 预算计算最大字符数（预留 50% 给 prompt 和输出）
-        const provider = getActiveProvider();
         const budget = provider ? getTokenBudget(provider.model, provider.contextWindow) : null;
         const maxTokens = budget ? Math.floor(budget.maxInputTokens * 0.5) : 30000;
         const maxChars = maxTokens * 3; // 约 3 字符/token

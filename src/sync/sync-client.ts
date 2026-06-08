@@ -33,7 +33,7 @@ export class SyncClient {
   private heartbeatFailCount = 0;
   private autoOffline = false; // true if offlineMode was auto-enabled by heartbeat failure
   private conflictCooldownUntil = 0; // timestamp until which conflict dialog is suppressed
-  private _hasMoreBatch = false; // 是否有待执行的后续同步批次
+
 
   /** 获取按用户隔离的 last-sync-time localStorage key */
   private get syncTimeKey() {
@@ -346,17 +346,18 @@ export class SyncClient {
         } catch { /* ignore */ }
 
         // 检查是否还有更多数据需要同步
+        let hasMore = false;
         try {
-          if (await hasMoreChanges(this.lastSyncTime)) {
+          hasMore = await hasMoreChanges(this.lastSyncTime);
+          if (hasMore) {
             console.log("[sync] more data to sync, scheduling next batch...");
-            // 标记有后续批次，finally 不释放锁
-            this._hasMoreBatch = true;
-            setTimeout(() => {
-              this._hasMoreBatch = false;
-              this.syncOnce();
-            }, 1000);
           }
         } catch { /* ignore */ }
+
+        // 释放锁后，如果有更多数据，延迟触发下一批
+        if (hasMore) {
+          setTimeout(() => this.syncOnce(), 1000);
+        }
 
         return true;
       } else {
@@ -365,10 +366,7 @@ export class SyncClient {
       }
     } catch (e) { console.error("[sync] syncOnce error:", e); }
     finally {
-      // 如果有后续批次待执行，不释放锁，防止并发
-      if (!this._hasMoreBatch) {
-        this.syncing = false;
-      }
+      this.syncing = false;
     }
     return false;
   }

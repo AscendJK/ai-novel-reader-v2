@@ -55,6 +55,8 @@ export async function gatherChanges(lastSyncTime: number): Promise<Partial<SyncD
     for (const s of allSettings) {
       if (s.key.startsWith("api-providers:") || s.key.startsWith("api-active-provider:")) continue;
       // character-graph 已迁移到 UserDB.graphs，不再通过 settings 同步
+      if (s.key.startsWith("character-graph:")) continue;
+      settings[s.key] = s.value;
     }
   } catch { /* ignore */ }
 
@@ -100,7 +102,15 @@ export async function hasMoreChanges(lastSyncTime: number): Promise<boolean> {
     ? await udb.notes.where("updatedAt").above(lastSyncTime).count()
     : await udb.notes.count();
 
-  return summaryCount > BATCH_SIZE || noteCount > BATCH_SIZE;
+  const mapCount = lastSyncTime > 0
+    ? await udb.maps.where("updatedAt").above(lastSyncTime).count()
+    : await udb.maps.count();
+
+  const graphCount = lastSyncTime > 0
+    ? await udb.graphs.where("updatedAt").above(lastSyncTime).count()
+    : await udb.graphs.count();
+
+  return summaryCount > BATCH_SIZE || noteCount > BATCH_SIZE || mapCount > BATCH_SIZE || graphCount > BATCH_SIZE;
 }
 
 /** Apply server data to local storage (after sync pull) */

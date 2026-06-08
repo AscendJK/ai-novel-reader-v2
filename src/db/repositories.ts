@@ -168,9 +168,9 @@ export async function loadAllNovels(): Promise<Novel[]> {
 export async function deleteNovel(novelId: string): Promise<void> {
   const udb = getUserDB();
   try {
-    await udb.transaction("rw", udb.chapters, udb.summaries, udb.notes, udb.novels, udb.graphs, async () => {
+    await udb.transaction("rw", udb.chapters, udb.summaries, udb.notes, udb.novels, udb.graphs, udb.maps, async () => {
       await udb.chapters.where("novelId").equals(novelId).delete();
-      // Soft-delete summaries, notes, and graphs so sync propagates the deletion
+      // Soft-delete summaries, notes, graphs, and maps so sync propagates the deletion
       const now = Date.now();
       const novelSummaries = await udb.summaries.where("novelId").equals(novelId).toArray();
       for (const s of novelSummaries) {
@@ -183,6 +183,10 @@ export async function deleteNovel(novelId: string): Promise<void> {
       const novelGraphs = await udb.graphs.where("novelId").equals(novelId).toArray();
       for (const g of novelGraphs) {
         if (!g.deleted) await udb.graphs.put({ ...g, deleted: now, updatedAt: now });
+      }
+      const novelMaps = await udb.maps.where("novelId").equals(novelId).toArray();
+      for (const m of novelMaps) {
+        if (!m.deleted) await udb.maps.put({ ...m, deleted: now, updatedAt: now });
       }
       await udb.novels.delete(novelId);
     });
