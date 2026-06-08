@@ -26,7 +26,7 @@ export function UpdateBanner() {
   if (!needRefresh && !offlineReady) return null;
 
   return (
-    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-card border rounded-lg shadow-lg px-4 py-2.5 flex items-center gap-3 text-sm">
+    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[200] bg-card border rounded-lg shadow-lg px-4 py-2.5 flex items-center gap-3 text-sm">
       {needRefresh ? (
         <>
           <RefreshCw className="h-4 w-4 text-primary shrink-0" />
