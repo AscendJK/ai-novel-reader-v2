@@ -42,10 +42,13 @@ export function ToastContainer() {
   useEffect(() => {
     _setToasts = setToasts;
     const onReconnected = () => showToast("已重新连接到服务器。注意：此操作可能已断开其他设备的连接。", "warn");
+    const onOffline = () => showToast("服务器不可达，已自动切换到离线模式。阅读和笔记仍可用。", "warn");
     window.addEventListener("sync-reconnected", onReconnected);
+    window.addEventListener("sync-offline", onOffline);
     return () => {
       _setToasts = null;
       window.removeEventListener("sync-reconnected", onReconnected);
+      window.removeEventListener("sync-offline", onOffline);
       // 清理所有 pending 定时器
       for (const t of _pendingTimers) clearTimeout(t);
       _pendingTimers.clear();

@@ -148,6 +148,15 @@ class UserDB extends Dexie {
       maps: "id, novelId, updatedAt, deleted",
       graphs: "id, novelId, updatedAt, deleted",
     });
+    // 添加复合索引优化 hasMoreChanges 和 cleanupDeletedRecords 查询
+    this.version(5).stores({
+      novels: "id, createdAt",
+      chapters: "id, novelId, index",
+      summaries: "id, novelId, chapterId, type, updatedAt, deleted, [novelId+chapterId+type], [novelId+type]",
+      notes: "id, novelId, chapterId, source, createdAt, updatedAt, deleted",
+      maps: "id, novelId, updatedAt, deleted, [deleted+updatedAt]",
+      graphs: "id, novelId, updatedAt, deleted, [deleted+updatedAt]",
+    });
   }
 }
 

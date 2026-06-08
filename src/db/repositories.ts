@@ -421,22 +421,24 @@ export async function cleanupDeletedRecords() {
   const db = getUserDB();
   const cutoff = Date.now() - GC_MAX_AGE_MS;
   try {
-    const oldSummaries = await db.summaries.where("deleted").above(0).toArray();
-    const oldNotes = await db.notes.where("deleted").above(0).toArray();
-    const oldGraphs = await db.graphs.where("deleted").above(0).toArray();
-    const oldMaps = await db.maps.where("deleted").above(0).toArray();
+    // Use composite index [deleted+updatedAt] for maps/graphs to avoid loading all records
+    const oldMaps = await db.maps.where("[deleted+updatedAt]").between([1, 0], [1, cutoff]).toArray();
+    const oldGraphs = await db.graphs.where("[deleted+updatedAt]").between([1, 0], [1, cutoff]).toArray();
+    // summaries/notes don't have composite index, use filter
+    const oldSummaries = (await db.summaries.where("deleted").above(0).toArray()).filter(s => (s.updatedAt || 0) < cutoff);
+    const oldNotes = (await db.notes.where("deleted").above(0).toArray()).filter(n => (n.updatedAt || 0) < cutoff);
     let sCount = 0, nCount = 0, gCount = 0, mCount = 0;
     for (const s of oldSummaries) {
-      if ((s.updatedAt || 0) < cutoff) { await db.summaries.delete(s.id); sCount++; }
+      await db.summaries.delete(s.id); sCount++;
     }
     for (const n of oldNotes) {
-      if ((n.updatedAt || 0) < cutoff) { await db.notes.delete(n.id); nCount++; }
+      await db.notes.delete(n.id); nCount++;
     }
     for (const g of oldGraphs) {
-      if ((g.updatedAt || 0) < cutoff) { await db.graphs.delete(g.id); gCount++; }
+      await db.graphs.delete(g.id); gCount++;
     }
     for (const m of oldMaps) {
-      if ((m.updatedAt || 0) < cutoff) { await db.maps.delete(m.id); mCount++; }
+      await db.maps.delete(m.id); mCount++;
     }
     if (sCount || nCount || gCount || mCount) console.log(`[gc] cleaned ${sCount} summaries, ${nCount} notes, ${gCount} graphs, ${mCount} maps`);
   } catch (e) { console.error("[gc] cleanupDeletedRecords failed:", e); }

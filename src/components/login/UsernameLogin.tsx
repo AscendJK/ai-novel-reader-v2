@@ -1,10 +1,30 @@
-import { useState, useEffect } from "react";
-import { BookOpen, LogIn, Trash2, UserPlus, WifiOff, Server } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { BookOpen, LogIn, Trash2, UserPlus, WifiOff, Server, Clock, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2 } from "lucide-react";
 import { getServerUrl, setServerUrl, checkServerReachable } from "@/lib/api-client";
+
+const RECENT_URLS_KEY = "novel-reader-recent-urls";
+const MAX_RECENT = 5;
+
+function getRecentUrls(): string[] {
+  try {
+    return JSON.parse(localStorage.getItem(RECENT_URLS_KEY) || "[]");
+  } catch { return []; }
+}
+
+function addRecentUrl(url: string) {
+  const recent = getRecentUrls().filter(u => u !== url);
+  recent.unshift(url);
+  localStorage.setItem(RECENT_URLS_KEY, JSON.stringify(recent.slice(0, MAX_RECENT)));
+}
+
+function removeRecentUrl(url: string) {
+  const recent = getRecentUrls().filter(u => u !== url);
+  localStorage.setItem(RECENT_URLS_KEY, JSON.stringify(recent));
+}
 
 interface Props {
   localUsers: string[];
@@ -23,6 +43,8 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
   const [serverUrl, setServerUrlState] = useState(getServerUrl());
   const [serverStatus, setServerStatus] = useState<"unknown" | "checking" | "ok" | "fail">("unknown");
   const [showServerConfig, setShowServerConfig] = useState(false);
+  const [showRecent, setShowRecent] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // 检查服务器状态
   const checkServer = async (url: string) => {
@@ -42,14 +64,36 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
     }
     setServerUrlState(url);
     setServerUrl(url);
+    addRecentUrl(url);
     await checkServer(url);
     setShowServerConfig(false);
+    setShowRecent(false);
+  };
+
+  // 选择最近使用的地址
+  const handleSelectRecent = (url: string) => {
+    setServerUrlState(url);
+    setServerUrl(url);
+    setShowRecent(false);
+    inputRef.current?.focus();
   };
 
   // 初始检查
   useEffect(() => {
     if (getServerUrl()) checkServer(getServerUrl());
   }, []);
+
+  // 点击外部关闭下拉
+  useEffect(() => {
+    if (!showRecent) return;
+    const handleClick = (e: MouseEvent) => {
+      if (inputRef.current && !inputRef.current.parentElement?.contains(e.target as Node)) {
+        setShowRecent(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showRecent]);
 
   const isNewUser = selectedUser === "__new__";
   const username = isNewUser ? newUsername.trim() : selectedUser;
@@ -101,13 +145,35 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
                 <Server className="h-4 w-4" />
                 <span>后端服务器地址</span>
               </div>
-              <Input
-                placeholder="http://192.168.1.100:5173"
-                value={serverUrl}
-                onChange={(e) => setServerUrlState(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSaveServerUrl()}
-                autoFocus
-              />
+              <div className="relative">
+                <Input
+                  ref={inputRef}
+                  placeholder="http://192.168.1.100:5173"
+                  value={serverUrl}
+                  onChange={(e) => setServerUrlState(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleSaveServerUrl()}
+                  onFocus={() => { if (getRecentUrls().length > 0) setShowRecent(true); }}
+                  autoFocus
+                />
+                {/* 最近使用的地址下拉 */}
+                {showRecent && getRecentUrls().length > 0 && (
+                  <div className="absolute top-full left-0 right-0 mt-1 bg-popover border rounded-md shadow-md z-10 max-h-40 overflow-y-auto">
+                    {getRecentUrls().map((url) => (
+                      <div key={url} className="flex items-center justify-between px-3 py-1.5 hover:bg-accent text-sm cursor-pointer group"
+                        onClick={() => handleSelectRecent(url)}>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Clock className="h-3 w-3 text-muted-foreground shrink-0" />
+                          <span className="truncate">{url}</span>
+                        </div>
+                        <button className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-destructive"
+                          onClick={(e) => { e.stopPropagation(); removeRecentUrl(url); setServerUrlState(getServerUrl()); }}>
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
               <p className="text-[10px] text-muted-foreground">
                 输入运行后端服务的电脑 IP 地址和端口
               </p>

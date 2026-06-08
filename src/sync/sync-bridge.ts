@@ -19,14 +19,14 @@ export async function gatherChanges(lastSyncTime: number): Promise<Partial<SyncD
     ? await udb.notes.where("updatedAt").above(lastSyncTime).toArray()
     : await udb.notes.toArray();
 
-  // maps/graphs: filter by updatedAt and exclude soft-deleted
+  // maps/graphs: use composite index [deleted+updatedAt] for efficient filtering
   const filteredMaps = lastSyncTime > 0
-    ? (await udb.maps.where("updatedAt").above(lastSyncTime).toArray()).filter((m) => !m.deleted)
-    : (await udb.maps.toArray()).filter((m) => !m.deleted);
+    ? await udb.maps.where("[deleted+updatedAt]").between([0, lastSyncTime], [0, Infinity]).toArray()
+    : await udb.maps.where("deleted").equals(0).toArray();
 
   const filteredGraphs = lastSyncTime > 0
-    ? (await udb.graphs.where("updatedAt").above(lastSyncTime).toArray()).filter((g) => !g.deleted)
-    : (await udb.graphs.toArray()).filter((g) => !g.deleted);
+    ? await udb.graphs.where("[deleted+updatedAt]").between([0, lastSyncTime], [0, Infinity]).toArray()
+    : await udb.graphs.where("deleted").equals(0).toArray();
 
   // 分批：只取前 BATCH_SIZE 条记录
   const summaries = filteredSummaries.slice(0, BATCH_SIZE);
@@ -102,14 +102,14 @@ export async function hasMoreChanges(lastSyncTime: number): Promise<boolean> {
     ? await udb.notes.where("updatedAt").above(lastSyncTime).count()
     : await udb.notes.count();
 
-  // maps/graphs: exclude soft-deleted records (gatherChanges filters them out)
+  // maps/graphs: use composite index [deleted+updatedAt] for efficient filtering
   const mapCount = lastSyncTime > 0
-    ? (await udb.maps.where("updatedAt").above(lastSyncTime).toArray()).filter((m) => !m.deleted).length
-    : (await udb.maps.toArray()).filter((m) => !m.deleted).length;
+    ? await udb.maps.where("[deleted+updatedAt]").between([0, lastSyncTime], [0, Infinity]).count()
+    : await udb.maps.where("deleted").equals(0).count();
 
   const graphCount = lastSyncTime > 0
-    ? (await udb.graphs.where("updatedAt").above(lastSyncTime).toArray()).filter((g) => !g.deleted).length
-    : (await udb.graphs.toArray()).filter((g) => !g.deleted).length;
+    ? await udb.graphs.where("[deleted+updatedAt]").between([0, lastSyncTime], [0, Infinity]).count()
+    : await udb.graphs.where("deleted").equals(0).count();
 
   return summaryCount > BATCH_SIZE || noteCount > BATCH_SIZE || mapCount > BATCH_SIZE || graphCount > BATCH_SIZE;
 }

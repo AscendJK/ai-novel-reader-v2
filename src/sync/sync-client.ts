@@ -175,6 +175,7 @@ export class SyncClient {
     localStorage.setItem("sync-auto-offline", "true");
     if (!useUIStore.getState().offlineMode) {
       useUIStore.getState().setOfflineMode(true);
+      window.dispatchEvent(new CustomEvent("sync-offline"));
     }
   }
 
@@ -489,6 +490,7 @@ export class SyncClient {
         this.autoOffline = true;
         localStorage.setItem("sync-auto-offline", "true");
         useUIStore.getState().setOfflineMode(true);
+        window.dispatchEvent(new CustomEvent("sync-offline"));
         console.log("[sync] server unreachable after 3 heartbeats, offline mode auto-enabled");
       }
     }
