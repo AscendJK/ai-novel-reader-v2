@@ -19,25 +19,25 @@ function toModelPath(engine: string): string {
 const encoderCache = new Map<string, any>();
 let encoderLock: Promise<void> = Promise.resolve();
 
+// Module-level reference to original fetch
+const _originalFetch = globalThis.fetch;
+
 // Intercept fetch to route HuggingFace model requests through backend proxy
-function createProxiedFetch(originalFetch: typeof fetch): typeof fetch {
-  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+function proxiedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 
-    // Intercept HuggingFace model file requests
-    const hfPattern = /https?:\/\/huggingface\.co\/(Xenova\/[^/]+\/resolve\/main\/.+)/;
-    const match = url.match(hfPattern);
-    if (match) {
-      const serverUrl = getServerUrl();
-      if (serverUrl) {
-        const proxyUrl = `${serverUrl}/api/rag/model-proxy/${match[1]}`;
-        ragLog(`[client-encoder] 代理: ${url} → ${proxyUrl}`);
-        return originalFetch(proxyUrl, init);
-      }
+  const hfPattern = /https?:\/\/huggingface\.co\/(Xenova\/[^/]+\/resolve\/main\/.+)/;
+  const match = url.match(hfPattern);
+  if (match) {
+    const serverUrl = getServerUrl();
+    if (serverUrl) {
+      const proxyUrl = `${serverUrl}/api/rag/model-proxy/${match[1]}`;
+      ragLog(`[client-encoder] 代理: ${url} → ${proxyUrl}`);
+      return _originalFetch(proxyUrl, init);
     }
+  }
 
-    return originalFetch(input, init);
-  };
+  return _originalFetch(input, init);
 }
 
 async function getEncoder(engine: string): Promise<any> {
@@ -59,12 +59,9 @@ async function getEncoder(engine: string): Promise<any> {
 
     env.allowRemoteModels = true;
     env.useBrowserCache = true;
-    // Don't set remoteHost — let Transformers.js use default HuggingFace URL
-    // The fetch interceptor will route requests through the backend proxy
 
     // Install fetch interceptor
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = createProxiedFetch(originalFetch);
+    globalThis.fetch = proxiedFetch;
 
     ragLog(`[client-encoder] 加载模型: ${modelPath}`);
     try {
@@ -74,7 +71,7 @@ async function getEncoder(engine: string): Promise<any> {
       return extractor;
     } finally {
       // Restore original fetch
-      globalThis.fetch = originalFetch;
+      globalThis.fetch = _originalFetch;
     }
   } finally {
     releaseLock();

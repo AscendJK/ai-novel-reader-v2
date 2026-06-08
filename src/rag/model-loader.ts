@@ -8,25 +8,34 @@ import { useRAGStore } from "@/stores/rag-store";
 import { broadcast } from "@/lib/broadcast";
 import { getServerUrl } from "@/lib/api-client";
 
+// Module-level reference to original fetch (before any interception)
+const _originalFetch = globalThis.fetch;
+
 // Intercept fetch to route HuggingFace model requests through backend proxy
-function createProxiedFetch(originalFetch: typeof fetch): typeof fetch {
-  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+function proxiedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 
-    // Intercept HuggingFace model file requests
-    const hfPattern = /https?:\/\/huggingface\.co\/(Xenova\/[^/]+\/resolve\/main\/.+)/;
-    const match = url.match(hfPattern);
-    if (match) {
-      const serverUrl = getServerUrl();
-      if (serverUrl) {
-        const proxyUrl = `${serverUrl}/api/rag/model-proxy/${match[1]}`;
-        console.log(`[model-loader] 代理: ${url} → ${proxyUrl}`);
-        return originalFetch(proxyUrl, init);
-      }
+  // Intercept HuggingFace model file requests
+  const hfPattern = /https?:\/\/huggingface\.co\/(Xenova\/[^/]+\/resolve\/main\/.+)/;
+  const match = url.match(hfPattern);
+  if (match) {
+    const serverUrl = getServerUrl();
+    if (serverUrl) {
+      const proxyUrl = `${serverUrl}/api/rag/model-proxy/${match[1]}`;
+      console.log(`[model-loader] 代理: ${url} → ${proxyUrl}`);
+      return _originalFetch(proxyUrl, init);
     }
+  }
 
-    return originalFetch(input, init);
-  };
+  return _originalFetch(input, init);
+}
+
+function installFetchInterceptor() {
+  globalThis.fetch = proxiedFetch;
+}
+
+function restoreFetch() {
+  globalThis.fetch = _originalFetch;
 }
 
 // Mirror configuration
@@ -174,8 +183,7 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
       // Don't set remoteHost — use fetch interceptor to route through backend proxy
 
       // Install fetch interceptor for this download
-      const originalFetch = globalThis.fetch;
-      globalThis.fetch = createProxiedFetch(originalFetch);
+      installFetchInterceptor();
 
       // Download tokenizer
       store.setDownloadProgress("下载 tokenizer...");
@@ -208,7 +216,7 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
       });
 
       // Restore original fetch
-      globalThis.fetch = originalFetch;
+      restoreFetch();
 
       console.log(`[model-loader] 模型下载完成: ${modelKey}`);
       store.addDownloadedModel(modelKey);
@@ -221,7 +229,7 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
       break;
     } catch (e) {
       // Restore original fetch on error
-      globalThis.fetch = originalFetch;
+      restoreFetch();
       console.warn(`[model-loader] 下载失败 (${attempt}/${maxRetries}):`, e);
       if (attempt < maxRetries) {
         store.setDownloadProgress(`下载失败，重试中 (${attempt}/${maxRetries})...`);
