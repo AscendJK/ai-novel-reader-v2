@@ -22,11 +22,20 @@
 
 **前置条件**：
 - [Node.js](https://nodejs.org) v18~22 LTS（推荐 22）
-- [mkcert](https://github.com/FiloSottile/mkcert)（可选，用于 HTTPS）
 
 > **Node.js 24+ 用户注意**：`better-sqlite3` 在 Node 24 上缺少预编译二进制，需要 Python 3.x 和 C++ 构建工具。建议使用 **Node.js 22 LTS**。
 
-**安装与启动**：
+**方式一：下载精简包（推荐）**
+
+从 [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases) 下载 `ai-novel-reader-backend-v2.x.x.zip`（约 36 KB），解压后：
+
+```bash
+cd backend
+npm install
+npm run server
+```
+
+**方式二：Clone 整个仓库**
 
 ```bash
 git clone https://github.com/AscendJK/ai-novel-reader-v2.git

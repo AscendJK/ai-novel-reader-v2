@@ -22,11 +22,20 @@ The backend provides RAG building, data sync, book library management, and other
 
 **Prerequisites**:
 - [Node.js](https://nodejs.org) v18~22 LTS (22 recommended)
-- [mkcert](https://github.com/FiloSottile/mkcert) (optional, for HTTPS)
 
 > **Node.js 24+ users**: `better-sqlite3` lacks prebuilt binaries for Node 24, requiring Python 3.x and C++ build tools. We recommend **Node.js 22 LTS**.
 
-**Install & Start**:
+**Option 1: Download minimal package (Recommended)**
+
+Download `ai-novel-reader-backend-v2.x.x.zip` (~36 KB) from [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases), then:
+
+```bash
+cd backend
+npm install
+npm run server
+```
+
+**Option 2: Clone the entire repo**
 
 ```bash
 git clone https://github.com/AscendJK/ai-novel-reader-v2.git
