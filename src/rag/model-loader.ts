@@ -8,6 +8,27 @@ import { useRAGStore } from "@/stores/rag-store";
 import { broadcast } from "@/lib/broadcast";
 import { getServerUrl } from "@/lib/api-client";
 
+// Intercept fetch to route HuggingFace model requests through backend proxy
+function createProxiedFetch(originalFetch: typeof fetch): typeof fetch {
+  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+
+    // Intercept HuggingFace model file requests
+    const hfPattern = /https?:\/\/huggingface\.co\/(Xenova\/[^/]+\/resolve\/main\/.+)/;
+    const match = url.match(hfPattern);
+    if (match) {
+      const serverUrl = getServerUrl();
+      if (serverUrl) {
+        const proxyUrl = `${serverUrl}/api/rag/model-proxy/${match[1]}`;
+        console.log(`[model-loader] 代理: ${url} → ${proxyUrl}`);
+        return originalFetch(proxyUrl, init);
+      }
+    }
+
+    return originalFetch(input, init);
+  };
+}
+
 // Mirror configuration
 const HF_MIRROR_KEY = "novel-reader-hf-mirror";
 
@@ -150,8 +171,11 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
 
       env.allowRemoteModels = true;
       env.useBrowserCache = true;
-      env.remoteHost = getRemoteHost();
-      console.log(`[model-loader] 镜像源: ${env.remoteHost}`);
+      // Don't set remoteHost — use fetch interceptor to route through backend proxy
+
+      // Install fetch interceptor for this download
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = createProxiedFetch(originalFetch);
 
       // Download tokenizer
       store.setDownloadProgress("下载 tokenizer...");
@@ -183,6 +207,9 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
         },
       });
 
+      // Restore original fetch
+      globalThis.fetch = originalFetch;
+
       console.log(`[model-loader] 模型下载完成: ${modelKey}`);
       store.addDownloadedModel(modelKey);
       store.setDownloadProgress("下载完成");
@@ -193,6 +220,8 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
       success = true;
       break;
     } catch (e) {
+      // Restore original fetch on error
+      globalThis.fetch = originalFetch;
       console.warn(`[model-loader] 下载失败 (${attempt}/${maxRetries}):`, e);
       if (attempt < maxRetries) {
         store.setDownloadProgress(`下载失败，重试中 (${attempt}/${maxRetries})...`);

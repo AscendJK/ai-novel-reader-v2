@@ -1,11 +1,11 @@
 /**
  * Client-side query encoder using Transformers.js.
- * All models are downloaded from HuggingFace (or mirror) on demand.
+ * Models are downloaded via backend proxy (bypasses CORS).
  */
 
 import { ragLog } from "@/lib/logger";
 import { resolveModelKey } from "./engines";
-import { getRemoteHost } from "./model-loader";
+import { getServerUrl } from "@/lib/api-client";
 
 // Resolve engine ID to the model key Transformers.js expects
 function toModelPath(engine: string): string {
@@ -18,6 +18,27 @@ function toModelPath(engine: string): string {
 
 const encoderCache = new Map<string, any>();
 let encoderLock: Promise<void> = Promise.resolve();
+
+// Intercept fetch to route HuggingFace model requests through backend proxy
+function createProxiedFetch(originalFetch: typeof fetch): typeof fetch {
+  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+
+    // Intercept HuggingFace model file requests
+    const hfPattern = /https?:\/\/huggingface\.co\/(Xenova\/[^/]+\/resolve\/main\/.+)/;
+    const match = url.match(hfPattern);
+    if (match) {
+      const serverUrl = getServerUrl();
+      if (serverUrl) {
+        const proxyUrl = `${serverUrl}/api/rag/model-proxy/${match[1]}`;
+        ragLog(`[client-encoder] 代理: ${url} → ${proxyUrl}`);
+        return originalFetch(proxyUrl, init);
+      }
+    }
+
+    return originalFetch(input, init);
+  };
+}
 
 async function getEncoder(engine: string): Promise<any> {
   const cached = encoderCache.get(engine);
@@ -38,13 +59,23 @@ async function getEncoder(engine: string): Promise<any> {
 
     env.allowRemoteModels = true;
     env.useBrowserCache = true;
-    env.remoteHost = getRemoteHost();
+    // Don't set remoteHost — let Transformers.js use default HuggingFace URL
+    // The fetch interceptor will route requests through the backend proxy
 
-    ragLog(`[client-encoder] 加载模型: ${modelPath} (镜像: ${env.remoteHost})`);
-    const extractor = await pipeline("feature-extraction", modelPath);
-    encoderCache.set(engine, extractor);
-    ragLog(`[client-encoder] 模型就绪: ${modelPath}`);
-    return extractor;
+    // Install fetch interceptor
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = createProxiedFetch(originalFetch);
+
+    ragLog(`[client-encoder] 加载模型: ${modelPath}`);
+    try {
+      const extractor = await pipeline("feature-extraction", modelPath);
+      encoderCache.set(engine, extractor);
+      ragLog(`[client-encoder] 模型就绪: ${modelPath}`);
+      return extractor;
+    } finally {
+      // Restore original fetch
+      globalThis.fetch = originalFetch;
+    }
   } finally {
     releaseLock();
   }
