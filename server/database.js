@@ -227,6 +227,7 @@ export function deleteNovel(novelId) {
     db.prepare("DELETE FROM user_novels WHERE novel_id = ?").run(novelId);
     db.prepare("DELETE FROM summaries WHERE novel_id = ?").run(novelId);
     db.prepare("DELETE FROM notes WHERE novel_id = ?").run(novelId);
+    db.prepare("DELETE FROM maps WHERE novel_id = ?").run(novelId);
     db.prepare("DELETE FROM graphs WHERE novel_id = ?").run(novelId);
     db.prepare("DELETE FROM reading_progress WHERE novel_id = ?").run(novelId);
     db.prepare("DELETE FROM chapters WHERE novel_id = ?").run(novelId);

@@ -549,6 +549,17 @@ export function AppLayout() {
               for (const m of maps) { await udb.maps.put({ ...m, novelId: serverId }); }
               for (const g of graphs) { await udb.graphs.put({ ...g, novelId: serverId }); }
             });
+            // Migrate reading position from old ID to server ID
+            const { readingPositions } = useNovelStore.getState();
+            const oldPos = readingPositions[oldId];
+            if (oldPos) {
+              const newChapterId = `${serverId}-ch${oldPos.chapterIndex}`;
+              useNovelStore.getState().saveReadingPosition(serverId, newChapterId, oldPos.chapterIndex);
+              // Clean up old position
+              const positions = { ...readingPositions };
+              delete positions[oldId];
+              useNovelStore.setState({ readingPositions: positions });
+            }
             // Join server novel
             await apiFetch(`/api/novels/${serverId}/join`, { method: "POST" })
               .catch((e) => console.warn("[AppLayout] join novel failed:", e));

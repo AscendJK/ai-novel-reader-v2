@@ -334,7 +334,14 @@ export async function downloadModelToCache(modelKey: string, onProgress?: (file:
         body.set(chunk, offset);
         offset += chunk.length;
       }
-      const response = new Response(body, { headers: r.headers });
+      // Strip compression headers since the cached body is decompressed
+      const cacheHeaders = new Headers(r.headers);
+      if (isCompressed) {
+        cacheHeaders.delete("Content-Encoding");
+        cacheHeaders.delete("Content-Length");
+      }
+      cacheHeaders.set("Content-Length", String(loaded));
+      const response = new Response(body, { headers: cacheHeaders });
       await cache.put(url, response);
       console.log(`[model-loader] cached: ${file} (${(loaded / 1024 / 1024).toFixed(1)} MB)`);
     }
