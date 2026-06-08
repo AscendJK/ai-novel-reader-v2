@@ -226,20 +226,24 @@ export function AppLayout() {
       // Migrate data from old user DB to new user DB before switching
       try {
         const oldDb = getUserDB();
-        const [novels, chapters, summaries, notes] = await Promise.all([
+        const [novels, chapters, summaries, notes, maps, graphs] = await Promise.all([
           oldDb.novels.toArray(),
           oldDb.chapters.toArray(),
           oldDb.summaries.toArray(),
           oldDb.notes.toArray(),
+          oldDb.maps.toArray(),
+          oldDb.graphs.toArray(),
         ]);
         syncClient.setUsername(trimmedName);
         setCurrentUser(trimmedName);
         const newDb = getUserDB();
-        await newDb.transaction("rw", newDb.novels, newDb.chapters, newDb.summaries, newDb.notes, async () => {
+        await newDb.transaction("rw", newDb.novels, newDb.chapters, newDb.summaries, newDb.notes, newDb.maps, newDb.graphs, async () => {
           if (novels.length) await newDb.novels.bulkPut(novels);
           if (chapters.length) await newDb.chapters.bulkPut(chapters);
           if (summaries.length) await newDb.summaries.bulkPut(summaries);
           if (notes.length) await newDb.notes.bulkPut(notes);
+          if (maps.length) await newDb.maps.bulkPut(maps);
+          if (graphs.length) await newDb.graphs.bulkPut(graphs);
         });
         // Clean up old user's DB
         await deleteUserDB(conflictUsername).catch((e) => console.warn("[AppLayout] deleteUserDB failed:", e));
@@ -387,22 +391,26 @@ export function AppLayout() {
             const trimmedName = newName.trim();
             try {
               const oldDb = getUserDB();
-              const [novels, chapters, summaries, notes] = await Promise.all([
+              const [novels, chapters, summaries, notes, maps, graphs] = await Promise.all([
                 oldDb.novels.toArray(),
                 oldDb.chapters.toArray(),
                 oldDb.summaries.toArray(),
                 oldDb.notes.toArray(),
+                oldDb.maps.toArray(),
+                oldDb.graphs.toArray(),
               ]);
               syncClient.setUsername(trimmedName);
               setCurrentUser(trimmedName);
               localStorage.setItem("sync-username", trimmedName);
               addLocalUser(trimmedName);
               const newDb = getUserDB();
-              await newDb.transaction("rw", newDb.novels, newDb.chapters, newDb.summaries, newDb.notes, async () => {
+              await newDb.transaction("rw", newDb.novels, newDb.chapters, newDb.summaries, newDb.notes, newDb.maps, newDb.graphs, async () => {
                 if (novels.length) await newDb.novels.bulkPut(novels);
                 if (chapters.length) await newDb.chapters.bulkPut(chapters);
                 if (summaries.length) await newDb.summaries.bulkPut(summaries);
                 if (notes.length) await newDb.notes.bulkPut(notes);
+                if (maps.length) await newDb.maps.bulkPut(maps);
+                if (graphs.length) await newDb.graphs.bulkPut(graphs);
               });
               await deleteUserDB(username).catch((e) => console.warn("[AppLayout] deleteUserDB failed:", e));
               removeLocalUser(username);

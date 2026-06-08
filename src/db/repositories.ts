@@ -424,7 +424,8 @@ export async function cleanupDeletedRecords() {
     const oldSummaries = await db.summaries.where("deleted").above(0).toArray();
     const oldNotes = await db.notes.where("deleted").above(0).toArray();
     const oldGraphs = await db.graphs.where("deleted").above(0).toArray();
-    let sCount = 0, nCount = 0, gCount = 0;
+    const oldMaps = await db.maps.where("deleted").above(0).toArray();
+    let sCount = 0, nCount = 0, gCount = 0, mCount = 0;
     for (const s of oldSummaries) {
       if ((s.updatedAt || 0) < cutoff) { await db.summaries.delete(s.id); sCount++; }
     }
@@ -434,7 +435,10 @@ export async function cleanupDeletedRecords() {
     for (const g of oldGraphs) {
       if ((g.updatedAt || 0) < cutoff) { await db.graphs.delete(g.id); gCount++; }
     }
-    if (sCount || nCount || gCount) console.log(`[gc] cleaned ${sCount} summaries, ${nCount} notes, ${gCount} graphs`);
+    for (const m of oldMaps) {
+      if ((m.updatedAt || 0) < cutoff) { await db.maps.delete(m.id); mCount++; }
+    }
+    if (sCount || nCount || gCount || mCount) console.log(`[gc] cleaned ${sCount} summaries, ${nCount} notes, ${gCount} graphs, ${mCount} maps`);
   } catch (e) { console.error("[gc] cleanupDeletedRecords failed:", e); }
 }
 

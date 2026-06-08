@@ -102,13 +102,14 @@ export async function hasMoreChanges(lastSyncTime: number): Promise<boolean> {
     ? await udb.notes.where("updatedAt").above(lastSyncTime).count()
     : await udb.notes.count();
 
+  // maps/graphs: exclude soft-deleted records (gatherChanges filters them out)
   const mapCount = lastSyncTime > 0
-    ? await udb.maps.where("updatedAt").above(lastSyncTime).count()
-    : await udb.maps.count();
+    ? (await udb.maps.where("updatedAt").above(lastSyncTime).toArray()).filter((m) => !m.deleted).length
+    : (await udb.maps.toArray()).filter((m) => !m.deleted).length;
 
   const graphCount = lastSyncTime > 0
-    ? await udb.graphs.where("updatedAt").above(lastSyncTime).count()
-    : await udb.graphs.count();
+    ? (await udb.graphs.where("updatedAt").above(lastSyncTime).toArray()).filter((g) => !g.deleted).length
+    : (await udb.graphs.toArray()).filter((g) => !g.deleted).length;
 
   return summaryCount > BATCH_SIZE || noteCount > BATCH_SIZE || mapCount > BATCH_SIZE || graphCount > BATCH_SIZE;
 }
