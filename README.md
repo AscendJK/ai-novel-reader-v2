@@ -77,7 +77,9 @@ npm run dev
 
 ## HTTPS 与证书（可选）
 
-局域网使用 HTTP 即可，无需配置 HTTPS。以下仅在需要 HTTPS 时参考。
+**不安装 mkcert 也能正常使用**，后端会以 HTTP 模式运行。前端（GitHub Pages，HTTPS）向后端（HTTP）发请求时，浏览器控制台会显示一条 mixed content 黄色警告，但**请求不会被阻止**，所有功能完全正常。
+
+安装 mkcert 只是消除这个警告，不是必须的。
 
 ### 前端
 
@@ -85,7 +87,7 @@ GitHub Pages 自动提供 HTTPS，无需额外配置。
 
 ### 后端
 
-后端默认同时监听 HTTP（5173）和 HTTPS（8443）。如果系统安装了 [mkcert](https://github.com/FiloSottile/mkcert)，服务器会自动生成并使用受信任的 HTTPS 证书。
+后端默认监听 HTTP（端口 5173）。如果系统安装了 [mkcert](https://github.com/FiloSottile/mkcert)，服务器会自动额外启动 HTTPS（端口 8443），消除浏览器的 mixed content 警告。
 
 **安装 mkcert**（可选）：
 
@@ -120,7 +122,11 @@ mkcert -CAROOT     # 获取 CA 根证书路径
 - **Android**：设置 → 安全 → 加密与凭据 → 安装证书 → CA 证书
 - **iOS**：设置 → 通用 → 描述文件 → 安装 → 设置 → 通用 → 关于 → 证书信任设置 → 启用
 
-> 不使用 mkcert 时，后端仍然可以通过 HTTP 访问（如 `http://192.168.1.100:5173`），功能完全正常。
+| 访问方式 | 无 mkcert | 有 mkcert |
+|---------|----------|----------|
+| `http://局域网IP:5173` 前端 + 后端 | ✅ 正常 | ✅ 正常 |
+| `https://ascendjk.github.io` 前端 + HTTP 后端 | ✅ 正常（控制台有黄色警告） | ✅ 正常（无警告） |
+| `https://ascendjk.github.io` 前端 + HTTPS 后端 | — | ✅ 正常（无警告） |
 
 ---
 
@@ -460,15 +466,13 @@ MIT License
 - Windows：以管理员身份运行终端（右键 PowerShell → 以管理员身份运行）
 - macOS/Linux：使用 `sudo`
 
-### 浏览器显示"不安全"
+### 浏览器控制台显示 mixed content 警告
 
-**原因**：未安装 mkcert 或证书未正确安装。
+**原因**：GitHub Pages（HTTPS）前端向 HTTP 后端发请求，浏览器会显示黄色警告。
 
-**解决方案**：
-1. 安装 mkcert
-2. 运行 `mkcert -install`
-3. 重启浏览器
-4. 重新启动服务器
+**影响**：仅是警告，**不会阻止请求**，所有功能正常工作。
+
+**消除警告**：安装 mkcert 后服务器会自动启用 HTTPS，警告消失。不安装也完全不影响使用。
 
 ### 前端无法连接后端
 
@@ -477,7 +481,7 @@ MIT License
 2. 服务器地址是否正确（包含协议和端口，如 `http://192.168.1.100:5173`）
 3. 前端和后端是否在同一局域网
 4. 防火墙是否放行了 5173 端口
-5. 如果使用 HTTPS，其他设备是否已安装 CA 根证书
+5. 浏览器控制台的 mixed content 黄色警告不影响连接，忽略即可
 
 ### 如何重新安装依赖
 

@@ -77,7 +77,9 @@ Dev server runs at `http://localhost:5173`, API requests are automatically proxi
 
 ## HTTPS & Certificates (Optional)
 
-LAN access works fine with HTTP. HTTPS is only needed for specific scenarios.
+**The project works perfectly without mkcert.** The backend runs in HTTP mode by default. When the frontend (GitHub Pages, HTTPS) sends requests to the backend (HTTP), the browser console shows a yellow mixed content warning, but **requests are not blocked** — all features work normally.
+
+Installing mkcert only eliminates this warning; it is not required.
 
 ### Frontend
 
@@ -85,7 +87,7 @@ GitHub Pages provides HTTPS automatically. No extra configuration needed.
 
 ### Backend
 
-The backend listens on both HTTP (5173) and HTTPS (8443) by default. If [mkcert](https://github.com/FiloSottile/mkcert) is installed on the system, the server will automatically generate and use a trusted HTTPS certificate.
+The backend listens on HTTP (port 5173) by default. If [mkcert](https://github.com/FiloSottile/mkcert) is installed, the server will automatically start an additional HTTPS listener (port 8443), eliminating the browser's mixed content warning.
 
 **Install mkcert** (optional):
 
@@ -120,7 +122,11 @@ Send `rootCA.pem` to other devices and install:
 - **Android**: Settings → Security → Encryption & credentials → Install certificate → CA certificate
 - **iOS**: Settings → General → Profiles → Install → Settings → General → About → Certificate Trust Settings → Enable
 
-> Without mkcert, the backend is still accessible via HTTP (e.g., `http://192.168.1.100:5173`) with full functionality.
+| Access method | Without mkcert | With mkcert |
+|--------------|---------------|-------------|
+| `http://LAN-IP:5173` frontend + backend | ✅ Works | ✅ Works |
+| `https://ascendjk.github.io` frontend + HTTP backend | ✅ Works (yellow warning in console) | ✅ Works (no warning) |
+| `https://ascendjk.github.io` frontend + HTTPS backend | — | ✅ Works (no warning) |
 
 ---
 
@@ -457,15 +463,13 @@ MIT License. Built-in models:
 - Windows: Run terminal as Administrator (right-click PowerShell → Run as administrator)
 - macOS/Linux: Use `sudo`
 
-### Browser shows "Not Secure"
+### Browser console shows mixed content warning
 
-**Cause**: mkcert not installed or certificate not properly installed.
+**Cause**: GitHub Pages (HTTPS) frontend sends requests to HTTP backend, triggering a yellow warning.
 
-**Solution**:
-1. Install mkcert
-2. Run `mkcert -install`
-3. Restart browser
-4. Restart server
+**Impact**: Warning only — **requests are not blocked**, all features work normally.
+
+**To eliminate warning**: Install mkcert and the server will automatically enable HTTPS. Not required for normal use.
 
 ### Frontend cannot connect to backend
 
@@ -474,7 +478,7 @@ MIT License. Built-in models:
 2. Is the server address correct? (Include protocol and port, e.g., `http://192.168.1.100:5173`)
 3. Are the frontend and backend on the same LAN?
 4. Is port 5173 allowed through the firewall?
-5. If using HTTPS, have other devices installed the CA root certificate?
+5. The mixed content yellow warning in the console does not affect connectivity — ignore it
 
 ### How to reinstall dependencies
 
