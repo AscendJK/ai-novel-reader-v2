@@ -34,6 +34,8 @@ Download `ai-novel-reader-backend-v2.x.x.zip` (~36 KB) from [Releases](https://g
 
 The script will auto-install dependencies (server-side only, no frontend build) and start the backend. Models will be downloaded from the mirror on first index build (requires network).
 
+> **Package contents**: Only `server/` source code, `package.json`, and start scripts. The start script only runs `npm install` + `node server/index.js` (no frontend build). Runtime data (database, model cache, certificates) is created automatically on first server start.
+
 **Option 2: Clone the entire repo**
 
 ```bash
