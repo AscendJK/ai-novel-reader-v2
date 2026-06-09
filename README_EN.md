@@ -27,12 +27,12 @@ The backend provides RAG building, data sync, book library management, and other
 
 **Option 1: Download backend package (Recommended)**
 
-Download `ai-novel-reader-backend-v2.x.x.zip` (~38 KB) from [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases), then:
+Download `ai-novel-reader-backend-v2.x.x.zip` (~36 KB) from [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases), then:
 
 - **Windows**: Double-click `start.bat`
 - **macOS / Linux**: `chmod +x start.sh && ./start.sh`
 
-The script will auto-install dependencies and start the backend. Models will be downloaded from the mirror on first index build (requires network).
+The script will auto-install dependencies (server-side only, no frontend build) and start the backend. Models will be downloaded from the mirror on first index build (requires network).
 
 **Option 2: Clone the entire repo**
 

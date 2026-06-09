@@ -27,12 +27,12 @@
 
 **方式一：下载后端包（推荐）**
 
-从 [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases) 下载 `ai-novel-reader-backend-v2.x.x.zip`（约 38 KB），解压后：
+从 [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases) 下载 `ai-novel-reader-backend-v2.x.x.zip`（约 36 KB），解压后：
 
 - **Windows**：双击 `start.bat`
 - **macOS / Linux**：`chmod +x start.sh && ./start.sh`
 
-脚本会自动安装依赖并启动后端。首次构建索引时会自动从镜像下载模型（需要网络）。
+脚本会自动安装依赖并启动后端（仅安装服务端依赖，不构建前端）。首次构建索引时会自动从镜像下载模型（需要网络）。
 
 **方式二：Clone 整个仓库**
 
@@ -44,7 +44,7 @@ cd ai-novel-reader-v2
 - **Windows**：双击 `start.bat`
 - **macOS / Linux**：`chmod +x start.sh && ./start.sh`
 
-脚本会自动安装依赖、构建前端、启动服务器。
+脚本会自动安装依赖、构建前端、启动服务器（完整模式，含前端）。
 
 启动后终端会显示地址：
 ```
