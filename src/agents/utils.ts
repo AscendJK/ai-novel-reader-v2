@@ -126,7 +126,7 @@ export function getRelevantContent(
  */
 export function formatAgentError(err: unknown): string {
   if (err instanceof APIError) {
-    return `[${err.code}] ${err.message}`;
+    return `[${err.apiCode || err.code}] ${err.message}`;
   }
   return err instanceof Error ? err.message : "未知错误";
 }

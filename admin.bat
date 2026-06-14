@@ -11,21 +11,12 @@ if not exist "node_modules\" ( echo Installing deps... && call npm install )
 
 set ADMIN_PORT=5173
 
-if exist "dist\index.html" (
-    echo Mode: Production
-    REM Kill any existing process on port 5173 (could be Vite dev server)
-    for /f "tokens=5" %%a in ('powershell -Command "Get-NetTCPConnection -LocalPort 5173 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess"') do (
-        echo Stopping old instance on port 5173 PID %%a ...
-        taskkill /PID %%a /F >nul 2>&1
-    )
-    echo Starting production server...
-    powershell -Command "Start-Process -FilePath 'cmd' -ArgumentList '/c cd /d %~dp0 && node server/index.js --full > server\server.log 2>&1' -WindowStyle Hidden"
-    timeout /t 3 /nobreak >nul
-) else (
-    echo Mode: Development
-    set ADMIN_PORT=3001
-    powershell -Command "$c=Get-NetTCPConnection -LocalPort 3001 -State Listen -ErrorAction SilentlyContinue | Select -First 1; if(-not $c){ Start-Process -FilePath 'cmd' -ArgumentList '/c node server/index.js' -WindowStyle Hidden; Start-Sleep 1 }"
-    powershell -Command "$c=Get-NetTCPConnection -LocalPort 5173 -State Listen -ErrorAction SilentlyContinue | Select -First 1; if(-not $c){ Start-Process -FilePath 'cmd' -ArgumentList '/c npx vite --host 0.0.0.0 --port 5173' -WindowStyle Hidden; Start-Sleep 2 }"
+REM Check if server is already running on port 5173
+powershell -Command "$c=Get-NetTCPConnection -LocalPort 5173 -State Listen -ErrorAction SilentlyContinue | Select -First 1; if(-not $c){ exit 1 } else { exit 0 }"
+if %errorlevel% neq 0 (
+    echo Starting server...
+    powershell -Command "Start-Process -FilePath 'cmd' -ArgumentList '/c node server/index.js' -WindowStyle Hidden"
+    timeout /t 2 /nobreak >nul
 )
 
 set TOKEN=

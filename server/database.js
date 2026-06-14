@@ -230,6 +230,7 @@ export function deleteNovel(novelId) {
     db.prepare("DELETE FROM maps WHERE novel_id = ?").run(novelId);
     db.prepare("DELETE FROM graphs WHERE novel_id = ?").run(novelId);
     db.prepare("DELETE FROM reading_progress WHERE novel_id = ?").run(novelId);
+    db.prepare("DELETE FROM rag_indices WHERE novel_id = ?").run(novelId);
     db.prepare("DELETE FROM chapters WHERE novel_id = ?").run(novelId);
     db.prepare("DELETE FROM novels WHERE id = ?").run(novelId);
   })();
@@ -435,7 +436,7 @@ export function gatherSyncData(username, since = 0) {
   const maps = since > 0
     ? db.prepare(`
         SELECT id, novel_id AS "novelId", username, data, created_at AS "createdAt", updated_at AS "updatedAt", deleted
-        FROM maps WHERE username = ? AND updated_at > ? AND (deleted IS NULL OR deleted = 0)
+        FROM maps WHERE username = ? AND updated_at > ?
       `).all(username, since)
     : db.prepare(`
         SELECT id, novel_id AS "novelId", username, data, created_at AS "createdAt", updated_at AS "updatedAt", deleted
@@ -445,7 +446,7 @@ export function gatherSyncData(username, since = 0) {
   const graphs = since > 0
     ? db.prepare(`
         SELECT id, novel_id AS "novelId", username, data, created_at AS "createdAt", updated_at AS "updatedAt", deleted
-        FROM graphs WHERE username = ? AND updated_at > ? AND (deleted IS NULL OR deleted = 0)
+        FROM graphs WHERE username = ? AND updated_at > ?
       `).all(username, since)
     : db.prepare(`
         SELECT id, novel_id AS "novelId", username, data, created_at AS "createdAt", updated_at AS "updatedAt", deleted
@@ -573,6 +574,12 @@ export function createBackup() {
   cleanOldBackups();
 }
 
+let isRestoring = false;
+
+export function isRestoringBackup() {
+  return isRestoring;
+}
+
 export function restoreBackup(filename) {
   // Validate filename FIRST before constructing path
   if (!filename.endsWith(".db") || filename.includes("..") || filename.includes("/") || filename.includes("\\")) {
@@ -582,6 +589,8 @@ export function restoreBackup(filename) {
   if (!fs.existsSync(backupPath)) throw new Error("备份文件不存在");
   // Create a pre-restore backup first
   createBackup();
+  // Set restoring flag to reject incoming requests
+  isRestoring = true;
   // Close current connection, replace DB
   db.close();
   fs.copyFileSync(backupPath, DB_PATH);

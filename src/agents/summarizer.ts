@@ -92,7 +92,7 @@ class SummarizerAgent extends BaseAgent {
 
   private formatError(err: unknown): string {
     if (err instanceof APIError) {
-      return `[${err.code}] ${err.message}`;
+      return `[${err.apiCode || err.code}] ${err.message}`;
     }
     return err instanceof Error ? err.message : "未知错误";
   }
@@ -155,9 +155,10 @@ class GlobalSummarizerAgent extends BaseAgent {
       };
     } catch (err) {
       if (err instanceof APIError) {
+        const code = err.apiCode || err.code;
         return {
           success: false,
-          error: `[${err.code}] ${err.message}${err.code === "context_length" ? " (提示：小说文本过长，已自动使用精简模式，但仍超出限制。请尝试使用支持更长上下文的模型。)" : ""}`,
+          error: `[${code}] ${err.message}${code === "context_length" ? " (提示：小说文本过长，已自动使用精简模式，但仍超出限制。请尝试使用支持更长上下文的模型。)" : ""}`,
         };
       }
       return {

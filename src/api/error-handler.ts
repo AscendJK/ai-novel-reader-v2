@@ -1,23 +1,45 @@
-export class APIError extends Error {
-  code: "auth" | "network" | "context_length" | "rate_limit" | "quota_exceeded" | "server" | "unknown";
+import { AppError, type ErrorCode } from "@/lib/error-handler";
+
+/** API 错误代码类型 */
+export type APIErrorCode = "auth" | "network" | "context_length" | "rate_limit" | "quota_exceeded" | "server" | "unknown";
+
+/** API 错误代码到统一错误代码的映射 */
+const API_TO_ERROR_CODE: Record<APIErrorCode, ErrorCode> = {
+  "auth": "AUTH",
+  "network": "NETWORK",
+  "context_length": "CONTEXT_LENGTH",
+  "rate_limit": "RATE_LIMIT",
+  "quota_exceeded": "QUOTA_EXCEEDED",
+  "server": "SERVER_ERROR",
+  "unknown": "API_ERROR",
+};
+
+/**
+ * API 错误类
+ * 继承自 AppError，保持向后兼容
+ */
+export class APIError extends AppError {
   statusCode?: number;
   originalBody?: string;
+  apiCode: APIErrorCode;
 
   constructor(
     message: string,
-    code: "auth" | "network" | "context_length" | "rate_limit" | "quota_exceeded" | "server" | "unknown",
+    code: APIErrorCode,
     statusCode?: number,
     originalBody?: string
   ) {
-    super(message);
+    const errorCode = API_TO_ERROR_CODE[code] || "API_ERROR";
+    const severity = code === "auth" ? "high" : "medium";
+    super(message, errorCode, severity, { statusCode, originalBody, apiCode: code });
     this.name = "APIError";
-    this.code = code;
+    this.apiCode = code;
     this.statusCode = statusCode;
     this.originalBody = originalBody;
   }
 }
 
-function classifyError(status: number, body: string): { code: APIError["code"]; message: string } {
+function classifyError(status: number, body: string): { code: APIErrorCode; message: string } {
   let parsed: Record<string, unknown> = {};
   try { parsed = JSON.parse(body); } catch { /* ignore */ }
 

@@ -5,7 +5,7 @@ import { createAnthropicProvider } from "./providers/anthropic";
 const providerCache = new Map<string, AIProvider>();
 
 export function getProvider(config: ProviderConfig): AIProvider {
-  const cacheKey = `${config.id}:${config.apiKey}:${config.baseUrl}:${config.model}`;
+  const cacheKey = `${config.id}:${config.baseUrl}:${config.model}`;
   if (providerCache.has(cacheKey)) return providerCache.get(cacheKey)!;
 
   let provider: AIProvider;
@@ -17,4 +17,8 @@ export function getProvider(config: ProviderConfig): AIProvider {
 
   providerCache.set(cacheKey, provider);
   return provider;
+}
+
+export function clearProviderCache(): void {
+  providerCache.clear();
 }

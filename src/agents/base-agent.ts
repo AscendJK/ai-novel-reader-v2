@@ -8,7 +8,7 @@ import type { AIProvider } from "@/api/types";
 import type { TokenBudget } from "@/api/token-manager";
 import type { Novel } from "@/parsers/types";
 import { prepareAgentContext, formatAgentError } from "./utils";
-import { APIError } from "@/api/error-handler";
+import { normalizeError, getUserFriendlyMessage } from "@/lib/error-handler";
 
 /** Agent 运行环境 */
 export interface AgentEnvironment {
@@ -68,23 +68,14 @@ export abstract class BaseAgent implements Agent {
   }
 
   /**
-   * 处理错误
+   * 处理错误（使用统一错误处理）
    */
   protected handleError(err: unknown): AgentResult {
-    const error = formatAgentError(err);
-    console.error(`[Agent:${this.name}] Error:`, error);
+    const appError = normalizeError(err);
+    const userMessage = getUserFriendlyMessage(appError);
+    console.error(`[Agent:${this.name}] Error:`, appError.code, appError.message);
 
-    // 检查是否是认证错误
-    if (err instanceof APIError && err.code === "auth") {
-      return { success: false, error: "认证失败，请重新登录" };
-    }
-
-    // 检查是否是网络/CORS 错误
-    if (err instanceof TypeError && err.message.includes("fetch")) {
-      return { success: false, error: "网络请求失败，请检查网络连接或重新登录" };
-    }
-
-    return { success: false, error };
+    return { success: false, error: userMessage };
   }
 }
 
@@ -109,9 +100,10 @@ export function createSimpleAgent(
       try {
         return await execute(context, envResult);
       } catch (err) {
-        const error = formatAgentError(err);
-        console.error(`[Agent:${name}] Error:`, error);
-        return { success: false, error };
+        const appError = normalizeError(err);
+        const userMessage = getUserFriendlyMessage(appError);
+        console.error(`[Agent:${name}] Error:`, appError.code, appError.message);
+        return { success: false, error: userMessage };
       }
     },
   };

@@ -39,7 +39,7 @@ export async function saveNovel(novel: Novel): Promise<void> {
   }
 }
 
-export async function loadNovel(novelId: string, chapterIndex?: number): Promise<Novel | null> {
+export async function loadNovel(novelId: string, chapterIndex?: number, loadAllContent?: boolean): Promise<Novel | null> {
   const db = getUserDB();
   try {
     const record = await db.novels.get(novelId);
@@ -48,9 +48,9 @@ export async function loadNovel(novelId: string, chapterIndex?: number): Promise
     const allChapterRecords = await db.chapters.where("novelId").equals(novelId).sortBy("index");
     const totalCount = allChapterRecords.length;
 
-    // 如果指定了章节索引，只加载当前章节及前后各10章的内容
+    // 如果指定了章节索引且不需要加载所有内容，只加载当前章节及前后各10章的内容
     let chaptersToLoad = allChapterRecords;
-    if (chapterIndex !== undefined && totalCount > 21) {
+    if (!loadAllContent && chapterIndex !== undefined && totalCount > 21) {
       const start = Math.max(0, chapterIndex - 10);
       const end = Math.min(totalCount, chapterIndex + 11);
       chaptersToLoad = allChapterRecords.slice(start, end);

@@ -5,19 +5,32 @@ cd /d "%~dp0"
 echo ===== AI Novel Reader - Backend =====
 echo.
 
-where npm >nul 2>&1
+where node >nul 2>&1
 if %errorlevel% neq 0 (
     echo [ERROR] Node.js is not installed.
     pause
     exit /b 1
 )
 
-for /f "tokens=2 delims=v." %%a in ('node -v') do set "NODE_VER=%%a"
-if !NODE_VER! geq 24 (
-    echo Node.js 24+ is not supported. Please use 18-22 LTS.
+REM Extract major version number (e.g., v18.20.4 -> 18)
+for /f "tokens=1 delims=." %%a in ('node -v') do set "NODE_VER_FULL=%%a"
+set "NODE_VER=%NODE_VER_FULL:v=%"
+
+REM Check version range: only 18-22 supported
+if !NODE_VER! lss 18 (
+    echo [ERROR] Node.js !NODE_VER! is too old. Please use 18-22 LTS.
+    echo Download from: https://nodejs.org/
     pause
     exit /b 1
 )
+if !NODE_VER! gtr 22 (
+    echo [ERROR] Node.js !NODE_VER! is not supported. Please use 18-22 LTS.
+    echo Node.js 23+ has breaking changes that are not compatible.
+    pause
+    exit /b 1
+)
+
+echo Node.js version: !NODE_VER! [OK]
 
 if not exist "node_modules\" (
     echo Installing dependencies...
@@ -31,7 +44,7 @@ if not exist "node_modules\" (
 
 echo.
 echo Starting server...
-echo Backend running at: http://0.0.0.0:5173
+echo Backend running at: http://localhost:5173
 echo Admin panel: http://localhost:5173/admin
 echo.
 echo Open https://ascendjk.github.io/ai-novel-reader-v2/ and enter your backend address.

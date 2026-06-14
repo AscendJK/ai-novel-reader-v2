@@ -11,7 +11,7 @@ import path from "node:path";
 import fs from "node:fs";
 import https from "node:https";
 import { fileURLToPath } from "node:url";
-import { checkpointWAL, createBackup, cleanupDeletedRecords, getBackupConfig } from "./database.js";
+import { checkpointWAL, createBackup, cleanupDeletedRecords, getBackupConfig, isRestoringBackup } from "./database.js";
 import { novelsRouter, ragRouter, syncRouter, proxyRouter } from "./routes/index.js";
 
 import { mountAdminRoutes } from "./admin.js";
@@ -20,13 +20,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isFullMode = process.argv.includes("--full");
 const app = express();
 
-// ── CORS: restrict to localhost origins ──
+// ── CORS: restrict to specific origins ──
 const ALLOWED_ORIGINS = [
   // 开发环境
   "http://localhost:5173", "http://127.0.0.1:5173",
   "http://localhost:4173", "http://127.0.0.1:4173",
   "https://localhost", "https://127.0.0.1",
-  // GitHub Pages
+  // GitHub Pages（只允许特定域名）
   "https://ascendjk.github.io",
   // 用户自定义前端域名（可通过环境变量配置）
   ...(process.env.CORS_ORIGINS || "").split(",").filter(Boolean),
@@ -36,9 +36,7 @@ app.use(cors({
     // Allow no-origin (same-origin, curl, mobile apps) and localhost
     if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
     // Allow any LAN/private IP (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
-    if (/^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?/.test(origin)) return cb(null, true);
-    // Allow any GitHub Pages domain (*.github.io)
-    if (/^https:\/\/[a-z0-9-]+\.github\.io$/.test(origin)) return cb(null, true);
+    if (/^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/.test(origin)) return cb(null, true);
     cb(new Error("CORS not allowed"));
   },
   allowedHeaders: ["Content-Type", "Authorization", "x-api-key", "anthropic-version"],
@@ -47,6 +45,14 @@ app.use(cors({
   maxAge: 86400,
 }));
 app.use(express.json({ limit: "50mb" }));
+
+// ── Reject requests during backup restore ───────────────────
+app.use((req, res, next) => {
+  if (isRestoringBackup()) {
+    return res.status(503).json({ error: "服务器正在恢复备份，请稍后重试" });
+  }
+  next();
+});
 
 // ── Mount Admin Routes ──────────────────────────────────────
 mountAdminRoutes(app);
@@ -83,11 +89,13 @@ const dataDir = path.join(__dirname, "data");
 const certPath = path.join(dataDir, "cert.pem");
 const keyPath = path.join(dataDir, "key.pem");
 
-function isCertValid(certFile) {
+async function isCertValid(certFile) {
   try {
-    const cert = fs.readFileSync(certFile, "utf-8");
-    // Extract expiry date from PEM certificate
-    const match = cert.match(/Not After\s*:\s*(.+)/);
+    const { execSync } = await import("node:child_process");
+    // Use openssl to check certificate expiry
+    const result = execSync(`openssl x509 -enddate -noout -in "${certFile}"`, { encoding: "utf-8" });
+    // Output format: "notAfter=Jun 14 12:00:00 2026 GMT"
+    const match = result.match(/notAfter=(.+)/);
     if (!match) return false;
     return new Date(match[1]) > new Date();
   } catch {
@@ -134,7 +142,7 @@ async function generateCert() {
 async function startServers() {
   // Check if certificate exists and is valid
   let hasSSL = fs.existsSync(certPath) && fs.existsSync(keyPath);
-  if (hasSSL && !isCertValid(certPath)) {
+  if (hasSSL && !(await isCertValid(certPath))) {
     console.log("[ssl] Certificate expired, regenerating...");
     hasSSL = await generateCert();
   }

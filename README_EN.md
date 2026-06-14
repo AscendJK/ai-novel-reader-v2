@@ -66,20 +66,20 @@ The terminal will display:
 For local frontend development, start frontend and backend separately:
 
 ```bash
-# Terminal 1: Start backend (use port 3001 to avoid conflict with Vite)
-PORT=3001 npm run server
+# Terminal 1: Start backend
+npm run server
 
 # Terminal 2: Start frontend dev server
 npm run dev
 ```
 
-Dev server runs at `http://localhost:5173`, API requests are automatically proxied to the backend at `localhost:3001`.
+Frontend dev server runs at `http://localhost:5174`, API requests are automatically proxied to the backend at `localhost:5173`.
 
 ---
 
 ## HTTPS & Certificates (Optional)
 
-**The project works perfectly without mkcert.** The backend runs in HTTP mode by default. When the frontend (GitHub Pages, HTTPS) sends requests to the backend (HTTP), the browser console shows a yellow mixed content warning, but **requests are not blocked** — all features work normally.
+**The project works perfectly without mkcert.** The backend runs in HTTP mode by default. When the frontend (GitHub Pages, HTTPS) sends requests to the backend (HTTP), if the backend runs on localhost, browsers typically allow it; if the backend is on a LAN IP (e.g., 192.168.x.x), some browsers may block mixed content requests. Installing mkcert to enable HTTPS completely eliminates this issue.
 
 Installing mkcert only eliminates this warning; it is not required.
 

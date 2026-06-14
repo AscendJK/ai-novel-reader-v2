@@ -12,18 +12,28 @@ if ! command -v node &>/dev/null; then
 fi
 
 NODE_MAJOR=$(node -v | sed 's/v\([0-9]*\).*/\1/')
-if [ "$NODE_MAJOR" -ge 24 ]; then
-  echo "[ERROR] Node.js version $(node -v) is not supported."
+
+# Check version range: only 18-22 supported
+if [ "$NODE_MAJOR" -lt 18 ]; then
+  echo "[ERROR] Node.js $NODE_MAJOR is too old. Please use 18-22 LTS."
   echo ""
-  echo "  better-sqlite3 has no prebuilt binaries for Node.js 24+."
-  echo "  This project requires Node.js 18-22 LTS."
-  echo ""
-  echo "  Fix: Install Node.js 22 LTS"
-  echo "  - Download: https://nodejs.org (select 22.x.x LTS)"
-  echo "  - Or use nvm: nvm install 22 && nvm use 22"
+  echo "  Download: https://nodejs.org (select 18-22 LTS)"
+  echo "  Or use nvm: nvm install 22 && nvm use 22"
   echo ""
   exit 1
 fi
+
+if [ "$NODE_MAJOR" -gt 22 ]; then
+  echo "[ERROR] Node.js $NODE_MAJOR is not supported. Please use 18-22 LTS."
+  echo ""
+  echo "  Node.js 23+ has breaking changes that are not compatible."
+  echo "  Download: https://nodejs.org (select 18-22 LTS)"
+  echo "  Or use nvm: nvm install 22 && nvm use 22"
+  echo ""
+  exit 1
+fi
+
+echo "Node.js version: $(node -v) [OK]"
 
 if [ ! -d "node_modules" ]; then
   echo "Installing dependencies..."

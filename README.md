@@ -66,20 +66,20 @@ cd ai-novel-reader-v2
 如需本地开发前端，手动分别启动前后端：
 
 ```bash
-# 终端 1：启动后端（指定端口 3001 避免和 Vite 冲突）
-PORT=3001 npm run server
+# 终端 1：启动后端
+npm run server
 
 # 终端 2：启动前端开发服务器
 npm run dev
 ```
 
-开发服务器运行在 `http://localhost:5173`，API 请求自动代理到后端 `localhost:3001`。
+前端开发服务器运行在 `http://localhost:5174`，API 请求自动代理到后端 `localhost:5173`。
 
 ---
 
 ## HTTPS 与证书（可选）
 
-**不安装 mkcert 也能正常使用**，后端会以 HTTP 模式运行。前端（GitHub Pages，HTTPS）向后端（HTTP）发请求时，浏览器控制台会显示一条 mixed content 黄色警告，但**请求不会被阻止**，所有功能完全正常。
+**不安装 mkcert 也能正常使用**，后端会以 HTTP 模式运行。前端（GitHub Pages，HTTPS）向后端（HTTP）发请求时，如果后端运行在 localhost 上，浏览器通常允许通过；如果后端在局域网 IP（如 192.168.x.x）上，部分浏览器可能阻止 mixed content 请求。安装 mkcert 启用 HTTPS 可完全消除此问题。
 
 安装 mkcert 只是消除这个警告，不是必须的。
 

@@ -13,7 +13,6 @@ import { getUserDB } from "@/db/database";
 import { APIError } from "@/api/error-handler";
 import { getTokenBudget } from "@/api/token-manager";
 import { buildIndex, retrieveRelevantWithDetails, retrieveRelevantForRange } from "@/rag/index";
-import { isEmbeddingEngine } from "@/rag/engines";
 import { useRAGStore } from "@/stores/rag-store";
 import { syncClient } from "@/sync/sync-client";
 import { addDebugEntry } from "@/components/common/DebugPanel";
@@ -64,6 +63,8 @@ export function useSummarizer() {
   const abortRef = useRef<AbortController | null>(null);
   // Cached RAG context for Q&A session (cleared on new session or every 3 follow-ups)
   const qaRagCacheRef = useRef<{ question: string; text: string; followUps: number } | null>(null);
+  // Guard against concurrent novel reloads
+  const reloadingRef = useRef(false);
 
   const startTask = useCallback((name: string) => {
     setCurrentTask(name);
@@ -104,13 +105,40 @@ export function useSummarizer() {
       const prefEngine = useRAGStore.getState().engine;
       ragLog(`getRelevantText: prefEngine=${prefEngine}, novelId=${currentNovel.id.slice(0, 8)}`);
       try {
+        // 确保加载所有章节内容（懒加载可能导致部分章节内容为空）
+        let chapters = currentNovel.chapters;
+        const hasEmptyContent = chapters.some(ch => !ch.content);
+        if (hasEmptyContent && !reloadingRef.current) {
+          reloadingRef.current = true;
+          try {
+            ragLog("检测到空章节内容，重新加载所有章节...");
+            const { loadNovel } = await import("@/db/repositories");
+            const fullNovel = await loadNovel(currentNovel.id, undefined, true);
+            if (fullNovel) {
+              chapters = fullNovel.chapters;
+              // 更新 store 中的 currentNovel
+              useNovelStore.getState().setCurrentNovel(fullNovel);
+            }
+          } finally {
+            reloadingRef.current = false;
+          }
+        } else if (hasEmptyContent && reloadingRef.current) {
+          // 另一个调用正在重载，等待完成
+          ragLog("等待另一个重载完成...");
+          while (reloadingRef.current) {
+            await new Promise(r => setTimeout(r, 50));
+          }
+          // 重新获取最新的 chapters
+          chapters = useNovelStore.getState().currentNovel?.chapters || chapters;
+        }
+
         let engine = prefEngine;
         let degraded = false;
 
         // Only load from cache (memory + IndexedDB). Never trigger a fresh build.
         if (engine !== "tfidf") {
           try {
-            await buildIndex(currentNovel.id, currentNovel.chapters, engine, (msg) => setCurrentTask(msg), { cacheOnly: true });
+            await buildIndex(currentNovel.id, chapters, engine, (msg) => setCurrentTask(msg), { cacheOnly: true });
             ragLog(`索引从缓存加载成功 (${engine})`);
           } catch {
             ragLog(`索引未缓存 (${engine}), 降级为 TF-IDF`);
@@ -123,7 +151,7 @@ export function useSummarizer() {
         setCurrentTask(`正在启动检索引擎 (${engine})${degradedLabel}...`);
         if (engine === "tfidf") {
           ragLog("构建 TF-IDF 索引...");
-          await buildIndex(currentNovel.id, currentNovel.chapters, engine, (msg) => setCurrentTask(msg + degradedLabel));
+          await buildIndex(currentNovel.id, chapters, engine, (msg) => setCurrentTask(msg + degradedLabel));
         }
         setCurrentTask(`正在检索相关段落${degradedLabel}...`);
         const t0 = performance.now();
@@ -148,12 +176,14 @@ export function useSummarizer() {
 
   const handleError = useCallback((err: unknown) => {
     if (err instanceof APIError) {
-      if (err.code === "context_length") setError(`[上下文超限] ${err.message}`);
-      else if (err.code === "auth") setError(`[认证失败] ${err.message}`);
-      else if (err.code === "quota_exceeded") setError(`[额度用尽] ${err.message}`);
-      else if (err.code === "rate_limit") setError(`[频率限制] ${err.message}`);
-      else if (err.code === "network") setError(`[网络错误] ${err.message}`);
-      else setError(`[${err.code}] ${err.message}`);
+      // 使用 apiCode（API 专用代码）显示错误
+      const code = err.apiCode || err.code;
+      if (code === "context_length") setError(`[上下文超限] ${err.message}`);
+      else if (code === "auth") setError(`[认证失败] ${err.message}`);
+      else if (code === "quota_exceeded") setError(`[额度用尽] ${err.message}`);
+      else if (code === "rate_limit") setError(`[频率限制] ${err.message}`);
+      else if (code === "network") setError(`[网络错误] ${err.message}`);
+      else setError(`[${code}] ${err.message}`);
     } else {
       setError(err instanceof Error ? err.message : "未知错误");
     }

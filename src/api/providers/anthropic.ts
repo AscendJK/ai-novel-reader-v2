@@ -91,7 +91,7 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
         // 如果是取消请求，直接抛出
         if (err instanceof DOMException && err.name === "AbortError") throw err;
         // 如果是认证错误，直接抛出（代理也无法解决）
-        if (err instanceof APIError && err.code === "auth") throw err;
+        if (err instanceof APIError && (err.apiCode === "auth" || err.code === "AUTH")) throw err;
         // 其他错误（包括 CORS、网络错误等）都走代理
         try {
           return parseResponse(await doProxy(req));

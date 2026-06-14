@@ -10,7 +10,7 @@
 /** 错误严重程度 */
 export type ErrorSeverity = 'low' | 'medium' | 'high' | 'critical';
 
-/** 错误代码 */
+/** 错误代码（统一） */
 export type ErrorCode =
   | 'UNKNOWN'
   | 'NETWORK'
@@ -21,7 +21,12 @@ export type ErrorCode =
   | 'ABORTED'
   | 'API_ERROR'
   | 'SYNC_ERROR'
-  | 'PARSER_ERROR';
+  | 'PARSER_ERROR'
+  // API 专用错误代码
+  | 'RATE_LIMIT'
+  | 'QUOTA_EXCEEDED'
+  | 'CONTEXT_LENGTH'
+  | 'SERVER_ERROR';
 
 /** 应用错误类 */
 export class AppError extends Error {
@@ -48,6 +53,19 @@ interface ApiErrorResponse {
 // ============================================================
 
 /**
+ * API 错误代码映射（从 APIError.code 到 ErrorCode）
+ */
+const API_ERROR_CODE_MAP: Record<string, ErrorCode> = {
+  'auth': 'AUTH',
+  'network': 'NETWORK',
+  'context_length': 'CONTEXT_LENGTH',
+  'rate_limit': 'RATE_LIMIT',
+  'quota_exceeded': 'QUOTA_EXCEEDED',
+  'server': 'SERVER_ERROR',
+  'unknown': 'API_ERROR',
+};
+
+/**
  * 标准化错误对象
  * 将各种类型的错误转换为 AppError
  */
@@ -55,6 +73,23 @@ export function normalizeError(error: unknown, context?: string): AppError {
   // 已经是 AppError
   if (error instanceof AppError) {
     return error;
+  }
+
+  // 检查是否是 APIError（通过 name 属性判断，避免循环依赖）
+  if (error instanceof Error && error.name === 'APIError') {
+    const apiError = error as any;
+    const mappedCode = API_ERROR_CODE_MAP[apiError.code] || 'API_ERROR';
+    return new AppError(
+      apiError.message,
+      mappedCode,
+      mappedCode === 'AUTH' ? 'high' : 'medium',
+      {
+        original: error,
+        statusCode: apiError.statusCode,
+        originalBody: apiError.originalBody,
+        apiCode: apiError.code,
+      }
+    );
   }
 
   // 标准 Error
@@ -184,7 +219,7 @@ export function getUserFriendlyMessage(error: unknown): string {
     case 'NETWORK':
       return '网络连接失败，请检查网络设置';
     case 'AUTH':
-      return '认证失败，请重新登录';
+      return '认证失败，请检查 API Key 是否正确';
     case 'DATABASE':
       return '数据访问失败，请刷新页面重试';
     case 'VALIDATION':
@@ -199,6 +234,14 @@ export function getUserFriendlyMessage(error: unknown): string {
       return '同步失败，请检查网络连接';
     case 'PARSER_ERROR':
       return '数据解析失败，请检查文件格式';
+    case 'RATE_LIMIT':
+      return '请求频率过高，请稍后重试';
+    case 'QUOTA_EXCEEDED':
+      return 'API 额度已用尽，请充值或等待重置';
+    case 'CONTEXT_LENGTH':
+      return '请求内容超过模型上下文长度限制';
+    case 'SERVER_ERROR':
+      return 'API 服务器错误，请稍后重试';
     default:
       return appError.message || '发生未知错误，请重试';
   }
