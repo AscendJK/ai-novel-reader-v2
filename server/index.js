@@ -46,7 +46,7 @@ app.use(cors({
   credentials: true,
   maxAge: 86400,
 }));
-app.use(express.json({ limit: "20mb" }));
+app.use(express.json({ limit: "50mb" }));
 
 // ── Mount Admin Routes ──────────────────────────────────────
 mountAdminRoutes(app);
