@@ -19,6 +19,7 @@ interface ChapterContentProps {
   hasSummary: boolean;
   immersive: boolean;
   onToggleImmersive: () => void;
+  scrollControlRef?: React.RefObject<{ scrollToChapter: (chapterId: string, chapterOffset?: number) => void; suppressIO: () => () => void } | null>;
 }
 
 const FONT_WEIGHTS = [
@@ -35,7 +36,7 @@ const MAX_SINGLE_WIDTH = 768;
 
 type ReadingMode = "scroll" | "single" | "double";
 
-export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immersive, onToggleImmersive }: ChapterContentProps) {
+export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immersive, onToggleImmersive, scrollControlRef }: ChapterContentProps) {
   const { currentNovel, selectedChapterId, setSelectedChapter, addChapters, saveScrollTop, readingPositions } = useNovelStore();
   const { getSummariesByNovel } = useSummaryStore();
   const {
@@ -106,6 +107,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     loadedChapters,
     scrollToChapter,
     isLoadingMore,
+    suppressIO,
   } = useContinuousScroll({
     novelId: currentNovel?.id || "",
     chapters,
@@ -114,6 +116,11 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     initialChapterId: selectedChapterId,
     initialChapterOffset: savedChapterOffset,
   });
+
+  // 暴露 scrollToChapter 和 suppressIO 给 ChapterNav
+  if (scrollControlRef) {
+    (scrollControlRef as React.MutableRefObject<ScrollControl | null>).current = { scrollToChapter, suppressIO };
+  }
 
   // ── 滚动位置保存（节流 + 页面退出时立即保存）──────────────────
   const saveScrollTopRef = useRef(saveScrollTop);

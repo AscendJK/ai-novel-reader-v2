@@ -25,6 +25,8 @@ interface UseContinuousScrollReturn {
   loadedChapters: Chapter[];
   scrollToChapter: (chapterId: string, chapterOffset?: number) => void;
   isLoadingMore: boolean;
+  /** 临时抑制 IO 回调（用于目录点击等场景），返回解锁函数 */
+  suppressIO: () => () => void;
 }
 
 const LOAD_BATCH = 10;
@@ -241,6 +243,9 @@ export function useContinuousScroll({
     // 延迟恢复，确保 DOM 已更新
     isRestoringIORef.current = true; // 抑制 IO 回调
     const timer = setTimeout(() => {
+      // 如果已被 suppressIO 标记为已恢复，跳过（用户主动导航了）
+      // 注意：不重置 isRestoringIORef，由 suppressIO 的 release 函数负责
+      if (hasRestoredRef.current) return;
       hasRestoredRef.current = true;
       restoreTargetRef.current = null;
       scrollToChapterRef.current(targetChapterId, targetOffset);
@@ -321,5 +326,13 @@ export function useContinuousScroll({
     return () => edgeObserver.disconnect();
   }, [loadedChapters, loadMore, enabled]);
 
-  return { containerRef, topSentinelRef, bottomSentinelRef, loadedChapters, scrollToChapter, isLoadingMore };
+  // ── 临时抑制 IO 回调（同时标记恢复完成，防止恢复 effect 干扰）──
+  const suppressIO = useCallback(() => {
+    isRestoringIORef.current = true;
+    hasRestoredRef.current = true;
+    restoreTargetRef.current = null;
+    return () => { isRestoringIORef.current = false; };
+  }, []);
+
+  return { containerRef, topSentinelRef, bottomSentinelRef, loadedChapters, scrollToChapter, isLoadingMore, suppressIO };
 }

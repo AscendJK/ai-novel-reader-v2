@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ChapterNav } from "./ChapterNav";
 import { ChapterContent } from "./ChapterContent";
 import { SummaryPanel } from "@/components/summary/SummaryPanel";
@@ -7,12 +7,19 @@ import { PanelRightOpen, PanelRightClose, List, FileText, BookOpen, MessageSquar
 import { useSummaryStore } from "@/stores/summary-store";
 import { useNovelStore } from "@/stores/novel-store";
 
+/** ChapterContent 暴露给 ChapterNav 的滚动控制函数 */
+export interface ScrollControl {
+  scrollToChapter: (chapterId: string, chapterOffset?: number) => void;
+  suppressIO: () => () => void;
+}
+
 export function ReadingPanel() {
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [mobileAiOpen, setMobileAiOpen] = useState(false);
   const [mobileAiTab, setMobileAiTab] = useState("chapter");
   const [immersive, setImmersive] = useState(false);
+  const scrollControlRef = useRef<ScrollControl | null>(null);
 
   // Toggle CSS class on <html> for immersive reading
   useEffect(() => {
@@ -37,7 +44,7 @@ export function ReadingPanel() {
   return (
     <div className="flex h-full relative">
       <div className="hidden md:flex shrink-0" data-sidebar="chapter-nav">
-        <ChapterNav />
+        <ChapterNav scrollControlRef={scrollControlRef} />
       </div>
 
       <div className="flex-1 flex flex-col min-w-0">
@@ -47,6 +54,7 @@ export function ReadingPanel() {
           hasSummary={hasCurrentSummary}
           immersive={immersive}
           onToggleImmersive={() => setImmersive(!immersive)}
+          scrollControlRef={scrollControlRef}
         />
       </div>
 
@@ -113,7 +121,7 @@ export function ReadingPanel() {
               <button onClick={() => setMobileNavOpen(false)} className="p-1 rounded hover:bg-accent"><X className="h-4 w-4" /></button>
             </div>
             <div className="h-[calc(100vh-48px)]">
-              <ChapterNav />
+              <ChapterNav scrollControlRef={scrollControlRef} />
             </div>
           </div>
         </>

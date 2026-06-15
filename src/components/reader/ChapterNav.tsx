@@ -8,7 +8,11 @@ import { loadChapters } from "@/db/repositories";
 const TOGGLE_W = "w-8";
 const TOGGLE_H = "h-[85px]"; // matches ChapterContent top bar height
 
-export function ChapterNav() {
+interface ChapterNavProps {
+  scrollControlRef?: React.RefObject<{ scrollToChapter: (chapterId: string, chapterOffset?: number) => void; suppressIO: () => () => void } | null>;
+}
+
+export function ChapterNav({ scrollControlRef }: ChapterNavProps) {
   const { currentNovel, selectedChapterId, setSelectedChapter, addChapters } = useNovelStore();
   const [collapsed, setCollapsed] = useState(false);
   const [loadingChapter, setLoadingChapter] = useState<string | null>(null);
@@ -35,12 +39,15 @@ export function ChapterNav() {
     const chapter = currentNovel.chapters.find(c => c.id === chapterId);
 
     if (chapter && chapter.content) {
-      // 已加载：更新选中状态
+      // 已加载：使用 scrollToChapter（抑制 IO 干扰）
       setSelectedChapter(chapterId);
-      // 滚动到该章节（限定在阅读区域内的 .chapter-section）
-      const el = document.querySelector(`.chapter-section[data-chapter-id="${chapterId}"]`);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      if (scrollControlRef?.current) {
+        const release = scrollControlRef.current.suppressIO();
+        scrollControlRef.current.scrollToChapter(chapterId);
+        setTimeout(release, 500);
+      } else {
+        const el = document.querySelector(`.chapter-section[data-chapter-id="${chapterId}"]`);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
       }
     } else {
       // 未加载，需要懒加载
@@ -48,24 +55,28 @@ export function ChapterNav() {
       try {
         const start = Math.max(0, chapterIndex - 10);
         const loaded = await loadChapters(currentNovel.id, start, 21);
+        // 先抑制 IO，再加载章节和滚动
+        const release = scrollControlRef?.current?.suppressIO();
         addChapters(loaded);
         setSelectedChapter(chapterId);
-        // 等待渲染后滚动
-        requestAnimationFrame(() => {
+        if (scrollControlRef?.current) {
+          scrollControlRef.current.scrollToChapter(chapterId);
+        } else {
           requestAnimationFrame(() => {
-            const el = document.querySelector(`.chapter-section[data-chapter-id="${chapterId}"]`);
-            if (el) {
-              el.scrollIntoView({ behavior: "smooth", block: "start" });
-            }
+            requestAnimationFrame(() => {
+              const el = document.querySelector(`.chapter-section[data-chapter-id="${chapterId}"]`);
+              if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+            });
           });
-        });
+        }
+        if (release) setTimeout(release, 500);
       } catch (err) {
         console.error("[ChapterNav] Failed to load chapters:", err);
       } finally {
         setLoadingChapter(null);
       }
     }
-  }, [currentNovel, setSelectedChapter, addChapters]);
+  }, [currentNovel, setSelectedChapter, addChapters, scrollControlRef]);
 
   if (!currentNovel) return null;
 
