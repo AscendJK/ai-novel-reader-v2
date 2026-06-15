@@ -164,14 +164,20 @@ export function useContinuousScroll({
         loadChapters(novelId, startIndex, LOAD_BATCH + 5).then((loaded) => {
           if (loaded.length > 0) {
             addChapters(loaded);
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
-                const el = containerRef.current?.querySelector(
-                  `.chapter-section[data-chapter-id="${chapterId}"]`
-                );
-                if (el) applyScroll(el);
-              });
-            });
+            // 轮询等待 React 渲染完成（addChapters 触发的状态更新可能需要多帧）
+            let attempts = 0;
+            const poll = () => {
+              const el = containerRef.current?.querySelector(
+                `.chapter-section[data-chapter-id="${chapterId}"]`
+              );
+              if (el) {
+                applyScroll(el);
+              } else if (attempts < 30) {
+                attempts++;
+                requestAnimationFrame(poll);
+              }
+            };
+            requestAnimationFrame(poll);
           }
         });
       }
@@ -186,6 +192,9 @@ export function useContinuousScroll({
   const hasRestoredRef = useRef(false);
   // 用 ref 锁定恢复目标，防止 IO 改变 selectedChapterId 后 effect 重新计算目标
   const restoreTargetRef = useRef<{ chapterId: string; offset?: number } | null>(null);
+  // 用 ref 存储 scrollToChapter，避免 effect 依赖它（否则 addChapters 会重建它导致 effect 重运行清除定时器）
+  const scrollToChapterRef = useRef(scrollToChapter);
+  scrollToChapterRef.current = scrollToChapter;
 
   useEffect(() => {
     if (!enabled || !novelId) {
@@ -234,14 +243,14 @@ export function useContinuousScroll({
     const timer = setTimeout(() => {
       hasRestoredRef.current = true;
       restoreTargetRef.current = null;
-      scrollToChapter(targetChapterId, targetOffset);
+      scrollToChapterRef.current(targetChapterId, targetOffset);
       // 恢复完成后解锁 IO（延迟足够让 scrollTop 生效）
       setTimeout(() => { isRestoringIORef.current = false; }, 500);
     }, 100);
 
     // cleanup 不重置 isRestoringIORef，防止 IO 在恢复间隙触发
     return () => { clearTimeout(timer); };
-  }, [novelId, enabled, chapters, initialChapterId, initialChapterOffset, scrollToChapter]);
+  }, [novelId, enabled, chapters, initialChapterId, initialChapterOffset]);
 
   // ── IntersectionObserver：章节检测（带去重）────────────────────
   const onChapterChangeRef = useRef(onChapterChange);
