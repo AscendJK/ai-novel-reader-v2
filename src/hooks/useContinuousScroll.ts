@@ -13,18 +13,19 @@ interface UseContinuousScrollOptions {
   novelId: string;
   chapters: Chapter[];
   onChapterChange: (chapterId: string) => void;
+  enabled: boolean; // 仅在滚动模式下启用
 }
 
 interface UseContinuousScrollReturn {
   containerRef: React.RefObject<HTMLDivElement | null>;
+  topSentinelRef: React.RefObject<HTMLDivElement | null>;
+  bottomSentinelRef: React.RefObject<HTMLDivElement | null>;
   loadedChapters: Chapter[];
   scrollToChapter: (chapterId: string) => void;
   isLoadingMore: boolean;
 }
 
-const LOAD_BATCH = 10; // 每次加载章节数
-const TOP_THRESHOLD = 200; // 距顶部多少 px 触发加载
-const BOTTOM_THRESHOLD = 400; // 距底部多少 px 触发加载
+const LOAD_BATCH = 10;
 
 /**
  * 连续滚动 hook：管理多章节在一个滚动容器中的懒加载、章节检测、滚动定位。
@@ -33,30 +34,41 @@ export function useContinuousScroll({
   novelId,
   chapters,
   onChapterChange,
+  enabled,
 }: UseContinuousScrollOptions): UseContinuousScrollReturn {
   const containerRef = useRef<HTMLDivElement>(null);
+  const topSentinelRef = useRef<HTMLDivElement>(null);
+  const bottomSentinelRef = useRef<HTMLDivElement>(null);
   const { addChapters } = useNovelStore();
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const isLoadingRef = useRef(false);
 
-  // 已加载内容的章节（content 非空）
+  // 用 ref 读取最新 chapters，避免 stale closure
+  const chaptersRef = useRef(chapters);
+  chaptersRef.current = chapters;
+
+  // 已加载内容的章节
   const loadedChapters = useMemo(
     () => chapters.filter((ch) => ch.content),
     [chapters]
   );
 
-  // 所有章节的索引映射（用于快速查找）
+  // 章节索引映射
   const chapterIndexMap = useMemo(() => {
     const map = new Map<string, number>();
     chapters.forEach((ch) => map.set(ch.id, ch.index));
     return map;
   }, [chapters]);
 
-  // ── 加载更多章节 ──────────────────────────────────────────────
+  // ── 加载更多章节（使用 ref 读取最新数据，避免 stale closure）──
   const loadMore = useCallback(
     async (direction: "forward" | "backward") => {
-      if (isLoadingRef.current || !novelId) return;
-      if (loadedChapters.length === 0) return;
+      if (isLoadingRef.current || !novelId || !enabled) return;
+
+      // 从 ref 读取最新 chapters
+      const currentChapters = chaptersRef.current;
+      const loaded = currentChapters.filter((ch) => ch.content);
+      if (loaded.length === 0) return;
 
       const container = containerRef.current;
       if (!container) return;
@@ -66,35 +78,29 @@ export function useContinuousScroll({
 
       try {
         if (direction === "forward") {
-          // 向后加载：从最后一个已加载章节之后开始
-          const lastLoaded = loadedChapters[loadedChapters.length - 1];
+          const lastLoaded = loaded[loaded.length - 1];
           const startIndex = lastLoaded.index + 1;
-          if (startIndex >= chapters.length) return; // 已经是最后一章
+          if (startIndex >= currentChapters.length) return;
 
-          const loaded = await loadChapters(novelId, startIndex, LOAD_BATCH);
-          if (loaded.length > 0) {
-            addChapters(loaded);
-          }
+          const newChapters = await loadChapters(novelId, startIndex, LOAD_BATCH);
+          if (newChapters.length > 0) addChapters(newChapters);
         } else {
-          // 向前加载：从第一个已加载章节之前开始
-          const firstLoaded = loadedChapters[0];
+          const firstLoaded = loaded[0];
           const startIndex = Math.max(0, firstLoaded.index - LOAD_BATCH);
-          if (startIndex >= firstLoaded.index) return; // 已经是第一章
+          if (startIndex >= firstLoaded.index) return;
 
-          // 保存滚动位置
           const oldScrollHeight = container.scrollHeight;
           const oldScrollTop = container.scrollTop;
 
-          const loaded = await loadChapters(novelId, startIndex, LOAD_BATCH);
-          if (loaded.length > 0) {
-            addChapters(loaded);
-
-            // 补偿滚动位置：新内容插入到顶部，需要调整 scrollTop
-            // 使用 rAF 等待 DOM 更新
+          const newChapters = await loadChapters(novelId, startIndex, LOAD_BATCH);
+          if (newChapters.length > 0) {
+            addChapters(newChapters);
+            // 双层 rAF 确保 DOM 更新完成后再补偿
             requestAnimationFrame(() => {
-              const newScrollHeight = container.scrollHeight;
-              const heightDiff = newScrollHeight - oldScrollHeight;
-              container.scrollTop = oldScrollTop + heightDiff;
+              requestAnimationFrame(() => {
+                const newScrollHeight = container.scrollHeight;
+                container.scrollTop = oldScrollTop + (newScrollHeight - oldScrollHeight);
+              });
             });
           }
         }
@@ -105,7 +111,7 @@ export function useContinuousScroll({
         setIsLoadingMore(false);
       }
     },
-    [novelId, loadedChapters, chapters.length, addChapters]
+    [novelId, enabled, addChapters]
   );
 
   // ── 滚动到指定章节 ────────────────────────────────────────────
@@ -115,12 +121,11 @@ export function useContinuousScroll({
       if (!container) return;
 
       const target = container.querySelector(
-        `[data-chapter-id="${chapterId}"]`
+        `.chapter-section[data-chapter-id="${chapterId}"]`
       );
       if (target) {
         target.scrollIntoView({ behavior: "smooth", block: "start" });
       } else {
-        // 章节未加载，先加载再滚动
         const chapterIndex = chapterIndexMap.get(chapterId);
         if (chapterIndex === undefined) return;
 
@@ -128,11 +133,10 @@ export function useContinuousScroll({
         loadChapters(novelId, startIndex, LOAD_BATCH + 5).then((loaded) => {
           if (loaded.length > 0) {
             addChapters(loaded);
-            // 等待渲染后滚动
             requestAnimationFrame(() => {
               requestAnimationFrame(() => {
                 const el = containerRef.current?.querySelector(
-                  `[data-chapter-id="${chapterId}"]`
+                  `.chapter-section[data-chapter-id="${chapterId}"]`
                 );
                 el?.scrollIntoView({ behavior: "smooth", block: "start" });
               });
@@ -144,65 +148,56 @@ export function useContinuousScroll({
     [novelId, chapterIndexMap, addChapters]
   );
 
-  // ── IntersectionObserver：章节检测 ────────────────────────────
+  // ── IntersectionObserver：章节检测（带去重）────────────────────
   const onChapterChangeRef = useRef(onChapterChange);
   onChapterChangeRef.current = onChapterChange;
+  const lastDetectedChapterRef = useRef<string | null>(null);
 
   useEffect(() => {
+    if (!enabled) return;
     const container = containerRef.current;
     if (!container || loadedChapters.length === 0) return;
 
-    // 观测每个章节标记元素
     const observer = new IntersectionObserver(
       (entries) => {
-        // 找到进入视口的章节标记
+        // 只取第一个进入视口的章节标记（避免多个同时触发）
         for (const entry of entries) {
           if (entry.isIntersecting) {
             const chapterId = entry.target.getAttribute("data-chapter-id");
-            if (chapterId) {
+            if (chapterId && chapterId !== lastDetectedChapterRef.current) {
+              lastDetectedChapterRef.current = chapterId;
               onChapterChangeRef.current(chapterId);
             }
+            break; // 只处理第一个
           }
         }
       },
       {
         root: container,
-        rootMargin: "-10% 0px -80% 0px", // 只检测顶部 10% 区域
+        rootMargin: "-5% 0px -85% 0px", // 检测顶部 5%-15% 区域
         threshold: 0,
       }
     );
 
-    // 观测所有章节标记
-    const markers = container.querySelectorAll("[data-chapter-id]");
+    const markers = container.querySelectorAll(".chapter-section[data-chapter-id]");
     markers.forEach((el) => observer.observe(el));
 
     return () => observer.disconnect();
-  }, [loadedChapters]);
+  }, [loadedChapters, enabled]);
 
-  // ── IntersectionObserver：边缘加载 ────────────────────────────
+  // ── IntersectionObserver：边缘加载（使用 React ref 哨兵）──────
   useEffect(() => {
+    if (!enabled) return;
     const container = containerRef.current;
-    if (!container || loadedChapters.length === 0) return;
-
-    // 创建顶部哨兵
-    const topSentinel = document.createElement("div");
-    topSentinel.style.height = "1px";
-    topSentinel.style.width = "100%";
-    if (container.firstChild) {
-      container.insertBefore(topSentinel, container.firstChild);
-    }
-
-    // 创建底部哨兵
-    const bottomSentinel = document.createElement("div");
-    bottomSentinel.style.height = "1px";
-    bottomSentinel.style.width = "100%";
-    container.appendChild(bottomSentinel);
+    const topSentinel = topSentinelRef.current;
+    const bottomSentinel = bottomSentinelRef.current;
+    if (!container || !topSentinel || !bottomSentinel) return;
+    if (loadedChapters.length === 0) return;
 
     const edgeObserver = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
           if (!entry.isIntersecting) continue;
-
           if (entry.target === topSentinel) {
             loadMore("backward");
           } else if (entry.target === bottomSentinel) {
@@ -210,22 +205,14 @@ export function useContinuousScroll({
           }
         }
       },
-      {
-        root: container,
-        rootMargin: `${TOP_THRESHOLD}px 0px ${BOTTOM_THRESHOLD}px 0px`,
-        threshold: 0,
-      }
+      { root: container, rootMargin: "200px 0px 400px 0px", threshold: 0 }
     );
 
     edgeObserver.observe(topSentinel);
     edgeObserver.observe(bottomSentinel);
 
-    return () => {
-      edgeObserver.disconnect();
-      topSentinel.remove();
-      bottomSentinel.remove();
-    };
-  }, [loadedChapters, loadMore]);
+    return () => edgeObserver.disconnect();
+  }, [loadedChapters, loadMore, enabled]);
 
-  return { containerRef, loadedChapters, scrollToChapter, isLoadingMore };
+  return { containerRef, topSentinelRef, bottomSentinelRef, loadedChapters, scrollToChapter, isLoadingMore };
 }

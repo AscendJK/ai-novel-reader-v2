@@ -143,14 +143,9 @@
   to { opacity: 1; }
 }
 
-/* ── 连续滚动模式优化 ── */
+/* ── 连续滚动模式 ── */
 .chapter-section {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 800px;
-}
-
-.chapter-section:first-child {
-  content-visibility: visible;
+  /* 不使用 content-visibility: auto，因为它会干扰 IntersectionObserver 的位置检测 */
 }
 
 /* ── 移动端安全区域适配 ── */

@@ -37,8 +37,8 @@ export function ChapterNav() {
     if (chapter && chapter.content) {
       // 已加载：更新选中状态
       setSelectedChapter(chapterId);
-      // 滚动到该章节（连续滚动模式下生效）
-      const el = document.querySelector(`[data-chapter-id="${chapterId}"]`);
+      // 滚动到该章节（限定在阅读区域内的 .chapter-section）
+      const el = document.querySelector(`.chapter-section[data-chapter-id="${chapterId}"]`);
       if (el) {
         el.scrollIntoView({ behavior: "smooth", block: "start" });
       }
@@ -53,7 +53,7 @@ export function ChapterNav() {
         // 等待渲染后滚动
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            const el = document.querySelector(`[data-chapter-id="${chapterId}"]`);
+            const el = document.querySelector(`.chapter-section[data-chapter-id="${chapterId}"]`);
             if (el) {
               el.scrollIntoView({ behavior: "smooth", block: "start" });
             }

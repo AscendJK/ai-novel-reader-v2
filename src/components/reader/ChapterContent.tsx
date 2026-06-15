@@ -80,15 +80,20 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   const isPaginated = effectiveMode !== "scroll";
   const isMobile = windowWidth < 768;
 
-  // ── 连续滚动 hook（仅滚动模式） ───────────────────────────────
+  // ── 连续滚动 hook（仅滚动模式启用） ───────────────────────────
+  const selectedChapterRef = useRef(selectedChapterId);
+  selectedChapterRef.current = selectedChapterId;
+
   const handleChapterChange = useCallback((chapterId: string) => {
-    if (chapterId !== selectedChapterId) {
+    if (chapterId !== selectedChapterRef.current) {
       setSelectedChapter(chapterId);
     }
-  }, [selectedChapterId, setSelectedChapter]);
+  }, [setSelectedChapter]);
 
   const {
     containerRef: scrollContainerRef,
+    topSentinelRef,
+    bottomSentinelRef,
     loadedChapters,
     scrollToChapter,
     isLoadingMore,
@@ -96,6 +101,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     novelId: currentNovel?.id || "",
     chapters,
     onChapterChange: handleChapterChange,
+    enabled: !isPaginated,
   });
 
   // ── 翻页模式相关 ──────────────────────────────────────────────
@@ -220,7 +226,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     return [
       { key: "ArrowLeft", action: () => goPrevPageRef.current(), description: "上一页" },
       { key: "ArrowRight", action: () => goNextPageRef.current(), description: "下一页" },
-      { key: " ", action: () => goNextPageRef.current(), description: "下一页" },
+      { key: " ", action: () => goNextPageRef.current(), description: "下一页", when: () => !showFontPanel && (document.activeElement?.tagName ?? "") !== "BUTTON" },
       { key: "+", action: () => setFontSize(Math.min(24, fontSize + 1)), description: "增大字号" },
       { key: "-", action: () => setFontSize(Math.max(12, fontSize - 1)), description: "减小字号" },
       { key: "i", action: onToggleImmersive, description: "切换沉浸模式" },
@@ -432,6 +438,9 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
         className="flex-1 overflow-y-auto scroll-smooth"
       >
         <div className="max-w-3xl mx-auto px-4 md:px-6 pb-24 md:pb-20">
+          {/* 顶部哨兵（IntersectionObserver 触发向前加载） */}
+          <div ref={topSentinelRef} className="h-px" />
+
           {loadedChapters.map((ch) => (
             <div
               key={ch.id}
@@ -468,6 +477,9 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
             </div>
           ))}
 
+          {/* 底部哨兵（IntersectionObserver 触发向后加载） */}
+          <div ref={bottomSentinelRef} className="h-px" />
+
           {/* 加载更多提示 */}
           {isLoadingMore && (
             <div className="flex items-center justify-center py-8 text-muted-foreground">
@@ -486,16 +498,10 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
           prevLabel={prevChapter ? prevChapter.title : "已是第一章"}
           nextLabel={nextChapter ? nextChapter.title : "已是最后一章"}
           onPrev={() => {
-            if (prevChapter) {
-              scrollToChapter(prevChapter.id);
-              setSelectedChapter(prevChapter.id);
-            }
+            if (prevChapter) scrollToChapter(prevChapter.id);
           }}
           onNext={() => {
-            if (nextChapter) {
-              scrollToChapter(nextChapter.id);
-              setSelectedChapter(nextChapter.id);
-            }
+            if (nextChapter) scrollToChapter(nextChapter.id);
           }}
           prevDisabled={!prevChapter}
           nextDisabled={!nextChapter}
