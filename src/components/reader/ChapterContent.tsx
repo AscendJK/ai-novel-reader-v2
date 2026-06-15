@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useCallback, useRef, useMemo, useState } from "react";
 import { useNovelStore } from "@/stores/novel-store";
 import { useSummaryStore } from "@/stores/summary-store";
 import { useUIStore } from "@/stores/ui-store";
@@ -55,6 +55,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   const touchRef = useRef<{ x: number; y: number } | null>(null);
   const isLoadingChapterRef = useRef(false);
   const scrollDirectionRef = useRef<"top" | "bottom">("top");
+  const isTransitioningRef = useRef(false); // 章节切换过渡中标记
 
   const chapters = currentNovel?.chapters || [];
   const currentIndex = chapters.findIndex((c) => c.id === selectedChapterId);
@@ -144,22 +145,58 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   }, [isPaginated, chapter?.id]);
 
   // 切换章节时重置页码和滚动位置
-  useEffect(() => {
+  useLayoutEffect(() => {
     setCurrentPage(0);
     if (isPaginated) return; // 翻页模式不滚动
-    if (scrollRef.current) {
-      const viewport = scrollRef.current.querySelector("[data-radix-scroll-area-viewport]");
-      if (!viewport) return;
-      // 使用 setTimeout 确保 DOM 更新完成后再设置滚动位置
-      setTimeout(() => {
-        if (scrollDirectionRef.current === "bottom") {
-          viewport.scrollTop = viewport.scrollHeight;
-        } else {
-          viewport.scrollTop = 0;
-        }
-        scrollDirectionRef.current = "top";
-      }, 50);
+    if (!scrollRef.current) return;
+    const viewport = scrollRef.current.querySelector("[data-radix-scroll-area-viewport]");
+    if (!viewport) return;
+
+    // 标记正在过渡，阻止滚动事件触发章节切换
+    isTransitioningRef.current = true;
+
+    const direction = scrollDirectionRef.current;
+    scrollDirectionRef.current = "top";
+
+    // 立即尝试设置滚动位置
+    if (direction === "bottom") {
+      viewport.scrollTop = viewport.scrollHeight;
+    } else {
+      viewport.scrollTop = 0;
     }
+
+    // 多次重试确保内容渲染完成后滚动位置正确
+    let retryCount = 0;
+    const maxRetries = 5;
+    let lastScrollHeight = viewport.scrollHeight;
+
+    const retry = () => {
+      if (retryCount >= maxRetries) {
+        isTransitioningRef.current = false;
+        return;
+      }
+      retryCount++;
+      requestAnimationFrame(() => {
+        if (!viewport) return;
+        const newScrollHeight = viewport.scrollHeight;
+        // scrollHeight 还在变化，说明内容还在渲染，继续重试
+        if (newScrollHeight !== lastScrollHeight || retryCount <= 2) {
+          lastScrollHeight = newScrollHeight;
+          if (direction === "bottom") {
+            viewport.scrollTop = viewport.scrollHeight;
+          } else {
+            viewport.scrollTop = 0;
+          }
+        }
+        // 最后一次重试后解锁
+        if (retryCount >= maxRetries) {
+          isTransitioningRef.current = false;
+        } else {
+          retry();
+        }
+      });
+    };
+    retry();
   }, [chapter?.id, isPaginated]);
 
   // 章节切换（含懒加载）
@@ -189,68 +226,78 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     [currentNovel, chapters, setSelectedChapter, addChapters]
   );
 
-  // 无限滚动：自动切换章节
+  // 用 ref 保持 goToChapter 引用稳定，避免 scroll 监听器频繁重建
+  const goToChapterRef = useRef(goToChapter);
+  goToChapterRef.current = goToChapter;
+  const nextChapterRef = useRef(nextChapter);
+  nextChapterRef.current = nextChapter;
+  const prevChapterRef = useRef(prevChapter);
+  prevChapterRef.current = prevChapter;
+
+  // 无限滚动：自动切换章节（用 ref 读取最新值，函数引用始终稳定）
   const autoLoadNextChapter = useCallback(async () => {
-    if (isLoadingChapterRef.current || !nextChapter) return;
+    const nc = nextChapterRef.current;
+    if (isLoadingChapterRef.current || !nc) return;
     isLoadingChapterRef.current = true;
     scrollDirectionRef.current = "top";
     try {
-      await goToChapter(nextChapter.id);
-      // 等待内容渲染完成后解锁（缩短延迟提升流畅度）
-      await new Promise<void>(resolve => setTimeout(resolve, 100));
+      await goToChapterRef.current(nc.id);
     } finally {
       isLoadingChapterRef.current = false;
     }
-  }, [nextChapter, goToChapter]);
+  }, []); // 空依赖，引用始终稳定
 
   const autoLoadPrevChapter = useCallback(async () => {
-    if (isLoadingChapterRef.current || !prevChapter) return;
+    const pc = prevChapterRef.current;
+    if (isLoadingChapterRef.current || !pc) return;
     isLoadingChapterRef.current = true;
     scrollDirectionRef.current = "bottom";
     try {
-      await goToChapter(prevChapter.id);
-      // 等待内容渲染完成后解锁（缩短延迟提升流畅度）
-      await new Promise<void>(resolve => setTimeout(resolve, 100));
+      await goToChapterRef.current(pc.id);
     } finally {
       isLoadingChapterRef.current = false;
     }
-  }, [prevChapter, goToChapter]);
+  }, []); // 空依赖，引用始终稳定
 
   // 无限滚动：监听滚动事件（带节流）
+  // 只依赖 isPaginated 和 chapter?.id，autoLoad* 通过 ref 读取最新值
   useEffect(() => {
     if (isPaginated || !scrollRef.current) return;
     const viewport = scrollRef.current.querySelector("[data-radix-scroll-area-viewport]");
     if (!viewport) return;
 
-    let lastScrollTime = 0;
+    let lastTriggerTime = 0;
     let rafId: number | null = null;
+    const DEBOUNCE = 300; // 防抖间隔
+
     const handleScroll = () => {
       if (rafId) return; // 节流：每帧最多执行一次
       rafId = requestAnimationFrame(() => {
         rafId = null;
+        // 过渡中不触发章节切换
+        if (isTransitioningRef.current) return;
         const now = Date.now();
-        // 防抖：200ms 内不重复触发（降低延迟提升流畅度）
-        if (now - lastScrollTime < 200) return;
+        if (now - lastTriggerTime < DEBOUNCE) return;
         const { scrollTop, scrollHeight, clientHeight } = viewport;
         // 滚动到底部（距离 < 100px）→ 加载下一章
         if (scrollHeight - scrollTop - clientHeight < 100) {
-          lastScrollTime = now;
+          lastTriggerTime = now;
           autoLoadNextChapter();
         }
         // 滚动到顶部（距离 < 30px）→ 加载上一章
-        if (scrollTop < 30) {
-          lastScrollTime = now;
+        else if (scrollTop < 30) {
+          lastTriggerTime = now;
           autoLoadPrevChapter();
         }
       });
     };
 
-    viewport.addEventListener("scroll", handleScroll);
+    viewport.addEventListener("scroll", handleScroll, { passive: true });
     return () => {
       viewport.removeEventListener("scroll", handleScroll);
       if (rafId) cancelAnimationFrame(rafId);
     };
-  }, [isPaginated, chapter?.id, autoLoadNextChapter, autoLoadPrevChapter]);
+  }, [isPaginated, chapter?.id]);
 
   // 翻页导航
   const goNextPage = useCallback(() => {
