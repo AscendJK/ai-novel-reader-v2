@@ -92,10 +92,11 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     }
   }, [setSelectedChapter]);
 
-  // 获取保存的滚动位置（用于恢复）
-  const savedScrollTop = useMemo(() => {
+  // 获取保存的章节偏移量（用于恢复）
+  const savedChapterOffset = useMemo(() => {
     if (!currentNovel) return undefined;
-    return readingPositions[currentNovel.id]?.scrollTop;
+    const pos = readingPositions[currentNovel.id];
+    return pos?.chapterOffset;
   }, [currentNovel?.id, readingPositions]);
 
   const {
@@ -111,12 +112,35 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     onChapterChange: handleChapterChange,
     enabled: !isPaginated,
     initialChapterId: selectedChapterId,
-    initialScrollTop: savedScrollTop,
+    initialChapterOffset: savedChapterOffset,
   });
 
   // ── 滚动位置保存（节流 + 页面退出时立即保存）──────────────────
   const saveScrollTopRef = useRef(saveScrollTop);
   saveScrollTopRef.current = saveScrollTop;
+
+  // 计算当前章节内偏移量（相对于章节元素顶部的像素偏移）
+  const calcChapterOffset = useCallback((): { scrollTop: number; chapterOffset: number } | null => {
+    const container = scrollContainerRef.current;
+    if (!container) return null;
+    const scrollTop = container.scrollTop;
+    // 找到当前可见的章节元素
+    const sections = container.querySelectorAll(".chapter-section[data-chapter-id]");
+    let chapterOffset = 0;
+    for (const section of sections) {
+      const el = section as HTMLElement;
+      if (el.offsetTop + el.offsetHeight > scrollTop) {
+        chapterOffset = scrollTop - el.offsetTop;
+        break;
+      }
+    }
+    return { scrollTop, chapterOffset };
+  }, [scrollContainerRef]);
+
+  const savePositionNow = useCallback(() => {
+    const pos = calcChapterOffset();
+    if (pos) saveScrollTopRef.current(pos.scrollTop, pos.chapterOffset);
+  }, [calcChapterOffset]);
 
   // 退出或切换小说时立即保存滚动位置
   const prevNovelIdRef = useRef(currentNovel?.id);
@@ -127,12 +151,22 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     prevNovelIdRef.current = curId;
     // 小说变化（退出或切换到另一本小说），用之前的 container 保存旧小说的位置
     if (prevId && prevId !== curId && prevContainerRef.current) {
-      const scrollTop = prevContainerRef.current.scrollTop;
-      // 直接更新 store 中旧小说的 scrollTop
+      const container = prevContainerRef.current;
+      const scrollTop = container.scrollTop;
+      // 计算章节偏移量
+      const sections = container.querySelectorAll(".chapter-section[data-chapter-id]");
+      let chapterOffset = 0;
+      for (const section of sections) {
+        const el = section as HTMLElement;
+        if (el.offsetTop + el.offsetHeight > scrollTop) {
+          chapterOffset = scrollTop - el.offsetTop;
+          break;
+        }
+      }
       const { readingPositions } = useNovelStore.getState();
       const existingPos = readingPositions[prevId];
       if (existingPos) {
-        const positions = { ...readingPositions, [prevId]: { ...existingPos, scrollTop } };
+        const positions = { ...readingPositions, [prevId]: { ...existingPos, scrollTop, chapterOffset } };
         localStorage.setItem(userKey("novel-reader-positions"), JSON.stringify(positions));
         useNovelStore.setState({ readingPositions: positions });
       }
@@ -153,15 +187,13 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     const handleScroll = () => {
       const now = Date.now();
       if (now - lastSaveTimeRef.current >= 3000) {
-        // 距离上次保存超过 3 秒，立即保存
         lastSaveTimeRef.current = now;
-        saveScrollTopRef.current(container.scrollTop);
+        savePositionNow();
       } else {
-        // 否则设置定时器，在 3 秒后保存
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
         saveTimerRef.current = setTimeout(() => {
           lastSaveTimeRef.current = Date.now();
-          saveScrollTopRef.current(container.scrollTop);
+          savePositionNow();
         }, 3000);
       }
     };
@@ -171,33 +203,26 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
       container.removeEventListener("scroll", handleScroll);
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
-  }, [isPaginated, currentNovel?.id, scrollContainerRef]);
+  }, [isPaginated, currentNovel?.id, scrollContainerRef, savePositionNow]);
 
   // 页面退出时立即保存滚动位置
   useEffect(() => {
     if (isPaginated || !currentNovel) return;
 
-    const container = scrollContainerRef.current;
-    if (!container) return;
-
-    const saveNow = () => {
-      saveScrollTopRef.current(container.scrollTop);
-    };
-
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "hidden") saveNow();
+      if (document.visibilityState === "hidden") savePositionNow();
     };
 
-    window.addEventListener("beforeunload", saveNow);
-    window.addEventListener("pagehide", saveNow);
+    window.addEventListener("beforeunload", savePositionNow);
+    window.addEventListener("pagehide", savePositionNow);
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
-      window.removeEventListener("beforeunload", saveNow);
-      window.removeEventListener("pagehide", saveNow);
+      window.removeEventListener("beforeunload", savePositionNow);
+      window.removeEventListener("pagehide", savePositionNow);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [isPaginated, currentNovel?.id, scrollContainerRef]);
+  }, [isPaginated, currentNovel?.id, savePositionNow]);
 
   // ── 翻页模式相关 ──────────────────────────────────────────────
   const pageWidth = useMemo(() => {

@@ -3,7 +3,7 @@ import type { Novel } from "@/parsers/types";
 import { syncClient } from "@/sync/sync-client";
 import { userKey } from "@/lib/user-utils";
 
-interface ReadPosition { chapterId: string; chapterIndex: number; scrollTop?: number }
+interface ReadPosition { chapterId: string; chapterIndex: number; scrollTop?: number; /** 章节内偏移量（像素），相对于章节元素顶部 */ chapterOffset?: number }
 
 interface NovelState {
   currentNovel: Novel | null;
@@ -16,7 +16,7 @@ interface NovelState {
   removeNovel: (novelId: string) => void;
   getReadingPosition: (novelId: string) => ReadPosition | null;
   saveReadingPosition: (novelId: string, chapterId: string, chapterIndex: number, scrollTop?: number) => void;
-  saveScrollTop: (scrollTop: number) => void;
+  saveScrollTop: (scrollTop: number, chapterOffset?: number) => void;
   addChapters: (chapters: Novel["chapters"]) => void;
 }
 
@@ -87,8 +87,9 @@ export const useNovelStore = create<NovelState>((set, get) => ({
         [currentNovel.id]: {
           chapterId,
           chapterIndex: idx >= 0 ? idx : 0,
-          // scrollTop：传入新值时使用，否则保留已有的（由 saveScrollTop 负责更新）
           scrollTop: scrollTop !== undefined ? scrollTop : existingPos?.scrollTop,
+          // 章节切换时清除偏移量，由下次滚动事件重新保存
+          chapterOffset: undefined,
         },
       };
       savePositions(positions);
@@ -132,14 +133,14 @@ export const useNovelStore = create<NovelState>((set, get) => ({
     set({ readingPositions: positions });
   },
 
-  saveScrollTop: (scrollTop) => {
+  saveScrollTop: (scrollTop, chapterOffset) => {
     const { currentNovel, readingPositions } = get();
     if (!currentNovel) return;
     const existingPos = readingPositions[currentNovel.id];
     if (!existingPos) return;
     const positions = {
       ...readingPositions,
-      [currentNovel.id]: { ...existingPos, scrollTop },
+      [currentNovel.id]: { ...existingPos, scrollTop, chapterOffset: chapterOffset ?? existingPos.chapterOffset },
     };
     savePositions(positions);
     set({ readingPositions: positions });
