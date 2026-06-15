@@ -433,11 +433,9 @@ export function AppLayout() {
   };
 
   const clearLocalData = async () => {
-    // Delete current user's database (settings/API keys are in shared DB, preserved)
     const currentUser = localStorage.getItem("sync-username");
     if (currentUser) {
-      await deleteUserDB(currentUser).catch((e) => console.warn("[AppLayout] deleteUserDB failed:", e));
-      removeLocalUser(currentUser);
+      await deleteUserData(currentUser).catch((e) => console.warn("[AppLayout] deleteUserData failed:", e));
     }
   };
 
