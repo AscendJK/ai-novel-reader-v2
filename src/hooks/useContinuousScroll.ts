@@ -80,17 +80,24 @@ export function useContinuousScroll({
         if (direction === "forward") {
           const lastLoaded = loaded[loaded.length - 1];
           const startIndex = lastLoaded.index + 1;
-          if (startIndex >= currentChapters.length) return;
+          if (startIndex >= currentChapters.length) {
+            isLoadingRef.current = false;
+            setIsLoadingMore(false);
+            return;
+          }
 
           const newChapters = await loadChapters(novelId, startIndex, LOAD_BATCH);
           if (newChapters.length > 0) addChapters(newChapters);
-          // 前向加载立即解锁
           isLoadingRef.current = false;
           setIsLoadingMore(false);
         } else {
           const firstLoaded = loaded[0];
           const startIndex = Math.max(0, firstLoaded.index - LOAD_BATCH);
-          if (startIndex >= firstLoaded.index) return;
+          if (startIndex >= firstLoaded.index) {
+            isLoadingRef.current = false;
+            setIsLoadingMore(false);
+            return;
+          }
 
           const oldScrollHeight = container.scrollHeight;
           const oldScrollTop = container.scrollTop;
