@@ -33,21 +33,32 @@ export function ChapterNav() {
 
     // 检查章节内容是否已加载
     const chapter = currentNovel.chapters.find(c => c.id === chapterId);
-    console.log(`[ChapterNav] Click: ${chapterId}, index=${chapterIndex}, hasContent=${!!chapter?.content}`);
 
     if (chapter && chapter.content) {
-      // 已加载，直接切换
+      // 已加载：更新选中状态
       setSelectedChapter(chapterId);
+      // 滚动到该章节（连续滚动模式下生效）
+      const el = document.querySelector(`[data-chapter-id="${chapterId}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
     } else {
       // 未加载，需要懒加载
-      console.log(`[ChapterNav] Loading chapters around index ${chapterIndex}...`);
       setLoadingChapter(chapterId);
       try {
         const start = Math.max(0, chapterIndex - 10);
-        const chapters = await loadChapters(currentNovel.id, start, 21);
-        console.log(`[ChapterNav] Loaded ${chapters.length} chapters, first: ${chapters[0]?.title}, last: ${chapters[chapters.length-1]?.title}`);
-        addChapters(chapters);
+        const loaded = await loadChapters(currentNovel.id, start, 21);
+        addChapters(loaded);
         setSelectedChapter(chapterId);
+        // 等待渲染后滚动
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const el = document.querySelector(`[data-chapter-id="${chapterId}"]`);
+            if (el) {
+              el.scrollIntoView({ behavior: "smooth", block: "start" });
+            }
+          });
+        });
       } catch (err) {
         console.error("[ChapterNav] Failed to load chapters:", err);
       } finally {
