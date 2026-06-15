@@ -53,6 +53,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomNavRef = useRef<HTMLDivElement>(null);
   const touchRef = useRef<{ x: number; y: number } | null>(null);
+  const lastTapRef = useRef(0); // 双击检测
 
   const chapters = currentNovel?.chapters || [];
   const currentIndex = chapters.findIndex((c) => c.id === selectedChapterId);
@@ -438,6 +439,20 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
       <div
         ref={scrollContainerRef}
         className="flex-1 overflow-y-auto scroll-smooth"
+        onClick={(e) => {
+          // 移动端双击中间区域切换沉浸模式
+          if (window.innerWidth >= 768 || !onToggleImmersive) return;
+          const rect = e.currentTarget.getBoundingClientRect();
+          const ratio = (e.clientX - rect.left) / rect.width;
+          if (ratio < 1 / 3 || ratio > 2 / 3) return; // 只响应中间区域
+          const now = Date.now();
+          if (now - lastTapRef.current < 300) {
+            onToggleImmersive();
+            lastTapRef.current = 0; // 防止三次点击再次触发
+          } else {
+            lastTapRef.current = now;
+          }
+        }}
       >
         <div className="max-w-3xl mx-auto px-4 md:px-6 pb-24 md:pb-20">
           {/* 顶部哨兵（IntersectionObserver 触发向前加载） */}
@@ -582,19 +597,20 @@ function TopBar(props: {
         )}
       </div>
 
+      {/* 沉浸模式按钮 - 始终可见 */}
+      {onToggleImmersive && (
+        <Button variant="ghost" size="icon" className="h-7 w-7"
+          onClick={onToggleImmersive} title={isImmersive ? "退出沉浸模式" : "沉浸模式"}>
+          {isImmersive ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+        </Button>
+      )}
+
       {!isImmersive && (
         <div className="flex items-center gap-1 md:gap-2">
           {!summaryOpen && (
             <div className="flex items-center gap-1" title={hasSummary ? "已有章节总结" : "暂无章节总结"}>
               <Sparkles className={`h-3.5 w-3.5 ${hasSummary ? "text-primary" : "text-muted-foreground/40"}`} />
             </div>
-          )}
-
-          {onToggleImmersive && (
-            <Button variant="ghost" size="icon" className="h-7 w-7"
-              onClick={onToggleImmersive} title="沉浸模式">
-              <Maximize2 className="h-4 w-4" />
-            </Button>
           )}
 
           <div className="relative">
