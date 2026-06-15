@@ -39,11 +39,11 @@ Copy-Item "admin-backend.bat" "backend-pack-tmp\admin.bat"
 Copy-Item "admin-backend.sh" "backend-pack-tmp\admin.sh"
 
 # 压缩
-Compress-Archive -Path "backend-pack-tmp\*" -DestinationPath "release-backend.zip" -Force
+Compress-Archive -Path "backend-pack-tmp\*" -DestinationPath "ai-novel-reader-v2-backend.zip" -Force
 
 # 清理临时目录
 Remove-Item -Recurse -Force "backend-pack-tmp"
 
 # 显示结果
-$file = Get-Item "release-backend.zip"
-Write-Host "打包完成: release-backend.zip ($([math]::Round($file.Length / 1KB))KB)" -ForegroundColor Green
+$file = Get-Item "ai-novel-reader-v2-backend.zip"
+Write-Host "打包完成: ai-novel-reader-v2-backend.zip ($([math]::Round($file.Length / 1KB))KB)" -ForegroundColor Green
