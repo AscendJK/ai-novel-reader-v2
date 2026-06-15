@@ -57,8 +57,9 @@ export const useNovelStore = create<NovelState>((set, get) => ({
         [novel.id]: {
           chapterId: selectedId,
           chapterIndex: selectedIdx >= 0 ? selectedIdx : 0,
-          // 保留已有的 scrollTop
+          // 保留已有的滚动位置
           scrollTop: pos?.scrollTop,
+          chapterOffset: pos?.chapterOffset,
         },
       };
       savePositions(positions);

@@ -17,6 +17,7 @@ import { ensureModelReady } from "@/rag/model-loader";
 import { resolveModelKey } from "@/rag/engines";
 import { apiFetch } from "@/lib/api-client";
 import { buildAndPollRAGIndex, downloadAndCacheIndex } from "@/rag/build-index";
+import { onCacheEviction } from "@/rag/rag-cache-utils";
 import { NovelBuildWindow } from "@/components/common/NovelBuildWindow";
 import type { NovelMeta } from "@/parsers/types";
 
@@ -189,16 +190,26 @@ export function BookSelect() {
 
   // Auto-download indexes that are ready on server but missing from local cache
   const downloadingRef = useRef<Set<string>>(new Set());
+  // 跟踪被淘汰的索引，防止缓存抖动（下载→淘汰→下载→淘汰...）
+  const evictedKeysRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const unsub = onCacheEviction((evicted) => {
+      for (const e of evicted) evictedKeysRef.current.add(e.id);
+    });
+    return unsub;
+  }, []);
   useEffect(() => {
     if (!savedNovels.length) return;
     for (const novel of savedNovels) {
       const cacheKey = `${novel.id}-${engine}`;
       const st = buildStatuses[novel.id]?.[engine];
-      if (st?.status === "ready" && !cachedKeys.has(cacheKey) && !downloadingRef.current.has(cacheKey)) {
+      if (st?.status === "ready" && !cachedKeys.has(cacheKey) && !downloadingRef.current.has(cacheKey) && !evictedKeysRef.current.has(cacheKey)) {
         downloadingRef.current.add(cacheKey);
         (async () => {
           try {
             await downloadAndCacheIndex({ novelId: novel.id, engine });
+            // 下载成功后从淘汰列表移除（说明用户主动需要）
+            evictedKeysRef.current.delete(cacheKey);
           } catch { /* download failed, will retry on next effect run */ }
           finally { downloadingRef.current.delete(cacheKey); }
         })();

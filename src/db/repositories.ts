@@ -472,6 +472,47 @@ export function removeLocalUser(username: string) {
 
 /** Delete a user's entire database and remove from local users list */
 export async function deleteUserData(username: string) {
+  // 1. 删除前先获取用户的 novelId 列表，用于清理 localStorage 地图缓存
+  try {
+    const dbName = `ai-novel-reader-${username}`;
+    const req = indexedDB.open(dbName);
+    const novels: { id: string }[] = await new Promise((resolve, reject) => {
+      req.onsuccess = () => {
+        const db = req.result;
+        const tx = db.transaction("novels", "readonly");
+        const store = tx.objectStore("novels");
+        const getAll = store.getAll();
+        getAll.onsuccess = () => { resolve(getAll.result || []); db.close(); };
+        getAll.onerror = () => { reject(getAll.error); db.close(); };
+      };
+      req.onerror = () => reject(req.error);
+    });
+    for (const novel of novels) {
+      if (novel.id) localStorage.removeItem(`map-data-${novel.id}`);
+    }
+  } catch { /* ignore */ }
+
+  // 2. 删除用户专属 IndexedDB 数据库
   await deleteUserDB(username);
+
+  // 3. 删除用户专属 localStorage 数据
+  const userKeys = [
+    `novel-reader-positions:${username}`,
+    `novel-reader-last-opened:${username}`,
+    `novel-reader-last-sync-time:${username}`,
+  ];
+  for (const key of userKeys) {
+    localStorage.removeItem(key);
+  }
+
+  // 4. 删除 sharedDB 中用户的 API 配置
+  try {
+    await Promise.all([
+      sharedDB.settings.delete(`api-providers:${username}`),
+      sharedDB.settings.delete(`api-active-provider:${username}`),
+    ]);
+  } catch { /* ignore */ }
+
+  // 5. 从本地用户列表移除
   removeLocalUser(username);
 }
