@@ -472,7 +472,8 @@ export function removeLocalUser(username: string) {
 
 /** Delete a user's entire database and remove from local users list */
 export async function deleteUserData(username: string) {
-  // 1. 删除前先获取用户的 novelId 列表，用于清理 localStorage 地图缓存
+  // 1. 删除前先获取用户的 novelId 列表
+  const deletedUserNovelIds: string[] = [];
   try {
     const dbName = `ai-novel-reader-${username}`;
     const req = indexedDB.open(dbName);
@@ -488,14 +489,51 @@ export async function deleteUserData(username: string) {
       req.onerror = () => reject(req.error);
     });
     for (const novel of novels) {
-      if (novel.id) localStorage.removeItem(`map-data-${novel.id}`);
+      if (novel.id) {
+        deletedUserNovelIds.push(novel.id);
+        localStorage.removeItem(`map-data-${novel.id}`);
+      }
     }
   } catch { /* ignore */ }
 
-  // 2. 删除用户专属 IndexedDB 数据库
+  // 2. 收集其他本地用户的 novelId，用于判断哪些 RAG 缓存可以安全删除
+  const otherUsersNovelIds = new Set<string>();
+  const otherUsers = getLocalUsers().filter((u) => u !== username);
+  for (const otherUser of otherUsers) {
+    try {
+      const otherDbName = `ai-novel-reader-${otherUser}`;
+      const otherReq = indexedDB.open(otherDbName);
+      const otherNovels: { id: string }[] = await new Promise((resolve, reject) => {
+        otherReq.onsuccess = () => {
+          const db = otherReq.result;
+          const tx = db.transaction("novels", "readonly");
+          const store = tx.objectStore("novels");
+          const getAll = store.getAll();
+          getAll.onsuccess = () => { resolve(getAll.result || []); db.close(); };
+          getAll.onerror = () => { reject(getAll.error); db.close(); };
+        };
+        otherReq.onerror = () => reject(otherReq.error);
+      });
+      for (const novel of otherNovels) {
+        if (novel.id) otherUsersNovelIds.add(novel.id);
+      }
+    } catch { /* 跳过无法打开的数据库 */ }
+  }
+
+  // 3. 删除用户专属 IndexedDB 数据库
   await deleteUserDB(username);
 
-  // 3. 删除用户专属 localStorage 数据
+  // 4. 删除 sharedDB 中其他用户都没有的小说的 RAG 缓存
+  try {
+    const allCacheEntries = await sharedDB.ragCache.toArray();
+    for (const entry of allCacheEntries) {
+      if (deletedUserNovelIds.includes(entry.novelId) && !otherUsersNovelIds.has(entry.novelId)) {
+        await sharedDB.ragCache.delete(entry.id);
+      }
+    }
+  } catch { /* ignore */ }
+
+  // 5. 删除用户专属 localStorage 数据
   const userKeys = [
     `novel-reader-positions:${username}`,
     `novel-reader-last-opened:${username}`,
@@ -505,7 +543,7 @@ export async function deleteUserData(username: string) {
     localStorage.removeItem(key);
   }
 
-  // 4. 删除 sharedDB 中用户的 API 配置
+  // 6. 删除 sharedDB 中用户的 API 配置
   try {
     await Promise.all([
       sharedDB.settings.delete(`api-providers:${username}`),
@@ -513,6 +551,6 @@ export async function deleteUserData(username: string) {
     ]);
   } catch { /* ignore */ }
 
-  // 5. 从本地用户列表移除
+  // 7. 从本地用户列表移除
   removeLocalUser(username);
 }
