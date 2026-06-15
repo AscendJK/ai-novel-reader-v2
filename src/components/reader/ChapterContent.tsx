@@ -9,7 +9,7 @@ import { useContinuousScroll } from "@/hooks/useContinuousScroll";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Minus, Plus, Sparkles, ChevronLeft, ChevronRight, Type, Loader2 } from "lucide-react";
+import { Minus, Plus, Sparkles, ChevronLeft, ChevronRight, Type, Loader2, Maximize2, Minimize2 } from "lucide-react";
 import { loadChapters } from "@/db/repositories";
 
 interface ChapterContentProps {
@@ -327,6 +327,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
           summaries={summaries} summaryOpen={summaryOpen} onToggleSummary={onToggleSummary}
           hasSummary={hasSummary}
           showFontPanel={showFontPanel} setShowFontPanel={setShowFontPanel}
+          onToggleImmersive={onToggleImmersive}
           fontSize={fontSize} setFontSize={setFontSize}
           fontWeight={fontWeight} cycleFontWeight={cycleFontWeight} currentWeightLabel={currentWeightLabel}
           lineHeight={lineHeight} setLineHeight={setLineHeight}
@@ -421,6 +422,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
         summaries={summaries} summaryOpen={summaryOpen} onToggleSummary={onToggleSummary}
         hasSummary={hasSummary}
         showFontPanel={showFontPanel} setShowFontPanel={setShowFontPanel}
+        onToggleImmersive={onToggleImmersive}
         fontSize={fontSize} setFontSize={setFontSize}
         fontWeight={fontWeight} cycleFontWeight={cycleFontWeight} currentWeightLabel={currentWeightLabel}
         lineHeight={lineHeight} setLineHeight={setLineHeight}
@@ -527,6 +529,7 @@ function TopBar(props: {
   hasSummary: boolean;
   showFontPanel: boolean;
   setShowFontPanel: (v: boolean) => void;
+  onToggleImmersive?: () => void;
   fontSize: number;
   setFontSize: (v: number) => void;
   fontWeight: number;
@@ -547,7 +550,7 @@ function TopBar(props: {
 }) {
   const {
     chapter, currentIndex, chapters, summaries, summaryOpen, onToggleSummary, hasSummary,
-    showFontPanel, setShowFontPanel,
+    showFontPanel, setShowFontPanel, onToggleImmersive,
     fontSize, setFontSize, fontWeight, cycleFontWeight, currentWeightLabel,
     lineHeight, setLineHeight, paragraphSpacing, setParagraphSpacing,
     fontFamily, setFontFamily,
@@ -585,6 +588,13 @@ function TopBar(props: {
             <div className="flex items-center gap-1" title={hasSummary ? "已有章节总结" : "暂无章节总结"}>
               <Sparkles className={`h-3.5 w-3.5 ${hasSummary ? "text-primary" : "text-muted-foreground/40"}`} />
             </div>
+          )}
+
+          {onToggleImmersive && (
+            <Button variant="ghost" size="icon" className="h-7 w-7"
+              onClick={onToggleImmersive} title="沉浸模式">
+              <Maximize2 className="h-4 w-4" />
+            </Button>
           )}
 
           <div className="relative">
