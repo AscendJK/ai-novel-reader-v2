@@ -84,6 +84,9 @@ export function useContinuousScroll({
 
           const newChapters = await loadChapters(novelId, startIndex, LOAD_BATCH);
           if (newChapters.length > 0) addChapters(newChapters);
+          // 前向加载立即解锁
+          isLoadingRef.current = false;
+          setIsLoadingMore(false);
         } else {
           const firstLoaded = loaded[0];
           const startIndex = Math.max(0, firstLoaded.index - LOAD_BATCH);
@@ -95,18 +98,23 @@ export function useContinuousScroll({
           const newChapters = await loadChapters(novelId, startIndex, LOAD_BATCH);
           if (newChapters.length > 0) {
             addChapters(newChapters);
-            // 双层 rAF 确保 DOM 更新完成后再补偿
+            // 双层 rAF 确保 DOM 更新完成后再补偿，补偿后才解锁
             requestAnimationFrame(() => {
               requestAnimationFrame(() => {
                 const newScrollHeight = container.scrollHeight;
                 container.scrollTop = oldScrollTop + (newScrollHeight - oldScrollHeight);
+                // 补偿完成后再解锁，避免哨兵仍在检测区导致循环加载
+                isLoadingRef.current = false;
+                setIsLoadingMore(false);
               });
             });
+          } else {
+            isLoadingRef.current = false;
+            setIsLoadingMore(false);
           }
         }
       } catch (err) {
         console.error("[ContinuousScroll] Failed to load chapters:", err);
-      } finally {
         isLoadingRef.current = false;
         setIsLoadingMore(false);
       }
