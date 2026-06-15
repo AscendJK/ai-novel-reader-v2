@@ -140,10 +140,12 @@ export function useContinuousScroll({
       if (!container) return;
 
       const applyScroll = (el: Element) => {
-        const htmlEl = el as HTMLElement;
         if (chapterOffset !== undefined) {
-          // 恢复精确位置：章节顶部 + 章节内偏移量
-          container.scrollTop = htmlEl.offsetTop + chapterOffset;
+          // 用 getBoundingClientRect 计算精确位置（不依赖 offsetParent）
+          const elRect = el.getBoundingClientRect();
+          const containerRect = container.getBoundingClientRect();
+          const relativeTop = elRect.top - containerRect.top + container.scrollTop;
+          container.scrollTop = relativeTop + chapterOffset;
         } else {
           el.scrollIntoView({ behavior: "smooth", block: "start" });
         }

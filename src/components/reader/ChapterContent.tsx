@@ -124,13 +124,17 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     const container = scrollContainerRef.current;
     if (!container) return null;
     const scrollTop = container.scrollTop;
+    const containerRect = container.getBoundingClientRect();
     // 找到当前可见的章节元素
     const sections = container.querySelectorAll(".chapter-section[data-chapter-id]");
     let chapterOffset = 0;
     for (const section of sections) {
       const el = section as HTMLElement;
-      if (el.offsetTop + el.offsetHeight > scrollTop) {
-        chapterOffset = scrollTop - el.offsetTop;
+      const elRect = el.getBoundingClientRect();
+      const relativeTop = elRect.top - containerRect.top + scrollTop;
+      const relativeBottom = relativeTop + elRect.height;
+      if (relativeBottom > scrollTop) {
+        chapterOffset = scrollTop - relativeTop;
         break;
       }
     }
@@ -153,13 +157,17 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     if (prevId && prevId !== curId && prevContainerRef.current) {
       const container = prevContainerRef.current;
       const scrollTop = container.scrollTop;
-      // 计算章节偏移量
+      const containerRect = container.getBoundingClientRect();
+      // 计算章节偏移量（使用 getBoundingClientRect 避免 offsetParent 问题）
       const sections = container.querySelectorAll(".chapter-section[data-chapter-id]");
       let chapterOffset = 0;
       for (const section of sections) {
         const el = section as HTMLElement;
-        if (el.offsetTop + el.offsetHeight > scrollTop) {
-          chapterOffset = scrollTop - el.offsetTop;
+        const elRect = el.getBoundingClientRect();
+        const relativeTop = elRect.top - containerRect.top + scrollTop;
+        const relativeBottom = relativeTop + elRect.height;
+        if (relativeBottom > scrollTop) {
+          chapterOffset = scrollTop - relativeTop;
           break;
         }
       }
