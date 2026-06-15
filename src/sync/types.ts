@@ -8,7 +8,7 @@ export interface SyncData {
   graphs: GraphRecord[];
   settings: Record<string, unknown>;
   progress: {
-    readingPositions: Record<string, { chapterId: string; chapterIndex: number }>;
+    readingPositions: Record<string, { chapterId: string; chapterIndex: number; scrollTop?: number }>;
     lastOpened: Record<string, number>;
   };
   joinedNovelIds?: string[];

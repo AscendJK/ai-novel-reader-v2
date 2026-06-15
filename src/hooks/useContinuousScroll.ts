@@ -14,6 +14,8 @@ interface UseContinuousScrollOptions {
   chapters: Chapter[];
   onChapterChange: (chapterId: string) => void;
   enabled: boolean; // 仅在滚动模式下启用
+  initialChapterId?: string | null; // 初始章节 ID（用于恢复位置）
+  initialScrollTop?: number; // 恢复时的滚动偏移量
 }
 
 interface UseContinuousScrollReturn {
@@ -21,7 +23,7 @@ interface UseContinuousScrollReturn {
   topSentinelRef: React.RefObject<HTMLDivElement | null>;
   bottomSentinelRef: React.RefObject<HTMLDivElement | null>;
   loadedChapters: Chapter[];
-  scrollToChapter: (chapterId: string) => void;
+  scrollToChapter: (chapterId: string, scrollTop?: number) => void;
   isLoadingMore: boolean;
 }
 
@@ -35,6 +37,8 @@ export function useContinuousScroll({
   chapters,
   onChapterChange,
   enabled,
+  initialChapterId,
+  initialScrollTop,
 }: UseContinuousScrollOptions): UseContinuousScrollReturn {
   const containerRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
@@ -129,17 +133,32 @@ export function useContinuousScroll({
     [novelId, enabled, addChapters]
   );
 
-  // ── 滚动到指定章节 ────────────────────────────────────────────
+  // ── 滚动到指定章节（可选 scrollTop 偏移）────────────────────
   const scrollToChapter = useCallback(
-    (chapterId: string) => {
+    (chapterId: string, scrollTop?: number) => {
       const container = containerRef.current;
       if (!container) return;
+
+      const applyScroll = (el: Element) => {
+        if (scrollTop !== undefined) {
+          // 恢复精确位置：先滚到章节顶部，再应用偏移
+          el.scrollIntoView({ behavior: "auto", block: "start" });
+          // 双层 rAF 确保 scrollIntoView 完成后再设置偏移
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              container.scrollTop = scrollTop;
+            });
+          });
+        } else {
+          el.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      };
 
       const target = container.querySelector(
         `.chapter-section[data-chapter-id="${chapterId}"]`
       );
       if (target) {
-        target.scrollIntoView({ behavior: "smooth", block: "start" });
+        applyScroll(target);
       } else {
         const chapterIndex = chapterIndexMap.get(chapterId);
         if (chapterIndex === undefined) return;
@@ -153,7 +172,7 @@ export function useContinuousScroll({
                 const el = containerRef.current?.querySelector(
                   `.chapter-section[data-chapter-id="${chapterId}"]`
                 );
-                el?.scrollIntoView({ behavior: "smooth", block: "start" });
+                if (el) applyScroll(el);
               });
             });
           }
@@ -162,6 +181,55 @@ export function useContinuousScroll({
     },
     [novelId, chapterIndexMap, addChapters]
   );
+
+  // ── 位置恢复：当小说变化或 chapters 从空到非空时恢复阅读位置 ─────────
+  const prevNovelIdRef = useRef(novelId);
+  const prevEnabledRef = useRef(enabled);
+  const prevChaptersLenRef = useRef(0);
+  const hasRestoredRef = useRef(false);
+
+  useEffect(() => {
+    if (!enabled || !novelId) {
+      prevNovelIdRef.current = novelId;
+      prevEnabledRef.current = enabled;
+      prevChaptersLenRef.current = 0;
+      hasRestoredRef.current = false;
+      return;
+    }
+
+    const prevNovelId = prevNovelIdRef.current;
+    const prevEnabled = prevEnabledRef.current;
+    const prevLen = prevChaptersLenRef.current;
+    const curLen = chapters.length;
+    prevNovelIdRef.current = novelId;
+    prevEnabledRef.current = enabled;
+    prevChaptersLenRef.current = curLen;
+
+    // 小说变化、从翻页切到滚动、或 chapters 从空到非空 = 需要恢复
+    const novelChanged = prevNovelId !== novelId;
+    const modeChanged = !prevEnabled && enabled;
+    const justEntered = prevLen === 0 && curLen > 0;
+    if (novelChanged || modeChanged || justEntered) {
+      hasRestoredRef.current = false;
+    }
+
+    // 已恢复或无章节可恢复
+    if (hasRestoredRef.current || curLen === 0) return;
+
+    // 使用传入的 initialChapterId，或回退到第一个章节
+    const targetChapterId = initialChapterId && chapters.some(c => c.id === initialChapterId)
+      ? initialChapterId
+      : chapters[0]?.id;
+    if (!targetChapterId) return;
+
+    // 延迟恢复，确保 DOM 已更新
+    const timer = setTimeout(() => {
+      hasRestoredRef.current = true;
+      scrollToChapter(targetChapterId, initialScrollTop);
+    }, 100);
+
+    return () => clearTimeout(timer);
+  }, [novelId, enabled, chapters, initialChapterId, initialScrollTop, scrollToChapter]);
 
   // ── IntersectionObserver：章节检测（带去重）────────────────────
   const onChapterChangeRef = useRef(onChapterChange);

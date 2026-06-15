@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Minus, Plus, Sparkles, ChevronLeft, ChevronRight, Type, Loader2, Maximize2, Minimize2 } from "lucide-react";
 import { loadChapters } from "@/db/repositories";
+import { userKey } from "@/lib/user-utils";
 
 interface ChapterContentProps {
   summaryOpen: boolean;
@@ -35,7 +36,7 @@ const MAX_SINGLE_WIDTH = 768;
 type ReadingMode = "scroll" | "single" | "double";
 
 export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immersive, onToggleImmersive }: ChapterContentProps) {
-  const { currentNovel, selectedChapterId, setSelectedChapter, addChapters } = useNovelStore();
+  const { currentNovel, selectedChapterId, setSelectedChapter, addChapters, saveScrollTop, readingPositions } = useNovelStore();
   const { getSummariesByNovel } = useSummaryStore();
   const {
     fontSize, setFontSize, fontWeight, setFontWeight, lineHeight, setLineHeight,
@@ -91,6 +92,12 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     }
   }, [setSelectedChapter]);
 
+  // 获取保存的滚动位置（用于恢复）
+  const savedScrollTop = useMemo(() => {
+    if (!currentNovel) return undefined;
+    return readingPositions[currentNovel.id]?.scrollTop;
+  }, [currentNovel?.id, readingPositions]);
+
   const {
     containerRef: scrollContainerRef,
     topSentinelRef,
@@ -103,7 +110,94 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     chapters,
     onChapterChange: handleChapterChange,
     enabled: !isPaginated,
+    initialChapterId: selectedChapterId,
+    initialScrollTop: savedScrollTop,
   });
+
+  // ── 滚动位置保存（节流 + 页面退出时立即保存）──────────────────
+  const saveScrollTopRef = useRef(saveScrollTop);
+  saveScrollTopRef.current = saveScrollTop;
+
+  // 退出或切换小说时立即保存滚动位置
+  const prevNovelIdRef = useRef(currentNovel?.id);
+  const prevContainerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const prevId = prevNovelIdRef.current;
+    const curId = currentNovel?.id;
+    prevNovelIdRef.current = curId;
+    // 小说变化（退出或切换到另一本小说），用之前的 container 保存旧小说的位置
+    if (prevId && prevId !== curId && prevContainerRef.current) {
+      const scrollTop = prevContainerRef.current.scrollTop;
+      // 直接更新 store 中旧小说的 scrollTop
+      const { readingPositions } = useNovelStore.getState();
+      const existingPos = readingPositions[prevId];
+      if (existingPos) {
+        const positions = { ...readingPositions, [prevId]: { ...existingPos, scrollTop } };
+        localStorage.setItem(userKey("novel-reader-positions"), JSON.stringify(positions));
+        useNovelStore.setState({ readingPositions: positions });
+      }
+    }
+    prevContainerRef.current = scrollContainerRef.current;
+  }, [currentNovel?.id, scrollContainerRef]);
+
+  // 节流保存滚动位置（每 3 秒最多保存一次）
+  const lastSaveTimeRef = useRef(0);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (isPaginated || !currentNovel) return;
+
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      const now = Date.now();
+      if (now - lastSaveTimeRef.current >= 3000) {
+        // 距离上次保存超过 3 秒，立即保存
+        lastSaveTimeRef.current = now;
+        saveScrollTopRef.current(container.scrollTop);
+      } else {
+        // 否则设置定时器，在 3 秒后保存
+        if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = setTimeout(() => {
+          lastSaveTimeRef.current = Date.now();
+          saveScrollTopRef.current(container.scrollTop);
+        }, 3000);
+      }
+    };
+
+    container.addEventListener("scroll", handleScroll, { passive: true });
+    return () => {
+      container.removeEventListener("scroll", handleScroll);
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [isPaginated, currentNovel?.id, scrollContainerRef]);
+
+  // 页面退出时立即保存滚动位置
+  useEffect(() => {
+    if (isPaginated || !currentNovel) return;
+
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const saveNow = () => {
+      saveScrollTopRef.current(container.scrollTop);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") saveNow();
+    };
+
+    window.addEventListener("beforeunload", saveNow);
+    window.addEventListener("pagehide", saveNow);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("beforeunload", saveNow);
+      window.removeEventListener("pagehide", saveNow);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [isPaginated, currentNovel?.id, scrollContainerRef]);
 
   // ── 翻页模式相关 ──────────────────────────────────────────────
   const pageWidth = useMemo(() => {

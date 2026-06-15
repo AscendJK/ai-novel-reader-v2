@@ -3,7 +3,7 @@ import type { Novel } from "@/parsers/types";
 import { syncClient } from "@/sync/sync-client";
 import { userKey } from "@/lib/user-utils";
 
-interface ReadPosition { chapterId: string; chapterIndex: number }
+interface ReadPosition { chapterId: string; chapterIndex: number; scrollTop?: number }
 
 interface NovelState {
   currentNovel: Novel | null;
@@ -11,11 +11,12 @@ interface NovelState {
   selectedChapterId: string | null;
   readingPositions: Record<string, ReadPosition>;
   setCurrentNovel: (novel: Novel | null) => void;
-  setSelectedChapter: (chapterId: string | null) => void;
+  setSelectedChapter: (chapterId: string | null, scrollTop?: number) => void;
   addNovel: (novel: Novel) => void;
   removeNovel: (novelId: string) => void;
   getReadingPosition: (novelId: string) => ReadPosition | null;
-  saveReadingPosition: (novelId: string, chapterId: string, chapterIndex: number) => void;
+  saveReadingPosition: (novelId: string, chapterId: string, chapterIndex: number, scrollTop?: number) => void;
+  saveScrollTop: (scrollTop: number) => void;
   addChapters: (chapters: Novel["chapters"]) => void;
 }
 
@@ -53,7 +54,12 @@ export const useNovelStore = create<NovelState>((set, get) => ({
         : 0;
       const positions = {
         ...get().readingPositions,
-        [novel.id]: { chapterId: selectedId, chapterIndex: selectedIdx >= 0 ? selectedIdx : 0 },
+        [novel.id]: {
+          chapterId: selectedId,
+          chapterIndex: selectedIdx >= 0 ? selectedIdx : 0,
+          // 保留已有的 scrollTop
+          scrollTop: pos?.scrollTop,
+        },
       };
       savePositions(positions);
       try {
@@ -71,13 +77,19 @@ export const useNovelStore = create<NovelState>((set, get) => ({
     }
   },
 
-  setSelectedChapter: (chapterId) => {
+  setSelectedChapter: (chapterId, scrollTop) => {
     const { currentNovel } = get();
     if (currentNovel && chapterId) {
       const idx = currentNovel.chapters.findIndex((c) => c.id === chapterId);
+      const existingPos = get().readingPositions[currentNovel.id];
       const positions = {
         ...get().readingPositions,
-        [currentNovel.id]: { chapterId, chapterIndex: idx >= 0 ? idx : 0 },
+        [currentNovel.id]: {
+          chapterId,
+          chapterIndex: idx >= 0 ? idx : 0,
+          // scrollTop：传入新值时使用，否则保留已有的（由 saveScrollTop 负责更新）
+          scrollTop: scrollTop !== undefined ? scrollTop : existingPos?.scrollTop,
+        },
       };
       savePositions(positions);
       set({ selectedChapterId: chapterId, readingPositions: positions });
@@ -106,8 +118,29 @@ export const useNovelStore = create<NovelState>((set, get) => ({
 
   getReadingPosition: (novelId) => get().readingPositions[novelId] || null,
 
-  saveReadingPosition: (novelId, chapterId, chapterIndex) => {
-    const positions = { ...get().readingPositions, [novelId]: { chapterId, chapterIndex } };
+  saveReadingPosition: (novelId, chapterId, chapterIndex, scrollTop) => {
+    const existingPos = get().readingPositions[novelId];
+    const positions = {
+      ...get().readingPositions,
+      [novelId]: {
+        chapterId,
+        chapterIndex,
+        scrollTop: scrollTop !== undefined ? scrollTop : existingPos?.scrollTop,
+      },
+    };
+    savePositions(positions);
+    set({ readingPositions: positions });
+  },
+
+  saveScrollTop: (scrollTop) => {
+    const { currentNovel, readingPositions } = get();
+    if (!currentNovel) return;
+    const existingPos = readingPositions[currentNovel.id];
+    if (!existingPos) return;
+    const positions = {
+      ...readingPositions,
+      [currentNovel.id]: { ...existingPos, scrollTop },
+    };
     savePositions(positions);
     set({ readingPositions: positions });
   },
