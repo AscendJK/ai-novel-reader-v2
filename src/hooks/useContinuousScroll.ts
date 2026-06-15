@@ -220,7 +220,7 @@ export function useContinuousScroll({
 
     // 首次进入此 effect 分支时锁定恢复目标（不随 prop 变化）
     if (!restoreTargetRef.current) {
-      const targetChapterId = initialChapterId && chapters.some(c => c.id === initialChapterId)
+      const targetChapterId = initialChapterId && chapterIndexMap.has(initialChapterId)
         ? initialChapterId
         : chapters[0]?.id;
       if (!targetChapterId) return;

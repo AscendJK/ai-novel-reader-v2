@@ -192,12 +192,20 @@ export function BookSelect() {
   const downloadingRef = useRef<Set<string>>(new Set());
   // 跟踪被淘汰的索引，防止缓存抖动（下载→淘汰→下载→淘汰...）
   const evictedKeysRef = useRef<Set<string>>(new Set());
+  const prevEngineRef = useRef(engine);
   useEffect(() => {
     const unsub = onCacheEviction((evicted) => {
       for (const e of evicted) evictedKeysRef.current.add(e.id);
     });
     return unsub;
   }, []);
+  // 切换引擎时清空淘汰记录（不同引擎的 key 不同，旧记录无意义）
+  useEffect(() => {
+    if (prevEngineRef.current !== engine) {
+      prevEngineRef.current = engine;
+      evictedKeysRef.current.clear();
+    }
+  }, [engine]);
   useEffect(() => {
     if (!savedNovels.length) return;
     for (const novel of savedNovels) {
@@ -441,6 +449,7 @@ export function BookSelect() {
       method: "POST",
     }).catch((e) => console.warn("[BookSelect] leave novel failed:", e));
     await deleteNovel(novelId);
+    useNovelStore.getState().removeNovel(novelId);
     setSavedNovels((prev) => prev.filter((n) => n.id !== novelId));
     setServerNovels((prev) => prev.map((n) => n.id === novelId ? { ...n, joined: false } : n));
   };

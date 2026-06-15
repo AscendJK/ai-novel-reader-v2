@@ -119,13 +119,28 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   const saveScrollTopRef = useRef(saveScrollTop);
   saveScrollTopRef.current = saveScrollTop;
 
+  // 缓存当前章节元素，避免每次滚动都遍历所有章节
+  const cachedChapterElRef = useRef<HTMLElement | null>(null);
+
   // 计算当前章节内偏移量（相对于章节元素顶部的像素偏移）
   const calcChapterOffset = useCallback((): { scrollTop: number; chapterOffset: number } | null => {
     const container = scrollContainerRef.current;
     if (!container) return null;
     const scrollTop = container.scrollTop;
     const containerRect = container.getBoundingClientRect();
-    // 找到当前可见的章节元素
+
+    // 先检查缓存的章节元素是否仍然在当前滚动位置
+    const cached = cachedChapterElRef.current;
+    if (cached && cached.isConnected) {
+      const cachedRect = cached.getBoundingClientRect();
+      const cachedTop = cachedRect.top - containerRect.top + scrollTop;
+      const cachedBottom = cachedTop + cachedRect.height;
+      if (scrollTop >= cachedTop && scrollTop < cachedBottom) {
+        return { scrollTop, chapterOffset: scrollTop - cachedTop };
+      }
+    }
+
+    // 缓存未命中，遍历查找
     const sections = container.querySelectorAll(".chapter-section[data-chapter-id]");
     let chapterOffset = 0;
     for (const section of sections) {
@@ -135,6 +150,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
       const relativeBottom = relativeTop + elRect.height;
       if (relativeBottom > scrollTop) {
         chapterOffset = scrollTop - relativeTop;
+        cachedChapterElRef.current = el;
         break;
       }
     }

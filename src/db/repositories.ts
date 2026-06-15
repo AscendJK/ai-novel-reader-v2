@@ -496,28 +496,32 @@ export async function deleteUserData(username: string) {
     }
   } catch { /* ignore */ }
 
-  // 2. 收集其他本地用户的 novelId，用于判断哪些 RAG 缓存可以安全删除
+  // 2. 并行收集其他本地用户的 novelId，用于判断哪些 RAG 缓存可以安全删除
   const otherUsersNovelIds = new Set<string>();
   const otherUsers = getLocalUsers().filter((u) => u !== username);
-  for (const otherUser of otherUsers) {
-    try {
-      const otherDbName = `ai-novel-reader-${otherUser}`;
-      const otherReq = indexedDB.open(otherDbName);
-      const otherNovels: { id: string }[] = await new Promise((resolve, reject) => {
-        otherReq.onsuccess = () => {
-          const db = otherReq.result;
+  const readNovelIds = (dbName: string): Promise<string[]> =>
+    new Promise((resolve) => {
+      try {
+        const req = indexedDB.open(dbName);
+        req.onsuccess = () => {
+          const db = req.result;
           const tx = db.transaction("novels", "readonly");
           const store = tx.objectStore("novels");
           const getAll = store.getAll();
-          getAll.onsuccess = () => { resolve(getAll.result || []); db.close(); };
-          getAll.onerror = () => { reject(getAll.error); db.close(); };
+          getAll.onsuccess = () => {
+            resolve((getAll.result || []).map((n: { id: string }) => n.id).filter(Boolean));
+            db.close();
+          };
+          getAll.onerror = () => { resolve([]); db.close(); };
         };
-        otherReq.onerror = () => reject(otherReq.error);
-      });
-      for (const novel of otherNovels) {
-        if (novel.id) otherUsersNovelIds.add(novel.id);
-      }
-    } catch { /* 跳过无法打开的数据库 */ }
+        req.onerror = () => resolve([]);
+      } catch { resolve([]); }
+    });
+  const otherNovelIdArrays = await Promise.all(
+    otherUsers.map((u) => readNovelIds(`ai-novel-reader-${u}`))
+  );
+  for (const ids of otherNovelIdArrays) {
+    for (const id of ids) otherUsersNovelIds.add(id);
   }
 
   // 3. 删除用户专属 IndexedDB 数据库
