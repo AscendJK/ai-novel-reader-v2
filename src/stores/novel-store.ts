@@ -88,8 +88,8 @@ export const useNovelStore = create<NovelState>((set, get) => ({
           chapterId,
           chapterIndex: idx >= 0 ? idx : 0,
           scrollTop: scrollTop !== undefined ? scrollTop : existingPos?.scrollTop,
-          // 章节切换时清除偏移量，由下次滚动事件重新保存
-          chapterOffset: undefined,
+          // 保留已有的 chapterOffset，由滚动事件负责更新
+          chapterOffset: existingPos?.chapterOffset,
         },
       };
       savePositions(positions);

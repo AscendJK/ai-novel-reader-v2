@@ -218,18 +218,23 @@ export function useContinuousScroll({
     if (!targetChapterId) return;
 
     // 延迟恢复，确保 DOM 已更新
+    isRestoringIORef.current = true; // 抑制 IO 回调
     const timer = setTimeout(() => {
       hasRestoredRef.current = true;
       scrollToChapter(targetChapterId, initialChapterOffset);
+      // 恢复完成后解锁 IO（延迟足够让 scrollIntoView/scrollTop 生效）
+      setTimeout(() => { isRestoringIORef.current = false; }, 500);
     }, 100);
 
-    return () => clearTimeout(timer);
+    return () => { clearTimeout(timer); isRestoringIORef.current = false; };
   }, [novelId, enabled, chapters, initialChapterId, initialChapterOffset, scrollToChapter]);
 
   // ── IntersectionObserver：章节检测（带去重）────────────────────
   const onChapterChangeRef = useRef(onChapterChange);
   onChapterChangeRef.current = onChapterChange;
   const lastDetectedChapterRef = useRef<string | null>(null);
+  // 恢复期间抑制 IO 回调，防止挂载时检测到错误章节
+  const isRestoringIORef = useRef(false);
 
   useEffect(() => {
     if (!enabled) return;
@@ -238,6 +243,7 @@ export function useContinuousScroll({
 
     const observer = new IntersectionObserver(
       (entries) => {
+        if (isRestoringIORef.current) return; // 恢复期间忽略
         // 只取第一个进入视口的章节标记（避免多个同时触发）
         for (const entry of entries) {
           if (entry.isIntersecting) {
