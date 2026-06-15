@@ -165,21 +165,22 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
       viewport.scrollTop = 0;
     }
 
-    // 多次重试确保内容渲染完成后滚动位置正确
+    // 多次 rAF 重试确保内容渲染完成后滚动位置正确
+    let cancelled = false;
     let retryCount = 0;
     const maxRetries = 5;
     let lastScrollHeight = viewport.scrollHeight;
 
     const retry = () => {
-      if (retryCount >= maxRetries) {
-        isTransitioningRef.current = false;
+      if (cancelled || retryCount >= maxRetries) {
+        if (!cancelled) isTransitioningRef.current = false;
         return;
       }
       retryCount++;
       requestAnimationFrame(() => {
-        if (!viewport) return;
+        if (cancelled) return;
         const newScrollHeight = viewport.scrollHeight;
-        // scrollHeight 还在变化，说明内容还在渲染，继续重试
+        // scrollHeight 还在变化或前 2 次强制重试
         if (newScrollHeight !== lastScrollHeight || retryCount <= 2) {
           lastScrollHeight = newScrollHeight;
           if (direction === "bottom") {
@@ -188,7 +189,6 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
             viewport.scrollTop = 0;
           }
         }
-        // 最后一次重试后解锁
         if (retryCount >= maxRetries) {
           isTransitioningRef.current = false;
         } else {
@@ -197,6 +197,9 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
       });
     };
     retry();
+
+    // 清理：取消未完成的 rAF 重试
+    return () => { cancelled = true; };
   }, [chapter?.id, isPaginated]);
 
   // 章节切换（含懒加载）
