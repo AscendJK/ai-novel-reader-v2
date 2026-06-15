@@ -182,6 +182,8 @@ export function useContinuousScroll({
   const prevEnabledRef = useRef(enabled);
   const prevChaptersLenRef = useRef(0);
   const hasRestoredRef = useRef(false);
+  // 用 ref 锁定恢复目标，防止 IO 改变 selectedChapterId 后 effect 重新计算目标
+  const restoreTargetRef = useRef<{ chapterId: string; offset?: number } | null>(null);
 
   useEffect(() => {
     if (!enabled || !novelId) {
@@ -189,6 +191,8 @@ export function useContinuousScroll({
       prevEnabledRef.current = enabled;
       prevChaptersLenRef.current = 0;
       hasRestoredRef.current = false;
+      restoreTargetRef.current = null;
+      isRestoringIORef.current = false;
       return;
     }
 
@@ -206,27 +210,35 @@ export function useContinuousScroll({
     const justEntered = prevLen === 0 && curLen > 0;
     if (novelChanged || modeChanged || justEntered) {
       hasRestoredRef.current = false;
+      restoreTargetRef.current = null;
     }
 
     // 已恢复或无章节可恢复
     if (hasRestoredRef.current || curLen === 0) return;
 
-    // 使用传入的 initialChapterId，或回退到第一个章节
-    const targetChapterId = initialChapterId && chapters.some(c => c.id === initialChapterId)
-      ? initialChapterId
-      : chapters[0]?.id;
-    if (!targetChapterId) return;
+    // 首次进入此 effect 分支时锁定恢复目标（不随 prop 变化）
+    if (!restoreTargetRef.current) {
+      const targetChapterId = initialChapterId && chapters.some(c => c.id === initialChapterId)
+        ? initialChapterId
+        : chapters[0]?.id;
+      if (!targetChapterId) return;
+      restoreTargetRef.current = { chapterId: targetChapterId, offset: initialChapterOffset };
+    }
+
+    const { chapterId: targetChapterId, offset: targetOffset } = restoreTargetRef.current;
 
     // 延迟恢复，确保 DOM 已更新
     isRestoringIORef.current = true; // 抑制 IO 回调
     const timer = setTimeout(() => {
       hasRestoredRef.current = true;
-      scrollToChapter(targetChapterId, initialChapterOffset);
-      // 恢复完成后解锁 IO（延迟足够让 scrollIntoView/scrollTop 生效）
+      restoreTargetRef.current = null;
+      scrollToChapter(targetChapterId, targetOffset);
+      // 恢复完成后解锁 IO（延迟足够让 scrollTop 生效）
       setTimeout(() => { isRestoringIORef.current = false; }, 500);
     }, 100);
 
-    return () => { clearTimeout(timer); isRestoringIORef.current = false; };
+    // cleanup 不重置 isRestoringIORef，防止 IO 在恢复间隙触发
+    return () => { clearTimeout(timer); };
   }, [novelId, enabled, chapters, initialChapterId, initialChapterOffset, scrollToChapter]);
 
   // ── IntersectionObserver：章节检测（带去重）────────────────────
