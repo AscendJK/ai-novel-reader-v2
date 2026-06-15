@@ -150,18 +150,15 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     if (scrollRef.current) {
       const viewport = scrollRef.current.querySelector("[data-radix-scroll-area-viewport]");
       if (!viewport) return;
-      if (scrollDirectionRef.current === "bottom") {
-        // 从上一章切换来，等待内容渲染后滚动到底部
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            viewport.scrollTop = viewport.scrollHeight;
-          });
-        });
-      } else {
-        // 从下一章切换来，滚动到顶部
-        viewport.scrollTop = 0;
-      }
-      scrollDirectionRef.current = "top";
+      // 使用 setTimeout 确保 DOM 更新完成后再设置滚动位置
+      setTimeout(() => {
+        if (scrollDirectionRef.current === "bottom") {
+          viewport.scrollTop = viewport.scrollHeight;
+        } else {
+          viewport.scrollTop = 0;
+        }
+        scrollDirectionRef.current = "top";
+      }, 50);
     }
   }, [chapter?.id, isPaginated]);
 
@@ -199,8 +196,8 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     scrollDirectionRef.current = "top";
     try {
       await goToChapter(nextChapter.id);
-      // 等待内容渲染完成后解锁，并添加延迟防止竞态
-      await new Promise<void>(resolve => setTimeout(resolve, 500));
+      // 等待内容渲染完成后解锁（缩短延迟提升流畅度）
+      await new Promise<void>(resolve => setTimeout(resolve, 100));
     } finally {
       isLoadingChapterRef.current = false;
     }
@@ -212,8 +209,8 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     scrollDirectionRef.current = "bottom";
     try {
       await goToChapter(prevChapter.id);
-      // 等待内容渲染完成后解锁，并添加延迟防止竞态
-      await new Promise<void>(resolve => setTimeout(resolve, 500));
+      // 等待内容渲染完成后解锁（缩短延迟提升流畅度）
+      await new Promise<void>(resolve => setTimeout(resolve, 100));
     } finally {
       isLoadingChapterRef.current = false;
     }
@@ -232,8 +229,8 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
       rafId = requestAnimationFrame(() => {
         rafId = null;
         const now = Date.now();
-        // 防抖：500ms 内不重复触发
-        if (now - lastScrollTime < 500) return;
+        // 防抖：200ms 内不重复触发（降低延迟提升流畅度）
+        if (now - lastScrollTime < 200) return;
         const { scrollTop, scrollHeight, clientHeight } = viewport;
         // 滚动到底部（距离 < 100px）→ 加载下一章
         if (scrollHeight - scrollTop - clientHeight < 100) {
@@ -304,7 +301,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   }, [isPaginated, prevChapter, nextChapter, goToChapter, fontSize, setFontSize, onToggleImmersive]);
   useKeyboardShortcuts(readingShortcuts);
 
-  // 触摸滑动
+  // 触摸滑动（增加垂直方向容差，避免滚动时误触发翻页）
   const handleTouchStart = (e: React.TouchEvent) => {
     touchRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
   };
@@ -312,7 +309,8 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     if (!touchRef.current) return;
     const dx = e.changedTouches[0].clientX - touchRef.current.x;
     const dy = e.changedTouches[0].clientY - touchRef.current.y;
-    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
+    // 水平滑动距离 > 50px 且水平位移明显大于垂直位移（1.5倍容差）
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
       dx < 0 ? goNextPage() : goPrevPage();
     }
     touchRef.current = null;
@@ -449,13 +447,13 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
             <div className="h-full flex justify-center">
               <div className="h-full flex" style={{ width: pageWidth * 2 + SPINE_WIDTH }}>
                 <div className="overflow-hidden flex-1" style={{ padding: `${activePadding}px` }}>
-                  <div className="prose prose-neutral dark:prose-invert max-w-none" style={textStyles}>
+                  <div className="prose prose-neutral dark:prose-invert max-w-none chapter-fade-in" style={textStyles} key={`${chapter.id}-${safePage}`}>
                     {totalPages > 0 ? renderPage(leftPage) : renderPage({ startIndex: 0, endIndex: contentParagraphs.length - 1 })}
                   </div>
                 </div>
                 <div className="w-px bg-border/30 shrink-0" />
                 <div className="overflow-hidden flex-1" style={{ padding: `${activePadding}px` }}>
-                  <div className="prose prose-neutral dark:prose-invert max-w-none" style={textStyles}>
+                  <div className="prose prose-neutral dark:prose-invert max-w-none chapter-fade-in" style={textStyles} key={`${chapter.id}-${safePage}-r`}>
                     {totalPages > 0 ? renderPage(rightPage) : null}
                   </div>
                 </div>
@@ -465,7 +463,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
             // 单页模式
             <div className="flex-1 min-h-0 overflow-hidden" style={{ padding: `${activePadding}px` }}>
               <div className="mx-auto overflow-hidden" style={{ width: contentWidth || "100%", maxWidth: MAX_SINGLE_WIDTH }}>
-                <div className="prose prose-neutral dark:prose-invert max-w-none" style={textStyles}>
+                <div className="prose prose-neutral dark:prose-invert max-w-none chapter-fade-in" style={textStyles} key={`${chapter.id}-${safePage}`}>
                   {totalPages > 0 ? renderPage(leftPage) : renderPage({ startIndex: 0, endIndex: contentParagraphs.length - 1 })}
                 </div>
               </div>
@@ -513,11 +511,10 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
         isIndexLoading={isIndexLoading}
       />
 
-      {/* 内容区 */}
-      <div className="flex-1 flex flex-col min-h-0"
-        onClick={() => { if (typeof window !== "undefined" && window.innerWidth < 768) onToggleImmersive(); }}>
+      {/* 内容区（滚动模式下移动端不响应点击切换沉浸，避免滚动误触） */}
+      <div className="flex-1 flex flex-col min-h-0">
         <ScrollArea className="flex-1 min-h-0" ref={scrollRef}>
-          <div className="p-6 max-w-3xl mx-auto pb-20">
+          <div className="p-6 max-w-3xl mx-auto pb-24 md:pb-20 chapter-fade-in" key={chapter.id}>
             {summaries.length > 0 && (
               <div className="mb-4 flex flex-wrap gap-2">
                 {summaries.map((s) => (
@@ -644,7 +641,7 @@ function TopBar(props: {
               <Type className="h-4 w-4" />
             </Button>
           {showFontPanel && (
-            <div className="absolute right-0 top-full mt-1 p-3 rounded-lg border bg-card shadow-lg z-20 flex flex-col gap-2 min-w-[200px]"
+            <div className="absolute right-0 top-full mt-1 p-3 rounded-lg border bg-card shadow-lg z-20 flex flex-col gap-2 min-w-[220px]"
               onClick={(e) => e.stopPropagation()}>
               {/* 阅读模式 */}
               <div className="flex items-center justify-between gap-2">
@@ -674,27 +671,27 @@ function TopBar(props: {
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs text-muted-foreground">字号</span>
                 <div className="flex items-center gap-1">
-                  <Button variant="outline" size="icon" className="h-6 w-6" disabled={fontSize <= 12}
+                  <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={fontSize <= 12}
                     onClick={() => setFontSize(Math.max(12, fontSize - 1))}><Minus className="h-3 w-3" /></Button>
                   <span className="text-xs w-7 text-center tabular-nums">{fontSize}</span>
-                  <Button variant="outline" size="icon" className="h-6 w-6" disabled={fontSize >= 24}
+                  <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={fontSize >= 24}
                     onClick={() => setFontSize(Math.min(24, fontSize + 1))}><Plus className="h-3 w-3" /></Button>
                 </div>
               </div>
               {/* 粗细 */}
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs text-muted-foreground">粗细</span>
-                <Button variant="outline" size="sm" className="h-6 text-xs"
+                <Button variant="outline" size="sm" className="h-8 min-h-[44px] md:min-h-0 md:h-6 text-xs"
                   onClick={cycleFontWeight}>{currentWeightLabel}</Button>
               </div>
               {/* 行距 */}
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs text-muted-foreground">行距</span>
                 <div className="flex items-center gap-1">
-                  <Button variant="outline" size="icon" className="h-6 w-6" disabled={lineHeight <= 1.2}
+                  <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={lineHeight <= 1.2}
                     onClick={() => setLineHeight(lineHeight - 0.1)}><Minus className="h-3 w-3" /></Button>
                   <span className="text-xs w-7 text-center tabular-nums">{lineHeight.toFixed(1)}</span>
-                  <Button variant="outline" size="icon" className="h-6 w-6" disabled={lineHeight >= 2.4}
+                  <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={lineHeight >= 2.4}
                     onClick={() => setLineHeight(lineHeight + 0.1)}><Plus className="h-3 w-3" /></Button>
                 </div>
               </div>
@@ -702,10 +699,10 @@ function TopBar(props: {
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs text-muted-foreground">段距</span>
                 <div className="flex items-center gap-1">
-                  <Button variant="outline" size="icon" className="h-6 w-6" disabled={paragraphSpacing <= 0}
+                  <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={paragraphSpacing <= 0}
                     onClick={() => setParagraphSpacing(paragraphSpacing - 2)}><Minus className="h-3 w-3" /></Button>
                   <span className="text-xs w-7 text-center tabular-nums">{paragraphSpacing}</span>
-                  <Button variant="outline" size="icon" className="h-6 w-6" disabled={paragraphSpacing >= 20}
+                  <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={paragraphSpacing >= 20}
                     onClick={() => setParagraphSpacing(paragraphSpacing + 2)}><Plus className="h-3 w-3" /></Button>
                 </div>
               </div>
@@ -753,7 +750,7 @@ function BottomNav(props: {
   return (
     <div
       ref={ref}
-      className={`border-t bg-card px-4 py-2.5 relative flex items-center justify-between shrink-0 ${immersive ? "pb-2.5" : "md:pb-2.5 pb-16"}`}
+      className={`border-t bg-card px-4 py-2.5 relative flex items-center justify-between shrink-0 safe-area-bottom ${immersive ? "pb-2.5" : "md:pb-2.5 pb-16"}`}
       onClick={(e) => e.stopPropagation()}
     >
       <Button variant="outline" size="sm" disabled={prevDisabled || loadingChapter !== null}

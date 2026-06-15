@@ -52,7 +52,7 @@ export function ReadingPanel() {
 
       {/* Mobile: bottom bar — hidden in immersive mode */}
       {!immersive && (
-      <div className="md:hidden fixed bottom-0 left-0 right-0 h-12 border-t bg-card flex items-center justify-around z-30 px-2">
+      <div className="md:hidden fixed bottom-0 left-0 right-0 h-12 border-t bg-card flex items-center justify-around z-30 px-2 safe-area-bottom">
         <button onClick={() => setMobileNavOpen(true)}
           className="flex flex-col items-center gap-0.5 text-xs text-muted-foreground hover:text-primary">
           <List className="h-4 w-4" />目录
@@ -107,7 +107,7 @@ export function ReadingPanel() {
       {mobileNavOpen && (
         <>
           <div className="md:hidden fixed inset-0 bg-black/40 z-40" onClick={() => setMobileNavOpen(false)} />
-          <div className="md:hidden fixed inset-y-0 left-0 w-64 bg-card z-50 shadow-xl animate-in slide-in-from-left">
+          <div className="md:hidden fixed inset-y-0 left-0 w-[min(280px,80vw)] bg-card z-50 shadow-xl animate-in slide-in-from-left">
             <div className="flex items-center justify-between p-3 border-b">
               <span className="font-semibold text-sm">目录</span>
               <button onClick={() => setMobileNavOpen(false)} className="p-1 rounded hover:bg-accent"><X className="h-4 w-4" /></button>
@@ -126,7 +126,7 @@ export function ReadingPanel() {
             <button onClick={() => setMobileAiOpen(false)} className="p-1 rounded hover:bg-accent"><X className="h-4 w-4" /></button>
           </div>
           <div className="flex-1 min-h-0">
-            <SummaryPanel key={mobileAiTab} defaultTab={mobileAiTab} />
+            <SummaryPanel value={mobileAiTab} onValueChange={setMobileAiTab} />
           </div>
         </div>
     </div>

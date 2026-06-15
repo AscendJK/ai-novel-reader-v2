@@ -119,7 +119,9 @@ export const useUIStore = create<UIState>((set) => ({
   },
 
   setLineHeight: (v) => {
-    const clamped = Math.max(1.2, Math.min(2.4, v));
+    // 修正浮点精度：先取整到 1 位小数，再限制范围
+    const rounded = Math.round(v * 10) / 10;
+    const clamped = Math.max(1.2, Math.min(2.4, rounded));
     safeSet("novel-reader-line-height", String(clamped));
     set({ lineHeight: clamped });
   },

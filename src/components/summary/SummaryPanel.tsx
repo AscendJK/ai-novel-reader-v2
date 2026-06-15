@@ -22,7 +22,19 @@ import { DataMgr } from "./shared";
 import { useNotes, useQA, useSearch } from "./hooks";
 import { QATab, ChapterTab, BookTab, NotesTab, SearchTab } from "./tabs";
 
-export function SummaryPanel({ defaultTab = "chapter" }: { defaultTab?: string }) {
+export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: { defaultTab?: string; value?: string; onValueChange?: (v: string) => void }) {
+  // 受控/非受控 tab 状态
+  const [internalTab, setInternalTab] = useState(defaultTab);
+  const tabValue = value ?? internalTab;
+  const setTabValue = (v: string) => {
+    setInternalTab(v);
+    onValueChange?.(v);
+  };
+  // 外部 value 变化时同步内部状态
+  useEffect(() => {
+    if (value !== undefined) setInternalTab(value);
+  }, [value]);
+
   // Book sub-items: "timeline" | "characters" | "global" | null
   const [bookSub, setBookSub] = useState<string | null>(null);
   const [dataOpen, setDataOpen] = useState(false);
@@ -283,7 +295,7 @@ export function SummaryPanel({ defaultTab = "chapter" }: { defaultTab?: string }
       )}
 
       {/* Fixed tabs — always visible */}
-      <Tabs defaultValue={defaultTab} className="flex flex-col flex-1 min-h-0">
+      <Tabs value={tabValue} onValueChange={setTabValue} className="flex flex-col flex-1 min-h-0">
         <div className="shrink-0 px-2.5 pt-2 border-b">
           <TabsList className="w-full">
             <TabsTrigger value="qa" className="text-xs h-7 flex-1">问答</TabsTrigger>
