@@ -308,6 +308,7 @@ export function useContinuousScroll({
 
     const edgeObserver = new IntersectionObserver(
       (entries) => {
+        if (isRestoringIORef.current) return; // 恢复/抑制期间忽略
         for (const entry of entries) {
           if (!entry.isIntersecting) continue;
           if (entry.target === topSentinel) {
