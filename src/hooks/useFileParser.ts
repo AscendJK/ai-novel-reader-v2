@@ -68,6 +68,12 @@ export function useFileParser() {
       setProgress(90);
       await saveNovel(novel);
 
+      // 内容变更后清除旧的 RAG 缓存（重新上传同 ID 小说时避免使用过期索引）
+      try {
+        const { clearCache } = await import("@/rag/index");
+        clearCache(novel.id);
+      } catch { /* ignore */ }
+
       // Upload to server + auto-join
       apiFetch(`/api/novels`, {
         method: "POST",

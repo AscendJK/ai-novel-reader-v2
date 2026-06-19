@@ -60,12 +60,13 @@ export interface RAGCacheRecord {
   novelId: string;      // raw novel UUID
   engine: string;
   vectorsBuffer: ArrayBuffer;  // Float32Array 二进制数据
-  chunks: { id: string; content: string }[];
+  chunks: { id: string; content: string; chapterIndex?: number }[];
   dim: number;
   chunkCount: number;   // chunk 数量
   createdAt: number;
   lastAccessed?: number;  // 最后访问时间（用于智能淘汰）
   accessCount?: number;   // 访问次数（用于智能淘汰）
+  extraData?: string;     // JSON 序列化的附加数据（TF-IDF 存 idfMap）
 }
 
 export interface MapRecord {

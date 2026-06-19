@@ -27,8 +27,11 @@ export class Retriever {
   private docs: DocVector[] = [];
   private idf = new Map<string, number>();
   private averageDocLength = 0;
+  private chunks: Chunk[] = [];
 
-  constructor(private documents: Chunk[]) {
+  constructor(documents: Chunk[]) {
+    void 0; // placeholder for empty constructor call from fromCache()
+    this.chunks = documents;
     const docCount = documents.length;
 
     // Count document frequency for each token
@@ -90,6 +93,40 @@ export class Retriever {
 
       this.docs.push({ id: documents[i].id, vector });
     }
+  }
+
+  /** 从缓存数据重建 Retriever（跳过全量计算） */
+  static fromCache(chunks: Chunk[], vectorsBuffer: ArrayBuffer, idfMapJson: string): Retriever {
+    const r = new Retriever([]);
+    r.chunks = chunks;
+    r.idf = new Map(Object.entries(JSON.parse(idfMapJson)));
+    r.averageDocLength = 1; // 不影响搜索，仅影响构建时的 TF 归一化
+
+    const f32 = new Float32Array(vectorsBuffer);
+    const dim = 128;
+    for (let i = 0; i < chunks.length; i++) {
+      const vector = new Float64Array(dim);
+      for (let j = 0; j < dim; j++) {
+        vector[j] = f32[i * dim + j];
+      }
+      r.docs.push({ id: chunks[i].id, vector });
+    }
+    return r;
+  }
+
+  /** 序列化为可存入 ragCache 的格式 */
+  toCache(): { vectorsBuffer: ArrayBuffer; extraData: string } {
+    const dim = 128;
+    const f32 = new Float32Array(this.docs.length * dim);
+    for (let i = 0; i < this.docs.length; i++) {
+      for (let j = 0; j < dim; j++) {
+        f32[i * dim + j] = this.docs[i].vector[j];
+      }
+    }
+    return {
+      vectorsBuffer: f32.buffer,
+      extraData: JSON.stringify(Object.fromEntries(this.idf)),
+    };
   }
 
   private hashToken(token: string): number {

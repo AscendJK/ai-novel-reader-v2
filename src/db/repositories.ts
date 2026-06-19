@@ -197,12 +197,16 @@ export async function deleteNovel(novelId: string): Promise<void> {
       }
       await udb.novels.delete(novelId);
     });
-    // Clean up shared data (ragCache)
+    // Clean up shared data (ragCache + in-memory indexCache)
     const cacheEntries = await sharedDB.ragCache.where("novelId").equals(novelId).toArray();
     for (const entry of cacheEntries) {
       await sharedDB.ragCache.delete(entry.id);
       useRAGStore.getState().removeCachedKey(entry.id);
     }
+    try {
+      const { clearCache } = await import("@/rag/index");
+      clearCache(novelId);
+    } catch { /* ignore import errors */ }
 
     try {
       const user = localStorage.getItem("sync-username");

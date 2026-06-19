@@ -5,7 +5,7 @@ import { isEmbeddingEngine } from "./engines";
 import { ragLog } from "@/lib/logger";
 import { sharedDB as db } from "@/db/database";
 import { useRAGStore } from "@/stores/rag-store";
-import { updateRagCacheSize } from "./rag-cache-utils";
+import { updateRagCacheSize, updateAccessTime } from "./rag-cache-utils";
 import { normalizeChunks } from "./chunk-utils";
 
 export { updateRagCacheSize } from "./rag-cache-utils";
@@ -27,8 +27,8 @@ const buildingNow = new Set<string>();
 // LRU eviction only clears memory. IndexedDB is managed by its own quota.
 onLRUEvict((evictedKey) => {
   const entry = indexCache.get(evictedKey);
-  if (entry?.embedding) {
-    entry.embedding.dispose();
+  if (entry) {
+    entry.embedding?.dispose();
     indexCache.delete(evictedKey);
   }
   useRAGStore.getState().removeLruKey(evictedKey);
@@ -77,6 +77,24 @@ export async function buildIndex(
         return emb;
       }
     } catch (e) { ragLog(`缓存加载异常: ${e}`); }
+  }
+
+  // TF-IDF 缓存检查（与嵌入引擎共用 ragCache 表）
+  if (engine === "tfidf") {
+    try {
+      const cached = await db.ragCache.get(cacheKey);
+      if (cached && cached.vectorsBuffer && cached.dim > 0 && cached.chunks?.length > 0 && cached.extraData) {
+        const chunks = normalizeChunks(cached.chunks);
+        const retriever = Retriever.fromCache(chunks, cached.vectorsBuffer, cached.extraData);
+        ragLog(`TF-IDF 从缓存加载: ${chunks.length}片段`);
+        useRAGStore.getState().addCachedKey(cacheKey);
+        useRAGStore.getState().addLruKey(cacheKey);
+        updateAccessTime(novelId, "tfidf");
+        const entry: IndexEntry = { novelId, engine, retriever, chunks, buildTime: 0 };
+        indexCache.set(cacheKey, entry);
+        return retriever;
+      }
+    } catch (e) { ragLog(`TF-IDF 缓存加载异常: ${e}`); }
   }
 
   // cacheOnly: only read from cache, don't trigger a build
@@ -128,8 +146,26 @@ export async function buildIndex(
       indexCache.set(cacheKey, entry);
       return emb;
     } else {
+      onProgress?.("正在构建 TF-IDF 索引...");
       const retriever = new Retriever(chunks);
       ragLog(`TF-IDF 索引就绪: ${chunks.length}片段 · ${(Date.now() - t0)}ms`);
+
+      // 持久化到 ragCache（下次直接加载，无需重新构建）
+      try {
+        const { vectorsBuffer, extraData } = retriever.toCache();
+        await db.ragCache.put({
+          id: cacheKey, novelId, engine: "tfidf",
+          vectorsBuffer, chunks, dim: 128, chunkCount: chunks.length,
+          extraData, createdAt: Date.now(), lastAccessed: Date.now(), accessCount: 1,
+        });
+        useRAGStore.getState().addCachedKey(cacheKey);
+        useRAGStore.getState().addLruKey(cacheKey);
+        ragLog(`TF-IDF 已缓存: ${chunks.length}片段`);
+        // 清理超限缓存
+        const { enforceIndexedDBQuota } = await import("./rag-cache-utils");
+        await enforceIndexedDBQuota();
+      } catch (e) { ragLog(`TF-IDF 缓存写入失败: ${e}`); }
+
       const entry: IndexEntry = { novelId, engine, retriever, chunks, buildTime: Date.now() - t0 };
       indexCache.set(cacheKey, entry);
       return retriever;

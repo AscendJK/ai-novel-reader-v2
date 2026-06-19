@@ -109,6 +109,12 @@ export function BookSelect() {
           }
           if (entry.vectorsBuffer && entry.dim && entry.chunkCount) {
             totalBytes += entry.chunkCount * entry.dim * 4;
+            if (entry.chunks && entry.chunks.length > 0) {
+              totalBytes += entry.chunks.reduce((s: number, c: { content?: string }) => s + (c.content?.length || 0) * 2, 0);
+            }
+            if (entry.extraData) {
+              totalBytes += entry.extraData.length * 2;
+            }
           }
         }
         useRAGStore.getState().updateRagCacheSize(totalBytes);
@@ -759,6 +765,32 @@ export function BookSelect() {
                             </Button>
                           </div>
                         );
+                      })()}
+
+                      {/* TF-IDF 缓存状态 */}
+                      {engine === "tfidf" && (() => {
+                        const tfidfKey = `${novel.id}-tfidf`;
+                        const inMemory = lruKeys.has(tfidfKey);
+                        const inIndexedDB = cachedKeys.has(tfidfKey);
+                        if (inMemory) {
+                          return (
+                            <div className="flex items-center gap-1 mt-2 pt-2 border-t border-border/50">
+                              <Badge variant="outline" className="text-[10px] text-green-500 border-green-500/30">
+                                TF-IDF 已加载
+                              </Badge>
+                            </div>
+                          );
+                        }
+                        if (inIndexedDB) {
+                          return (
+                            <div className="flex items-center gap-1 mt-2 pt-2 border-t border-border/50">
+                              <Badge variant="outline" className="text-[10px] text-yellow-600 border-yellow-500/30">
+                                TF-IDF 已缓存
+                              </Badge>
+                            </div>
+                          );
+                        }
+                        return null;
                       })()}
                     </CardContent>
                   </Card>

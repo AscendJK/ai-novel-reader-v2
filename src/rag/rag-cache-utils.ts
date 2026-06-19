@@ -11,7 +11,7 @@ import { ragLog } from "@/lib/logger";
 // 缓存大小计算
 // ============================================================
 
-/** Compute total size of all ragCache entries in bytes (vectors only) */
+/** Compute total size of all ragCache entries in bytes */
 export async function computeRagCacheSize(): Promise<number> {
   try {
     const all = await db.ragCache.toArray();
@@ -24,6 +24,10 @@ export async function computeRagCacheSize(): Promise<number> {
         if (entry.chunks && entry.chunks.length > 0) {
           const chunksSize = entry.chunks.reduce((sum, c) => sum + (c.content?.length || 0) * 2, 0);
           total += chunksSize;
+        }
+        // extraData 大小（TF-IDF 的 idfMap 等）
+        if (entry.extraData) {
+          total += entry.extraData.length * 2; // UTF-16
         }
       }
     }
@@ -122,12 +126,15 @@ async function evictSmartestRagCacheEntry(skipNovelId?: string): Promise<{ freed
     scored.sort((a, b) => b.score - a.score);
 
     const toEvict = scored[0].entry;
-    // 与 computeRagCacheSize 保持一致：向量 + 文本 chunk 都计入
+    // 与 computeRagCacheSize 保持一致：向量 + 文本 chunk + extraData 都计入
     let size = toEvict.vectorsBuffer && toEvict.dim && toEvict.chunkCount
       ? toEvict.chunkCount * toEvict.dim * 4
       : 0;
     if (toEvict.chunks && toEvict.chunks.length > 0) {
       size += toEvict.chunks.reduce((sum, c) => sum + (c.content?.length || 0) * 2, 0);
+    }
+    if (toEvict.extraData) {
+      size += toEvict.extraData.length * 2;
     }
 
     await db.ragCache.delete(toEvict.id);
