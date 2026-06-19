@@ -21,7 +21,10 @@ class CharacterAnalysisAgent extends BaseAgent {
     const { novel, provider, budget } = env;
 
     const chapterList = novel.chapters
-      .map((c, i) => `${i + 1}. ${c.title} (${c.content.length.toLocaleString()}字)`)
+      .map((c, i) => {
+        const charCount = c.content.length;
+        return charCount > 0 ? `${i + 1}. ${c.title} (${charCount.toLocaleString()}字)` : `${i + 1}. ${c.title}`;
+      })
       .join("\n");
 
     const { content: relevantContent, label: promptLabel } = getRelevantContent(context, novel.chapters);
@@ -94,7 +97,10 @@ class TimelineAgent extends BaseAgent {
     const { novel, provider, budget } = env;
 
     const chapterList = novel.chapters
-      .map((c, i) => `${i + 1}. ${c.title} (${c.content.length.toLocaleString()}字)`)
+      .map((c, i) => {
+        const charCount = c.content.length;
+        return charCount > 0 ? `${i + 1}. ${c.title} (${charCount.toLocaleString()}字)` : `${i + 1}. ${c.title}`;
+      })
       .join("\n");
 
     const { content: relevantContent, label: promptLabel } = getRelevantContent(context, novel.chapters);

@@ -59,12 +59,15 @@ export abstract class BaseAgent implements Agent {
 
   /**
    * 准备运行环境
+   * 当 preRetrieved 已有内容时，只加载章节目录不加载内容（减少内存占用）
+   * 子类可覆写此方法强制加载全书内容（如 SummarizerAgent）
    */
   protected async prepareEnvironment(context: AgentContext): Promise<
     | { success: true; novel: Novel; provider: AIProvider; budget: TokenBudget }
     | { success: false; error: string }
   > {
-    return prepareAgentContext(context);
+    const hasRetrieved = !!context.preRetrieved && context.preRetrieved.length >= 100;
+    return prepareAgentContext(context, { loadAllContent: hasRetrieved ? false : undefined });
   }
 
   /**
@@ -92,7 +95,8 @@ export function createSimpleAgent(
     name,
     description,
     async run(context: AgentContext): Promise<AgentResult> {
-      const envResult = await prepareAgentContext(context);
+      const hasRetrieved = !!context.preRetrieved && context.preRetrieved.length >= 100;
+      const envResult = await prepareAgentContext(context, { loadAllContent: hasRetrieved ? false : undefined });
       if (!envResult.success) {
         return { success: false, error: envResult.error };
       }

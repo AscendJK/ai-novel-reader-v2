@@ -116,7 +116,7 @@ export function getRelevantContent(
   context: AgentContext,
   chapters: Array<{ title: string; content: string }>
 ): { content: string; label: string } {
-  if (context.preRetrieved && context.preRetrieved.length > 100) {
+  if (context.preRetrieved && context.preRetrieved.length >= 100) {
     return { content: context.preRetrieved, label: "语义检索相关段落" };
   }
   return { content: sampleChaptersContent(chapters), label: "内容样本" };

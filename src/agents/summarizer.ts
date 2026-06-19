@@ -7,7 +7,7 @@ import { TaskType } from "./types";
 import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
 import { buildChapterSummaryPrompt } from "@/lib/prompt-templates";
-import { sampleChapterContent } from "./utils";
+import { sampleChapterContent, prepareAgentContext } from "./utils";
 import { estimateTokens } from "@/api/token-manager";
 import { APIError } from "@/api/error-handler";
 
@@ -18,6 +18,11 @@ class SummarizerAgent extends BaseAgent {
   name = "summarizer";
   description = "生成章节摘要或全书总结";
   taskType = TaskType.CHAPTER as const;
+
+  /** 章节总结需要读取原文内容，强制加载全书 */
+  protected async prepareEnvironment(context: AgentContext) {
+    return prepareAgentContext(context, { loadAllContent: true });
+  }
 
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider, budget } = env;
@@ -113,11 +118,16 @@ class GlobalSummarizerAgent extends BaseAgent {
 
     // Build a prompt with metadata + chapter structure + content samples
     const chapterList = novel.chapters
-      .map((c, i) => `${i + 1}. ${c.title} (${c.content.length.toLocaleString()} 字)`)
+      .map((c, i) => {
+        const charCount = c.content.length;
+        return charCount > 0
+          ? `${i + 1}. ${c.title} (${charCount.toLocaleString()} 字)`
+          : `${i + 1}. ${c.title}`;
+      })
       .join("\n");
 
     // Use pre-retrieved relevant text from RAG if available, else fall back to samples
-    const relevantContent = context.preRetrieved && context.preRetrieved.length > 100
+    const relevantContent = context.preRetrieved && context.preRetrieved.length >= 100
       ? context.preRetrieved
       : this.sampleChapters(novel.chapters);
 
