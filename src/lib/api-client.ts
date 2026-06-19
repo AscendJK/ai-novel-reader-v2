@@ -24,7 +24,14 @@ export function setServerUrl(url: string): void {
   if (!/^https?:\/\//i.test(url)) {
     url = "http://" + url;
   }
-  localStorage.setItem(SERVER_URL_KEY, url.replace(/\/+$/, "")); // 移除末尾斜杠
+  // 移除末尾斜杠
+  url = url.replace(/\/+$/, "");
+  // 如果没有端口号，自动补全 :5173
+  const afterProtocol = url.replace(/^https?:\/\//i, "");
+  if (!afterProtocol.includes(":")) {
+    url += ":5173";
+  }
+  localStorage.setItem(SERVER_URL_KEY, url);
 }
 
 /**
@@ -80,6 +87,11 @@ export async function checkServerReachable(url: string): Promise<boolean> {
     // 确保 URL 有协议头
     if (!/^https?:\/\//i.test(url)) {
       url = "http://" + url;
+    }
+    // 自动补全端口
+    const afterProtocol = url.replace(/^https?:\/\//i, "");
+    if (!afterProtocol.includes(":")) {
+      url += ":5173";
     }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000); // 5秒超时

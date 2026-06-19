@@ -124,29 +124,35 @@ export function useSummarizer() {
           }
         }
 
-        // 仅在缓存未命中（降级 TF-IDF）时才加载全书章节
-        // TF-IDF 需要章节内容来构建临时索引
+        // TF-IDF 路径：先检查缓存，缓存未命中时才加载全书
         let chapters = currentNovel.chapters;
         if (engine === "tfidf") {
-          const hasEmptyContent = chapters.some(ch => !ch.content);
-          if (hasEmptyContent && !reloadingRef.current) {
-            reloadingRef.current = true;
-            try {
-              ragLog("TF-IDF 需要章节内容，加载全书...");
-              const fullNovel = await loadNovel(currentNovel.id, undefined, true);
-              if (fullNovel) {
-                chapters = fullNovel.chapters;
-                useNovelStore.getState().setCurrentNovel(fullNovel);
+          // 尝试从缓存加载 TF-IDF 索引
+          try {
+            await buildIndex(currentNovel.id, chapters, "tfidf", undefined, { cacheOnly: true });
+            ragLog(`TF-IDF 索引从缓存加载成功`);
+          } catch {
+            // TF-IDF 缓存未命中，需要加载全书构建索引
+            const hasEmptyContent = chapters.some(ch => !ch.content);
+            if (hasEmptyContent && !reloadingRef.current) {
+              reloadingRef.current = true;
+              try {
+                ragLog("TF-IDF 需要章节内容，加载全书...");
+                const fullNovel = await loadNovel(currentNovel.id, undefined, true);
+                if (fullNovel) {
+                  chapters = fullNovel.chapters;
+                  useNovelStore.getState().setCurrentNovel(fullNovel);
+                }
+              } finally {
+                reloadingRef.current = false;
               }
-            } finally {
-              reloadingRef.current = false;
+            } else if (hasEmptyContent && reloadingRef.current) {
+              ragLog("等待另一个重载完成...");
+              while (reloadingRef.current) {
+                await new Promise(r => setTimeout(r, 50));
+              }
+              chapters = useNovelStore.getState().currentNovel?.chapters || chapters;
             }
-          } else if (hasEmptyContent && reloadingRef.current) {
-            ragLog("等待另一个重载完成...");
-            while (reloadingRef.current) {
-              await new Promise(r => setTimeout(r, 50));
-            }
-            chapters = useNovelStore.getState().currentNovel?.chapters || chapters;
           }
         }
 

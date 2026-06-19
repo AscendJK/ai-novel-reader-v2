@@ -71,7 +71,9 @@ export async function buildIndex(
         const emb = EmbeddingRetriever.fromArrayBuffer(cached.vectorsBuffer, chunks, cached.dim, engine);
 
         useRAGStore.getState().addCachedKey(cacheKey);
+        useRAGStore.getState().addLruKey(cacheKey);
         lruAdd(cacheKey, emb.vectors, chunks, cached.dim);
+        updateAccessTime(novelId, engine);
         const entry: IndexEntry = { novelId, engine, retriever: new Retriever(chunks), embedding: emb, chunks, buildTime: 0 };
         indexCache.set(cacheKey, entry);
         return emb;

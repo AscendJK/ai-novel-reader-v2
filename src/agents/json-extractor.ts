@@ -100,12 +100,29 @@ function extractBalancedJSON(text: string): string | null {
 
 /**
  * 尝试修复被截断的 JSON
- * 从后往前找到最后一个完整位置，然后闭合所有未闭合的括号
+ * 策略1：截断到最后一个完整 token，闭合括号
+ * 策略2：如果策略1失败（截断点在字符串内部），找到最后一个逗号截断
  *
  * @param json 截断的 JSON 字符串
  * @returns 修复后的 JSON 字符串，无法修复返回 null
  */
 function fixTruncatedJson(json: string): string | null {
+  // 策略1：截断到最后一个完整 token，闭合括号
+  const result = tryFixAndClose(json);
+  if (result) return result;
+
+  // 策略2：截断点在字符串内部时，找到最后一个逗号截断（删除不完整的 key-value）
+  const lastComma = json.lastIndexOf(",");
+  if (lastComma > 0) {
+    const result2 = tryFixAndClose(json.slice(0, lastComma));
+    if (result2) return result2;
+  }
+
+  return null;
+}
+
+/** 截断并闭合括号，返回有效 JSON 或 null */
+function tryFixAndClose(json: string): string | null {
   try {
     // 从后往前找，尝试找到最后一个有效的 JSON 位置
     let lastValidPos = json.length;

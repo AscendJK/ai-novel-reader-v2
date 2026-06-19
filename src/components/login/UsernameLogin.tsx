@@ -148,7 +148,7 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
               <div className="relative">
                 <Input
                   ref={inputRef}
-                  placeholder="http://192.168.1.100:5173"
+                  placeholder="192.168.1.100"
                   value={serverUrl}
                   onChange={(e) => setServerUrlState(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleSaveServerUrl()}
@@ -175,7 +175,7 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
                 )}
               </div>
               <p className="text-[10px] text-muted-foreground">
-                输入运行后端服务的电脑 IP 地址和端口
+                输入运行后端服务的电脑 IP 地址（端口 5173 自动补全）
               </p>
               <div className="flex gap-2">
                 <Button

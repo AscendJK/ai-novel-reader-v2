@@ -3,6 +3,7 @@ import { useRAGStore } from "@/stores/rag-store";
 import { useUIStore } from "@/stores/ui-store";
 import { ENGINES } from "@/rag/engines";
 import { ALL_ENGINES, downloadModel, getMirrorId, setMirrorId, getMirrorOptions } from "@/rag/model-loader";
+import { clearCache } from "@/rag/index";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -220,6 +221,22 @@ export function RAGSettings() {
               </div>
             );
           })()}
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-[10px] text-destructive hover:bg-destructive/10"
+              onClick={() => {
+                if (window.confirm("确认清除所有 RAG 索引缓存？清除后需要重新构建。")) {
+                  clearCache();
+                  // 重新计算缓存大小
+                  import("@/rag/rag-cache-utils").then(m => m.updateRagCacheSize());
+                }
+              }}
+            >
+              清除全部缓存
+            </Button>
+          </div>
         </div>
 
         <Separator className="my-4" />

@@ -95,9 +95,10 @@ export class Retriever {
     }
   }
 
-  /** 从缓存数据重建 Retriever（跳过全量计算） */
+  /** 从缓存数据重建 Retriever（跳过构造函数的全量计算） */
   static fromCache(chunks: Chunk[], vectorsBuffer: ArrayBuffer, idfMapJson: string): Retriever {
-    const r = new Retriever([]);
+    const r = Object.create(Retriever.prototype) as Retriever;
+    r.docs = [];
     r.chunks = chunks;
     r.idf = new Map(Object.entries(JSON.parse(idfMapJson)));
     r.averageDocLength = 1; // 不影响搜索，仅影响构建时的 TF 归一化
