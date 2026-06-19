@@ -19,16 +19,16 @@ export async function gatherChanges(lastSyncTime: number): Promise<Partial<SyncD
     ? await udb.notes.where("updatedAt").above(lastSyncTime).toArray()
     : await udb.notes.toArray();
 
-  // maps/graphs: filter by updatedAt and exclude soft-deleted, limit to BATCH_SIZE
+  // maps/graphs: filter by updatedAt, include soft-deleted (deletions must propagate)
   const mapQuery = lastSyncTime > 0
     ? udb.maps.where("updatedAt").above(lastSyncTime)
     : udb.maps.toCollection();
-  const maps = await mapQuery.filter((m) => !m.deleted).limit(BATCH_SIZE).toArray();
+  const maps = await mapQuery.limit(BATCH_SIZE).toArray();
 
   const graphQuery = lastSyncTime > 0
     ? udb.graphs.where("updatedAt").above(lastSyncTime)
     : udb.graphs.toCollection();
-  const graphs = await graphQuery.filter((g) => !g.deleted).limit(BATCH_SIZE).toArray();
+  const graphs = await graphQuery.limit(BATCH_SIZE).toArray();
 
   // 分批：只取前 BATCH_SIZE 条记录
   const summaries = filteredSummaries.slice(0, BATCH_SIZE);
@@ -106,17 +106,17 @@ export async function hasMoreChanges(lastSyncTime: number): Promise<boolean> {
     : await udb.notes.count();
   if (noteCount > BATCH_SIZE) return true;
 
-  // Maps/graphs: load only first BATCH_SIZE+1 non-deleted records
+  // Maps/graphs: include soft-deleted records (deletions must propagate)
   const mapQuery = lastSyncTime > 0
     ? udb.maps.where("updatedAt").above(lastSyncTime)
     : udb.maps.toCollection();
-  const mapSample = await mapQuery.filter((m) => !m.deleted).limit(limit).toArray();
+  const mapSample = await mapQuery.limit(limit).toArray();
   if (mapSample.length > BATCH_SIZE) return true;
 
   const graphQuery = lastSyncTime > 0
     ? udb.graphs.where("updatedAt").above(lastSyncTime)
     : udb.graphs.toCollection();
-  const graphSample = await graphQuery.filter((g) => !g.deleted).limit(limit).toArray();
+  const graphSample = await graphQuery.limit(limit).toArray();
   if (graphSample.length > BATCH_SIZE) return true;
 
   return false;

@@ -166,6 +166,7 @@ export function CharacterGraph({ graphData, onRegenerate }: Props) {
     const maxIterations = 300;
     const chunkSize = 50;
     let iteration = 0;
+    let rafId = 0;
     const runChunk = () => {
       const end = Math.min(iteration + chunkSize, maxIterations);
       for (; iteration < end; iteration++) {
@@ -185,7 +186,8 @@ export function CharacterGraph({ graphData, onRegenerate }: Props) {
         setSimData({ nodes: finalNodes, edges: finalEdges });
       }
     };
-    requestAnimationFrame(runChunk);
+    rafId = requestAnimationFrame(runChunk);
+    return () => cancelAnimationFrame(rafId);
   }, [graphData]);
 
   // Mouse drag handlers for panning

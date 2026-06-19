@@ -53,6 +53,7 @@ export function DataMgr({
       }
     }
     setSummaries((prev) => prev.filter((s) => s.type !== type));
+    syncClient.pushNow();
   };
 
   // 删除图谱

@@ -22,19 +22,24 @@ router.post("/chat", rateLimit(60), async (req, res) => {
     }
 
     const urlObj = new URL(url);
-    const hostname = urlObj.hostname;
+    // 去除 IPv6 方括号，统一处理
+    const hostname = urlObj.hostname.replace(/^\[|\]$/g, "");
     const isPrivateIP =
       hostname === "localhost" ||
       hostname === "127.0.0.1" ||
-      hostname === "[::1]" ||
+      hostname === "::1" ||
       hostname === "0.0.0.0" ||
+      hostname === "::" ||
       hostname.startsWith("169.254.") ||
       hostname.startsWith("10.") ||
       hostname.startsWith("192.168.") ||
       /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
       /^100\.(6[4-9]|[7-9]\d|1[0-2][0-7])\./.test(hostname) || // CGNAT
       hostname.startsWith("fd") || // IPv6 ULA
-      hostname.startsWith("fc");
+      hostname.startsWith("fc") ||
+      hostname.startsWith("fe80") || // IPv6 link-local
+      hostname.startsWith("::ffff:") || // IPv4-mapped IPv6
+      /^::ffff:\d+\.\d+\.\d+\.\d+$/.test(hostname); // IPv4-mapped IPv6 (完整格式)
 
     // HTTP only allowed for LAN/private IPs; external must use HTTPS
     if (url.startsWith("http://") && !isPrivateIP) {
