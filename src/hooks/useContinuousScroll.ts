@@ -187,6 +187,15 @@ export function useContinuousScroll({
     [novelId, chapterIndexMap, addChapters]
   );
 
+  // ── 章节检测相关 refs（声明在恢复 effect 之前，确保可用）──
+  const onChapterChangeRef = useRef(onChapterChange);
+  onChapterChangeRef.current = onChapterChange;
+  const lastDetectedChapterRef = useRef<string | null>(null);
+  // 恢复/导航期间抑制检测，防止中间状态更新目录
+  const suppressChapterDetectionRef = useRef(false);
+  // 抑制解除后的主动检测回调（由章节检测 effect 设置，恢复/suppressIO 调用）
+  const triggerDetectionRef = useRef<(() => void) | null>(null);
+
   // ── 位置恢复：当小说变化或 chapters 从空到非空时恢复阅读位置 ─────────
   const prevNovelIdRef = useRef(novelId);
   const prevEnabledRef = useRef(enabled);
@@ -205,7 +214,7 @@ export function useContinuousScroll({
       prevChaptersLenRef.current = 0;
       hasRestoredRef.current = false;
       restoreTargetRef.current = null;
-      isRestoringIORef.current = false;
+      suppressChapterDetectionRef.current = false;
       return;
     }
 
@@ -241,61 +250,100 @@ export function useContinuousScroll({
     const { chapterId: targetChapterId, offset: targetOffset } = restoreTargetRef.current;
 
     // 延迟恢复，确保 DOM 已更新
-    isRestoringIORef.current = true; // 抑制 IO 回调
-    let innerTimer: ReturnType<typeof setTimeout>;
+    suppressChapterDetectionRef.current = true; // 抑制滚动检测，防止恢复过程中的中间状态
     const timer = setTimeout(() => {
       // 如果已被 suppressIO 标记为已恢复，跳过（用户主动导航了）
-      // 注意：不重置 isRestoringIORef，由 suppressIO 的 release 函数负责
       if (hasRestoredRef.current) return;
       hasRestoredRef.current = true;
       restoreTargetRef.current = null;
       scrollToChapterRef.current(targetChapterId, targetOffset);
-      // 恢复完成后解锁 IO（延迟足够让 scrollTop 生效）
-      innerTimer = setTimeout(() => { isRestoringIORef.current = false; }, 500);
+      // 恢复完成后解锁检测，并主动触发一次（延迟足够让 scrollTop 生效）
+      setTimeout(() => {
+        suppressChapterDetectionRef.current = false;
+        triggerDetectionRef.current?.();
+      }, 500);
     }, 100);
 
-    // cleanup 清除两层 timer，防止 isRestoringIORef 永久锁定
-    return () => { clearTimeout(timer); clearTimeout(innerTimer); };
+    // cleanup：清除外层 timer，并无条件重置 suppress ref
+    // 即使内层 setTimeout 已经启动，cleanup 也会重置 ref，防止永久锁定
+    return () => {
+      clearTimeout(timer);
+      suppressChapterDetectionRef.current = false;
+    };
   }, [novelId, enabled, chapters, initialChapterId, initialChapterOffset]);
 
-  // ── IntersectionObserver：章节检测（带去重）────────────────────
-  const onChapterChangeRef = useRef(onChapterChange);
-  onChapterChangeRef.current = onChapterChange;
-  const lastDetectedChapterRef = useRef<string | null>(null);
-  // 恢复期间抑制 IO 回调，防止挂载时检测到错误章节
-  const isRestoringIORef = useRef(false);
+  // ── 章节检测（scroll 事件 + requestAnimationFrame 节流）────────────
+  // 用 scroll 事件替代 IntersectionObserver，彻底消除"已在视口不触发"的时序问题
 
   useEffect(() => {
     if (!enabled) return;
     const container = containerRef.current;
-    if (!container || loadedChapters.length === 0) return;
+    if (!container) return;
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (isRestoringIORef.current) return; // 恢复期间忽略
-        // 只取第一个进入视口的章节标记（避免多个同时触发）
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            const chapterId = entry.target.getAttribute("data-chapter-id");
-            if (chapterId && chapterId !== lastDetectedChapterRef.current) {
-              lastDetectedChapterRef.current = chapterId;
-              onChapterChangeRef.current(chapterId);
-            }
-            break; // 只处理第一个
+    let rafId = 0;
+
+    const detectCurrentChapter = () => {
+      if (suppressChapterDetectionRef.current) return;
+      const markers = container.querySelectorAll(".chapter-section[data-chapter-id]");
+      if (markers.length === 0) return;
+
+      const containerRect = container.getBoundingClientRect();
+      const zoneTop = containerRect.top + containerRect.height * 0.05;
+      const zoneBottom = containerRect.top + containerRect.height * 0.15;
+
+      // 找到检测区（顶部 5%-15%）内的第一个章节标记
+      for (const el of markers) {
+        const rect = el.getBoundingClientRect();
+        if (rect.top >= zoneTop && rect.top <= zoneBottom) {
+          const chapterId = el.getAttribute("data-chapter-id");
+          if (chapterId && chapterId !== lastDetectedChapterRef.current) {
+            lastDetectedChapterRef.current = chapterId;
+            onChapterChangeRef.current(chapterId);
           }
+          return;
         }
-      },
-      {
-        root: container,
-        rootMargin: "-5% 0px -85% 0px", // 检测顶部 5%-15% 区域
-        threshold: 0,
       }
-    );
 
-    const markers = container.querySelectorAll(".chapter-section[data-chapter-id]");
-    markers.forEach((el) => observer.observe(el));
+      // 检测区内没有章节标记（可能在两个章节之间，或在小说顶部）
+      // 找到检测区上方最近的章节标记
+      let closestId: string | null = null;
+      let closestDist = Infinity;
+      for (const el of markers) {
+        const rect = el.getBoundingClientRect();
+        const dist = zoneTop - rect.top;
+        if (dist >= 0 && dist < closestDist) {
+          closestDist = dist;
+          closestId = el.getAttribute("data-chapter-id");
+        }
+      }
+      // fallback：如果所有标记都在检测区下方（小说顶部），取第一个标记
+      if (!closestId && markers.length > 0) {
+        closestId = markers[0].getAttribute("data-chapter-id");
+      }
+      if (closestId && closestId !== lastDetectedChapterRef.current) {
+        lastDetectedChapterRef.current = closestId;
+        onChapterChangeRef.current(closestId);
+      }
+    };
 
-    return () => observer.disconnect();
+    const handleScroll = () => {
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(detectCurrentChapter);
+    };
+
+    // 暴露主动检测函数，供恢复/suppressIO 解锁后调用
+    triggerDetectionRef.current = () => requestAnimationFrame(detectCurrentChapter);
+
+    container.addEventListener("scroll", handleScroll, { passive: true });
+
+    // 初始检测（不依赖 IntersectionObserver 的 isIntersecting 回调）
+    triggerDetectionRef.current();
+
+    return () => {
+      container.removeEventListener("scroll", handleScroll);
+      cancelAnimationFrame(rafId);
+      triggerDetectionRef.current = null;
+    };
   }, [loadedChapters, enabled]);
 
   // ── IntersectionObserver：边缘加载（使用 React ref 哨兵）──────
@@ -309,7 +357,7 @@ export function useContinuousScroll({
 
     const edgeObserver = new IntersectionObserver(
       (entries) => {
-        if (isRestoringIORef.current) return; // 恢复/抑制期间忽略
+        if (suppressChapterDetectionRef.current) return; // 恢复/抑制期间忽略
         for (const entry of entries) {
           if (!entry.isIntersecting) continue;
           if (entry.target === topSentinel) {
@@ -328,12 +376,15 @@ export function useContinuousScroll({
     return () => edgeObserver.disconnect();
   }, [loadedChapters, loadMore, enabled]);
 
-  // ── 临时抑制 IO 回调（同时标记恢复完成，防止恢复 effect 干扰）──
+  // ── 临时抑制章节检测和边缘加载（目录点击等场景）──
   const suppressIO = useCallback(() => {
-    isRestoringIORef.current = true;
+    suppressChapterDetectionRef.current = true;
     hasRestoredRef.current = true;
     restoreTargetRef.current = null;
-    return () => { isRestoringIORef.current = false; };
+    return () => {
+      suppressChapterDetectionRef.current = false;
+      triggerDetectionRef.current?.();
+    };
   }, []);
 
   return { containerRef, topSentinelRef, bottomSentinelRef, loadedChapters, scrollToChapter, isLoadingMore, suppressIO };

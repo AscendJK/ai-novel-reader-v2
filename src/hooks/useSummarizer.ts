@@ -138,10 +138,14 @@ export function useSummarizer() {
               reloadingRef.current = true;
               try {
                 ragLog("TF-IDF 需要章节内容，加载全书...");
-                const fullNovel = await loadNovel(currentNovel.id, undefined, true);
+                const novelIdBefore = currentNovel.id;
+                const fullNovel = await loadNovel(novelIdBefore, undefined, true);
                 if (fullNovel) {
                   chapters = fullNovel.chapters;
-                  useNovelStore.getState().setCurrentNovel(fullNovel);
+                  // 仅当用户没有切换到其他小说时才更新 store
+                  if (useNovelStore.getState().currentNovel?.id === novelIdBefore) {
+                    useNovelStore.getState().setCurrentNovel(fullNovel);
+                  }
                 }
               } finally {
                 reloadingRef.current = false;

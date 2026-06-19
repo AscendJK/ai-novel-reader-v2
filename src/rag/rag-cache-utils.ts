@@ -127,14 +127,15 @@ async function evictSmartestRagCacheEntry(skipNovelId?: string): Promise<{ freed
 
     const toEvict = scored[0].entry;
     // 与 computeRagCacheSize 保持一致：向量 + 文本 chunk + extraData 都计入
-    let size = toEvict.vectorsBuffer && toEvict.dim && toEvict.chunkCount
-      ? toEvict.chunkCount * toEvict.dim * 4
-      : 0;
-    if (toEvict.chunks && toEvict.chunks.length > 0) {
-      size += toEvict.chunks.reduce((sum, c) => sum + (c.content?.length || 0) * 2, 0);
-    }
-    if (toEvict.extraData) {
-      size += toEvict.extraData.length * 2;
+    let size = 0;
+    if (toEvict.vectorsBuffer && toEvict.dim && toEvict.chunkCount) {
+      size = toEvict.chunkCount * toEvict.dim * 4;
+      if (toEvict.chunks && toEvict.chunks.length > 0) {
+        size += toEvict.chunks.reduce((sum, c) => sum + (c.content?.length || 0) * 2, 0);
+      }
+      if (toEvict.extraData) {
+        size += toEvict.extraData.length * 2;
+      }
     }
 
     await db.ragCache.delete(toEvict.id);

@@ -15,7 +15,7 @@ interface NovelState {
   addNovel: (novel: Novel) => void;
   removeNovel: (novelId: string) => void;
   getReadingPosition: (novelId: string) => ReadPosition | null;
-  saveReadingPosition: (novelId: string, chapterId: string, chapterIndex: number, scrollTop?: number) => void;
+  saveReadingPosition: (novelId: string, chapterId: string, chapterIndex: number, scrollTop?: number, chapterOffset?: number) => void;
   saveScrollTop: (scrollTop: number, chapterOffset?: number) => void;
   addChapters: (chapters: Novel["chapters"]) => void;
 }
@@ -120,7 +120,7 @@ export const useNovelStore = create<NovelState>((set, get) => ({
 
   getReadingPosition: (novelId) => get().readingPositions[novelId] || null,
 
-  saveReadingPosition: (novelId, chapterId, chapterIndex, scrollTop) => {
+  saveReadingPosition: (novelId, chapterId, chapterIndex, scrollTop, chapterOffset?) => {
     const existingPos = get().readingPositions[novelId];
     const positions = {
       ...get().readingPositions,
@@ -128,6 +128,7 @@ export const useNovelStore = create<NovelState>((set, get) => ({
         chapterId,
         chapterIndex,
         scrollTop: scrollTop !== undefined ? scrollTop : existingPos?.scrollTop,
+        chapterOffset: chapterOffset !== undefined ? chapterOffset : existingPos?.chapterOffset,
       },
     };
     savePositions(positions);

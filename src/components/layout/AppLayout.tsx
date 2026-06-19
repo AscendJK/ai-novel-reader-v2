@@ -538,11 +538,11 @@ export function AppLayout() {
             const oldPos = readingPositions[oldId];
             if (oldPos) {
               const newChapterId = `${serverId}-ch${oldPos.chapterIndex}`;
-              useNovelStore.getState().saveReadingPosition(serverId, newChapterId, oldPos.chapterIndex);
-              // Clean up old position
-              const positions = { ...readingPositions };
-              delete positions[oldId];
-              useNovelStore.setState({ readingPositions: positions });
+              // 先保存新位置，再读取最新 state 删除旧位置（避免快照过期覆盖新数据）
+              useNovelStore.getState().saveReadingPosition(serverId, newChapterId, oldPos.chapterIndex, undefined, oldPos.chapterOffset);
+              const latestPositions = { ...useNovelStore.getState().readingPositions };
+              delete latestPositions[oldId];
+              useNovelStore.setState({ readingPositions: latestPositions });
             }
             // Join server novel
             await apiFetch(`/api/novels/${serverId}/join`, { method: "POST" })
