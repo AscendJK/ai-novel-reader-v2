@@ -48,9 +48,13 @@ export async function loadNovel(novelId: string, chapterIndex?: number, loadAllC
     const allChapterRecords = await db.chapters.where("novelId").equals(novelId).sortBy("index");
     const totalCount = allChapterRecords.length;
 
-    // 如果指定了章节索引且不需要加载所有内容，只加载当前章节及前后各10章的内容
+    // 确定需要加载内容的章节范围
     let chaptersToLoad = allChapterRecords;
-    if (!loadAllContent && chapterIndex !== undefined && totalCount > 21) {
+    if (loadAllContent === false) {
+      // 显式不要内容：加载全部标题，content 为空（用于只需章节目录的场景）
+      chaptersToLoad = [];
+    } else if (!loadAllContent && chapterIndex !== undefined && totalCount > 21) {
+      // 懒加载：只加载当前章节及前后各10章的内容
       const start = Math.max(0, chapterIndex - 10);
       const end = Math.min(totalCount, chapterIndex + 11);
       chaptersToLoad = allChapterRecords.slice(start, end);

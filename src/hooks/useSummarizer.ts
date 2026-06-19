@@ -9,7 +9,7 @@ import { mapAgent } from "@/agents/map-agent";
 import type { Agent, AgentContext, AgentResult, MapData, TaskTypeValue } from "@/agents/types";
 import { TaskType } from "@/agents/types";
 import { getProvider } from "@/api/registry";
-import { saveSummary, saveMap, deleteMap, loadChapters } from "@/db/repositories";
+import { saveSummary, saveMap, deleteMap, loadChapters, loadNovel } from "@/db/repositories";
 import { getUserDB } from "@/db/database";
 import { APIError } from "@/api/error-handler";
 import { getTokenBudget } from "@/api/token-manager";
@@ -108,42 +108,14 @@ export function useSummarizer() {
       const prefEngine = useRAGStore.getState().engine;
       ragLog(`getRelevantText: prefEngine=${prefEngine}, novelId=${currentNovel.id.slice(0, 8)}`);
       try {
-        // 确保加载所有章节内容（懒加载可能导致部分章节内容为空）
-        let chapters = currentNovel.chapters;
-        const hasEmptyContent = chapters.some(ch => !ch.content);
-        if (hasEmptyContent && !reloadingRef.current) {
-          reloadingRef.current = true;
-          try {
-            ragLog("检测到空章节内容，重新加载所有章节...");
-            const { loadNovel } = await import("@/db/repositories");
-            const fullNovel = await loadNovel(currentNovel.id, undefined, true);
-            if (fullNovel) {
-              chapters = fullNovel.chapters;
-              // 更新 store 中的 currentNovel
-              useNovelStore.getState().setCurrentNovel(fullNovel);
-            }
-          } finally {
-            reloadingRef.current = false;
-          }
-        } else if (hasEmptyContent && reloadingRef.current) {
-          // 另一个调用正在重载，等待完成
-          ragLog("等待另一个重载完成...");
-          while (reloadingRef.current) {
-            await new Promise(r => setTimeout(r, 50));
-          }
-          // 重新获取最新的 chapters
-          chapters = useNovelStore.getState().currentNovel?.chapters || chapters;
-        }
-
-        if (signal?.aborted) { ragLog("getRelevantText: 加载章节后被取消"); return ""; }
-
         let engine = prefEngine;
         let degraded = false;
 
-        // Only load from cache (memory + IndexedDB). Never trigger a fresh build.
+        // 优先从缓存加载 RAG 索引（内存 LRU + IndexedDB）
+        // 索引自带 chunks 文本，不需要加载全书章节
         if (engine !== "tfidf") {
           try {
-            await buildIndex(currentNovel.id, chapters, engine, (msg) => setCurrentTask(msg), { cacheOnly: true });
+            await buildIndex(currentNovel.id, currentNovel.chapters, engine, (msg) => setCurrentTask(msg), { cacheOnly: true });
             ragLog(`索引从缓存加载成功 (${engine})`);
           } catch {
             ragLog(`索引未缓存 (${engine}), 降级为 TF-IDF`);
@@ -151,6 +123,34 @@ export function useSummarizer() {
             degraded = true;
           }
         }
+
+        // 仅在缓存未命中（降级 TF-IDF）时才加载全书章节
+        // TF-IDF 需要章节内容来构建临时索引
+        let chapters = currentNovel.chapters;
+        if (engine === "tfidf") {
+          const hasEmptyContent = chapters.some(ch => !ch.content);
+          if (hasEmptyContent && !reloadingRef.current) {
+            reloadingRef.current = true;
+            try {
+              ragLog("TF-IDF 需要章节内容，加载全书...");
+              const fullNovel = await loadNovel(currentNovel.id, undefined, true);
+              if (fullNovel) {
+                chapters = fullNovel.chapters;
+                useNovelStore.getState().setCurrentNovel(fullNovel);
+              }
+            } finally {
+              reloadingRef.current = false;
+            }
+          } else if (hasEmptyContent && reloadingRef.current) {
+            ragLog("等待另一个重载完成...");
+            while (reloadingRef.current) {
+              await new Promise(r => setTimeout(r, 50));
+            }
+            chapters = useNovelStore.getState().currentNovel?.chapters || chapters;
+          }
+        }
+
+        if (signal?.aborted) { ragLog("getRelevantText: 被取消"); return ""; }
 
         const degradedLabel = degraded ? " (降级至 TF-IDF)" : "";
         setCurrentTask(`正在启动检索引擎 (${engine})${degradedLabel}...`);

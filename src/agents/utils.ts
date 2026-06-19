@@ -40,10 +40,11 @@ export function getProviderBudget(): { config: ProviderConfig | null; budget: To
  */
 export async function loadNovelData(
   novelId: string,
-  onStatus?: (status: string) => void
+  onStatus?: (status: string) => void,
+  options?: { loadAllContent?: boolean }
 ): Promise<Novel | null> {
   onStatus?.("正在加载小说数据...");
-  const novel = await loadNovel(novelId);
+  const novel = await loadNovel(novelId, undefined, options?.loadAllContent);
   return novel;
 }
 
@@ -54,12 +55,15 @@ export async function loadNovelData(
  * @param context Agent 上下文
  * @returns 准备好的运行环境，如果失败返回错误结果
  */
-export async function prepareAgentContext(context: AgentContext): Promise<
+export async function prepareAgentContext(
+  context: AgentContext,
+  options?: { loadAllContent?: boolean }
+): Promise<
   | { success: true; novel: Novel; provider: AIProvider; budget: TokenBudget }
   | { success: false; error: string }
 > {
   // 加载小说
-  const novel = await loadNovelData(context.novelId, context.onStatus);
+  const novel = await loadNovelData(context.novelId, context.onStatus, options);
   if (!novel) {
     return { success: false, error: "小说数据未找到" };
   }

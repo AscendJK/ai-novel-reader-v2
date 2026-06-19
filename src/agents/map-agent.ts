@@ -8,6 +8,7 @@ import { TaskType } from "./types";
 import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
 import { extractJSON } from "./json-extractor";
+import { prepareAgentContext } from "./utils";
 
 /**
  * 地图生成 Agent
@@ -16,6 +17,11 @@ class MapAgent extends BaseAgent {
   name = "map-generator";
   description = "生成小说地图，分析地理位置和势力分布";
   taskType = TaskType.MAP as const;
+
+  /** 地图只需要章节目录（标题），不需要章节内容，避免加载全书 */
+  protected async prepareEnvironment(context: AgentContext) {
+    return prepareAgentContext(context, { loadAllContent: false });
+  }
 
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider, budget } = env;
