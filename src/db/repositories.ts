@@ -1,7 +1,7 @@
 import { sharedDB, getUserDB, deleteUserDB } from "./database";
 import type { Novel, NovelMeta } from "@/parsers/types";
 import type { SummaryItem } from "@/stores/summary-store";
-import type { MapRecord, GraphRecord } from "./database";
+import type { ChapterRecord, MapRecord, GraphRecord } from "./database";
 import { useRAGStore } from "@/stores/rag-store";
 
 export type { MapRecord, GraphRecord };
@@ -119,12 +119,14 @@ export async function loadAllNovelMeta(): Promise<NovelMeta[]> {
   const db = getUserDB();
   try {
     const records = await db.novels.orderBy("createdAt").reverse().toArray();
-    // Use count queries per novel instead of loading all chapters
+    // 共享事务 + 并行查询：所有 count 在单个事务内并发执行，避免 N 次串行事务开销
     const countMap = new Map<string, number>();
-    for (const r of records) {
-      const count = await db.chapters.where("novelId").equals(r.id).count();
-      countMap.set(r.id, count);
-    }
+    await db.transaction("r", db.chapters, async (tx) => {
+      const counts = await Promise.all(
+        records.map((r) => tx.chapters.where("novelId").equals(r.id).count())
+      );
+      records.forEach((r, i) => countMap.set(r.id, counts[i]));
+    });
     return records.map((r) => ({
       id: r.id, title: r.title, author: r.author,
       fileName: r.fileName, fileFormat: r.fileFormat,
@@ -168,7 +170,8 @@ export async function loadAllNovels(): Promise<Novel[]> {
 export async function deleteNovel(novelId: string): Promise<void> {
   const udb = getUserDB();
   try {
-    await udb.transaction("rw", udb.chapters, udb.summaries, udb.notes, udb.novels, udb.graphs, udb.maps, async () => {
+    // Dexie TS 重载最多支持 4 表参数，运行时支持更多，用类型断言绕过
+    await (udb.transaction as (...args: unknown[]) => Promise<void>)("rw", udb.chapters, udb.summaries, udb.notes, udb.novels, udb.graphs, udb.maps, async () => {
       await udb.chapters.where("novelId").equals(novelId).delete();
       // Soft-delete summaries, notes, graphs, and maps so sync propagates the deletion
       const now = Date.now();
@@ -236,7 +239,8 @@ export async function saveSummary(summary: SummaryItem & { novelId: string }): P
 export async function loadSummaries(novelId: string): Promise<(SummaryItem & { novelId: string })[]> {
   try {
     const all = await getUserDB().summaries.where("novelId").equals(novelId).sortBy("createdAt");
-    return all.filter((s) => !s.deleted);
+    // SummaryRecord.type 是 string，运行时实际存储的是字面量联合类型值，安全断言
+    return all.filter((s) => !s.deleted) as (SummaryItem & { novelId: string })[];
   } catch (e) {
     console.error("loadSummaries failed:", e);
     return [];

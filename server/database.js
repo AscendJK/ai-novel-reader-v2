@@ -418,7 +418,7 @@ export function gatherSyncData(username, since = 0) {
         SELECT id, novel_id AS "novelId", chapter_id AS "chapterId", chapter_title AS "chapterTitle",
                username, content, tokens_used AS "tokensUsed", created_at AS "createdAt", updated_at AS "updatedAt", type,
                deleted, used_fallback AS "usedFallback"
-        FROM summaries WHERE username = ?
+        FROM summaries WHERE username = ? AND (deleted IS NULL OR deleted = 0)
       `).all(username);
 
   const notes = since > 0
@@ -430,7 +430,7 @@ export function gatherSyncData(username, since = 0) {
     : db.prepare(`
         SELECT id, novel_id AS "novelId", chapter_id AS "chapterId", chapter_title AS "chapterTitle",
                username, content, source, source_label AS "sourceLabel", created_at AS "createdAt", updated_at AS "updatedAt", deleted
-        FROM notes WHERE username = ?
+        FROM notes WHERE username = ? AND (deleted IS NULL OR deleted = 0)
       `).all(username);
 
   const maps = since > 0

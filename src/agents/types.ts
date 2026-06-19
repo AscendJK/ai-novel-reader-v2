@@ -32,9 +32,28 @@ export interface AgentResult {
   metadata?: AnalysisMetadata;
 }
 
+/**
+ * 任务类型常量 — 用于 UI 状态检测，替代脆弱的中文字符串匹配
+ * 每个 Agent 声明自己的 taskType，runAgentTask 用它来标识当前任务
+ */
+export const TaskType = {
+  CHAPTER: "chapter",
+  GLOBAL: "global",
+  TIMELINE: "timeline",
+  CHARACTER: "character",
+  GRAPH: "graph",
+  MAP: "map",
+  QA: "qa",
+  RANGE: "range",
+} as const;
+
+export type TaskTypeValue = (typeof TaskType)[keyof typeof TaskType];
+
 export interface Agent {
   name: string;
   description: string;
+  /** 任务类型标识，用于 UI 判断哪个功能正在运行 */
+  taskType?: TaskTypeValue;
   run(context: AgentContext): Promise<AgentResult>;
 }
 

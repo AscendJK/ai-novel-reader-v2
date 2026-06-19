@@ -76,7 +76,7 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
   }
 
   return {
-    type: "anthropic",
+    format: "anthropic",
     async chat(req: ChatCompletionRequest): Promise<ChatCompletionResponse> {
       const offline = useUIStore.getState().offlineMode;
       const hasToken = !!localStorage.getItem("sync-token");

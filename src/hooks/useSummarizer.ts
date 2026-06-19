@@ -6,13 +6,14 @@ import { summarizerAgent, globalSummarizerAgent } from "@/agents/summarizer";
 import { characterAnalysisAgent, timelineAgent } from "@/agents/analyzers";
 import { characterGraphAgent } from "@/agents/graph-agent";
 import { mapAgent } from "@/agents/map-agent";
-import type { Agent, AgentContext, AgentResult, MapData } from "@/agents/types";
+import type { Agent, AgentContext, AgentResult, MapData, TaskTypeValue } from "@/agents/types";
+import { TaskType } from "@/agents/types";
 import { getProvider } from "@/api/registry";
-import { saveSummary, saveMap, loadMap, deleteMap, loadChapters } from "@/db/repositories";
+import { saveSummary, saveMap, deleteMap, loadChapters } from "@/db/repositories";
 import { getUserDB } from "@/db/database";
 import { APIError } from "@/api/error-handler";
 import { getTokenBudget } from "@/api/token-manager";
-import { buildIndex, retrieveRelevantWithDetails, retrieveRelevantForRange } from "@/rag/index";
+import { buildIndex, retrieveRelevantWithDetails } from "@/rag/index";
 import { useRAGStore } from "@/stores/rag-store";
 import { syncClient } from "@/sync/sync-client";
 import { addDebugEntry } from "@/components/common/DebugPanel";
@@ -66,9 +67,9 @@ export function useSummarizer() {
   // Guard against concurrent novel reloads
   const reloadingRef = useRef(false);
 
-  const startTask = useCallback((name: string) => {
+  const startTask = useCallback((name: string, type?: string) => {
     setCurrentTask(name);
-    setCurrentTaskType(name);
+    setCurrentTaskType(type || name);
     setIsRunning(true);
     setAiRunning(true);
     setError(null);
@@ -101,6 +102,8 @@ export function useSummarizer() {
   const getRelevantText = useCallback(
     async (query: string): Promise<string> => {
       if (!currentNovel) { ragLog("getRelevantText: currentNovel 为空"); return ""; }
+      const signal = abortRef.current?.signal;
+      if (signal?.aborted) { ragLog("getRelevantText: 已取消"); return ""; }
       await new Promise((r) => setTimeout(r, 0));
       const prefEngine = useRAGStore.getState().engine;
       ragLog(`getRelevantText: prefEngine=${prefEngine}, novelId=${currentNovel.id.slice(0, 8)}`);
@@ -132,6 +135,8 @@ export function useSummarizer() {
           chapters = useNovelStore.getState().currentNovel?.chapters || chapters;
         }
 
+        if (signal?.aborted) { ragLog("getRelevantText: 加载章节后被取消"); return ""; }
+
         let engine = prefEngine;
         let degraded = false;
 
@@ -153,6 +158,7 @@ export function useSummarizer() {
           ragLog("构建 TF-IDF 索引...");
           await buildIndex(currentNovel.id, chapters, engine, (msg) => setCurrentTask(msg + degradedLabel));
         }
+        if (signal?.aborted) { ragLog("getRelevantText: 构建索引后被取消"); return ""; }
         setCurrentTask(`正在检索相关段落${degradedLabel}...`);
         const t0 = performance.now();
         const result = await retrieveRelevantWithDetails(currentNovel.id, query, undefined, engine);
@@ -234,9 +240,11 @@ export function useSummarizer() {
     errorMessage: string;
     onSuccess?: (result: AgentResult) => Promise<void>;
     returnData?: boolean;
+    /** 任务类型标识，优先使用，其次使用 agent.taskType，最后回退到 taskName */
+    taskType?: TaskTypeValue;
   }): Promise<unknown> => {
-    const { taskName, agent, context, errorMessage, onSuccess, returnData } = options;
-    startTask(taskName);
+    const { taskName, agent, context, errorMessage, onSuccess, returnData, taskType } = options;
+    startTask(taskName, taskType || agent.taskType);
     try {
       const result = await agent.run(context);
       if (result.success) {
@@ -289,7 +297,7 @@ export function useSummarizer() {
     const { skipExisting = true } = options || {};
 
     batchStopRef.current = false;
-    startTask("批量总结所有章节");
+    startTask("批量总结所有章节", TaskType.CHAPTER);
     const chapters = currentNovel.chapters;
 
     // 获取已有的章节总结
@@ -394,7 +402,7 @@ export function useSummarizer() {
       context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await getRelevantText("小说中各主要角色的关系网络、互动、性格特征与情感变化"), onStatus: setCurrentTask },
       errorMessage: "图谱生成失败",
       returnData: true,
-    });
+    }) as { graphData: GraphData } | null;
     if (result && !result.graphData) {
       setError("图谱生成成功但数据解析失败，请重试");
       return null;
@@ -410,7 +418,7 @@ export function useSummarizer() {
       context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await getRelevantText("小说中各主要角色的关系网络、互动、性格特征与情感变化"), onStatus: setCurrentTask },
       errorMessage: "图谱生成失败",
       returnData: true,
-    });
+    }) as { graphData: GraphData } | null;
     if (result && !result.graphData) {
       setError("图谱生成成功但数据解析失败，请重试");
       return null;
@@ -472,7 +480,7 @@ export function useSummarizer() {
       const provider = getActiveProvider();
       if (!provider) return null;
 
-      startTask(`第${fromChapter}-${toChapter}章 范围总结`);
+      startTask(`第${fromChapter}-${toChapter}章 范围总结`, TaskType.RANGE);
       try {
         // 从 IndexedDB 直接读取指定范围的章节
         setCurrentTask(`正在加载第${fromChapter}-${toChapter}章...`);

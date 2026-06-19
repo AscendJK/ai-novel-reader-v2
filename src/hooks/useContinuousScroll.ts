@@ -242,6 +242,7 @@ export function useContinuousScroll({
 
     // 延迟恢复，确保 DOM 已更新
     isRestoringIORef.current = true; // 抑制 IO 回调
+    let innerTimer: ReturnType<typeof setTimeout>;
     const timer = setTimeout(() => {
       // 如果已被 suppressIO 标记为已恢复，跳过（用户主动导航了）
       // 注意：不重置 isRestoringIORef，由 suppressIO 的 release 函数负责
@@ -250,11 +251,11 @@ export function useContinuousScroll({
       restoreTargetRef.current = null;
       scrollToChapterRef.current(targetChapterId, targetOffset);
       // 恢复完成后解锁 IO（延迟足够让 scrollTop 生效）
-      setTimeout(() => { isRestoringIORef.current = false; }, 500);
+      innerTimer = setTimeout(() => { isRestoringIORef.current = false; }, 500);
     }, 100);
 
-    // cleanup 不重置 isRestoringIORef，防止 IO 在恢复间隙触发
-    return () => { clearTimeout(timer); };
+    // cleanup 清除两层 timer，防止 isRestoringIORef 永久锁定
+    return () => { clearTimeout(timer); clearTimeout(innerTimer); };
   }, [novelId, enabled, chapters, initialChapterId, initialChapterOffset]);
 
   // ── IntersectionObserver：章节检测（带去重）────────────────────

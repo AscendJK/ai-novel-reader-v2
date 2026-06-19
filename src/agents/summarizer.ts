@@ -3,6 +3,7 @@
  */
 
 import type { AgentContext, AgentResult, AnalysisMetadata } from "./types";
+import { TaskType } from "./types";
 import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
 import { buildChapterSummaryPrompt } from "@/lib/prompt-templates";
@@ -16,6 +17,7 @@ import { APIError } from "@/api/error-handler";
 class SummarizerAgent extends BaseAgent {
   name = "summarizer";
   description = "生成章节摘要或全书总结";
+  taskType = TaskType.CHAPTER as const;
 
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider, budget } = env;
@@ -104,6 +106,7 @@ class SummarizerAgent extends BaseAgent {
 class GlobalSummarizerAgent extends BaseAgent {
   name = "global-summarizer";
   description = "生成全书总结（发送小说结构信息+内容样本，让大模型自行分析）";
+  taskType = TaskType.GLOBAL as const;
 
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider, budget } = env;

@@ -56,7 +56,7 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
   }
 
   return {
-    type: "openai",
+    format: "openai",
     async chat(req: ChatCompletionRequest): Promise<ChatCompletionResponse> {
       const offline = useUIStore.getState().offlineMode;
       const hasToken = !!localStorage.getItem("sync-token");

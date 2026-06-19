@@ -3,6 +3,7 @@
  */
 
 import type { AgentContext, AgentResult } from "./types";
+import { TaskType } from "./types";
 import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
 import { getRelevantContent } from "./utils";
@@ -14,6 +15,7 @@ import { estimateTokens } from "@/api/token-manager";
 class CharacterAnalysisAgent extends BaseAgent {
   name = "character-analysis";
   description = "分析小说主要人物及其关系";
+  taskType = TaskType.CHARACTER as const;
 
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider, budget } = env;
@@ -86,6 +88,7 @@ ${relevantContent}
 class TimelineAgent extends BaseAgent {
   name = "timeline";
   description = "提取小说剧情时间线";
+  taskType = TaskType.TIMELINE as const;
 
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider, budget } = env;

@@ -4,8 +4,10 @@
  */
 
 import type { AgentContext, AgentResult, MapData } from "./types";
+import { TaskType } from "./types";
 import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
+import { extractJSON } from "./json-extractor";
 
 /**
  * 地图生成 Agent
@@ -13,6 +15,7 @@ import { BaseAgent } from "./base-agent";
 class MapAgent extends BaseAgent {
   name = "map-generator";
   description = "生成小说地图，分析地理位置和势力分布";
+  taskType = TaskType.MAP as const;
 
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider, budget } = env;
@@ -191,131 +194,7 @@ ${chapterList}
    * 解析地图数据
    */
   private parseMapData(content: string): MapData | null {
-    let raw = content.trim();
-    // 移除 markdown 代码块
-    raw = raw.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```[\s\S]*$/i, "");
-
-    // 尝试直接解析
-    try {
-      return JSON.parse(raw);
-    } catch (e) {
-      console.warn("[MapAgent] 直接 JSON 解析失败，尝试修复截断的 JSON:", e);
-
-      // 尝试修复截断的 JSON
-      const fixed = this.fixTruncatedJson(raw);
-      if (fixed) {
-        try {
-          return JSON.parse(fixed);
-        } catch (e2) {
-          console.warn("[MapAgent] 修复后的 JSON 解析失败:", e2);
-        }
-      }
-
-      // 尝试提取 JSON 对象（考虑字符串中的括号）
-      const start = raw.indexOf("{");
-      if (start >= 0) {
-        let depth = 0;
-        let inString = false;
-        let escapeNext = false;
-        for (let i = start; i < raw.length; i++) {
-          const char = raw[i];
-          if (escapeNext) {
-            escapeNext = false;
-            continue;
-          }
-          if (char === "\\") {
-            escapeNext = true;
-            continue;
-          }
-          if (char === '"') {
-            inString = !inString;
-            continue;
-          }
-          if (inString) continue;
-          if (char === "{") depth++;
-          else if (char === "}") depth--;
-          if (depth === 0) {
-            try {
-              return JSON.parse(raw.slice(start, i + 1));
-            } catch (e3) {
-              console.warn("[MapAgent] 提取的 JSON 解析失败:", e3);
-            }
-            break;
-          }
-        }
-      }
-    }
-    console.warn("[MapAgent] 无法从 AI 响应中解析 JSON，原始内容:", content.slice(0, 500));
-    return null;
-  }
-
-  /**
-   * 修复截断的 JSON
-   */
-  private fixTruncatedJson(json: string): string | null {
-    try {
-      // 找到最后一个完整的位置
-      let lastValidPos = json.length;
-
-      // 从后往前找，尝试找到最后一个有效的 JSON 位置
-      for (let i = json.length - 1; i >= 0; i--) {
-        const char = json[i];
-        if (char === '"' || char === "'" || char === ',' || char === ':') {
-          // 这些字符后面可能有不完整的内容
-          lastValidPos = i;
-        } else if (char === '}' || char === ']') {
-          // 这是完整的结束符号
-          lastValidPos = i + 1;
-          break;
-        }
-      }
-
-      // 截取到最后一个有效位置
-      let truncated = json.slice(0, lastValidPos);
-
-      // 统计未闭合的括号
-      let openBraces = 0;
-      let openBrackets = 0;
-      let inString = false;
-      let escapeNext = false;
-
-      for (const char of truncated) {
-        if (escapeNext) {
-          escapeNext = false;
-          continue;
-        }
-        if (char === '\\') {
-          escapeNext = true;
-          continue;
-        }
-        if (char === '"') {
-          inString = !inString;
-          continue;
-        }
-        if (inString) continue;
-
-        if (char === '{') openBraces++;
-        else if (char === '}') openBraces--;
-        else if (char === '[') openBrackets++;
-        else if (char === ']') openBrackets--;
-      }
-
-      // 闭合未闭合的括号
-      let fixed = truncated;
-      for (let i = 0; i < openBrackets; i++) {
-        fixed += ']';
-      }
-      for (let i = 0; i < openBraces; i++) {
-        fixed += '}';
-      }
-
-      // 验证修复后的 JSON
-      JSON.parse(fixed);
-      console.log("[MapAgent] 成功修复截断的 JSON");
-      return fixed;
-    } catch {
-      return null;
-    }
+    return extractJSON<MapData>(content, { fixTruncated: true });
   }
 
   /**

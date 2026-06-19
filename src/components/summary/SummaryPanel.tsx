@@ -8,6 +8,7 @@ import { apiFetch } from "@/lib/api-client";
 import { useSummaryStore } from "@/stores/summary-store";
 import { useSummarizer } from "@/hooks/useSummarizer";
 import type { GraphData, MapData } from "@/hooks/useSummarizer";
+import { TaskType } from "@/agents/types";
 import { saveNote, loadMap, saveGraph as saveGraphToDB, loadGraph } from "@/db/repositories";
 import type { NoteItem } from "@/db/repositories";
 import { syncClient } from "@/sync/sync-client";
@@ -83,11 +84,11 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
   const offlineMode = useUIStore((s) => s.offlineMode);
   const buildPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // 判断各个功能是否正在执行（使用 currentTaskType，不会被 Agent 的 onStatus 回调覆盖）
-  const isTimelineRunning = isRunning && currentTaskType.includes("时间线");
-  const isCharacterRunning = isRunning && (currentTaskType.includes("人物") || currentTaskType.includes("图谱"));
-  const isGlobalRunning = isRunning && currentTaskType.includes("全书");
-  const isMapRunning = isRunning && currentTaskType.includes("地图");
+  // 判断各个功能是否正在执行（使用 TaskType 常量匹配，不依赖中文字符串）
+  const isTimelineRunning = isRunning && currentTaskType === TaskType.TIMELINE;
+  const isCharacterRunning = isRunning && (currentTaskType === TaskType.CHARACTER || currentTaskType === TaskType.GRAPH);
+  const isGlobalRunning = isRunning && currentTaskType === TaskType.GLOBAL;
+  const isMapRunning = isRunning && currentTaskType === TaskType.MAP;
   const isChapterRunning = isRunning && !isTimelineRunning && !isCharacterRunning && !isGlobalRunning && !isMapRunning;
 
   // Cleanup build poll on unmount

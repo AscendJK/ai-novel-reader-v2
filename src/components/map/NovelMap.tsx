@@ -3,7 +3,7 @@
  * 支持拖拽、缩放、全屏、导出、Tooltip
  */
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { ZoomIn, ZoomOut, Download, RefreshCw, FileJson } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { MapData } from "@/agents/types";
@@ -31,8 +31,8 @@ export function NovelMap({ mapData, onRegenerate, loading }: NovelMapProps) {
   const [hoveredPlace, setHoveredPlace] = useState<string | null>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
 
-  // 渲染 SVG
-  const svgContent = renderMapToSvg(mapData);
+  // 渲染 SVG（缓存，避免拖拽/缩放时重复执行 d3-force 布局）
+  const svgContent = useMemo(() => renderMapToSvg(mapData), [mapData]);
 
   // 处理缩放
   const handleZoom = useCallback((delta: number) => {
@@ -46,7 +46,7 @@ export function NovelMap({ mapData, onRegenerate, loading }: NovelMapProps) {
     setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y });
   }, [position]);
 
-  // 处理拖拽
+  // 处理拖拽中
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!isDragging) return;
     setPosition({
@@ -59,13 +59,6 @@ export function NovelMap({ mapData, onRegenerate, loading }: NovelMapProps) {
   const handleMouseUp = useCallback(() => {
     setIsDragging(false);
   }, []);
-
-  // 处理滚轮缩放
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? -0.1 : 0.1;
-    handleZoom(delta);
-  }, [handleZoom]);
 
   // 触摸状态 ref
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -151,16 +144,12 @@ export function NovelMap({ mapData, onRegenerate, loading }: NovelMapProps) {
 
   // 处理鼠标悬停（使用原生事件）
   useEffect(() => {
-    console.log("[Tooltip] useEffect called");
     const container = mapRef.current;
-    console.log("[Tooltip] mapRef.current", container);
 
     if (!container) {
-      console.log("[Tooltip] container is null, retrying...");
       // 延迟重试
       const timer = setTimeout(() => {
         const retryContainer = mapRef.current;
-        console.log("[Tooltip] retry container", retryContainer);
         if (retryContainer) {
           attachListeners(retryContainer);
         }
@@ -171,12 +160,8 @@ export function NovelMap({ mapData, onRegenerate, loading }: NovelMapProps) {
     attachListeners(container);
 
     function attachListeners(el: HTMLElement) {
-      console.log("[Tooltip] attaching listeners to", el);
-
       const handleMouseMove = (e: MouseEvent) => {
         const target = e.target as Element;
-        console.log("[Tooltip] mousemove", target.tagName, target.className);
-
         let placeId: string | null = null;
 
         // 检查当前元素
@@ -193,7 +178,6 @@ export function NovelMap({ mapData, onRegenerate, loading }: NovelMapProps) {
         }
 
         if (placeId) {
-          console.log("[Tooltip] found place", placeId);
           setHoveredPlace(placeId);
           setMousePos({ x: e.clientX, y: e.clientY });
         } else {
@@ -202,7 +186,6 @@ export function NovelMap({ mapData, onRegenerate, loading }: NovelMapProps) {
       };
 
       const handleMouseLeave = () => {
-        console.log("[Tooltip] mouseleave");
         setHoveredPlace(null);
       };
 
@@ -222,6 +205,19 @@ export function NovelMap({ mapData, onRegenerate, loading }: NovelMapProps) {
       }
     };
   }, []);
+
+  // 滚轮缩放（原生事件监听，支持 passive: false 以调用 preventDefault）
+  useEffect(() => {
+    const container = mapRef.current;
+    if (!container) return;
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -0.1 : 0.1;
+      handleZoom(delta);
+    };
+    container.addEventListener("wheel", handleWheel, { passive: false });
+    return () => container.removeEventListener("wheel", handleWheel);
+  }, [handleZoom]);
 
   // 获取选中的地点
   const selectedPlaceData = selectedPlace
@@ -265,20 +261,11 @@ export function NovelMap({ mapData, onRegenerate, loading }: NovelMapProps) {
         className="w-full h-full cursor-grab active:cursor-grabbing"
         style={{ touchAction: "none", overflow: "hidden" }}
         onMouseDown={handleMouseDown}
-        onMouseMove={(e) => {
-          // 拖拽处理
-          if (isDragging) {
-            setPosition({
-              x: e.clientX - dragStart.x,
-              y: e.clientY - dragStart.y,
-            });
-          }
-        }}
+        onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={() => {
           handleMouseUp();
         }}
-        onWheel={handleWheel}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}

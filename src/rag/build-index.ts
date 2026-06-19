@@ -226,7 +226,7 @@ export async function downloadAndCacheIndex(options: DownloadOptions): Promise<D
   }
 
   // 清理超限缓存（合并了 ensureCacheSpace 的逻辑，只执行一次全表扫描）
-  enforceIndexedDBQuota();
+  await enforceIndexedDBQuota();
 
   ragLog(`索引下载完成: ${chunkCount} 片段 · ${dim} 维`);
 

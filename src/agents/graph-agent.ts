@@ -3,9 +3,11 @@
  */
 
 import type { AgentContext, AgentResult } from "./types";
+import { TaskType } from "./types";
 import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
 import { getRelevantContent } from "./utils";
+import { extractJSON } from "./json-extractor";
 import { useUIStore } from "@/stores/ui-store";
 import { estimateTokens } from "@/api/token-manager";
 
@@ -20,6 +22,7 @@ interface GraphData {
 class CharacterGraphAgent extends BaseAgent {
   name = "character-graph";
   description = "只生成人物关系图谱JSON数据";
+  taskType = TaskType.GRAPH as const;
 
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider, budget } = env;
@@ -98,54 +101,7 @@ ${relevantContent}
    * 解析图谱 JSON 数据
    */
   private parseGraphData(content: string): GraphData | null {
-    let raw = content.trim();
-
-    // Remove ```json ... ``` or ``` ... ``` wrappers
-    raw = raw.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```[\s\S]*$/i, "");
-
-    // Remove single-line comments (// ...)
-    raw = raw.replace(/\/\/.*$/gm, "");
-
-    // Remove trailing commas before } or ]
-    raw = raw.replace(/,\s*([}\]])/g, "$1");
-
-    // Try direct parse first
-    try {
-      return JSON.parse(raw);
-    } catch { /* not valid JSON */ }
-
-    // Fallback: extract first balanced JSON object (considering strings)
-    const start = raw.indexOf("{");
-    if (start >= 0) {
-      let depth = 0;
-      let inString = false;
-      let escapeNext = false;
-      for (let i = start; i < raw.length; i++) {
-        const char = raw[i];
-        if (escapeNext) {
-          escapeNext = false;
-          continue;
-        }
-        if (char === "\\") {
-          escapeNext = true;
-          continue;
-        }
-        if (char === '"') {
-          inString = !inString;
-          continue;
-        }
-        if (inString) continue;
-        if (char === "{") depth++;
-        else if (char === "}") depth--;
-        if (depth === 0) {
-          try {
-            return JSON.parse(raw.slice(start, i + 1));
-          } catch { /* not valid JSON */ }
-          break;
-        }
-      }
-    }
-    return null;
+    return extractJSON<GraphData>(content);
   }
 
   /**

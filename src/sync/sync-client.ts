@@ -187,6 +187,7 @@ export class SyncClient {
       }).catch((e) => console.warn("[sync] disconnect failed:", e));
     }
     this.stop();
+    const syncTimeKey = this.syncTimeKey; // 先保存 key，再清 username
     this.username = null;
     // 保留 clientId，这样重新登录时会被识别为已知设备（与 handleKicked 一致）
     this.token = null;
@@ -196,7 +197,7 @@ export class SyncClient {
     this.heartbeatFailCount = 0;
     localStorage.removeItem("sync-username");
     localStorage.removeItem("sync-token");
-    localStorage.removeItem(this.syncTimeKey);
+    localStorage.removeItem(syncTimeKey);
     localStorage.removeItem("sync-auto-offline");
     useUIStore.getState().setOfflineMode(false);
     // 通知其他标签页
@@ -507,6 +508,7 @@ export class SyncClient {
   private async handleKicked() {
     const kickedUser = this.username;
     this.stop();
+    const syncTimeKey = this.syncTimeKey; // 先保存 key，再清 username
     this.username = null;
     // 保留 clientId，这样重新登录时会被识别为已知设备
     this.token = null;
@@ -516,7 +518,7 @@ export class SyncClient {
     this.heartbeatFailCount = 0;
     localStorage.removeItem("sync-username");
     localStorage.removeItem("sync-token");
-    localStorage.removeItem(this.syncTimeKey);
+    localStorage.removeItem(syncTimeKey);
     localStorage.removeItem("sync-auto-offline");
     useUIStore.getState().setOfflineMode(false);
     // 通知其他标签页用户已登出

@@ -186,6 +186,15 @@ async function _doBuild(novelId, engine, key) {
     }
   }
 
+  // 空章节/损坏内容检查：所有 chunk 都太短时直接报错，避免构建无用索引
+  if (chunks.length === 0) {
+    const msg = "小说内容为空或所有章节内容过短（不足 10 字符），无法构建索引";
+    buildProgress.set(key, { status: "error", error: msg });
+    db.db.prepare("UPDATE rag_indices SET status = 'error', error_msg = ? WHERE novel_id = ? AND engine = ?")
+      .run(msg, novelId, engine);
+    throw new Error(msg);
+  }
+
   buildProgress.set(key, { status: "building", current: 0, total: chunks.length });
   db.db.prepare("INSERT OR REPLACE INTO rag_indices (novel_id, engine, status, chunks_json, chunk_count) VALUES (?, ?, 'building', ?, ?)")
     .run(novelId, engine, JSON.stringify(chunks), chunks.length);
