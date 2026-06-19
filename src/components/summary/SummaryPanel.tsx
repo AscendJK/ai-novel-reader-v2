@@ -227,7 +227,7 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
         if (!cancelled) setCharacterGraphData(result.data);
       });
       loadMap(currentNovel.id).then((md) => {
-        if (!cancelled) setMapData(md);
+        if (!cancelled) setMapData(md.data);
       });
       notesHook.loadNotesList();
     } else {
