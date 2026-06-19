@@ -9,7 +9,7 @@ import { mapAgent } from "@/agents/map-agent";
 import type { Agent, AgentContext, AgentResult, MapData, TaskTypeValue } from "@/agents/types";
 import { TaskType } from "@/agents/types";
 import { getProvider } from "@/api/registry";
-import { saveSummary, saveMap, deleteMap, loadChapters, loadNovel } from "@/db/repositories";
+import { saveSummary, saveMap, deleteMap, loadChapters } from "@/db/repositories";
 import { getUserDB } from "@/db/database";
 import { APIError } from "@/api/error-handler";
 import { getTokenBudget } from "@/api/token-manager";
@@ -64,8 +64,6 @@ export function useSummarizer() {
   const abortRef = useRef<AbortController | null>(null);
   // Cached RAG context for Q&A session (cleared on new session or every 3 follow-ups)
   const qaRagCacheRef = useRef<{ question: string; text: string; followUps: number } | null>(null);
-  // Guard against concurrent novel reloads
-  const reloadingRef = useRef(false);
 
   const startTask = useCallback((name: string, type?: string) => {
     setCurrentTask(name);
@@ -132,41 +130,23 @@ export function useSummarizer() {
             await buildIndex(currentNovel.id, chapters, "tfidf", undefined, { cacheOnly: true });
             ragLog(`TF-IDF 索引从缓存加载成功`);
           } catch {
-            // TF-IDF 缓存未命中，需要加载全书构建索引
-            const hasEmptyContent = chapters.some(ch => !ch.content);
-            if (hasEmptyContent && !reloadingRef.current) {
-              reloadingRef.current = true;
-              try {
-                ragLog("TF-IDF 需要章节内容，加载全书...");
-                const novelIdBefore = currentNovel.id;
-                const fullNovel = await loadNovel(novelIdBefore, undefined, true);
-                if (fullNovel) {
-                  chapters = fullNovel.chapters;
-                  // 仅当用户没有切换到其他小说时才更新 store
-                  if (useNovelStore.getState().currentNovel?.id === novelIdBefore) {
-                    useNovelStore.getState().setCurrentNovel(fullNovel);
-                  }
-                }
-              } finally {
-                reloadingRef.current = false;
-              }
-            } else if (hasEmptyContent && reloadingRef.current) {
-              ragLog("等待另一个重载完成...");
-              while (reloadingRef.current) {
-                await new Promise(r => setTimeout(r, 50));
-              }
-              chapters = useNovelStore.getState().currentNovel?.chapters || chapters;
-            }
+            // TF-IDF 缓存未命中，流式构建（内部逐批加载章节，不预加载全书）
+            ragLog("TF-IDF 缓存未命中，流式构建...");
+            const degradedLabel = degraded ? " (降级至 TF-IDF)" : "";
+            setCurrentTask(`正在构建 TF-IDF 索引${degradedLabel}...`);
+            await buildIndex(currentNovel.id, [], "tfidf",
+              (msg) => setCurrentTask(msg + degradedLabel),
+              undefined,
+              currentNovel.chapterCount  // 传入章节数，由 buildIndex 内部流式加载
+            );
           }
         }
 
         if (signal?.aborted) { ragLog("getRelevantText: 被取消"); return ""; }
 
         const degradedLabel = degraded ? " (降级至 TF-IDF)" : "";
-        setCurrentTask(`正在启动检索引擎 (${engine})${degradedLabel}...`);
-        if (engine === "tfidf") {
-          ragLog("构建 TF-IDF 索引...");
-          await buildIndex(currentNovel.id, chapters, engine, (msg) => setCurrentTask(msg + degradedLabel));
+        if (engine !== "tfidf") {
+          setCurrentTask(`正在启动检索引擎 (${engine})${degradedLabel}...`);
         }
         if (signal?.aborted) { ragLog("getRelevantText: 构建索引后被取消"); return ""; }
         setCurrentTask(`正在检索相关段落${degradedLabel}...`);

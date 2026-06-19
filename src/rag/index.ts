@@ -5,7 +5,7 @@ import { isEmbeddingEngine } from "./engines";
 import { ragLog } from "@/lib/logger";
 import { sharedDB as db } from "@/db/database";
 import { useRAGStore } from "@/stores/rag-store";
-import { updateRagCacheSize, updateAccessTime } from "./rag-cache-utils";
+import { updateRagCacheSize, updateAccessTime, onCacheEviction } from "./rag-cache-utils";
 import { normalizeChunks } from "./chunk-utils";
 
 export { updateRagCacheSize } from "./rag-cache-utils";
@@ -16,7 +16,7 @@ interface IndexEntry {
   engine: EngineId;
   retriever: Retriever;
   embedding?: EmbeddingRetriever;
-  chunks: Chunk[];
+  chunkCount: number;
   buildTime?: number;
 }
 
@@ -35,6 +35,19 @@ onLRUEvict((evictedKey) => {
   ragLog(`内存 LRU 淘汰: ${evictedKey}`);
 });
 
+// ragCache IndexedDB 淘汰时，同步清理内存 indexCache 和 chunksMemCache
+onCacheEviction((evicted) => {
+  for (const e of evicted) {
+    const entry = indexCache.get(e.id);
+    if (entry) {
+      entry.embedding?.dispose();
+      indexCache.delete(e.id);
+      useRAGStore.getState().removeLruKey(e.id);
+    }
+    chunksMemCache.delete(e.id);
+  }
+});
+
 export type { EmbeddingRetriever, EmbeddingProgress };
 
 export async function buildIndex(
@@ -42,7 +55,9 @@ export async function buildIndex(
   chapters: { title: string; content: string }[],
   engine: EngineId = "tfidf",
   onProgress?: (msg: string) => void,
-  options?: { cacheOnly?: boolean }
+  options?: { cacheOnly?: boolean },
+  /** 章节总数（TF-IDF 流式构建时传入，避免预加载全书） */
+  chapterCount?: number
 ): Promise<Retriever | EmbeddingRetriever> {
   const cacheKey = `${novelId}-${engine}`;
   const existing = indexCache.get(cacheKey);
@@ -74,7 +89,7 @@ export async function buildIndex(
         useRAGStore.getState().addLruKey(cacheKey);
         lruAdd(cacheKey, emb.vectors, chunks, cached.dim);
         updateAccessTime(novelId, engine);
-        const entry: IndexEntry = { novelId, engine, retriever: new Retriever(chunks), embedding: emb, chunks, buildTime: 0 };
+        const entry: IndexEntry = { novelId, engine, retriever: new Retriever(chunks), embedding: emb, chunkCount: chunks.length, buildTime: 0 };
         indexCache.set(cacheKey, entry);
         return emb;
       }
@@ -92,7 +107,7 @@ export async function buildIndex(
         useRAGStore.getState().addCachedKey(cacheKey);
         useRAGStore.getState().addLruKey(cacheKey);
         updateAccessTime(novelId, "tfidf");
-        const entry: IndexEntry = { novelId, engine, retriever, chunks, buildTime: 0 };
+        const entry: IndexEntry = { novelId, engine, retriever, chunkCount: chunks.length, buildTime: 0 };
         indexCache.set(cacheKey, entry);
         return retriever;
       }
@@ -110,25 +125,54 @@ export async function buildIndex(
   buildingNow.add(cacheKey);
 
   try {
-    onProgress?.("正在分割文本...");
-    const chunks: Chunk[] = [];
     const chunkSize = 500;
     const overlap = 100;
-    for (let ci = 0; ci < chapters.length; ci++) {
-      const ch = chapters[ci];
-      let start = 0;
-      const { content } = ch;
-      while (start < content.length) {
-        const end = Math.min(start + chunkSize, content.length);
-        const text = content.slice(start, end).trim();
-        if (text) {
-          chunks.push({ id: `${novelId}-${chunks.length}`, content: `[${ch.title}] ${text}`, chapterIndex: ci });
+    const chunks: Chunk[] = [];
+    const t0 = Date.now();
+
+    // 分块：支持两种模式
+    // 1. 章节已加载（chapters 有内容）→ 直接分块
+    // 2. 流式模式（chapterCount 有值，chapters 为空）→ 逐批从 IndexedDB 加载
+    if (chapters.length > 0) {
+      onProgress?.("正在分割文本...");
+      for (let ci = 0; ci < chapters.length; ci++) {
+        const ch = chapters[ci];
+        let start = 0;
+        const { content } = ch;
+        while (start < content.length) {
+          const end = Math.min(start + chunkSize, content.length);
+          const text = content.slice(start, end).trim();
+          if (text) {
+            chunks.push({ id: `${novelId}-${chunks.length}`, content: `[${ch.title}] ${text}`, chapterIndex: ci });
+          }
+          start += chunkSize - overlap;
         }
-        start += chunkSize - overlap;
+      }
+    } else if (chapterCount && chapterCount > 0) {
+      // 流式构建：逐批从 IndexedDB 加载章节，分块后释放
+      const { loadChapters: loadCh } = await import("@/db/repositories");
+      const BATCH = 50;
+      for (let start = 0; start < chapterCount; start += BATCH) {
+        const batch = await loadCh(novelId, start, BATCH);
+        for (let ci = 0; ci < batch.length; ci++) {
+          const ch = batch[ci];
+          let pos = 0;
+          const { content } = ch;
+          while (pos < content.length) {
+            const end = Math.min(pos + chunkSize, content.length);
+            const text = content.slice(pos, end).trim();
+            if (text) {
+              chunks.push({ id: `${novelId}-${chunks.length}`, content: `[${ch.title}] ${text}`, chapterIndex: ch.index });
+            }
+            pos += chunkSize - overlap;
+          }
+        }
+        onProgress?.(`正在分块 ${Math.min(start + BATCH, chapterCount)}/${chapterCount} 章...`);
+        // 让出事件循环，保持 UI 响应
+        if (start + BATCH < chapterCount) await new Promise(ok => setTimeout(ok, 0));
       }
     }
 
-    const t0 = Date.now();
     ragLog(`开始构建索引: ${chunks.length}片段 · 引擎: ${engine}`);
 
     if (isEmbeddingEngine(engine)) {
@@ -144,31 +188,36 @@ export async function buildIndex(
       });
       ragLog(`编码完成: ${chunks.length}片段 · ${(Date.now() - t0) / 1000}s`);
 
-      const entry: IndexEntry = { novelId, engine, retriever: new Retriever(chunks), embedding: emb, chunks, buildTime: Date.now() - t0 };
+      const entry: IndexEntry = { novelId, engine, retriever: new Retriever(chunks), embedding: emb, chunkCount: chunks.length, buildTime: Date.now() - t0 };
       indexCache.set(cacheKey, entry);
       return emb;
     } else {
       onProgress?.("正在构建 TF-IDF 索引...");
-      const retriever = new Retriever(chunks);
+      const buildStart = Date.now(); // 向量构建单独计时，不含分块时间
+      const retriever = await Retriever.buildAsync(chunks, (phase, cur, total) => {
+        const pct = Math.round((cur / total) * 100);
+        const elapsed = (Date.now() - buildStart) / 1000;
+        const estimated = cur > 0 ? Math.ceil(elapsed / cur * (total - cur)) : 0;
+        const timeStr = estimated > 0 ? `（约 ${estimated} 秒）` : "";
+        onProgress?.(`${phase} ${pct}%${timeStr}`);
+      });
       ragLog(`TF-IDF 索引就绪: ${chunks.length}片段 · ${(Date.now() - t0)}ms`);
 
       // 持久化到 ragCache（下次直接加载，无需重新构建）
-      try {
-        const { vectorsBuffer, extraData } = retriever.toCache();
-        await db.ragCache.put({
-          id: cacheKey, novelId, engine: "tfidf",
-          vectorsBuffer, chunks, dim: 128, chunkCount: chunks.length,
-          extraData, createdAt: Date.now(), lastAccessed: Date.now(), accessCount: 1,
-        });
-        useRAGStore.getState().addCachedKey(cacheKey);
-        useRAGStore.getState().addLruKey(cacheKey);
-        ragLog(`TF-IDF 已缓存: ${chunks.length}片段`);
-        // 清理超限缓存
-        const { enforceIndexedDBQuota } = await import("./rag-cache-utils");
-        await enforceIndexedDBQuota();
-      } catch (e) { ragLog(`TF-IDF 缓存写入失败: ${e}`); }
+      const { vectorsBuffer, extraData } = retriever.toCache();
+      await db.ragCache.put({
+        id: cacheKey, novelId, engine: "tfidf",
+        vectorsBuffer, chunks, dim: 128, chunkCount: chunks.length,
+        extraData, createdAt: Date.now(), lastAccessed: Date.now(), accessCount: 1,
+      });
+      useRAGStore.getState().addCachedKey(cacheKey);
+      useRAGStore.getState().addLruKey(cacheKey);
+      ragLog(`TF-IDF 已缓存: ${chunks.length}片段`);
+      // 清理超限缓存
+      const { enforceIndexedDBQuota } = await import("./rag-cache-utils");
+      await enforceIndexedDBQuota();
 
-      const entry: IndexEntry = { novelId, engine, retriever, chunks, buildTime: Date.now() - t0 };
+      const entry: IndexEntry = { novelId, engine, retriever, chunkCount: chunks.length, buildTime: Date.now() - t0 };
       indexCache.set(cacheKey, entry);
       return retriever;
     }
@@ -200,6 +249,7 @@ export function clearCache(novelId?: string, engine?: string) {
       lruDelete(key);
       indexCache.delete(key);
     }
+    chunksMemCache.delete(key);
     db.ragCache.delete(key).then(() => updateRagCacheSize()).catch((e) => console.warn("[rag] delete cache failed:", e));
     store.removeCachedKey(key);
     store.removeLruKey(key);
@@ -214,6 +264,7 @@ export function clearCache(novelId?: string, engine?: string) {
       entry?.embedding?.dispose();
       lruDelete(key);
       indexCache.delete(key);
+      chunksMemCache.delete(key);
       store.removeCachedKey(key);
       store.removeLruKey(key);
     }
@@ -227,8 +278,26 @@ export function clearCache(novelId?: string, engine?: string) {
       store.removeLruKey(key);
     }
     indexCache.clear();
+    chunksMemCache.clear();
     db.ragCache.clear().then(() => store.updateRagCacheSize(0)).catch((e) => console.warn("[rag] clear cache failed:", e));
   }
+}
+
+// chunks 内存缓存：避免每次搜索都从 IndexedDB 读取全部 chunks
+// 淘汰时由 onCacheEviction 清理
+const chunksMemCache = new Map<string, Map<string, Chunk>>();
+
+/** 从 IndexedDB ragCache 按需加载 chunks（带内存缓存） */
+async function loadChunksFromCache(novelId: string, engine: string): Promise<Map<string, Chunk>> {
+  const cacheKey = `${novelId}-${engine}`;
+  const cached = chunksMemCache.get(cacheKey);
+  if (cached) return cached;
+
+  const record = await db.ragCache.get(cacheKey);
+  const chunks = record ? normalizeChunks(record.chunks) : [];
+  const chunkMap = new Map(chunks.map(c => [c.id, c]));
+  chunksMemCache.set(cacheKey, chunkMap);
+  return chunkMap;
 }
 
 export async function retrieveRelevant(
@@ -241,7 +310,7 @@ export async function retrieveRelevant(
   const entry = indexCache.get(`${novelId}-${effectiveEngine}`);
   if (!entry) return "";
 
-  const k = topK ?? useRAGStore.getState().getTopK(entry.chunks.length);
+  const k = topK ?? useRAGStore.getState().getTopK(entry.chunkCount);
 
   if (isEmbeddingEngine(entry.engine) && entry.embedding) {
     const results = await entry.embedding.search(query, k);
@@ -253,11 +322,9 @@ export async function retrieveRelevant(
   }
 
   const results = entry.retriever.search(query, k);
+  const chunkMap = await loadChunksFromCache(novelId, effectiveEngine);
   return results
-    .map((r) => {
-      const chunk = entry.chunks.find((c) => c.id === r.id);
-      return chunk?.content || "";
-    })
+    .map((r) => chunkMap.get(r.id)?.content || "")
     .filter(Boolean)
     .join("\n\n---\n\n");
 }
@@ -272,7 +339,7 @@ export async function retrieveRelevantWithDetails(
   const entry = indexCache.get(`${novelId}-${effectiveEngine}`);
   if (!entry) return { text: "", results: [], engine: "none" };
 
-  const k = topK ?? useRAGStore.getState().getTopK(entry.chunks.length);
+  const k = topK ?? useRAGStore.getState().getTopK(entry.chunkCount);
 
   if (isEmbeddingEngine(entry.engine) && entry.embedding) {
     const results = await entry.embedding.search(query, k);
@@ -288,9 +355,10 @@ export async function retrieveRelevantWithDetails(
   }
 
   const results = entry.retriever.search(query, k);
+  const chunkMap = await loadChunksFromCache(novelId, effectiveEngine);
   const mapped = results
     .map((r) => {
-      const chunk = entry.chunks.find((c) => c.id === r.id);
+      const chunk = chunkMap.get(r.id);
       return chunk ? { content: chunk.content, score: r.score } : null;
     })
     .filter(Boolean) as { content: string; score: number }[];
@@ -317,7 +385,7 @@ export async function retrieveRelevantForRange(
   const entry = indexCache.get(`${novelId}-${effectiveEngine}`);
   if (!entry) return { text: "", results: [], engine: "none" };
 
-  const k = topK ?? useRAGStore.getState().getTopK(entry.chunks.length);
+  const k = topK ?? useRAGStore.getState().getTopK(entry.chunkCount);
   const inRange = (ci?: number) => ci === undefined || (ci >= fromChapter && ci <= toChapter);
 
   if (isEmbeddingEngine(entry.engine) && entry.embedding) {
@@ -333,10 +401,11 @@ export async function retrieveRelevantForRange(
     ragLog("向量检索为空, 降级为 TF-IDF");
   }
 
+  const chunkMap = await loadChunksFromCache(novelId, effectiveEngine);
   const allResults = entry.retriever.search(query, k * 3);
   const mapped = allResults
     .map((r) => {
-      const chunk = entry.chunks.find((c) => c.id === r.id);
+      const chunk = chunkMap.get(r.id);
       if (!chunk || !inRange(chunk.chapterIndex)) return null;
       return { content: chunk.content, score: r.score };
     })

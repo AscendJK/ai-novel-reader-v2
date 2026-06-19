@@ -7,6 +7,7 @@ import { useState, useCallback } from "react";
 import { buildIndex, retrieveRelevantWithDetails } from "@/rag/index";
 import { isEmbeddingEngine } from "@/rag/engines";
 import { useRAGStore } from "@/stores/rag-store";
+import { loadNovel } from "@/db/repositories";
 
 interface UseSearchOptions {
   /** 小说 ID */
@@ -71,7 +72,16 @@ export function useSearch({
 
       // 如果是 TF-IDF，需要构建索引
       if (searchEngine === "tfidf") {
-        await buildIndex(novelId, chapters, "tfidf");
+        // 检查章节内容是否完整（懒加载可能导致大部分章节内容为空）
+        let buildChapters = chapters;
+        const hasEmptyContent = chapters.some(ch => !ch.content);
+        if (hasEmptyContent) {
+          const fullNovel = await loadNovel(novelId, undefined, true);
+          if (fullNovel) {
+            buildChapters = fullNovel.chapters;
+          }
+        }
+        await buildIndex(novelId, buildChapters, "tfidf");
       }
 
       // 执行搜索
