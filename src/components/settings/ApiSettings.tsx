@@ -13,6 +13,7 @@ import { sharedDB as db } from "@/db/database";
 import { useUIStore } from "@/stores/ui-store";
 import { syncClient } from "@/sync/sync-client";
 import { RAGSettings } from "./RAGSettings";
+import { TTSSettings } from "./TTSSettings";
 import { ExportPanel } from "./ExportPanel";
 
 function newId(): string {
@@ -207,6 +208,8 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
 
       <Separator />
       <RAGSettings />
+      <Separator />
+      <TTSSettings />
       <Separator />
 
       {/* Keyboard shortcuts */}
