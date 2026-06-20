@@ -160,7 +160,7 @@ export function AudioPlayer({
           <button
             className="text-xs text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded hover:bg-muted"
             onClick={() => {
-              const speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+              const speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0];
               const current = speeds.indexOf(speed);
               const next = speeds[(current + 1) % speeds.length];
               setSpeed(next);
@@ -175,12 +175,12 @@ export function AudioPlayer({
         <div className="shrink-0">
           {engine === "kokoro" ? (
             isWebGPU ? (
-              <Zap className="h-3.5 w-3.5 text-green-500" title="WebGPU 加速" />
+              <span title="WebGPU 加速"><Zap className="h-3.5 w-3.5 text-green-500" /></span>
             ) : (
-              <Cpu className="h-3.5 w-3.5 text-amber-500" title="CPU 推理" />
+              <span title="CPU 推理"><Cpu className="h-3.5 w-3.5 text-amber-500" /></span>
             )
           ) : (
-            <Volume2 className="h-3.5 w-3.5 text-muted-foreground" title="Web Speech API" />
+            <span title="Web Speech API"><Volume2 className="h-3.5 w-3.5 text-muted-foreground" /></span>
           )}
         </div>
       </div>

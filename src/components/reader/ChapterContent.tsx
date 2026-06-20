@@ -6,9 +6,8 @@ import { useRAGStore } from "@/stores/rag-store";
 import { useKeyboardShortcuts, type ShortcutBinding } from "@/hooks/useKeyboardShortcuts";
 import { usePagination, type PageRange } from "@/hooks/usePagination";
 import { useContinuousScroll } from "@/hooks/useContinuousScroll";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Badge } from "@/components/ui/badge";
 import { AudioPlayer } from "@/components/tts/AudioPlayer";
+import type { ScrollControl } from "./ReadingPanel";
 import { Button } from "@/components/ui/button";
 import { Minus, Plus, Sparkles, ChevronLeft, ChevronRight, Type, Loader2, Maximize2, Minimize2 } from "lucide-react";
 import { loadChapters } from "@/db/repositories";
@@ -277,7 +276,6 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
 
   const safePage = Math.min(currentPage, Math.max(0, totalPages - 1));
   const spreadIndex = Math.floor(safePage / 2);
-  const totalSpreads = Math.ceil(totalPages / 2);
 
   // 窗口尺寸监听
   useEffect(() => {
@@ -586,6 +584,18 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
         isIndexLoading={isIndexLoading}
       />
 
+      {/* TTS 播放栏 */}
+      {currentNovel && chapter && (
+        <AudioPlayer
+          novelId={currentNovel.id}
+          chapterContent={chapter.content || null}
+          chapterIndex={currentIndex}
+          chapterTitle={chapter.title}
+          onPrevChapter={currentIndex > 0 ? () => setSelectedChapter(chapters[currentIndex - 1]?.id) : undefined}
+          onNextChapter={currentIndex < chapters.length - 1 ? () => setSelectedChapter(chapters[currentIndex + 1]?.id) : undefined}
+        />
+      )}
+
       {/* 连续滚动容器 */}
       <div
         ref={scrollContainerRef}
@@ -689,7 +699,7 @@ function TopBar(props: {
   chapter: { id: string; title: string; content: string };
   currentIndex: number;
   chapters: Array<{ id: string }>;
-  summaries: Array<{ id: string; createdAt: string }>;
+  summaries: Array<{ id: string; createdAt: number }>;
   summaryOpen: boolean;
   onToggleSummary: () => void;
   hasSummary: boolean;
@@ -715,9 +725,9 @@ function TopBar(props: {
   isIndexLoading?: boolean;
 }) {
   const {
-    chapter, currentIndex, chapters, summaries, summaryOpen, onToggleSummary, hasSummary,
+    chapter, currentIndex, chapters, summaryOpen, hasSummary,
     showFontPanel, setShowFontPanel, onToggleImmersive,
-    fontSize, setFontSize, fontWeight, cycleFontWeight, currentWeightLabel,
+    fontSize, setFontSize, cycleFontWeight, currentWeightLabel,
     lineHeight, setLineHeight, paragraphSpacing, setParagraphSpacing,
     fontFamily, setFontFamily,
     readingMode, setReadingMode, autoSwitchPageMode, setAutoSwitchPageMode,
@@ -853,18 +863,6 @@ function TopBar(props: {
           </>
         )}
       </div>
-
-      {/* TTS 播放栏 */}
-      {currentNovel && chapter && (
-        <AudioPlayer
-          novelId={currentNovel.id}
-          chapterContent={chapter.content || null}
-          chapterIndex={currentIndex}
-          chapterTitle={chapter.title}
-          onPrevChapter={currentIndex > 0 ? () => setSelectedChapter(chapters[currentIndex - 1]?.id) : undefined}
-          onNextChapter={currentIndex < chapters.length - 1 ? () => setSelectedChapter(chapters[currentIndex + 1]?.id) : undefined}
-        />
-      )}
     </div>
   );
 }

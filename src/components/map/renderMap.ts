@@ -41,14 +41,7 @@ const FORCE_COLORS: Record<string, string> = {
 
 // ── 工具函数 ──────────────────────────────────────────────────────
 
-/** 坐标转换：0-1000 → SVG 实际坐标 */
-function scaleX(x: number): number {
-  return PADDING + (x / 1000) * (BASE_WIDTH - 2 * PADDING);
-}
-
-function scaleY(y: number): number {
-  return PADDING + (y / 1000) * (BASE_HEIGHT - 2 * PADDING);
-}
+// 坐标转换直接在渲染函数中内联计算
 
 /** d3-force 节点接口 */
 interface ForceNode {

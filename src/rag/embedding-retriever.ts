@@ -5,7 +5,7 @@ import { useRAGStore } from "@/stores/rag-store";
 import { useBuildStore } from "@/stores/build-store";
 import { apiFetch } from "@/lib/api-client";
 import { encodeQuery } from "./client-encoder";
-import { enforceIndexedDBQuota, updateAccessTime } from "./rag-cache-utils";
+import { updateAccessTime } from "./rag-cache-utils";
 import { buildAndPollRAGIndex, downloadAndCacheIndex } from "./build-index";
 
 export type BGEProgress = EmbeddingProgress;
@@ -64,7 +64,7 @@ function evictLRU() {
 }
 
 export class EmbeddingRetriever {
-  private vectors: Float32Array[] = [];
+  vectors: Float32Array[] = [];
   private chunks: Chunk[] = [];
   private dim = 0;
   private engine: string;
@@ -188,7 +188,7 @@ export class EmbeddingRetriever {
             message: progress.message || "",
             current: progress.current || 0,
             total: progress.total || _allChunks.length,
-            status: progress.status,
+            status: progress.status as any,
             queuePosition: progress.queuePosition,
           });
           if (progress.status === "loading" || progress.status === "building" || progress.status === "encoding") {

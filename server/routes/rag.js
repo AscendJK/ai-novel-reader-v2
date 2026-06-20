@@ -181,8 +181,8 @@ function toCachePath(subPath) {
 }
 
 // GET /api/rag/model-proxy/{*path} — proxy model file from mirror
-// Only allows Xenova/ model paths to prevent open proxy abuse
-const VALID_MODEL_PATH = /^Xenova\/[^/]+\/resolve\/main\/.+/;
+// Only allows Xenova/ and onnx-community/ model paths to prevent open proxy abuse
+const VALID_MODEL_PATH = /^(Xenova|onnx-community)\/[^/]+\/resolve\/main\/.+/;
 
 router.get("/model-proxy/{*path}", async (req, res) => {
   console.log(`[model-proxy] 请求: ${req.originalUrl}`);

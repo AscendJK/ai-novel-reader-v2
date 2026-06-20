@@ -81,14 +81,14 @@ function loadSettings(): { voiceId: string; speed: number; autoNextChapter: bool
     if (raw) {
       const s = JSON.parse(raw);
       return {
-        voiceId: s.voiceId || "zf_xiaobei",
+        voiceId: s.voiceId || "zf_001",
         speed: s.speed ?? 1.0,
         autoNextChapter: s.autoNextChapter ?? true,
         engine: s.engine || "kokoro",
       };
     }
   } catch { /* ignore */ }
-  return { voiceId: "zf_xiaobei", speed: 1.0, autoNextChapter: true, engine: "kokoro" };
+  return { voiceId: "zf_001", speed: 1.0, autoNextChapter: true, engine: "kokoro" };
 }
 
 function saveSettings(s: { voiceId: string; speed: number; autoNextChapter: boolean; engine: string }) {

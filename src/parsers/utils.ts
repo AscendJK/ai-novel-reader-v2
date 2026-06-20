@@ -23,6 +23,7 @@ export function createNovel(parseResult: import("./types").ParseResult, fileName
     fileName,
     fileFormat,
     totalChars: parseResult.totalChars,
+    chapterCount: parseResult.chapters.length,
     chapters: parseResult.chapters.map((ch, i) => ({
       id: uuid(),
       novelId,

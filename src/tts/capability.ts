@@ -28,8 +28,8 @@ export async function detectTTSCapability(): Promise<TTSCapability> {
         const name = adapter.name || "";
         return {
           device: "webgpu",
-          modelFile: "model_q8f16.onnx",
-          modelSize: 86 * 1024 * 1024,
+          modelFile: "model_fp16.onnx",
+          modelSize: 164 * 1024 * 1024,
           detail: `WebGPU 可用${name ? ` (${name})` : ""}`,
           supported: true,
         };
@@ -43,7 +43,7 @@ export async function detectTTSCapability(): Promise<TTSCapability> {
   return {
     device: "wasm",
     modelFile: "model_quantized.onnx",
-    modelSize: 92 * 1024 * 1024,
+    modelSize: 127 * 1024 * 1024,
     detail: "WebGPU 不可用，使用 CPU 推理（较慢）",
     supported: true,
   };

@@ -30,14 +30,21 @@ export type ErrorCode =
 
 /** 应用错误类 */
 export class AppError extends Error {
+  code: ErrorCode;
+  severity: ErrorSeverity;
+  context?: Record<string, unknown>;
+
   constructor(
     message: string,
-    public code: ErrorCode = 'UNKNOWN',
-    public severity: ErrorSeverity = 'medium',
-    public context?: Record<string, unknown>
+    code: ErrorCode = 'UNKNOWN',
+    severity: ErrorSeverity = 'medium',
+    context?: Record<string, unknown>
   ) {
     super(message);
     this.name = 'AppError';
+    this.code = code;
+    this.severity = severity;
+    this.context = context;
   }
 }
 

@@ -3,7 +3,8 @@ import { Download, Upload, FileText, FileJson, Package, HardDrive, AlertTriangle
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { loadAllNovelMeta, type NovelMeta } from "@/db/repositories";
+import { loadAllNovelMeta } from "@/db/repositories";
+import type { NovelMeta } from "@/parsers/types";
 import { exportNovelAsJSON, exportNovelAsTXT, exportAllAsJSON, importFromJSON } from "@/lib/export";
 
 export function ExportPanel() {

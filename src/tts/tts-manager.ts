@@ -4,7 +4,7 @@
  * 支持流式播放（边生成边播放 + 预生成下一章）
  */
 
-import { loadKokoroModel, isKokoroLoaded, generateAudio, disposeKokoro } from "./kokoro-engine";
+import { loadKokoroModel, isKokoroLoaded, generateAudio } from "./kokoro-engine";
 
 export type TTSEngine = "kokoro" | "webspeech";
 
@@ -24,6 +24,10 @@ export interface TTSPlaybackCallbacks {
   onError?: (error: string) => void;
   /** 引擎降级回调（如 Kokoro 加载失败降级到 Web Speech API） */
   onFallback?: (from: TTSEngine, to: TTSEngine) => void;
+  /** 模型加载进度回调 */
+  onModelProgress?: (progress: number) => void;
+  /** 模型加载完成回调 */
+  onModelLoaded?: () => void;
 }
 
 /**
@@ -101,7 +105,7 @@ class KokoroTTSEngine {
   private startedAt = 0;
   private currentBuffer: AudioBuffer | null = null;
   private currentCallbacks: TTSPlaybackCallbacks = {};
-  private voice = "zf_xiaobei";
+  private voice = "zf_001";
 
   setVoice(voiceId: string) {
     this.voice = voiceId;
@@ -126,7 +130,7 @@ class KokoroTTSEngine {
 
       const ctx = this.getAudioContext();
       const buffer = ctx.createBuffer(1, audioResult.audio.length, audioResult.sampleRate);
-      buffer.copyToChannel(audioResult.audio, 0);
+      buffer.copyToChannel(new Float32Array(audioResult.audio), 0);
       return buffer;
     } catch (err) {
       console.error("[Kokoro] Generate failed:", err);
@@ -137,8 +141,12 @@ class KokoroTTSEngine {
   /**
    * 播放已生成的 AudioBuffer
    */
-  playBuffer(buffer: AudioBuffer, callbacks: TTSPlaybackCallbacks): void {
+  async playBuffer(buffer: AudioBuffer, callbacks: TTSPlaybackCallbacks): Promise<void> {
     const ctx = this.getAudioContext();
+    // 确保 AudioContext 处于运行状态（浏览器要求用户手势后才能播放音频）
+    if (ctx.state === "suspended") {
+      await ctx.resume();
+    }
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(ctx.destination);
@@ -146,8 +154,11 @@ class KokoroTTSEngine {
     this.currentCallbacks = callbacks;
     source.onended = () => {
       this.currentSource = null;
-      this.currentBuffer = null;
-      callbacks.onEnd?.();
+      // 如果是 pause() 触发的 onended，保留 currentBuffer 供 resume() 使用
+      if (!this.paused) {
+        this.currentBuffer = null;
+        callbacks.onEnd?.();
+      }
     };
 
     this.currentBuffer = buffer;
@@ -184,9 +195,12 @@ class KokoroTTSEngine {
     }
   }
 
-  resume(): void {
+  async resume(): Promise<void> {
     if (this.paused && this.currentBuffer) {
       const ctx = this.getAudioContext();
+      if (ctx.state === "suspended") {
+        await ctx.resume();
+      }
       const source = ctx.createBufferSource();
       source.buffer = this.currentBuffer;
       source.connect(ctx.destination);
@@ -194,8 +208,10 @@ class KokoroTTSEngine {
       const callbacks = this.currentCallbacks;
       source.onended = () => {
         this.currentSource = null;
-        this.currentBuffer = null;
-        callbacks.onEnd?.();
+        if (!this.paused) {
+          this.currentBuffer = null;
+          callbacks.onEnd?.();
+        }
       };
 
       this.currentSource = source;
@@ -227,10 +243,9 @@ class KokoroTTSEngine {
   destroy(): void {
     this.stop();
     if (this.audioContext) {
-      this.audioContext.close();
+      this.audioContext.close().catch(() => { /* ignore */ });
       this.audioContext = null;
     }
-    disposeKokoro();
   }
 }
 
@@ -245,7 +260,7 @@ export class TTSManager {
   private currentChunkIndex = 0;
   private callbacks: TTSPlaybackCallbacks = {};
   private speed = 1.0;
-  private voiceId = "zf_xiaobei";
+  private voiceId = "zf_001";
   private stopped = false;
 
   // 预生成缓冲（流式播放核心）
@@ -267,10 +282,12 @@ export class TTSManager {
   }
 
   /**
-   * 设置语音
+   * 设置语音（清除预生成缓冲，新语音在下一段生成时生效）
    */
   setVoice(voiceId: string) {
     this.voiceId = voiceId;
+    this.preloadedBuffer = null;
+    this.preloadedIndex = -1;
     if (this.engine === "webspeech") {
       this.webSpeech.setVoice(voiceId);
     } else if (this.kokoro) {
@@ -279,11 +296,11 @@ export class TTSManager {
   }
 
   /**
-   * 设置语速（清除预生成缓冲并使进行中的预生成失效）
+   * 设置语速（清除预生成缓冲，新语速在下一段生成时生效）
+   * 注意：不递增 generationId，避免中断当前播放链路
    */
   setSpeed(speed: number) {
     this.speed = Math.max(0.5, Math.min(3.0, speed));
-    this.generationId++;
     this.preloadedBuffer = null;
     this.preloadedIndex = -1;
   }
@@ -292,6 +309,9 @@ export class TTSManager {
    * 开始朗读一组文本段落
    */
   async speak(chunks: TTSChunk[], callbacks: TTSPlaybackCallbacks): Promise<void> {
+    // 先清除旧回调，再停止（防止 stop() 触发旧 onStop/onEnd）
+    this.callbacks = {};
+    this.stop();
     this.chunks = chunks;
     this.currentChunkIndex = 0;
     this.callbacks = callbacks;
@@ -309,7 +329,14 @@ export class TTSManager {
     if (this.engine === "kokoro") {
       try {
         if (!isKokoroLoaded()) {
-          await loadKokoroModel();
+          const genBeforeLoad = this.generationId;
+          callbacks.onModelProgress?.(0);
+          await loadKokoroModel({
+            onProgress: (p) => callbacks.onModelProgress?.(p),
+          });
+          // 模型加载期间如果再次调用了 speak()，本次应作废
+          if (this.generationId !== genBeforeLoad) return;
+          callbacks.onModelLoaded?.();
         }
         if (!this.kokoro) {
           this.kokoro = new KokoroTTSEngine();
@@ -337,6 +364,7 @@ export class TTSManager {
     }
 
     const chunk = this.chunks[this.currentChunkIndex];
+    const genId = this.generationId; // 捕获当前代数，用于检测 stale 回调
     this.callbacks.onChunkStart?.(this.currentChunkIndex, this.chunks.length);
 
     if (this.engine === "kokoro" && this.kokoro) {
@@ -353,14 +381,15 @@ export class TTSManager {
         buffer = await this.kokoro.generate(chunk.text, this.speed);
       }
 
-      if (this.stopped) return;
+      if (this.stopped || this.generationId !== genId) return;
 
       if (buffer) {
         // 开始播放
-        this.kokoro.playBuffer(buffer, {
+        await this.kokoro.playBuffer(buffer, {
           onPlay: () => this.callbacks.onPlay?.(),
           onEnd: () => {
-            if (this.stopped) return;
+            // 代数不匹配说明 seekToChunk/stop/speak 已中断此链路
+            if (this.stopped || this.generationId !== genId) return;
             this.callbacks.onChunkEnd?.(this.currentChunkIndex, this.chunks.length);
             this.currentChunkIndex++;
             this.speakNextChunk();
@@ -378,7 +407,7 @@ export class TTSManager {
       this.webSpeech.speak(chunk.text, this.speed, {
         onPlay: () => this.callbacks.onPlay?.(),
         onEnd: () => {
-          if (this.stopped) return;
+          if (this.stopped || this.generationId !== genId) return;
           this.callbacks.onChunkEnd?.(this.currentChunkIndex, this.chunks.length);
           this.currentChunkIndex++;
           this.speakNextChunk();
@@ -401,10 +430,15 @@ export class TTSManager {
     this.isPreloading = true;
     const nextChunk = this.chunks[nextIndex];
     const genId = this.generationId; // 捕获当前代数
+    const capturedSpeed = this.speed; // 捕获当前语速
+    const capturedVoice = this.voiceId; // 捕获当前语音
 
     this.kokoro.generate(nextChunk.text, this.speed).then((buffer) => {
-      // 代数不匹配则丢弃（seek/stop/speed change 发生过）
-      if (this.generationId !== genId) return;
+      // 代数不匹配、语速或语音已变则丢弃
+      if (this.generationId !== genId || this.speed !== capturedSpeed || this.voiceId !== capturedVoice) {
+        this.isPreloading = false;
+        return;
+      }
       if (!this.stopped && buffer) {
         this.preloadedBuffer = buffer;
         this.preloadedIndex = nextIndex;
@@ -430,9 +464,9 @@ export class TTSManager {
   /**
    * 恢复
    */
-  resume(): void {
+  async resume(): Promise<void> {
     if (this.engine === "kokoro" && this.kokoro) {
-      this.kokoro.resume();
+      await this.kokoro.resume();
     } else {
       this.webSpeech.resume();
     }
@@ -496,7 +530,10 @@ export class TTSManager {
     this.generationId++;
     this.preloadedBuffer = null;
     this.preloadedIndex = -1;
-    if (this.kokoro) this.kokoro.destroy();
+    if (this.kokoro) {
+      this.kokoro.destroy();
+      this.kokoro = null;
+    }
     this.webSpeech.destroy();
   }
 }

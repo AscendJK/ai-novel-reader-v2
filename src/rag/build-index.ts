@@ -120,6 +120,7 @@ interface PollResult {
   total?: number;
   queuePosition?: number;
   error?: string;
+  message?: string;
 }
 
 /**
@@ -310,7 +311,6 @@ async function doBuild(options: BuildOptions & { buildKey: string }): Promise<Do
     pollInterval = 3000,
     timeout = 600_000,
     maxFailCount = 10,
-    buildKey,
   } = options;
 
   // 1. 触发构建

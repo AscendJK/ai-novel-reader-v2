@@ -35,12 +35,20 @@ export function TTSSettings() {
   const browserHint = getWebGPUBrowserHint();
 
   // Web Speech API 可用语音列表（中文）
-  const voices = typeof speechSynthesis !== "undefined"
-    ? speechSynthesis.getVoices().filter(v => v.lang.startsWith("zh"))
-    : [];
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  useEffect(() => {
+    if (typeof speechSynthesis === "undefined") return;
+    const updateVoices = () => {
+      setVoices(speechSynthesis.getVoices().filter(v => v.lang.startsWith("zh")));
+    };
+    updateVoices(); // 首次尝试（部分浏览器同步加载）
+    speechSynthesis.addEventListener("voiceschanged", updateVoices);
+    return () => speechSynthesis.removeEventListener("voiceschanged", updateVoices);
+  }, []);
 
   // 语音试听
   const [previewing, setPreviewing] = useState(false);
+  const [previewStatus, setPreviewStatus] = useState<string>("");
 
   const previewVoice = useCallback((previewVoiceId: string) => {
     if (previewing) return;
@@ -48,24 +56,47 @@ export function TTSSettings() {
     if (engine === "kokoro") {
       // Kokoro 试听：先加载模型，再生成短音频并播放
       setPreviewing(true);
-      import("@/tts/kokoro-engine").then(({ loadKokoroModel, generateAudio }) => {
-        loadKokoroModel().then(() =>
-          generateAudio("你好，我是你的小说朗读助手。", { voice: previewVoiceId, speed: 1.0 })
-        )
-          .then((result) => {
+      setPreviewStatus("正在加载模型...");
+      import("@/tts/kokoro-engine").then(({ loadKokoroModel, generateAudio, isKokoroLoaded }) => {
+        const modelReady = isKokoroLoaded();
+        if (!modelReady) {
+          setPreviewStatus("首次使用，正在下载模型（约 100MB）...");
+        }
+        loadKokoroModel({
+          onProgress: (p) => {
+            if (!modelReady) setPreviewStatus(`正在下载模型 ${p}%...`);
+          }
+        }).then(() => {
+          setPreviewStatus("正在生成音频...");
+          return generateAudio("你好，我是你的小说朗读助手。这是一段语音试听，你可以通过这段文字感受不同语音的音色效果。", { voice: previewVoiceId, speed: 1.0 });
+        })
+          .then(async (result) => {
+            setPreviewStatus("");
             const ctx = new AudioContext();
-            const buffer = ctx.createBuffer(1, result.audio.length, result.sampleRate);
-            buffer.copyToChannel(result.audio, 0);
-            const source = ctx.createBufferSource();
-            source.buffer = buffer;
-            source.connect(ctx.destination);
-            source.onended = () => {
+            try {
+              if (ctx.state === "suspended") await ctx.resume();
+              const buffer = ctx.createBuffer(1, result.audio.length, result.sampleRate);
+              buffer.copyToChannel(new Float32Array(result.audio), 0);
+              const source = ctx.createBufferSource();
+              source.buffer = buffer;
+              source.connect(ctx.destination);
+              source.onended = () => {
+                ctx.close();
+                setPreviewing(false);
+              };
+              source.start();
+            } catch (e) {
               ctx.close();
               setPreviewing(false);
-            };
-            source.start();
+              setPreviewStatus("");
+              console.error("[TTS] Preview playback failed:", e);
+            }
           })
-          .catch(() => setPreviewing(false));
+          .catch((err) => {
+            setPreviewing(false);
+            setPreviewStatus(`加载失败: ${err instanceof Error ? err.message : "未知错误"}`);
+            console.error("[TTS] Preview failed:", err);
+          });
       });
     } else {
       // Web Speech API 试听
@@ -99,7 +130,7 @@ export function TTSSettings() {
             <Zap className="h-4 w-4 text-green-500" />
             <div className="flex-1">
               <span className="text-xs text-green-600 font-medium">{capability?.detail}</span>
-              <span className="text-xs text-muted-foreground ml-2">· q8f16 (86MB) · WebGPU 推理</span>
+              <span className="text-xs text-muted-foreground ml-2">· fp16 (164MB) · WebGPU 推理</span>
             </div>
           </>
         ) : (
@@ -107,7 +138,7 @@ export function TTSSettings() {
             <Cpu className="h-4 w-4 text-amber-500" />
             <div className="flex-1">
               <span className="text-xs text-amber-600 font-medium">{capability?.detail}</span>
-              <span className="text-xs text-muted-foreground ml-2">· quantized (92MB) · WASM 推理</span>
+              <span className="text-xs text-muted-foreground ml-2">· quantized (127MB) · WASM 推理</span>
               {browserHint && (
                 <p className="text-[10px] text-muted-foreground mt-1">💡 {browserHint}</p>
               )}
@@ -178,7 +209,12 @@ export function TTSSettings() {
               <span className="ml-1">试听</span>
             </Button>
           </div>
-          <p className="text-[10px] text-muted-foreground">Kokoro 中文语音，首次使用需下载 86MB 模型</p>
+          {previewStatus && (
+            <p className={`text-[10px] ${previewStatus.includes("失败") ? "text-destructive" : "text-muted-foreground"}`}>
+              {previewStatus}
+            </p>
+          )}
+          <p className="text-[10px] text-muted-foreground">Kokoro 中文语音，首次使用需下载 127MB 模型</p>
         </div>
       ) : (
         <div className="space-y-2">

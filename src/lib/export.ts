@@ -86,16 +86,16 @@ export async function importFromJSON(file: File): Promise<{ novels: number; chap
 
   await udb.transaction("rw", udb.novels, udb.chapters, udb.summaries, udb.notes, async () => {
     if (data.novels?.length) {
-      for (const n of data.novels) { await udb.novels.put(n); novelCount++; }
+      for (const n of data.novels) { await udb.novels.put(n as any); novelCount++; }
     }
     if (data.chapters?.length) {
-      for (const ch of data.chapters) { await udb.chapters.put(ch); chapterCount++; }
+      for (const ch of data.chapters) { await udb.chapters.put(ch as any); chapterCount++; }
     }
     if (data.summaries?.length) {
-      for (const s of data.summaries) { await udb.summaries.put({ ...s, updatedAt: s.updatedAt || Date.now() }); summaryCount++; }
+      for (const s of data.summaries) { await udb.summaries.put({ ...s, updatedAt: (s as any).updatedAt || Date.now() } as any); summaryCount++; }
     }
     if (data.notes?.length) {
-      for (const n of data.notes) { await udb.notes.put({ ...n, updatedAt: n.updatedAt || Date.now() }); noteCount++; }
+      for (const n of data.notes) { await udb.notes.put({ ...n, updatedAt: (n as any).updatedAt || Date.now() } as any); noteCount++; }
     }
   });
   // Settings go to shared DB

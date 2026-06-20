@@ -9,7 +9,6 @@ import { Separator } from "@/components/ui/separator";
 import { ProviderSelect } from "./ProviderSelect";
 import type { ProviderConfig, ProviderFormat } from "@/api/types";
 import { Key, Trash2, ArrowLeft, Plus, WifiOff, Wifi, Keyboard, Edit2 } from "lucide-react";
-import { sharedDB as db } from "@/db/database";
 import { useUIStore } from "@/stores/ui-store";
 import { syncClient } from "@/sync/sync-client";
 import { RAGSettings } from "./RAGSettings";

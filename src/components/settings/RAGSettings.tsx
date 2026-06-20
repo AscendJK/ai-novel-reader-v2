@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useRAGStore } from "@/stores/rag-store";
 import { useUIStore } from "@/stores/ui-store";
-import { ENGINES } from "@/rag/engines";
 import { ALL_ENGINES, downloadModel, getMirrorId, setMirrorId, getMirrorOptions } from "@/rag/model-loader";
 import { clearCache } from "@/rag/index";
 import { Button } from "@/components/ui/button";
@@ -121,8 +120,8 @@ export function RAGSettings() {
                     <Badge variant="outline" className="text-xs">{m.size}</Badge>
                     {isDefault && <Star className="h-3 w-3 text-amber-500" aria-label="默认" />}
                     {isActive && <Badge className="text-xs bg-primary">当前</Badge>}
-                    {m.key === "tfidf" && <CheckCircle2 className="h-3.5 w-3.5 text-green-500" title="始终可用" />}
-                    {m.downloaded && m.key !== "tfidf" && <CheckCircle2 className="h-3.5 w-3.5 text-green-500" title="已下载" />}
+                    {m.key === "tfidf" && <span title="始终可用"><CheckCircle2 className="h-3.5 w-3.5 text-green-500" /></span>}
+                    {m.downloaded && m.key !== "tfidf" && <span title="已下载"><CheckCircle2 className="h-3.5 w-3.5 text-green-500" /></span>}
                   </div>
                   {m.url && (
                     <a

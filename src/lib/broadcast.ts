@@ -6,7 +6,7 @@
 type MessageHandler = (data: BroadcastMessage) => void;
 
 export interface BroadcastMessage {
-  type: 'sync-complete' | 'data-changed' | 'user-switched' | 'logout' | 'tab-closed';
+  type: 'sync-complete' | 'data-changed' | 'user-switched' | 'logout' | 'tab-closed' | 'model-download-complete';
   payload?: unknown;
   source: string; // 标签页 ID
   timestamp: number;
