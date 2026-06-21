@@ -17,6 +17,7 @@ export function TTSSettings() {
     voiceId, speed, autoNextChapter,
     modelDownloaded, modelDownloading, modelDownloadProgress,
     setCapability, setEngine, setVoiceId, setSpeed, setAutoNextChapter,
+    setModelDownloaded, setModelDownloading,
   } = useTTSStore();
 
   const [detecting, setDetecting] = useState(false);
@@ -54,49 +55,51 @@ export function TTSSettings() {
     if (previewing) return;
 
     if (engine === "kokoro") {
-      // Kokoro 试听：先加载模型，再生成短音频并播放
+      // Kokoro 试听：必须在用户手势内创建 AudioContext
+      const ctx = new AudioContext();
       setPreviewing(true);
       setPreviewStatus("正在加载模型...");
       import("@/tts/kokoro-engine").then(({ loadKokoroModel, generateAudio, isKokoroLoaded }) => {
         const modelReady = isKokoroLoaded();
         if (!modelReady) {
           setPreviewStatus("首次使用，正在下载模型（约 100MB）...");
+          setModelDownloading(true, 0);
         }
-        loadKokoroModel({
+        return loadKokoroModel({
           onProgress: (p) => {
-            if (!modelReady) setPreviewStatus(`正在下载模型 ${p}%...`);
+            if (!modelReady) {
+              setPreviewStatus(`正在下载模型 ${p}%...`);
+              setModelDownloading(true, p);
+            }
           }
         }).then(() => {
+          setModelDownloading(false);
+          setModelDownloaded(true);
           setPreviewStatus("正在生成音频...");
-          return generateAudio("你好，我是你的小说朗读助手。这是一段语音试听，你可以通过这段文字感受不同语音的音色效果。", { voice: previewVoiceId, speed: 1.0 });
-        })
-          .then(async (result) => {
+          const audioChunks: Float32Array[] = [];
+          return generateAudio("你好，我是你的小说朗读助手。这是一段语音试听，你可以通过这段文字感受不同语音的音色效果。", { voice: previewVoiceId, speed: 1.0 }, (chunk) => {
+            audioChunks.push(chunk);
+          }).then(() => {
             setPreviewStatus("");
-            const ctx = new AudioContext();
-            try {
-              if (ctx.state === "suspended") await ctx.resume();
-              const buffer = ctx.createBuffer(1, result.audio.length, result.sampleRate);
-              buffer.copyToChannel(new Float32Array(result.audio), 0);
-              const source = ctx.createBufferSource();
-              source.buffer = buffer;
-              source.connect(ctx.destination);
-              source.onended = () => {
-                ctx.close();
-                setPreviewing(false);
-              };
-              source.start();
-            } catch (e) {
-              ctx.close();
-              setPreviewing(false);
-              setPreviewStatus("");
-              console.error("[TTS] Preview playback failed:", e);
-            }
-          })
-          .catch((err) => {
-            setPreviewing(false);
-            setPreviewStatus(`加载失败: ${err instanceof Error ? err.message : "未知错误"}`);
-            console.error("[TTS] Preview failed:", err);
+            if (ctx.state === "suspended") ctx.resume();
+            const totalLen = audioChunks.reduce((s, c) => s + c.length, 0);
+            const merged = new Float32Array(totalLen);
+            let off = 0;
+            for (const c of audioChunks) { merged.set(c, off); off += c.length; }
+            const buffer = ctx.createBuffer(1, merged.length, 24000);
+            buffer.copyToChannel(merged, 0);
+            const source = ctx.createBufferSource();
+            source.buffer = buffer;
+            source.connect(ctx.destination);
+            source.onended = () => { ctx.close(); setPreviewing(false); };
+            source.start();
           });
+        });
+      }).catch((err) => {
+        try { ctx.close(); } catch { /* already closed */ }
+        setPreviewing(false);
+        setPreviewStatus(`加载失败: ${err instanceof Error ? err.message : "未知错误"}`);
+        console.error("[TTS] Preview failed:", err);
       });
     } else {
       // Web Speech API 试听

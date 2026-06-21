@@ -18,8 +18,8 @@ export function prepareTextForTTS(content: string, maxChunkLength: number = 300)
     .map(p =>
       p
         .replace(/\s+/g, " ") // 合并连续空白
-        .replace(/[""]/g, "") // 去除中文引号
-        .replace(/['']/g, "") // 去除中文单引号
+        .replace(/[""]/g, "，") // 中文双引号转逗号（保留对话停顿）
+        .replace(/['']/g, "，") // 中文单引号转逗号
         .replace(/\s*[—–]\s*/g, "，") // 破折号转逗号
         .trim()
     )

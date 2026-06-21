@@ -162,8 +162,8 @@ export function AudioPlayer({
             onClick={() => {
               const speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0];
               const current = speeds.indexOf(speed);
-              const next = speeds[(current + 1) % speeds.length];
-              setSpeed(next);
+              const nextIndex = (current + 1) % speeds.length;
+              setSpeed(speeds[nextIndex]);
             }}
             title="点击切换语速"
           >
