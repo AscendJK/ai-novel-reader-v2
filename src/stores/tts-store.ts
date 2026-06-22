@@ -4,7 +4,6 @@
  */
 
 import { create } from "zustand";
-import type { TTSCapability } from "@/tts/capability";
 
 export interface TTSState {
   // ── 播放状态 ──
@@ -39,21 +38,15 @@ export interface TTSState {
   /** 模型下载进度 0-100 */
   modelDownloadProgress: number;
 
-  // ── 设备能力 ──
-  /** 设备能力检测结果 */
-  capability: TTSCapability | null;
-  /** 是否已检测 */
-  capabilityChecked: boolean;
-
   // ── 设置 ──
-  /** 语音 ID */
+  /** 当前引擎的语音 ID（根据 engine 自动切换） */
   voiceId: string;
   /** 语速 0.5-3.0 */
   speed: number;
   /** 自动翻章 */
   autoNextChapter: boolean;
   /** TTS 引擎类型 */
-  engine: "kokoro" | "webspeech";
+  engine: "zipvoice" | "webspeech";
 
   // ── Actions ──
   setPlaying: (playing: boolean) => void;
@@ -65,37 +58,52 @@ export interface TTSState {
   setGenerating: (generating: boolean, progress?: number) => void;
   setModelDownloaded: (downloaded: boolean) => void;
   setModelDownloading: (downloading: boolean, progress?: number) => void;
-  setCapability: (capability: TTSCapability) => void;
   setVoiceId: (voiceId: string) => void;
   setSpeed: (speed: number) => void;
   setAutoNextChapter: (auto: boolean) => void;
-  setEngine: (engine: "kokoro" | "webspeech") => void;
+  setEngine: (engine: "zipvoice" | "webspeech") => void;
   reset: () => void;
 }
 
 const TTS_SETTINGS_KEY = "novel-reader-tts-settings";
 
-function loadSettings(): { voiceId: string; speed: number; autoNextChapter: boolean; engine: "kokoro" | "webspeech" } {
+interface PersistedSettings {
+  zipvoiceVoiceId: string;
+  webspeechVoiceId: string;
+  speed: number;
+  autoNextChapter: boolean;
+  engine: "zipvoice" | "webspeech";
+  modelDownloaded: boolean;
+}
+
+function loadSettings(): PersistedSettings {
   try {
     const raw = localStorage.getItem(TTS_SETTINGS_KEY);
     if (raw) {
       const s = JSON.parse(raw);
       return {
-        voiceId: s.voiceId || "zf_001",
+        zipvoiceVoiceId: s.zipvoiceVoiceId || s.voiceId || "0",
+        webspeechVoiceId: s.webspeechVoiceId || "",
         speed: s.speed ?? 1.0,
         autoNextChapter: s.autoNextChapter ?? true,
-        engine: s.engine || "kokoro",
+        engine: s.engine || "zipvoice",
+        modelDownloaded: s.modelDownloaded ?? false,
       };
     }
   } catch { /* ignore */ }
-  return { voiceId: "zf_001", speed: 1.0, autoNextChapter: true, engine: "kokoro" };
+  return { zipvoiceVoiceId: "0", webspeechVoiceId: "", speed: 1.0, autoNextChapter: true, engine: "zipvoice", modelDownloaded: false };
 }
 
-function saveSettings(s: { voiceId: string; speed: number; autoNextChapter: boolean; engine: string }) {
+function saveSettings(s: PersistedSettings) {
   try { localStorage.setItem(TTS_SETTINGS_KEY, JSON.stringify(s)); } catch { /* ignore */ }
 }
 
 const defaults = loadSettings();
+
+// 根据当前引擎获取对应的 voiceId
+function getVoiceIdForEngine(engine: "zipvoice" | "webspeech", zipvoiceVoiceId: string, webspeechVoiceId: string): string {
+  return engine === "zipvoice" ? zipvoiceVoiceId : webspeechVoiceId;
+}
 
 export const useTTSStore = create<TTSState>((set, get) => ({
   // 播放状态
@@ -112,17 +120,13 @@ export const useTTSStore = create<TTSState>((set, get) => ({
   generating: false,
   generateProgress: 0,
 
-  // 模型状态
-  modelDownloaded: false,
+  // 模型状态 — C6 fix: 从 localStorage 恢复
+  modelDownloaded: defaults.modelDownloaded,
   modelDownloading: false,
   modelDownloadProgress: 0,
 
-  // 设备能力
-  capability: null,
-  capabilityChecked: false,
-
-  // 设置
-  voiceId: defaults.voiceId,
+  // 设置 — M14 fix: 每个引擎独立的 voiceId
+  voiceId: getVoiceIdForEngine(defaults.engine, defaults.zipvoiceVoiceId, defaults.webspeechVoiceId),
   speed: defaults.speed,
   autoNextChapter: defaults.autoNextChapter,
   engine: defaults.engine,
@@ -141,13 +145,54 @@ export const useTTSStore = create<TTSState>((set, get) => ({
   setDuration: (duration) => set({ duration }),
   setParagraphProgress: (current, total) => set({ currentParagraph: current, totalParagraphs: total }),
   setGenerating: (generating, progress) => set({ generating, generateProgress: progress ?? 0 }),
-  setModelDownloaded: (downloaded) => set({ modelDownloaded: downloaded }),
+  setModelDownloaded: (downloaded) => {
+    set({ modelDownloaded: downloaded });
+    // C6 fix: 持久化 modelDownloaded
+    const s = get();
+    saveSettings({
+      zipvoiceVoiceId: s.engine === "zipvoice" ? s.voiceId : loadSettings().zipvoiceVoiceId,
+      webspeechVoiceId: s.engine === "webspeech" ? s.voiceId : loadSettings().webspeechVoiceId,
+      speed: s.speed, autoNextChapter: s.autoNextChapter, engine: s.engine, modelDownloaded: downloaded,
+    });
+  },
   setModelDownloading: (downloading, progress) => set({ modelDownloading: downloading, modelDownloadProgress: progress ?? 0 }),
-  setCapability: (capability) => set({ capability, capabilityChecked: true }),
-  setVoiceId: (voiceId) => { const s = get(); set({ voiceId }); saveSettings({ voiceId, speed: s.speed, autoNextChapter: s.autoNextChapter, engine: s.engine }); },
-  setSpeed: (speed) => { const s = get(); set({ speed }); saveSettings({ voiceId: s.voiceId, speed, autoNextChapter: s.autoNextChapter, engine: s.engine }); },
-  setAutoNextChapter: (autoNextChapter) => { const s = get(); set({ autoNextChapter }); saveSettings({ voiceId: s.voiceId, speed: s.speed, autoNextChapter, engine: s.engine }); },
-  setEngine: (engine) => { const s = get(); set({ engine }); saveSettings({ voiceId: s.voiceId, speed: s.speed, autoNextChapter: s.autoNextChapter, engine }); },
+  setVoiceId: (voiceId) => {
+    const s = get();
+    set({ voiceId });
+    // M14 fix: 按引擎分别保存 voiceId
+    const settings = loadSettings();
+    if (s.engine === "zipvoice") settings.zipvoiceVoiceId = voiceId;
+    else settings.webspeechVoiceId = voiceId;
+    settings.speed = s.speed;
+    settings.autoNextChapter = s.autoNextChapter;
+    settings.engine = s.engine;
+    settings.modelDownloaded = s.modelDownloaded;
+    saveSettings(settings);
+  },
+  setSpeed: (speed) => {
+    const s = get(); set({ speed });
+    const settings = loadSettings();
+    settings.speed = speed;
+    settings.modelDownloaded = s.modelDownloaded;
+    saveSettings(settings);
+  },
+  setAutoNextChapter: (autoNextChapter) => {
+    const s = get(); set({ autoNextChapter });
+    const settings = loadSettings();
+    settings.autoNextChapter = autoNextChapter;
+    settings.modelDownloaded = s.modelDownloaded;
+    saveSettings(settings);
+  },
+  setEngine: (engine) => {
+    const s = get();
+    // M14 fix: 切换引擎时自动切换到该引擎的 voiceId
+    const settings = loadSettings();
+    const newVoiceId = getVoiceIdForEngine(engine, settings.zipvoiceVoiceId, settings.webspeechVoiceId);
+    set({ engine, voiceId: newVoiceId });
+    settings.engine = engine;
+    settings.modelDownloaded = s.modelDownloaded;
+    saveSettings(settings);
+  },
   reset: () => set({
     playing: false, paused: false,
     currentNovelId: null, currentChapterIndex: null,

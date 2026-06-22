@@ -6,7 +6,7 @@
 import { Button } from "@/components/ui/button";
 import {
   Play, Pause, Square, SkipForward, SkipBack,
-  Volume2, Loader2, Cpu, Zap,
+  Volume2, Loader2, Cpu,
 } from "lucide-react";
 import { useTTSStore } from "@/stores/tts-store";
 import { useAudioPlayer } from "@/hooks/useAudioPlayer";
@@ -37,7 +37,7 @@ export function AudioPlayer({
   const {
     generating, generateProgress,
     currentParagraph, totalParagraphs,
-    capability, speed, engine,
+    speed, engine,
     setSpeed,
   } = useTTSStore();
 
@@ -51,7 +51,6 @@ export function AudioPlayer({
   });
 
   const canPlay = chapterContent && chapterContent.length > 0;
-  const isWebGPU = capability?.device === "webgpu";
 
   // 不显示播放栏的情况
   if (!canPlay && !isActive) return null;
@@ -161,7 +160,8 @@ export function AudioPlayer({
             className="text-xs text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded hover:bg-muted"
             onClick={() => {
               const speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0];
-              const current = speeds.indexOf(speed);
+              // L6 fix: 浮点容差比较，避免 1.2500000001 导致 indexOf 返回 -1
+              const current = speeds.findIndex(s => Math.abs(s - speed) < 0.01);
               const nextIndex = (current + 1) % speeds.length;
               setSpeed(speeds[nextIndex]);
             }}
@@ -173,12 +173,8 @@ export function AudioPlayer({
 
         {/* 推理模式指示 */}
         <div className="shrink-0">
-          {engine === "kokoro" ? (
-            isWebGPU ? (
-              <span title="WebGPU 加速"><Zap className="h-3.5 w-3.5 text-green-500" /></span>
-            ) : (
-              <span title="CPU 推理"><Cpu className="h-3.5 w-3.5 text-amber-500" /></span>
-            )
+          {engine === "zipvoice" ? (
+            <span title="ZipVoice 离线语音"><Cpu className="h-3.5 w-3.5 text-amber-500" /></span>
           ) : (
             <span title="Web Speech API"><Volume2 className="h-3.5 w-3.5 text-muted-foreground" /></span>
           )}

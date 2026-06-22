@@ -7,6 +7,7 @@ import { useRef, useCallback, useEffect } from "react";
 import { useTTSStore } from "@/stores/tts-store";
 import { TTSManager } from "@/tts/tts-manager";
 import { prepareTextForTTS } from "@/tts/text-preprocess";
+import { showToast } from "@/components/common/Toast";
 
 interface UseAudioPlayerOptions {
   /** 当前章节内容 */
@@ -32,6 +33,8 @@ export function useAudioPlayer({
   onNextChapter,
 }: UseAudioPlayerOptions) {
   const managerRef = useRef<TTSManager | null>(null);
+  // H11 fix: 追踪自动翻章定时器，stop 时清除
+  const autoNextTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const {
     playing, paused, speed, voiceId, engine, autoNextChapter,
@@ -44,6 +47,7 @@ export function useAudioPlayer({
   // 初始化/销毁 TTS 管理器
   useEffect(() => {
     return () => {
+      if (autoNextTimerRef.current) clearTimeout(autoNextTimerRef.current);
       managerRef.current?.destroy();
       managerRef.current = null;
     };
@@ -100,14 +104,19 @@ export function useAudioPlayer({
       onEnd: () => {
         setPlaying(false);
         if (autoNextChapter && onNextChapter) {
-          // 延迟一下再翻章，让用户看到"播放完毕"
-          setTimeout(() => onNextChapter(), 500);
+          // H11 fix: 存储定时器 ID，stop 时可清除
+          autoNextTimerRef.current = setTimeout(() => {
+            autoNextTimerRef.current = null;
+            onNextChapter();
+          }, 500);
         }
       },
       onError: (err) => {
         console.error("[TTS] Error:", err);
         setGenerating(false);
         setPlaying(false);
+        // M13 fix: 向用户显示错误信息
+        showToast(`朗读出错: ${err}`, "warn");
       },
       onStop: () => {
         setGenerating(false);
@@ -146,6 +155,11 @@ export function useAudioPlayer({
 
   // 停止
   const stop = useCallback(() => {
+    // H11 fix: 清除自动翻章定时器
+    if (autoNextTimerRef.current) {
+      clearTimeout(autoNextTimerRef.current);
+      autoNextTimerRef.current = null;
+    }
     managerRef.current?.stop();
     reset();
   }, [reset]);
