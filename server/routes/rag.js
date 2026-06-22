@@ -267,8 +267,12 @@ const TTS_MODEL_CACHE = path.join(TTS_CACHE_DIR, "model");
 const TTS_TEMP_DIR = path.resolve(__dirname, "../data/tts-temp");
 
 // ── 下载源配置 ──
+// 方案4: 分离式标准部署 — 通用 WASM 运行时 + 独立模型文件
 const TTS_RELEASE_TAG = "tts-zipvoice-v1.0";
-const WASM_ARCHIVE_NAME = "sherpa-onnx-wasm-simd-1.13.3-sherpa-onnx-zipvoice-distill-int8-zh-en-emilia";
+const SHERPA_VER = "v1.13.3";
+// 通用 TTS WASM 运行时（无内置模型/音色/vocoder）
+const WASM_ARCHIVE_NAME = "sherpa-onnx-wasm-simd-tts";
+// 模型文件（encoder/decoder/tokens/lexicon）
 const MODEL_ARCHIVE_NAME = "sherpa-onnx-zipvoice-distill-int8-zh-en-emilia";
 
 // Gitee（国内优先）：7z 分卷
@@ -276,10 +280,10 @@ const GITEE_BASE = `https://gitee.com/kunji777/ai-novel-reader-v2/releases/downl
 const GITEE_WASM_PARTS = [`${WASM_ARCHIVE_NAME}.7z.001`, `${WASM_ARCHIVE_NAME}.7z.002`, `${WASM_ARCHIVE_NAME}.7z.003`];
 const GITEE_MODEL_PARTS = [`${MODEL_ARCHIVE_NAME}.7z.001`, `${MODEL_ARCHIVE_NAME}.7z.002`];
 
-// GitHub（备选）：tar.bz2
-const GITHUB_BASE = `https://github.com/AscendJK/ai-novel-reader-v2/releases/download/${TTS_RELEASE_TAG}`;
-const GITHUB_WASM_URL = `${GITHUB_BASE}/${WASM_ARCHIVE_NAME}.tar.bz2`;
-const GITHUB_MODEL_URL = `${GITHUB_BASE}/${MODEL_ARCHIVE_NAME}.tar.bz2`;
+// GitHub（备选）：直接下载，来自 sherpa-onnx 官方 Release
+const SHERPA_RELEASE_BASE = `https://github.com/k2-fsa/sherpa-onnx/releases/download/${SHERPA_VER}`;
+const GITHUB_WASM_URL = `${SHERPA_RELEASE_BASE}/${WASM_ARCHIVE_NAME}.zip`;
+const GITHUB_MODEL_URL = `${SHERPA_RELEASE_BASE}/zipvoice-distill-int8-zh-en.tar.bz2`;
 
 // Vocoder 模型（独立下载，Gitee 优先，GitHub 备用）
 // 官方仅有 22kHz 通用版，ZipVoice 兼容
@@ -324,6 +328,11 @@ function isValidTar(buffer) {
   if (buffer.length < 300) return false;
   const magic = buffer.slice(257, 262).toString();
   return magic === "ustar";
+}
+
+/** 校验 zip 文件头（PK） */
+function isValidZip(buffer) {
+  return buffer.length > 2 && buffer[0] === 0x50 && buffer[1] === 0x4B;
 }
 
 // ── 解压后文件校验 ────────────────────────────────────────
@@ -487,7 +496,7 @@ async function downloadFromGitee(partNames, archiveName, targetDir, requiredFile
 /**
  * 从 GitHub 下载 tar.bz2 → 校验 → 解压 → 校验解压结果
  */
-async function downloadFromGitHub(url, archiveName, targetDir, requiredFiles, onProgress, { signal } = {}) {
+async function downloadFromGitHubTar(url, archiveName, targetDir, requiredFiles, onProgress, { signal } = {}) {
   if (!fs.existsSync(TTS_TEMP_DIR)) fs.mkdirSync(TTS_TEMP_DIR, { recursive: true });
   if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
 
@@ -495,13 +504,11 @@ async function downloadFromGitHub(url, archiveName, targetDir, requiredFiles, on
   const extractedDir = path.join(TTS_TEMP_DIR, archiveName);
 
   try {
-    // 1. 下载（流式写入磁盘）
     onProgress?.("下载中 (GitHub)", "tar.bz2 格式");
     await downloadFile(url, archivePath, 1024 * 1024, (pct) => {
       onProgress?.(`下载中 ${pct}% (GitHub)`, "tar.bz2 格式");
     }, { signal });
 
-    // 2. 校验 bzip2 文件头（读取前 2 字节）
     onProgress?.("校验压缩包", "检查文件格式");
     const headerBuf = Buffer.alloc(4);
     const fd = fs.openSync(archivePath, "r");
@@ -510,7 +517,6 @@ async function downloadFromGitHub(url, archiveName, targetDir, requiredFiles, on
       throw new Error("下载的文件不是有效的 bzip2 格式（文件头校验失败）");
     }
 
-    // 3. 解压
     onProgress?.("解压中", "tar.bz2 解压...");
     try {
       await execFileAsync("tar", ["xjf", archivePath, "-C", TTS_TEMP_DIR], { timeout: 120000 });
@@ -519,14 +525,55 @@ async function downloadFromGitHub(url, archiveName, targetDir, requiredFiles, on
       throw new Error(`tar 解压失败: ${e.message}`);
     }
 
-    // 4. 复制到目标目录
     onProgress?.("复制文件", "写入缓存目录");
     if (!fs.existsSync(extractedDir)) {
       throw new Error(`解压后找不到目录: ${archiveName}`);
     }
     fs.cpSync(extractedDir, targetDir, { recursive: true });
 
-    // 5. 校验解压后的文件
+    onProgress?.("校验文件", "检查完整性");
+    validateExtractedFiles(targetDir, requiredFiles);
+  } finally {
+    try { fs.unlinkSync(archivePath); } catch {}
+    try { fs.rmSync(extractedDir, { recursive: true }); } catch {}
+  }
+}
+
+/**
+ * 从 GitHub 下载 zip → 校验 → 解压 → 校验解压结果
+ */
+async function downloadFromGitHubZip(url, archiveName, targetDir, requiredFiles, onProgress, { signal } = {}) {
+  if (!fs.existsSync(TTS_TEMP_DIR)) fs.mkdirSync(TTS_TEMP_DIR, { recursive: true });
+  if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+
+  const archivePath = path.join(TTS_TEMP_DIR, archiveName + ".zip");
+  const extractedDir = path.join(TTS_TEMP_DIR, archiveName);
+
+  try {
+    onProgress?.("下载中 (GitHub)", "zip 格式");
+    await downloadFile(url, archivePath, 1024 * 1024, (pct) => {
+      onProgress?.(`下载中 ${pct}% (GitHub)`, "zip 格式");
+    }, { signal });
+
+    onProgress?.("校验压缩包", "检查文件格式");
+    const headerBuf = Buffer.alloc(2);
+    const fd = fs.openSync(archivePath, "r");
+    try { fs.readSync(fd, headerBuf, 0, 2, 0); } finally { fs.closeSync(fd); }
+    if (!isValidZip(headerBuf)) {
+      throw new Error("下载的文件不是有效的 zip 格式（文件头校验失败）");
+    }
+
+    onProgress?.("解压中", "zip 解压...");
+    try {
+      await execFileAsync("7z", ["x", archivePath, `-o${TTS_TEMP_DIR}`, "-y"], { timeout: 120000 });
+    } catch (e) {
+      if (e.code === "ENOENT") throw new Error("7z 未安装。请安装 7-Zip (Windows) 或 p7zip-full (Linux/macOS) 后重试。");
+      throw new Error(`zip 解压失败: ${e.message}`);
+    }
+
+    onProgress?.("复制文件", "写入缓存目录");
+    fs.cpSync(extractedDir, targetDir, { recursive: true });
+
     onProgress?.("校验文件", "检查完整性");
     validateExtractedFiles(targetDir, requiredFiles);
   } finally {
@@ -593,9 +640,13 @@ async function downloadAndExtract(giteeParts, githubUrl, archiveName, targetDir,
     }
   }
 
-  // 备选 GitHub
+  // 备选 GitHub：WASM 用 zip，模型用 tar.bz2
   onProgress?.("开始下载", "尝试 GitHub（海外源）");
-  await downloadFromGitHub(githubUrl, archiveName, targetDir, requiredFiles, onProgress, { signal });
+  if (requiredFiles === WASM_REQUIRED_FILES) {
+    await downloadFromGitHubZip(githubUrl, archiveName, targetDir, requiredFiles, onProgress, { signal });
+  } else {
+    await downloadFromGitHubTar(githubUrl, archiveName, targetDir, requiredFiles, onProgress, { signal });
+  }
   onProgress?.("完成", "GitHub 下载成功");
 }
 

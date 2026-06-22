@@ -73,11 +73,9 @@ async function init(files, origin) {
     if (!createOfflineTts) throw new Error("createOfflineTts 为空");
     log("TTS API 就绪");
 
-    // 4. 为 WASM 和 data 文件创建 Blob URL
+    // 4. 为 WASM 二进制文件创建 Blob URL
     const wasmBlob = new Blob([files["sherpa-onnx-wasm-main-tts.wasm"]], { type: "application/wasm" });
     const wasmUrl = URL.createObjectURL(wasmBlob);
-    const dataBlob = new Blob([files["sherpa-onnx-wasm-main-tts.data"]], { type: "application/octet-stream" });
-    const dataUrl = URL.createObjectURL(dataBlob);
 
     // 5. 初始化 WASM 模块
     log("初始化 WASM 模块...");
@@ -85,15 +83,13 @@ async function init(files, origin) {
     let Module;
     try {
       Module = await createModule({
-        // 直接传入 WASM 和数据文件，避免 fetch
+        // 直接传入 WASM 二进制，避免 fetch
         wasmBinary: files["sherpa-onnx-wasm-main-tts.wasm"],
-        getPreloadedPackage: () => files["sherpa-onnx-wasm-main-tts.data"],
-        // pthread Workers 用这个 blob URL 来加载，而不是 new URL(xxx, import.meta.url)
+        // pthread Workers 用这个 blob URL 来加载
         mainScriptUrlOrBlob: wasmMainJsUrl,
         locateFile: (filePath) => {
           log("locateFile: " + filePath);
           if (filePath.endsWith(".wasm")) return wasmUrl;
-          if (filePath.endsWith(".data")) return dataUrl;
           return pageOrigin + (filePath.startsWith("/") ? "" : "/") + filePath;
         },
         setStatus: (status) => {
@@ -161,7 +157,8 @@ async function init(files, origin) {
           encoder: MODEL_BASE + "/encoder.int8.onnx",
           decoder: MODEL_BASE + "/decoder.int8.onnx",
           vocoder: MODEL_BASE + "/vocos-22khz-univ.onnx",
-          dataDir: "/espeak-ng-data",
+          // espeak-ng-data 从服务器代理加载（首次后会缓存到浏览器 HTTP cache）
+          dataDir: pageOrigin + "/sherpa-tts/model/espeak-ng-data",
           lexicon: MODEL_BASE + "/lexicon.txt",
         },
         numThreads: 1,

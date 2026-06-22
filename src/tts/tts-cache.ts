@@ -11,10 +11,9 @@ const STORE_NAME = "files";
 
 // 缓存文件列表（key: 文件名, value: ArrayBuffer）
 const CACHE_FILES = [
-  // WASM 引擎
+  // WASM 引擎（通用 TTS 运行时，无内置模型）
   "sherpa-onnx-wasm-main-tts.js",
   "sherpa-onnx-wasm-main-tts.wasm",
-  "sherpa-onnx-wasm-main-tts.data",
   "sherpa-onnx-tts.js",
   // 模型文件
   "decoder.int8.onnx",
