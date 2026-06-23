@@ -57,6 +57,14 @@ export function useAudioPlayer({
     };
   }, []);
 
+  // M19: 手动翻章时清除自动翻章定时器
+  useEffect(() => {
+    if (autoNextTimerRef.current) {
+      clearTimeout(autoNextTimerRef.current);
+      autoNextTimerRef.current = null;
+    }
+  }, [chapterIndex]);
+
   // B5: 自动翻章后等新章节内容加载完成，自动恢复播放
   useEffect(() => {
     if (pendingAutoPlayRef.current && chapterContent) {
@@ -144,22 +152,23 @@ export function useAudioPlayer({
         console.error("[TTS] Error:", err);
         setGenerating(false);
         setPlaying(false);
-        setError(err);
+        const count = retryCountRef.current;
         // U5: 自动重试（Web Speech API 常见瞬时错误）
-        if (retryCountRef.current < 3) {
-          retryCountRef.current++;
+        if (count < 3) {
+          retryCountRef.current = count + 1;
+          setError(`${err}（自动重试 ${count + 1}/3...）`);
+          const retryGen = manager.getCurrentGenerationId(); // H6: 防止并发重试
           setTimeout(() => {
-            if (managerRef.current) {
+            if (managerRef.current && manager.getCurrentGenerationId() === retryGen) {
               setError(null);
               setGenerating(true);
-              // 重试当前段落
-              managerRef.current.seekToChunk(
-                managerRef.current.getCurrentChunkIndex()
-              );
+              managerRef.current.seekToChunk(managerRef.current.getCurrentChunkIndex());
             }
           }, 2000);
+        } else {
+          setError(err);
+          showToast(`朗读出错: ${err}`, "warn");
         }
-        showToast(`朗读出错: ${err}`, "warn");
       },
       onStop: () => {
         setGenerating(false);
@@ -202,10 +211,11 @@ export function useAudioPlayer({
     if (manager.isPlaying() || manager.isPaused()) {
       manager.seekToChunk(index);
     } else {
-      // 尚未开始播放，先 play 再 seek
+      // 保存目标位置，play 时会从 saved 位置开始（F10 LoadPosition 已处理）
+      try { localStorage.setItem(TTS_POS_KEY, JSON.stringify({ novelId, chapterIndex, paragraph: index })); } catch {}
       play();
     }
-  }, [getManager, play]);
+  }, [getManager, play, novelId, chapterIndex]);
 
   // F10: 保存/恢复朗读位置
   const savePosition = useCallback(() => {

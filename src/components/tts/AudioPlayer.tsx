@@ -3,7 +3,7 @@
  * 固定在阅读界面底部，显示播放控制和进度
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Play, Pause, Square, SkipForward, SkipBack,
@@ -60,23 +60,28 @@ export function AudioPlayer({
   // U1: 计时器
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
-    if (!isPlaying) { if (!isActive) setElapsed(0); return; }
+    if (!isPlaying) { return; }
+    // 开始播放时清零计时器
     const t = setInterval(() => setElapsed(e => e + 1), 1000);
     return () => clearInterval(t);
-  }, [isPlaying, isActive]);
+  }, [isPlaying]);
+  // 停止或换章时清零
+  useEffect(() => { if (!isActive) setElapsed(0); }, [isActive]);
 
   // F4: 睡眠定时器 (0=关闭, 15/30/60分钟)
   const [sleepTimer, setSleepTimer] = useState(0);
   const [sleepRemaining, setSleepRemaining] = useState(0);
+  const sleepTimerRef = useRef(sleepTimer);
+  sleepTimerRef.current = sleepTimer;
   useEffect(() => {
     if (sleepTimer > 0 && isPlaying) {
-      setSleepRemaining(sleepTimer);
+      setSleepRemaining(r => r > 0 ? r : sleepTimer); // 暂停后继续，不重置
       const t = setInterval(() => setSleepRemaining(r => {
-        if (r <= 1) { clearInterval(t); stop(); return 0; }
+        if (r <= 1) { clearInterval(t); if (sleepTimerRef.current > 0) stop(); return 0; }
         return r - 1;
       }), 60000);
       return () => clearInterval(t);
-    } else { setSleepRemaining(0); }
+    } else if (sleepTimer === 0) { setSleepRemaining(0); }
   }, [sleepTimer, isPlaying]);
 
   // U4: 播放结束或错误时也保留播放栏

@@ -34,13 +34,16 @@ class WebSpeechTTSEngine {
   private utterance: SpeechSynthesisUtterance | null = null;
   private paused = false;
   private voice: SpeechSynthesisVoice | null = null;
+  private available = typeof speechSynthesis !== "undefined";
 
   setVoice(voiceId: string) {
+    if (!this.available) return;
     const voices = speechSynthesis.getVoices();
     this.voice = voices.find(v => v.voiceURI === voiceId) || null;
   }
 
   speak(text: string, speed: number, volume: number, pitch: number, callbacks: TTSPlaybackCallbacks): void {
+    if (!this.available) { callbacks.onError?.("Web Speech API 不可用"); return; }
     this.stop();
     this.utterance = new SpeechSynthesisUtterance(text);
     this.utterance.rate = speed;
@@ -59,11 +62,11 @@ class WebSpeechTTSEngine {
   }
 
   pause(): void {
-    if (speechSynthesis.speaking) { speechSynthesis.pause(); this.paused = true; }
+    if (this.available && speechSynthesis.speaking) { speechSynthesis.pause(); this.paused = true; }
   }
-  resume(): void { if (this.paused) { speechSynthesis.resume(); this.paused = false; } }
-  stop(): void { speechSynthesis.cancel(); this.utterance = null; this.paused = false; }
-  isSpeaking(): boolean { return speechSynthesis.speaking; }
+  resume(): void { if (this.available && this.paused) { speechSynthesis.resume(); this.paused = false; } }
+  stop(): void { if (this.available) speechSynthesis.cancel(); this.utterance = null; this.paused = false; }
+  isSpeaking(): boolean { return this.available ? speechSynthesis.speaking : false; }
   isPaused(): boolean { return this.paused; }
   destroy(): void { this.stop(); }
 }
@@ -141,9 +144,11 @@ class ZipVoiceTTSEngine {
 
   pause(): void {
     if (this.currentSource && !this.paused) {
-      const ctx = this.getAudioContext();
-      this.pausedAt = ctx.currentTime - this.startedAt;
-      this.currentSource.stop();
+      try {
+        const ctx = this.getAudioContext();
+        this.pausedAt = ctx.currentTime - this.startedAt;
+        this.currentSource.stop();
+      } catch { /* already stopped */ }
       this.currentSource = null;
       this.paused = true;
     }
@@ -151,17 +156,19 @@ class ZipVoiceTTSEngine {
 
   async resume(): Promise<void> {
     if (this.paused && this.currentBuffer) {
-      const ctx = this.getAudioContext();
-      if (ctx.state === "suspended") await ctx.resume();
-      const source = ctx.createBufferSource();
-      source.buffer = this.currentBuffer;
-      source.connect(ctx.destination);
-      const resolve = this.pendingPlayResolve;
-      source.onended = () => { this.currentSource = null; this.currentBuffer = null; this.pendingPlayResolve = null; resolve?.(); };
-      this.currentSource = source;
-      this.startedAt = ctx.currentTime - this.pausedAt;
-      this.paused = false;
-      source.start(0, this.pausedAt);
+      try {
+        const ctx = this.getAudioContext();
+        if (ctx.state === "suspended") await ctx.resume();
+        const source = ctx.createBufferSource();
+        source.buffer = this.currentBuffer;
+        source.connect(ctx.destination);
+        const resolve = this.pendingPlayResolve;
+        source.onended = () => { this.currentSource = null; this.currentBuffer = null; this.pendingPlayResolve = null; resolve?.(); };
+        this.currentSource = source;
+        this.startedAt = ctx.currentTime - this.pausedAt;
+        this.paused = false;
+        source.start(0, this.pausedAt);
+      } catch { /* context closed, buffer detached */ }
     }
   }
 
@@ -267,7 +274,10 @@ export class TTSManager {
           this.currentChunkIndex++;
           this.speakNextChunk();
         },
-        onError: (err) => this.callbacks.onError?.(err),
+        onError: (err) => {
+          if (this.stopped || this.generationId !== genId) return;
+          this.callbacks.onError?.(err);
+        },
       });
     } else {
       this.webSpeech.speak(chunk.text, this.speed, this.volume, this.pitch, {
@@ -278,7 +288,10 @@ export class TTSManager {
           this.currentChunkIndex++;
           this.speakNextChunk();
         },
-        onError: (err) => this.callbacks.onError?.(err),
+        onError: (err) => {
+          if (this.stopped || this.generationId !== genId) return;
+          this.callbacks.onError?.(err);
+        },
       });
     }
   }
@@ -304,6 +317,8 @@ export class TTSManager {
 
   /** U5: 获取当前播放段落索引（供错误重试使用） */
   getCurrentChunkIndex(): number { return this.currentChunkIndex; }
+  /** H6: 获取当前 generation ID（防并发重试） */
+  getCurrentGenerationId(): number { return this.generationId; }
 
   seekToChunk(index: number): void {
     if (index >= 0 && index < this.chunks.length) {

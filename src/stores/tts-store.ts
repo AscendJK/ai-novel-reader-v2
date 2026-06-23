@@ -164,7 +164,7 @@ export const useTTSStore = create<TTSState>((set, get) => ({
     saveSettings({
       zipvoiceVoiceId: s.engine === "zipvoice" ? s.voiceId : loadSettings().zipvoiceVoiceId,
       webspeechVoiceId: s.engine === "webspeech" ? s.voiceId : loadSettings().webspeechVoiceId,
-      speed: s.speed, autoNextChapter: s.autoNextChapter, engine: s.engine, modelDownloaded: downloaded,
+      speed: s.speed, volume: s.volume, pitch: s.pitch, autoNextChapter: s.autoNextChapter, engine: s.engine, modelDownloaded: downloaded,
     });
   },
   setModelDownloading: (downloading, progress) => set({ modelDownloading: downloading, modelDownloadProgress: progress ?? 0 }),
