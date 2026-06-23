@@ -580,7 +580,6 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
           />
         )}
 
-        {audioPlayer}
       </div>
     );
     content = renderControls;
@@ -606,8 +605,6 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
         autoSwitchPageMode={autoSwitchPageMode} setAutoSwitchPageMode={setAutoSwitchPageMode}
         isIndexLoading={isIndexLoading}
       />
-
-      {audioPlayer}
 
       {/* 连续滚动容器 */}
       <div
