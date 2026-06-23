@@ -272,7 +272,10 @@ export class TTSManager {
     if (this.engine === "zipvoice" && this.zipvoice) {
       await new Promise(r => setTimeout(r, 0));
       await this.zipvoice.speak(chunk.text, this.speed, {
-        onPlay: () => this.callbacks.onPlay?.(),
+        onPlay: () => {
+          if (this.stopped || this.generationId !== genId) return;
+          this.callbacks.onPlay?.();
+        },
         onEnd: () => {
           if (this.stopped || this.generationId !== genId) return;
           this.callbacks.onChunkEnd?.(this.currentChunkIndex, this.chunks.length);
@@ -286,7 +289,10 @@ export class TTSManager {
       });
     } else {
       this.webSpeech.speak(chunk.text, this.speed, this.volume, this.pitch, {
-        onPlay: () => this.callbacks.onPlay?.(),
+        onPlay: () => {
+          if (this.stopped || this.generationId !== genId) return;
+          this.callbacks.onPlay?.();
+        },
         onEnd: () => {
           if (this.stopped || this.generationId !== genId) return;
           this.callbacks.onChunkEnd?.(this.currentChunkIndex, this.chunks.length);
