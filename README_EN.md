@@ -436,6 +436,14 @@ MIT License. Built-in models:
 
 ---
 
+## Text-to-Speech (TTS)
+
+Uses the browser's built-in **Web Speech API** for Chinese TTS. Click the play button in the reading view's bottom bar to start reading the current chapter aloud. Supports speed adjustment (0.5x ~ 3.0x) and auto-advance to the next chapter.
+
+> **ZipVoice offline engine** (sherpa-onnx WASM): The initialization pipeline is fully implemented, but the browser WASM build has a pthread heap corruption bug (C++ abort, unfixable from JavaScript). Currently hidden. See [DEVELOPER_MANUAL.md](DEVELOPER_MANUAL.md) for details.
+
+---
+
 ## FAQ
 
 ### npm install fails with better-sqlite3 compilation error

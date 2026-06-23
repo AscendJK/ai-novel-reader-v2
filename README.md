@@ -439,6 +439,14 @@ MIT License
 
 ---
 
+## 语音朗读（TTS）
+
+使用浏览器内置 **Web Speech API** 进行中文语音朗读。点击阅读界面底部播放栏的播放按钮，当前章节自动分段朗读。支持语速调节（0.5x ~ 3.0x）和自动翻章。
+
+> **ZipVoice 离线引擎**（sherpa-onnx WASM）的初始化链路已完整实现，但由于浏览器 WASM 构建存在 pthread 堆并发损坏 bug（C++ abort，JS 不可修复），暂时隐藏。详细分析见 [DEVELOPER_MANUAL.md](DEVELOPER_MANUAL.md)。
+
+---
+
 ## 常见问题
 
 ### npm install 失败，提示 better-sqlite3 编译错误
