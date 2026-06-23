@@ -270,20 +270,16 @@ const TTS_TEMP_DIR = path.resolve(__dirname, "../data/tts-temp");
 // 方案4: 分离式标准部署 — 通用 WASM 运行时 + 独立模型文件
 const TTS_RELEASE_TAG = "tts-zipvoice-v1.0";
 const SHERPA_VER = "v1.13.3";
-// 通用 TTS WASM 运行时（无内置模型/音色/vocoder）
-const WASM_ARCHIVE_NAME = "sherpa-onnx-wasm-simd-tts";
+// 分离式标准部署：WASM 运行时（去 data）+ 独立模型文件
+// WASM 运行时文件名（用户上传到 Gitee 的实际名称）
+const WASM_ARCHIVE_NAME = "sherpa-onnx-wasm-simd-1.13.3-sherpa-onnx-zipvoice-distill-int8-zh-en-emilia";
 // 模型文件（encoder/decoder/tokens/lexicon）
 const MODEL_ARCHIVE_NAME = "sherpa-onnx-zipvoice-distill-int8-zh-en-emilia";
 
-// Gitee（国内优先）：7z 分卷
+// Gitee（唯一下载源）
 const GITEE_BASE = `https://gitee.com/kunji777/ai-novel-reader-v2/releases/download/${TTS_RELEASE_TAG}`;
 const GITEE_WASM_PARTS = [`${WASM_ARCHIVE_NAME}.7z.001`, `${WASM_ARCHIVE_NAME}.7z.002`, `${WASM_ARCHIVE_NAME}.7z.003`];
 const GITEE_MODEL_PARTS = [`${MODEL_ARCHIVE_NAME}.7z.001`, `${MODEL_ARCHIVE_NAME}.7z.002`];
-
-// GitHub（备选）：直接下载，来自 sherpa-onnx 官方 Release
-const SHERPA_RELEASE_BASE = `https://github.com/k2-fsa/sherpa-onnx/releases/download/${SHERPA_VER}`;
-const GITHUB_WASM_URL = `${SHERPA_RELEASE_BASE}/${WASM_ARCHIVE_NAME}.zip`;
-const GITHUB_MODEL_URL = `${SHERPA_RELEASE_BASE}/zipvoice-distill-int8-zh-en.tar.bz2`;
 
 // Vocoder 模型（独立下载，Gitee 优先，GitHub 备用）
 // 官方仅有 22kHz 通用版，ZipVoice 兼容
@@ -640,14 +636,14 @@ async function downloadAndExtract(giteeParts, githubUrl, archiveName, targetDir,
     }
   }
 
-  // 备选 GitHub：WASM 用 zip，模型用 tar.bz2
-  onProgress?.("开始下载", "尝试 GitHub（海外源）");
-  if (requiredFiles === WASM_REQUIRED_FILES) {
-    await downloadFromGitHubZip(githubUrl, archiveName, targetDir, requiredFiles, onProgress, { signal });
-  } else {
+  // 备选 GitHub（仅模型文件有 GitHub 可下载）
+  if (githubUrl) {
+    onProgress?.("开始下载", "尝试 GitHub（海外源）");
     await downloadFromGitHubTar(githubUrl, archiveName, targetDir, requiredFiles, onProgress, { signal });
+    onProgress?.("完成", "GitHub 下载成功");
+    return;
   }
-  onProgress?.("完成", "GitHub 下载成功");
+  throw new Error("Gitee 下载失败，且无 GitHub 备选源。请检查 Gitee Release 文件。");
 }
 
 /** 确保 WASM 文件已缓存 */
@@ -660,7 +656,7 @@ async function ensureWasmReady(onProgress, { signal, force = false } = {}) {
   if (wasmReadyPromise) return wasmReadyPromise;
   if (Date.now() - wasmLastFailure < 30000) throw new Error("上次下载失败，请 30 秒后重试");
   wasmReadyPromise = downloadAndExtract(
-    GITEE_WASM_PARTS, GITHUB_WASM_URL, WASM_ARCHIVE_NAME, TTS_WASM_CACHE, WASM_REQUIRED_FILES, onProgress, { signal, force }
+    GITEE_WASM_PARTS, null, WASM_ARCHIVE_NAME, TTS_WASM_CACHE, WASM_REQUIRED_FILES, onProgress, { signal, force }
   ).then(() => { wasmReady = true; })
    .catch((e) => { wasmLastFailure = Date.now(); wasmReadyPromise = null; throw e; });
   await wasmReadyPromise;
@@ -701,7 +697,7 @@ async function ensureModelReady(onProgress, { signal, force = false } = {}) {
   if (modelReadyPromise) return modelReadyPromise;
   if (Date.now() - modelLastFailure < 30000) throw new Error("上次下载失败，请 30 秒后重试");
   modelReadyPromise = downloadAndExtract(
-    GITEE_MODEL_PARTS, GITHUB_MODEL_URL, MODEL_ARCHIVE_NAME, TTS_MODEL_CACHE, MODEL_REQUIRED_FILES, onProgress, { signal, force }
+    GITEE_MODEL_PARTS, null, MODEL_ARCHIVE_NAME, TTS_MODEL_CACHE, MODEL_REQUIRED_FILES, onProgress, { signal, force }
   ).then(() => { modelReady = true; })
    .catch((e) => { modelLastFailure = Date.now(); modelReadyPromise = null; throw e; });
   await modelReadyPromise;

@@ -78,7 +78,6 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 5174,
     proxy: {
-      "/sherpa-tts/model/espeak-ng-data": { target: "http://localhost:5173", rewrite: (p) => p.replace("/sherpa-tts/model/espeak-ng-data", "/api/rag/tts/model/espeak-ng-data") },
       "/api": "http://localhost:5173",
       "/admin": "http://localhost:5173",
     },

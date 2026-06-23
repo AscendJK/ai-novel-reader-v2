@@ -91,7 +91,7 @@ function loadSettings(): PersistedSettings {
       };
     }
   } catch { /* ignore */ }
-  return { zipvoiceVoiceId: "0", webspeechVoiceId: "", speed: 1.0, autoNextChapter: true, engine: "zipvoice", modelDownloaded: false };
+  return { zipvoiceVoiceId: "0", webspeechVoiceId: "", speed: 1.0, autoNextChapter: true, engine: "webspeech", modelDownloaded: false };
 }
 
 function saveSettings(s: PersistedSettings) {
