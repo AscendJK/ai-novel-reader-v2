@@ -9,6 +9,8 @@ import { TTSManager } from "@/tts/tts-manager";
 import { prepareTextForTTS } from "@/tts/text-preprocess";
 import { showToast } from "@/components/common/Toast";
 
+const TTS_POS_KEY = "novel-reader-tts-position";
+
 interface UseAudioPlayerOptions {
   /** 当前章节内容 */
   chapterContent: string | null;
@@ -104,14 +106,21 @@ export function useAudioPlayer({
       return;
     }
 
+    // F10: 恢复上次朗读位置
+    const savedPara = loadPosition();
+    const startIndex = savedPara && savedPara > 0 && savedPara < paragraphs.length ? savedPara : 0;
+    setParagraphProgress(startIndex, paragraphs.length);
+
     const chunks = paragraphs.map((text, i) => ({ text, index: i }));
-    await manager.speak(chunks, {
+    // F10: 从保存位置开始
+    const startChunks = startIndex > 0 ? chunks.slice(startIndex) : chunks;
+    await manager.speak(startChunks, {
       onPlay: () => {
         setGenerating(false);
         setPlaying(true);
       },
-      onChunkStart: (i, total) => setParagraphProgress(i, total),
-      onChunkEnd: (i, total) => setParagraphProgress(i + 1, total),
+      onChunkStart: (i, total) => setParagraphProgress(startIndex + i, startIndex + total),
+      onChunkEnd: (i, total) => setParagraphProgress(startIndex + i + 1, startIndex + total),
       onEnd: () => {
         setPlaying(false);
         if (autoNextChapter && onNextChapter) {
@@ -190,8 +199,26 @@ export function useAudioPlayer({
     }
   }, [getManager, play]);
 
-  // 停止
+  // F10: 保存/恢复朗读位置
+  const savePosition = useCallback(() => {
+    const s = useTTSStore.getState();
+    if (s.currentNovelId && s.currentChapterIndex != null) {
+      try { localStorage.setItem(TTS_POS_KEY, JSON.stringify({ novelId: s.currentNovelId, chapterIndex: s.currentChapterIndex, paragraph: s.currentParagraph })); } catch {}
+    }
+  }, []);
+  const loadPosition = useCallback((): number | null => {
+    try {
+      const raw = localStorage.getItem(TTS_POS_KEY);
+      if (!raw) return null;
+      const pos = JSON.parse(raw);
+      if (pos.novelId === novelId && pos.chapterIndex === chapterIndex) return pos.paragraph;
+    } catch {}
+    return null;
+  }, [novelId, chapterIndex]);
+
+  // 停止时保存位置
   const stop = useCallback(() => {
+    savePosition();
     pendingAutoPlayRef.current = false;
     if (autoNextTimerRef.current) {
       clearTimeout(autoNextTimerRef.current);
@@ -199,7 +226,7 @@ export function useAudioPlayer({
     }
     managerRef.current?.stop();
     reset();
-  }, [reset]);
+  }, [reset, savePosition]);
 
   // B4: 用 ref 存最新回调，避免 Media Session 闭包捕获旧章节引用
   const playRef = useRef(play);

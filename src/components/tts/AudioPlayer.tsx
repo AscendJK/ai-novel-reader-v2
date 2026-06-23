@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import {
   Play, Pause, Square, SkipForward, SkipBack,
   Volume2, Loader2, Cpu, ChevronUp, ChevronDown, RefreshCw,
+  Timer, TimerOff,
 } from "lucide-react";
 import { useTTSStore } from "@/stores/tts-store";
 import { useAudioPlayer } from "@/hooks/useAudioPlayer";
@@ -62,6 +63,20 @@ export function AudioPlayer({
     const t = setInterval(() => setElapsed(e => e + 1), 1000);
     return () => clearInterval(t);
   }, [isPlaying, isActive]);
+
+  // F4: 睡眠定时器 (0=关闭, 15/30/60分钟)
+  const [sleepTimer, setSleepTimer] = useState(0);
+  const [sleepRemaining, setSleepRemaining] = useState(0);
+  useEffect(() => {
+    if (sleepTimer > 0 && isPlaying) {
+      setSleepRemaining(sleepTimer);
+      const t = setInterval(() => setSleepRemaining(r => {
+        if (r <= 1) { clearInterval(t); stop(); return 0; }
+        return r - 1;
+      }), 60000);
+      return () => clearInterval(t);
+    } else { setSleepRemaining(0); }
+  }, [sleepTimer, isPlaying]);
 
   // U4: 播放结束或错误时也保留播放栏
   const showBar = canPlay || isActive || isPaused || generating || error;
@@ -185,6 +200,16 @@ export function AudioPlayer({
               if (idx < SPEEDS.length - 1) setSpeed(SPEEDS[idx + 1]);
             }} title="加速">
             <ChevronUp className="h-3 w-3" />
+          </Button>
+        </div>
+
+        {/* F4: 睡眠定时器 */}
+        <div className="shrink-0">
+          <Button variant="ghost" size="sm" className="h-6 px-1"
+            onClick={() => setSleepTimer(t => t === 0 ? 15 : t === 15 ? 30 : t === 30 ? 60 : 0)}
+            title={sleepTimer === 0 ? "睡眠定时器" : `剩余 ${sleepRemaining} 分钟，点击切换`}>
+            {sleepTimer === 0 ? <TimerOff className="h-3 w-3 text-muted-foreground" /> : <Timer className="h-3 w-3 text-primary" />}
+            {sleepTimer > 0 && <span className="text-[10px] ml-1 text-muted-foreground">{sleepRemaining}m</span>}
           </Button>
         </div>
 
