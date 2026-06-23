@@ -132,6 +132,7 @@ export function useAudioPlayer({
       onPlay: () => {
         setGenerating(false);
         setPlaying(true);
+        setError(null); // R3F3: 手动重试成功，清除错误
       },
       onChunkStart: (i, total) => setParagraphProgress(startIndex + i, startIndex + total),
       onChunkEnd: (i, total) => setParagraphProgress(startIndex + i + 1, startIndex + total),
@@ -171,6 +172,7 @@ export function useAudioPlayer({
       onStop: () => {
         setGenerating(false);
         setPlaying(false);
+        setError(null);
       },
       onFallback: (_from, to) => {
         // 同步 store 的引擎状态，重置下载状态
@@ -296,7 +298,6 @@ export function useAudioPlayer({
   // U5: 错误状态和自动重试
   const [error, setError] = useState<string | null>(null);
   const retryCountRef = useRef(0);
-  const maxRetries = 3;
 
   // 当章节变化时重置错误
   useEffect(() => { setError(null); retryCountRef.current = 0; }, [chapterIndex, novelId]);

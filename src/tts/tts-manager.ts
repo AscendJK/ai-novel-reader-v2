@@ -314,7 +314,8 @@ export class TTSManager {
 
   stop(): void {
     this.stopped = true;
-    this.seekId++; // B1: 无效化所有待执行的 seekToChunk timeout
+    this.generationId++; // R3F2: 无效化 auto-retry 的 setTimeout
+    this.seekId++;       // B1: 无效化 seekToChunk timeout
     if (this.zipvoice) this.zipvoice.stop();
     this.webSpeech.stop();
     this.callbacks.onStop?.();
