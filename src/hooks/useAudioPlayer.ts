@@ -5,7 +5,7 @@
 
 import { useRef, useCallback, useEffect, useState } from "react";
 import { useTTSStore } from "@/stores/tts-store";
-import { TTSManager } from "@/tts/tts-manager";
+import { TTSManager, type TTSChunk } from "@/tts/tts-manager";
 import { prepareTextForTTS } from "@/tts/text-preprocess";
 import { showToast } from "@/components/common/Toast";
 
@@ -41,11 +41,11 @@ export function useAudioPlayer({
   const pendingAutoPlayRef = useRef(false);
 
   const {
-    playing, paused, speed, volume, pitch, voiceId, engine, autoNextChapter,
+    playing, paused, speed, pitch, voiceId, engine, autoNextChapter,
     currentNovelId, currentChapterIndex,
     setPlaying, setPaused, setCurrentChapter,
     setParagraphProgress, setGenerating, setEngine,
-    setModelDownloaded, setModelDownloading, reset,
+    setModelDownloaded, setModelDownloading, setBrowserVoices, reset,
   } = useTTSStore();
 
   // 初始化/销毁 TTS 管理器
@@ -71,7 +71,7 @@ export function useAudioPlayer({
   }, [chapterIndex]);
 
   const playRef = useRef<typeof play>(null!); // B4+B5: 在 play 定义前声明，定义后赋值
-  const startIndexRef = useRef(0); // R6: seekToParagraph 偏移修正
+  const chunksRef = useRef<TTSChunk[]>([]); // 存储当前 chunk 列表，供 seekToParagraph 查找
 
   // 语速/语音变化时同步到管理器
   useEffect(() => {
@@ -85,10 +85,6 @@ export function useAudioPlayer({
       managerRef.current.setVoice(voiceId);
     }
   }, [voiceId]);
-
-  useEffect(() => {
-    if (managerRef.current) managerRef.current.setVolume(volume);
-  }, [volume]);
 
   useEffect(() => {
     if (managerRef.current) managerRef.current.setPitch(pitch);
@@ -115,34 +111,48 @@ export function useAudioPlayer({
     manager.setEngine(engine);
     manager.setVoice(voiceId);
     manager.setSpeed(speed);
+    manager.setPitch(pitch);
 
     setCurrentChapter(novelId, chapterIndex);
     setGenerating(true);
 
-    const paragraphs = prepareTextForTTS(chapterContent);
-    setParagraphProgress(0, paragraphs.length);
-    if (paragraphs.length === 0) {
+    const prepared = prepareTextForTTS(chapterContent);
+    // 用原始段落数（/\n+/ 分割）做进度条分母
+    const totalParaCount = chapterContent.split(/\n+/).filter(p => p.trim().length > 0).length;
+    setParagraphProgress(0, totalParaCount);
+    if (prepared.length === 0) {
       setGenerating(false);
       return;
     }
 
-    // F10: 恢复上次朗读位置
-    const savedPara = loadPosition();
-    const startIndex = savedPara && savedPara > 0 && savedPara < paragraphs.length ? savedPara : 0;
-    startIndexRef.current = startIndex; // R6: seekToParagraph 偏移修正
-    setParagraphProgress(startIndex, paragraphs.length);
+    // 构建 chunk 列表，保留段落追踪字段用于 UI 高亮
+    const chunks: TTSChunk[] = prepared.map((c, i) => ({
+      text: c.text, index: i,
+      paragraphIndex: c.paragraphIndex,
+      paragraphIndices: c.paragraphIndices,
+      paragraphBreaks: c.paragraphBreaks,
+    }));
+    chunksRef.current = chunks;
 
-    const chunks = paragraphs.map((text, i) => ({ text, index: i }));
-    // F10: 从保存位置开始
-    const startChunks = startIndex > 0 ? chunks.slice(startIndex) : chunks;
+    // F10: 恢复上次朗读位置（保存的是原始段落索引）
+    const savedPara = loadPosition();
+    let startChunkIdx = 0;
+    if (savedPara != null && savedPara > 0) {
+      const found = chunks.findIndex(c => c.paragraphIndex >= savedPara);
+      if (found >= 0) startChunkIdx = found;
+    }
+    setParagraphProgress(chunks[startChunkIdx]?.paragraphIndex ?? 0, totalParaCount);
+
+    const startChunks = startChunkIdx > 0 ? chunks.slice(startChunkIdx) : chunks;
     await manager.speak(startChunks, {
       onPlay: () => {
         setGenerating(false);
         setPlaying(true);
         setError(null); // R3F3: 手动重试成功，清除错误
       },
-      onChunkStart: (i, total) => setParagraphProgress(startIndex + i, startIndex + total),
-      onChunkEnd: (i, total) => setParagraphProgress(startIndex + i + 1, startIndex + total),
+      onChunkStart: (_i, _total, paraIdx) => setParagraphProgress(paraIdx, totalParaCount),
+      onChunkEnd: (_i, _total, paraIdx) => setParagraphProgress(paraIdx, totalParaCount),
+      onParagraphChange: (paraIdx) => setParagraphProgress(paraIdx, totalParaCount),
       onEnd: () => {
         setPlaying(false);
         if (autoNextChapter && onNextChapter) {
@@ -193,12 +203,16 @@ export function useAudioPlayer({
         setModelDownloading(false);
         setModelDownloaded(true);
       },
+      onVoicesLoaded: (voices) => {
+        // U8: 朗读时加载好的语音列表同步到 store，设置页直接读取
+        setBrowserVoices(voices);
+      },
     }).catch((err) => {
       console.error("[TTS] speak failed:", err);
       setGenerating(false);
       setPlaying(false);
     });
-  }, [chapterContent, chapterIndex, novelId, engine, voiceId, speed, autoNextChapter, getManager, setCurrentChapter, setGenerating, setParagraphProgress, setPlaying, onNextChapter]);
+  }, [chapterContent, chapterIndex, novelId, engine, voiceId, speed, pitch, autoNextChapter, getManager, setCurrentChapter, setGenerating, setParagraphProgress, setPlaying, onNextChapter]);
 
   // 暂停/恢复
   const togglePause = useCallback(async () => {
@@ -220,19 +234,22 @@ export function useAudioPlayer({
     }
   }, [getManager, setPaused]);
 
-  // F2+F3: 跳到指定段落并开始朗读
-  const seekToParagraph = useCallback((index: number) => {
+  // F2+F3: 跳到指定原始段落并开始朗读
+  const seekToParagraph = useCallback((paraIndex: number) => {
     const manager = getManager();
     if (manager.isPlaying() || manager.isPaused()) {
-      manager.seekToChunk(index - startIndexRef.current); // R6: 修正偏移
+      const chunks = chunksRef.current;
+      const chunkIdx = chunks.findIndex(c => c.paragraphIndex >= paraIndex);
+      // 超出范围时定位到最后一段
+      if (chunkIdx >= 0) manager.seekToChunk(chunkIdx);
+      else if (chunks.length > 0) manager.seekToChunk(chunks.length - 1);
     } else {
-      startIndexRef.current = 0; // 从头播放，无偏移
-      try { localStorage.setItem(TTS_POS_KEY, JSON.stringify({ novelId, chapterIndex, paragraph: index })); } catch {}
+      try { localStorage.setItem(TTS_POS_KEY, JSON.stringify({ novelId, chapterIndex, paragraph: paraIndex })); } catch {}
       play();
     }
   }, [getManager, play, novelId, chapterIndex]);
 
-  // F10: 保存/恢复朗读位置
+  // F10: 保存/恢复朗读位置（基于原始段落索引）
   const savePosition = useCallback(() => {
     const s = useTTSStore.getState();
     if (s.currentNovelId && s.currentChapterIndex != null) {

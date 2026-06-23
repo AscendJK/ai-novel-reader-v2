@@ -436,7 +436,18 @@ MIT License.
 
 ## Text-to-Speech (TTS)
 
-Uses the browser's built-in **Web Speech API** for Chinese TTS. Click the play button in the reading view's bottom bar to start reading the current chapter aloud. Supports speed adjustment (0.5x ~ 3.0x) and auto-advance to the next chapter.
+Uses the browser's built-in **Web Speech API** for Chinese TTS. Click the ▶ Read Aloud button in the top bar to start reading the current chapter aloud.
+
+**Features:**
+
+- **Paragraph highlight tracking**: The currently read paragraph is automatically highlighted and scrolled into view
+- **Pre-queue seamless playback**: Adjacent paragraphs are pre-queued to eliminate pauses between segments
+- **Short paragraph merging**: Adjacent short paragraphs are automatically merged for reading
+- **Speed control**: 0.5x ~ 3.0x, popup selection, changes take effect immediately
+- **Sleep timer**: 15/30/60/90 minute auto-stop
+- **Auto-advance**: Automatically plays the next chapter when the current one finishes
+- **Progress bar seeking**: Click the progress bar to jump to a specific paragraph
+- **Mobile-friendly**: Playback bar and popup panels are optimized for mobile
 
 > **ZipVoice offline engine** (sherpa-onnx WASM): The initialization pipeline is fully implemented, but the browser WASM build has a pthread heap corruption bug (C++ abort, unfixable from JavaScript). Currently hidden. See [DEVELOPER_MANUAL.md](DEVELOPER_MANUAL.md) for details.
 

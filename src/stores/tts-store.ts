@@ -68,6 +68,12 @@ export interface TTSState {
   setPitch: (pitch: number) => void;
   setAutoNextChapter: (auto: boolean) => void;
   setEngine: (engine: "zipvoice" | "webspeech") => void;
+  /** 顶栏朗读按钮触发计数器（外部递增，AudioPlayer 监听） */
+  startRequested: number;
+  requestStart: () => void;
+  /** 浏览器已加载的语音列表（朗读时 waitForVoices 同步） */
+  browserVoices: SpeechSynthesisVoice[];
+  setBrowserVoices: (voices: SpeechSynthesisVoice[]) => void;
   reset: () => void;
 }
 
@@ -142,6 +148,12 @@ export const useTTSStore = create<TTSState>((set, get) => ({
   pitch: defaults.pitch,
   autoNextChapter: defaults.autoNextChapter,
   engine: defaults.engine,
+
+  // 朗读触发（顶栏按钮 → AudioPlayer 监听）
+  startRequested: 0,
+
+  // 浏览器语音列表（朗读时 waitForVoices 同步，设置页直接读取）
+  browserVoices: [],
 
   // Actions
   setPlaying: (playing) => set({ playing, paused: false }),
@@ -220,6 +232,8 @@ export const useTTSStore = create<TTSState>((set, get) => ({
     settings.modelDownloaded = s.modelDownloaded;
     saveSettings(settings);
   },
+  requestStart: () => set(s => ({ startRequested: s.startRequested + 1 })),
+  setBrowserVoices: (voices) => set({ browserVoices: voices }),
   reset: () => set({
     playing: false, paused: false,
     currentNovelId: null, currentChapterIndex: null,

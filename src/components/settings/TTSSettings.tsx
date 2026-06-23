@@ -11,21 +11,54 @@ import { useTTSStore } from "@/stores/tts-store";
 
 export function TTSSettings() {
   const {
-    voiceId, speed, volume, pitch, autoNextChapter,
-    setVoiceId, setSpeed, setVolume, setPitch, setAutoNextChapter,
+    voiceId, speed, pitch, autoNextChapter, browserVoices,
+    setVoiceId, setSpeed, setPitch, setAutoNextChapter, setBrowserVoices,
   } = useTTSStore();
 
-  // Web Speech API 可用语音列表（中文）
-  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadAttempted, setLoadAttempted] = useState(false);
+
+  // 持续轮询语音列表（不依赖 voiceschanged，每 2 秒检查一次）
   useEffect(() => {
     if (typeof speechSynthesis === "undefined") return;
-    const updateVoices = () => {
-      setVoices(speechSynthesis.getVoices().filter(v => v.lang.startsWith("zh")));
+    const tryRead = () => {
+      const all = speechSynthesis.getVoices();
+      if (all.length > 0) setBrowserVoices(all);
     };
-    updateVoices();
-    speechSynthesis.addEventListener("voiceschanged", updateVoices);
-    return () => speechSynthesis.removeEventListener("voiceschanged", updateVoices);
-  }, []);
+    tryRead();
+    const poll = setInterval(tryRead, 2000);
+    return () => clearInterval(poll);
+  }, [setBrowserVoices]);
+
+  const voicesLoaded = browserVoices.length > 0;
+
+  // 加载语音列表（Chrome 需要 speak() 触发引擎初始化）
+  const loadVoices = useCallback(() => {
+    if (voicesLoaded) return;
+    setLoading(true);
+    setLoadAttempted(true);
+    const dummy = new SpeechSynthesisUtterance("加载语音");
+    dummy.lang = "zh-CN";
+    dummy.onstart = () => {
+      // speak 触发后，持续轮询直到 getVoices 返回结果
+      let attempts = 0;
+      const poll = setInterval(() => {
+        attempts++;
+        const all = speechSynthesis.getVoices();
+        if (all.length > 0) {
+          setBrowserVoices(all);
+          clearInterval(poll);
+          setLoading(false);
+        } else if (attempts > 40) {
+          clearInterval(poll);
+          setLoading(false);
+        }
+      }, 250);
+    };
+    dummy.onerror = () => setLoading(false);
+    speechSynthesis.speak(dummy);
+    setTimeout(() => setLoading(false), 12000);
+  }, [voicesLoaded, setBrowserVoices]);
 
   // 语音试听
   const [previewing, setPreviewing] = useState(false);
@@ -37,22 +70,21 @@ export function TTSSettings() {
 
   const previewVoice = useCallback((previewVoiceId: string) => {
     if (previewing) return;
-    // B2+B3+EC3+EC5b: 如果正在播放，通过 store 通知停止
     const state = useTTSStore.getState();
     if (state.playing) {
       speechSynthesis.cancel();
-      state.reset(); // 清洗 store 状态，防止 UI 卡在"播放中"
+      state.reset();
     }
     const utterance = new SpeechSynthesisUtterance("各位村民，大家新年好。近期，湖北省武汉市等多个地区。");
     utterance.lang = "zh-CN";
-    const voice = voices.find(v => v.voiceURI === previewVoiceId);
+    const voice = browserVoices.find(v => v.voiceURI === previewVoiceId);
     if (voice) utterance.voice = voice;
     utterance.onend = () => { if (previewTimerRef.current) { clearTimeout(previewTimerRef.current); previewTimerRef.current = null; } setPreviewing(false); };
     utterance.onerror = () => { if (previewTimerRef.current) { clearTimeout(previewTimerRef.current); previewTimerRef.current = null; } setPreviewing(false); };
     setPreviewing(true);
     speechSynthesis.speak(utterance);
     previewTimerRef.current = setTimeout(() => { speechSynthesis.cancel(); previewTimerRef.current = null; setPreviewing(false); }, 30000);
-  }, [voices, previewing]);
+  }, [browserVoices, previewing]);
 
   return (
     <div className="space-y-4">
@@ -66,14 +98,14 @@ export function TTSSettings() {
       {/* 语音选择 */}
       <div className="space-y-2">
         <p className="text-xs font-medium text-muted-foreground">语音选择</p>
-        {voices.length > 0 ? (
+        {voicesLoaded ? (
           <div className="flex gap-2">
             <select
               className="flex-1 text-xs border rounded px-2 py-1.5 bg-background"
               value={voiceId}
               onChange={(e) => setVoiceId(e.target.value)}
             >
-              {voices.map((v) => (
+              {browserVoices.map((v) => (
                 <option key={v.voiceURI} value={v.voiceURI}>{v.name} ({v.lang})</option>
               ))}
             </select>
@@ -84,7 +116,24 @@ export function TTSSettings() {
             </Button>
           </div>
         ) : (
-          <p className="text-xs text-muted-foreground">未检测到中文语音，使用系统默认</p>
+          <div className="space-y-2">
+            {loadAttempted && !loading ? (
+              <p className="text-xs text-muted-foreground">
+                当前浏览器未返回语音列表，将使用系统默认语音朗读（不影响朗读功能）
+              </p>
+            ) : (
+              <>
+                <p className="text-xs text-muted-foreground">
+                  {loading ? "正在加载语音列表..." : "未检测到语音，点击下方按钮加载"}
+                </p>
+                <Button variant="outline" size="sm" className="h-7 text-[10px]"
+                  onClick={loadVoices} disabled={loading}>
+                  {loading ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                  {loading ? "加载中..." : "加载语音列表"}
+                </Button>
+              </>
+            )}
+          </div>
         )}
       </div>
 
@@ -99,16 +148,6 @@ export function TTSSettings() {
         <div className="flex justify-between text-[10px] text-muted-foreground">
           <span>0.5x</span><span>1.0x</span><span>2.0x</span><span>3.0x</span>
         </div>
-      </div>
-
-      {/* F7: 音量 */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <p className="text-xs font-medium text-muted-foreground">音量</p>
-          <span className="text-xs text-muted-foreground">{(volume * 100).toFixed(0)}%</span>
-        </div>
-        <input type="range" min={0} max={1} step={0.05} value={volume}
-          onChange={(e) => setVolume(parseFloat(e.target.value))} className="w-full h-1.5" />
       </div>
 
       {/* F8: 音调 */}

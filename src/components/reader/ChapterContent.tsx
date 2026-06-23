@@ -10,7 +10,7 @@ import { useContinuousScroll } from "@/hooks/useContinuousScroll";
 import { AudioPlayer } from "@/components/tts/AudioPlayer";
 import type { ScrollControl } from "./ReadingPanel";
 import { Button } from "@/components/ui/button";
-import { Minus, Plus, Sparkles, ChevronLeft, ChevronRight, Type, Loader2, Maximize2, Minimize2 } from "lucide-react";
+import { Minus, Plus, Sparkles, ChevronLeft, ChevronRight, Type, Loader2, Maximize2, Minimize2, Play } from "lucide-react";
 import { loadChapters } from "@/db/repositories";
 import { userKey } from "@/lib/user-utils";
 
@@ -266,7 +266,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   const activePadding = isMobile ? PAGE_PADDING_MOBILE : PAGE_PADDING;
   const contentWidth = Math.max(0, pageWidth - activePadding * 2);
   const contentHeight = Math.max(0, containerSize.height - activePadding * 2);
-  const contentParagraphs = useMemo(() => chapter?.content.split("\n") || [], [chapter?.content]);
+  const contentParagraphs = useMemo(() => chapter?.content.split(/\n+/) || [], [chapter?.content]);
   // F1: 用 Zustand selector 减少不必要的重渲染
   const ttsParagraph = useTTSStore(s => s.playing && s.currentChapterIndex === currentIndex ? s.currentParagraph : -1);
   const ttsActive = ttsParagraph >= 0;
@@ -303,6 +303,29 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     obs.observe(el);
     return () => { cancelAnimationFrame(raf); obs.disconnect(); };
   }, [isPaginated, chapter?.id]);
+
+  // U6: TTS 朗读时自动滚动——跟随当前高亮段落
+  useEffect(() => {
+    if (ttsParagraph < 0) return;
+    if (isPaginated) {
+      // 翻页模式：找到段落所在页面并翻到该页
+      if (pages.length > 0) {
+        const pageIdx = pages.findIndex(p => ttsParagraph >= p.startIndex && ttsParagraph <= p.endIndex);
+        if (pageIdx >= 0 && pageIdx !== currentPage) {
+          setCurrentPage(pageIdx);
+        }
+      }
+    } else {
+      // 滚动模式：将高亮段落在当前章节内滚动到可见区域
+      const container = scrollContainerRef.current;
+      if (!container) return;
+      const section = container.querySelector(`.chapter-section[data-chapter-id="${selectedChapterId}"]`);
+      const el = section?.querySelector(`[data-tts-paragraph="${ttsParagraph}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    }
+  }, [ttsParagraph, isPaginated, pages, selectedChapterId, scrollContainerRef]);
 
   // 翻页模式章节切换
   const goToChapter = useCallback(async (chapterId: string) => {
@@ -456,7 +479,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
         // F1: 高亮当前朗读段落
         const hl = ttsActive && ttsParagraph === i;
         items.push(
-          <p key={i} className={`text-justify ${hl ? "bg-primary/10 border-l-2 border-primary pl-3 rounded-r" : ""}`} style={{ marginBottom: `${paragraphSpacing}px` }}>
+          <p key={i} data-tts-paragraph={i} className={`text-justify ${hl ? "bg-primary/10 border-l-2 border-primary pl-3 rounded-r" : ""}`} style={{ marginBottom: `${paragraphSpacing}px` }}>
             {trimmed}
           </p>
         );
@@ -476,8 +499,15 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
       chapterContent={chapter.content || null}
       chapterIndex={currentIndex}
       chapterTitle={chapter.title}
-      onPrevChapter={currentIndex > 0 ? () => setSelectedChapter(chapters[currentIndex - 1]?.id) : undefined}
-      onNextChapter={currentIndex < chapters.length - 1 ? () => setSelectedChapter(chapters[currentIndex + 1]?.id) : undefined}
+      // U8: 翻章时根据模式触发放内容加载（懒加载兼容）
+      onPrevChapter={currentIndex > 0 ? () => {
+        const prevId = chapters[currentIndex - 1]?.id;
+        if (isPaginated) goToChapter(prevId); else scrollToChapter(prevId);
+      } : undefined}
+      onNextChapter={currentIndex < chapters.length - 1 ? () => {
+        const nextId = chapters[currentIndex + 1]?.id;
+        if (isPaginated) goToChapter(nextId); else scrollToChapter(nextId);
+      } : undefined}
     />
   ) : null;
 
@@ -652,13 +682,13 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
 
               {/* 章节内容 */}
               <div className="prose prose-neutral dark:prose-invert max-w-none" style={textStyles}>
-                {ch.content.split("\n").map((paragraph, i) => {
+                {ch.content.split(/\n+/).map((paragraph, i) => {
                   const trimmed = paragraph.trim();
                   if (!trimmed) return <br key={i} />;
                   // F1: 高亮当前朗读段落
                   const isHighlighted = ttsActive && ch.id === selectedChapterId && ttsParagraph === i;
                   return (
-                    <p key={i} className={`text-justify ${isHighlighted ? "bg-primary/10 border-l-2 border-primary pl-3 rounded-r" : ""}`} style={{ marginBottom: `${paragraphSpacing}px` }}>
+                    <p key={i} data-tts-paragraph={i} className={`text-justify ${isHighlighted ? "bg-primary/10 border-l-2 border-primary pl-3 rounded-r" : ""}`} style={{ marginBottom: `${paragraphSpacing}px` }}>
                       {trimmed}
                     </p>
                   );
@@ -710,6 +740,25 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
 // ========================================
 // 子组件
 // ========================================
+
+/** 顶栏"朗读"按钮：点击显示播放栏并开始 TTS 朗读 */
+function TTSStartButton() {
+  const playing = useTTSStore(s => s.playing);
+  const paused = useTTSStore(s => s.paused);
+  const generating = useTTSStore(s => s.generating);
+  const requestStart = useTTSStore(s => s.requestStart);
+  const isTTSActive = playing || paused || generating;
+
+  if (isTTSActive) return null; // 播放中隐藏，避免重复点击
+
+  return (
+    <Button variant="ghost" size="icon"
+      className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-7 md:w-7"
+      onClick={requestStart} title="语音朗读">
+      <Play className="h-4 w-4" />
+    </Button>
+  );
+}
 
 function TopBar(props: {
   chapter: { id: string; title: string; content: string };
@@ -781,6 +830,8 @@ function TopBar(props: {
           </div>
         )}
 
+        {/* 朗读按钮 — 点击显示播放栏并开始朗读 */}
+        <TTSStartButton />
         {/* 沉浸模式按钮 - 始终可见 */}
         {onToggleImmersive && (
           <Button variant="ghost" size="icon" className="h-7 w-7"

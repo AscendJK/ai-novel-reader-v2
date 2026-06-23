@@ -11,6 +11,9 @@ export type TTSEngine = "zipvoice" | "webspeech";
 export interface TTSChunk {
   text: string;
   index: number;
+  paragraphIndex: number;          // 组内第一段的原始索引（兼容）
+  paragraphIndices: number[];      // 组内所有段落的原始索引
+  paragraphBreaks: number[];       // 每个段落在合并文本中的起始字符位置（用于 onboundary 逐段高亮）
 }
 
 export interface TTSPlaybackCallbacks {
@@ -19,12 +22,14 @@ export interface TTSPlaybackCallbacks {
   onResume?: () => void;
   onStop?: () => void;
   onEnd?: () => void;
-  onChunkStart?: (index: number, total: number) => void;
-  onChunkEnd?: (index: number, total: number) => void;
+  onChunkStart?: (index: number, total: number, paragraphIndex: number) => void;
+  onChunkEnd?: (index: number, total: number, paragraphIndex: number) => void;
+  onParagraphChange?: (paragraphIndex: number) => void; // 合并段内段落切换（onboundary 驱动）
   onError?: (error: string) => void;
   onFallback?: (from: TTSEngine, to: TTSEngine) => void;
   onModelProgress?: (progress: number) => void;
   onModelLoaded?: () => void;
+  onVoicesLoaded?: (voices: SpeechSynthesisVoice[]) => void;
 }
 
 /**
@@ -32,6 +37,7 @@ export interface TTSPlaybackCallbacks {
  */
 class WebSpeechTTSEngine {
   private utterance: SpeechSynthesisUtterance | null = null;
+  private preQueued: SpeechSynthesisUtterance | null = null;
   private paused = false;
   private voice: SpeechSynthesisVoice | null = null;
   private pendingVoiceId: string | null = null;
@@ -48,10 +54,7 @@ class WebSpeechTTSEngine {
     // R12: Chrome 异步加载语音，length=0 时保留 pendingVoiceId，speak() 时重试
   }
 
-  speak(text: string, speed: number, volume: number, pitch: number, callbacks: TTSPlaybackCallbacks): void {
-    if (!this.available) { callbacks.onError?.("Web Speech API 不可用"); return; }
-    this.stop();
-    // R12: 如果语音还没加载完，重试 setVoice
+  private ensureVoice(): void {
     if (this.pendingVoiceId) {
       const voices = speechSynthesis.getVoices();
       if (voices.length > 0) {
@@ -59,6 +62,61 @@ class WebSpeechTTSEngine {
         this.pendingVoiceId = null;
       }
     }
+  }
+
+  // U8: 等待 Chrome 异步加载语音列表，确保第一段就用对音色
+  async waitForVoices(): Promise<SpeechSynthesisVoice[]> {
+    if (!this.available) return [];
+    if (speechSynthesis.getVoices().length > 0) return speechSynthesis.getVoices();
+    // 移动端 Chrome：voice 懒加载，事件+轮询双保险
+    await new Promise<void>(resolve => {
+      const timeout = setTimeout(() => resolve(), 10000); // 延长到 10 秒
+      const handler = () => {
+        clearTimeout(timeout);
+        speechSynthesis.removeEventListener("voiceschanged", handler);
+        clearInterval(poll);
+        resolve();
+      };
+      speechSynthesis.addEventListener("voiceschanged", handler);
+      const poll = setInterval(() => {
+        if (speechSynthesis.getVoices().length > 0) handler();
+      }, 500);
+    });
+    this.ensureVoice(); // 语音加载完成后解析 pendingVoiceId
+    return speechSynthesis.getVoices();
+  }
+
+  // U6: 设置 onboundary 在合并段内逐段切换高亮
+  private setupParagraphTracking(
+    utterance: SpeechSynthesisUtterance,
+    breaks: number[],
+    indices: number[],
+    onParagraphChange: ((paraIndex: number) => void) | undefined,
+  ): void {
+    if (!onParagraphChange || indices.length <= 1) return;
+    let currentTracked = 0;
+    utterance.onboundary = (e: SpeechSynthesisEvent) => {
+      if (e.charIndex === undefined) return;
+      const ci = e.charIndex;
+      let newIdx = 0;
+      for (let i = breaks.length - 1; i >= 0; i--) {
+        if (ci >= breaks[i]) { newIdx = i; break; }
+      }
+      if (newIdx !== currentTracked) {
+        currentTracked = newIdx;
+        onParagraphChange(indices[newIdx]);
+      }
+    };
+  }
+
+  speak(
+    text: string, speed: number, volume: number, pitch: number,
+    callbacks: TTSPlaybackCallbacks,
+    paragraphBreaks?: number[], paragraphIndices?: number[],
+  ): void {
+    if (!this.available) { callbacks.onError?.("Web Speech API 不可用"); return; }
+    this.stop();
+    this.ensureVoice();
     this.utterance = new SpeechSynthesisUtterance(text);
     this.utterance.rate = speed;
     this.utterance.volume = volume;
@@ -71,15 +129,45 @@ class WebSpeechTTSEngine {
       // "interrupted" 在 seek/stop 时正常出现，不需要报错
       if (e.error !== "canceled" && e.error !== "interrupted") callbacks.onError?.(e.error);
     };
+    if (paragraphBreaks && paragraphIndices) {
+      this.setupParagraphTracking(this.utterance, paragraphBreaks, paragraphIndices, callbacks.onParagraphChange);
+    }
     speechSynthesis.speak(this.utterance);
     this.paused = false;
+  }
+
+  // U6: 预队列下一段 utterance（不 cancel 当前，浏览器自动衔接）
+  queue(
+    text: string, speed: number, volume: number, pitch: number,
+    onStart: () => void, onEnd: () => void, onError: (err: string) => void,
+    paragraphBreaks?: number[], paragraphIndices?: number[],
+    onParagraphChange?: (paraIndex: number) => void,
+  ): void {
+    if (!this.available) return;
+    this.ensureVoice();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = speed;
+    utterance.volume = volume;
+    utterance.pitch = pitch;
+    utterance.lang = "zh-CN";
+    if (this.voice) utterance.voice = this.voice;
+    utterance.onstart = () => onStart();
+    utterance.onend = () => onEnd();
+    utterance.onerror = (e) => {
+      if (e.error !== "canceled" && e.error !== "interrupted") onError(e.error);
+    };
+    if (paragraphBreaks && paragraphIndices) {
+      this.setupParagraphTracking(utterance, paragraphBreaks, paragraphIndices, onParagraphChange);
+    }
+    this.preQueued = utterance;
+    speechSynthesis.speak(utterance);
   }
 
   pause(): void {
     if (this.available && speechSynthesis.speaking) { speechSynthesis.pause(); this.paused = true; }
   }
   resume(): void { if (this.available && this.paused) { speechSynthesis.resume(); this.paused = false; } }
-  stop(): void { if (this.available) speechSynthesis.cancel(); this.utterance = null; this.paused = false; }
+  stop(): void { if (this.available) speechSynthesis.cancel(); this.utterance = null; this.preQueued = null; this.paused = false; }
   isSpeaking(): boolean { return this.available ? speechSynthesis.speaking : false; }
   isPaused(): boolean { return this.paused; }
   destroy(): void { this.stop(); }
@@ -220,6 +308,7 @@ export class TTSManager {
   private stopped = false;
   private generationId = 0;
   private seekId = 0; // B1: 防止 stop 后 seekToChunk 的 timeout 激活
+  private currentChunkWasPreQueued = false; // U6: 预队列标志位
 
   constructor() { this.webSpeech = new WebSpeechTTSEngine(); }
 
@@ -232,15 +321,34 @@ export class TTSManager {
       // B1: 播放中切音色，中断当前段并用新音色重新朗读
       if (this.webSpeech.isSpeaking() && this.currentChunkIndex < this.chunks.length) {
         this.generationId++; // R5: 无效化旧 onEnd 避免同步级联跳段
+        this.currentChunkWasPreQueued = false; // U6: cancel 已清除队列，重置标志位
         this.webSpeech.stop();
         this.speakNextChunk();
       }
     } else if (this.zipvoice) this.zipvoice.setVoice(voiceId);
   }
 
-  setSpeed(speed: number) { this.speed = Math.max(0.5, Math.min(3.0, speed)); }
+  setSpeed(speed: number) {
+    this.speed = Math.max(0.5, Math.min(3.0, speed));
+    // WebSpeech 的 rate 在 utterance 创建时固化，需要重启才能生效
+    this.restartIfPlaying();
+  }
   setVolume(volume: number) { this.volume = Math.max(0, Math.min(1, volume)); }
-  setPitch(pitch: number) { this.pitch = Math.max(0.5, Math.min(2.0, pitch)); }
+  setPitch(pitch: number) {
+    this.pitch = Math.max(0.5, Math.min(2.0, pitch));
+    // WebSpeech 的 pitch 在 utterance 创建时固化，需要重启才能生效
+    this.restartIfPlaying();
+  }
+
+  /** 语速/音调变化时，从当前段重新开始播放（新参数立即生效） */
+  private restartIfPlaying(): void {
+    if (this.engine === "webspeech" && this.webSpeech.isSpeaking() && this.currentChunkIndex < this.chunks.length) {
+      this.generationId++;
+      this.currentChunkWasPreQueued = false;
+      this.webSpeech.stop();
+      this.speakNextChunk();
+    }
+  }
 
   async speak(chunks: TTSChunk[], callbacks: TTSPlaybackCallbacks): Promise<void> {
     this.stop(); // 内部已调用 this.callbacks.onStop?.()
@@ -248,9 +356,16 @@ export class TTSManager {
     this.currentChunkIndex = 0;
     this.callbacks = callbacks;
     this.stopped = false;
+    this.currentChunkWasPreQueued = false;
     this.generationId++;
 
     if (chunks.length === 0) { callbacks.onError?.("没有可朗读的内容"); return; }
+
+    // U8: 等待 Chrome 异步加载语音列表，确保第一段就用对音色
+    if (this.engine === "webspeech") {
+      const loadedVoices = await this.webSpeech.waitForVoices();
+      if (loadedVoices.length > 0) callbacks.onVoicesLoaded?.(loadedVoices);
+    }
 
     if (this.engine === "zipvoice") {
       try {
@@ -281,9 +396,9 @@ export class TTSManager {
 
     const chunk = this.chunks[this.currentChunkIndex];
     const genId = this.generationId;
-    this.callbacks.onChunkStart?.(this.currentChunkIndex, this.chunks.length);
 
     if (this.engine === "zipvoice" && this.zipvoice) {
+      this.callbacks.onChunkStart?.(this.currentChunkIndex, this.chunks.length, chunk.paragraphIndex);
       await new Promise(r => setTimeout(r, 0));
       await this.zipvoice.speak(chunk.text, this.speed, {
         onPlay: () => {
@@ -292,7 +407,7 @@ export class TTSManager {
         },
         onEnd: () => {
           if (this.stopped || this.generationId !== genId) return;
-          this.callbacks.onChunkEnd?.(this.currentChunkIndex, this.chunks.length);
+          this.callbacks.onChunkEnd?.(this.currentChunkIndex, this.chunks.length, chunk.paragraphIndex);
           this.currentChunkIndex++;
           this.speakNextChunk();
         },
@@ -302,23 +417,68 @@ export class TTSManager {
         },
       });
     } else {
-      this.webSpeech.speak(chunk.text, this.speed, this.volume, this.pitch, {
-        onPlay: () => {
-          if (this.stopped || this.generationId !== genId) return;
-          this.callbacks.onPlay?.();
-        },
-        onEnd: () => {
-          if (this.stopped || this.generationId !== genId) return;
-          this.callbacks.onChunkEnd?.(this.currentChunkIndex, this.chunks.length);
-          this.currentChunkIndex++;
-          this.speakNextChunk();
-        },
-        onError: (err) => {
-          if (this.stopped || this.generationId !== genId) return;
-          this.callbacks.onError?.(err);
-        },
-      });
+      // U6: WebSpeech 预队列模式 — 播当前段的同时预队列下一段，消除段落间停顿
+      if (this.currentChunkWasPreQueued) {
+        // 当前段已由上次预队列开始播放，只需预队列下一段
+        this.currentChunkWasPreQueued = false;
+        this.preQueueNextIfAvailable(genId);
+      } else {
+        this.callbacks.onChunkStart?.(this.currentChunkIndex, this.chunks.length, chunk.paragraphIndex);
+        this.webSpeech.speak(chunk.text, this.speed, this.volume, this.pitch, {
+          onPlay: () => {
+            if (this.stopped || this.generationId !== genId) return;
+            this.callbacks.onPlay?.();
+          },
+          onEnd: () => this.handleChunkEnded(genId),
+          onError: (err) => this.handleChunkError(err, genId),
+          onParagraphChange: (paraIdx) => {
+            if (this.stopped || this.generationId !== genId) return;
+            this.callbacks.onParagraphChange?.(paraIdx);
+          },
+        }, chunk.paragraphBreaks, chunk.paragraphIndices);
+        this.preQueueNextIfAvailable(genId);
+      }
     }
+  }
+
+  /** U6: 预队列下一个 chunk（不 cancel 当前正在播放的 utterance） */
+  private preQueueNextIfAvailable(genId: number): void {
+    const nextIdx = this.currentChunkIndex + 1;
+    if (nextIdx >= this.chunks.length) return;
+    const nextChunk = this.chunks[nextIdx];
+    this.webSpeech.queue(
+      nextChunk.text, this.speed, this.volume, this.pitch,
+      () => {
+        // onStart: 浏览器实际开始播放预队列段时触发，确保进度精确
+        if (this.stopped || this.generationId !== genId) return;
+        this.callbacks.onChunkStart?.(nextIdx, this.chunks.length, nextChunk.paragraphIndex);
+      },
+      () => this.handleChunkEnded(genId),
+      (err) => this.handleChunkError(err, genId),
+      nextChunk.paragraphBreaks, nextChunk.paragraphIndices,
+      (paraIdx) => {
+        if (this.stopped || this.generationId !== genId) return;
+        this.callbacks.onParagraphChange?.(paraIdx);
+      },
+    );
+    this.currentChunkWasPreQueued = true;
+  }
+
+  private handleChunkEnded(genId: number): void {
+    if (this.stopped || this.generationId !== genId) return;
+    const chunk = this.chunks[this.currentChunkIndex];
+    // 使用组内最后一段的索引，避免合并段结束时高亮闪回第一段
+    const lastIdx = chunk?.paragraphIndices?.length
+      ? chunk.paragraphIndices[chunk.paragraphIndices.length - 1]
+      : chunk?.paragraphIndex ?? 0;
+    this.callbacks.onChunkEnd?.(this.currentChunkIndex, this.chunks.length, lastIdx);
+    this.currentChunkIndex++;
+    this.speakNextChunk();
+  }
+
+  private handleChunkError(err: string, genId: number): void {
+    if (this.stopped || this.generationId !== genId) return;
+    this.callbacks.onError?.(err);
   }
 
   pause(): void {
@@ -337,6 +497,7 @@ export class TTSManager {
     this.stopped = true;
     this.generationId++; // R3F2: 无效化 auto-retry 的 setTimeout
     this.seekId++;       // B1: 无效化 seekToChunk timeout
+    this.currentChunkWasPreQueued = false;
     if (this.zipvoice) this.zipvoice.stop();
     this.webSpeech.stop();
     this.callbacks.onStop?.();
@@ -350,6 +511,7 @@ export class TTSManager {
   seekToChunk(index: number): void {
     if (index >= 0 && index < this.chunks.length) {
       this.generationId++;
+      this.currentChunkWasPreQueued = false;
       this.stopped = true;
       if (this.zipvoice) this.zipvoice.stop();
       this.webSpeech.stop();
