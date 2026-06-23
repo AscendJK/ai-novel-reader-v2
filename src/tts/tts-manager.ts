@@ -163,7 +163,7 @@ class ZipVoiceTTSEngine {
         source.buffer = this.currentBuffer;
         source.connect(ctx.destination);
         const resolve = this.pendingPlayResolve;
-        source.onended = () => { this.currentSource = null; this.currentBuffer = null; this.pendingPlayResolve = null; resolve?.(); };
+        source.onended = () => { this.currentSource = null; if (!this.paused) { this.currentBuffer = null; this.pendingPlayResolve = null; resolve?.(); } };
         this.currentSource = source;
         this.startedAt = ctx.currentTime - this.pausedAt;
         this.paused = false;

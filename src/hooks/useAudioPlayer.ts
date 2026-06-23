@@ -197,12 +197,14 @@ export function useAudioPlayer({
     if (manager.isPaused()) {
       await manager.resume();
       setPaused(false);
-      // EC6c: Chrome 有时 resume 是静默 no-op，稍后验证
-      setTimeout(() => {
-        if (!speechSynthesis.speaking && !speechSynthesis.pending) {
-          setPaused(true); // resume 失败，恢复 paused 状态
-        }
-      }, 300);
+      // B4: 仅 WebSpeech 需要验证 resume（ZipVoice 用 Web Audio API）
+      if (useTTSStore.getState().engine === "webspeech") {
+        setTimeout(() => {
+          if (!speechSynthesis.speaking && !speechSynthesis.pending) {
+            setPaused(true);
+          }
+        }, 300);
+      }
     } else if (manager.isPlaying()) {
       manager.pause();
       setPaused(true);
@@ -252,7 +254,15 @@ export function useAudioPlayer({
 
   const togglePauseRef = useRef(togglePause);
   togglePauseRef.current = togglePause;
+  playRef.current = play; // B1+B2 fix
   const stopRef = useRef(stop);
+  // B2: 自动翻章后章节加载完自动播放
+  useEffect(() => {
+    if (pendingAutoPlayRef.current && chapterContent) {
+      pendingAutoPlayRef.current = false;
+      setTimeout(() => playRef.current(), 300);
+    }
+  }, [chapterContent, chapterIndex]);
   stopRef.current = stop;
   const onPrevRef = useRef(onPrevChapter);
   onPrevRef.current = onPrevChapter;
