@@ -51,7 +51,8 @@ class WebSpeechTTSEngine {
     this.utterance.onstart = () => callbacks.onPlay?.();
     this.utterance.onend = () => callbacks.onEnd?.();
     this.utterance.onerror = (e) => {
-      if (e.error !== "canceled") callbacks.onError?.(e.error);
+      // "interrupted" 在 seek/stop 时正常出现，不需要报错
+      if (e.error !== "canceled" && e.error !== "interrupted") callbacks.onError?.(e.error);
     };
     speechSynthesis.speak(this.utterance);
     this.paused = false;
