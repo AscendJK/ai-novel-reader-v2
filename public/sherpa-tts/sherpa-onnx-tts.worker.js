@@ -187,23 +187,14 @@ self.onmessage = async (e) => {
   } else if (msg.type === "generate") {
     if (!tts) { self.postMessage({ type: "error", id: msg.id, message: "TTS 未初始化" }); return; }
     try {
-      // generateWithConfig 才支持 referenceAudio/referenceSampleRate/referenceText
-      log("开始生成, refAudio=" + refAudioData.length + " samples, text=" + msg.text.length + " chars");
-      let audio;
-      try {
-        audio = tts.generateWithConfig(msg.text, {
-          sid: 0,
-          speed: msg.speed || 1.0,
-          referenceAudio: refAudioData,
-          referenceSampleRate: 24000,
-          referenceText: "各位村民, 大家新年好! 近期, 湖北省武汉市等多个地区",
-        });
-      } catch (e) {
-        log("generateWithConfig 抛出: " + e + " message=" + e.message);
-        throw e;
-      }
-      log("生成成功! samples=" + audio.samples.length + " rate=" + audio.sampleRate);
-      // 复制 samples 到独立 buffer（避免 Emscripten heap 已释放）
+      // 修复：3秒短参考音频 + referenceText
+      const shortRef = refAudioData.slice(0, 72000);
+      const audio = tts.generateWithConfig(msg.text, {
+        sid: 0,
+        referenceAudio: shortRef,
+        referenceSampleRate: 24000,
+        referenceText: "各位村民, 大家新年好! 近期, 湖北省武汉市等多个地区",
+      });
       const copy = new Float32Array(audio.samples);
       self.postMessage({ type: "sherpa-onnx-tts-result", id: msg.id, samples: copy, sampleRate: audio.sampleRate }, [copy.buffer]);
     } catch (err) {
