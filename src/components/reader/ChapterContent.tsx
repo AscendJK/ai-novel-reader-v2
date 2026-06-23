@@ -3,6 +3,7 @@ import { useNovelStore } from "@/stores/novel-store";
 import { useSummaryStore } from "@/stores/summary-store";
 import { useUIStore } from "@/stores/ui-store";
 import { useRAGStore } from "@/stores/rag-store";
+import { useTTSStore } from "@/stores/tts-store";
 import { useKeyboardShortcuts, type ShortcutBinding } from "@/hooks/useKeyboardShortcuts";
 import { usePagination, type PageRange } from "@/hooks/usePagination";
 import { useContinuousScroll } from "@/hooks/useContinuousScroll";
@@ -266,6 +267,9 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   const contentWidth = Math.max(0, pageWidth - activePadding * 2);
   const contentHeight = Math.max(0, containerSize.height - activePadding * 2);
   const contentParagraphs = useMemo(() => chapter?.content.split("\n") || [], [chapter?.content]);
+  // F1: 跟读高亮当前段落
+  const { currentParagraph: ttsParagraph, playing: ttsPlaying, currentChapterIndex: ttsChapterIndex } = useTTSStore();
+  const ttsActive = ttsPlaying && ttsChapterIndex === currentIndex;
 
   const { pages, totalPages, measureRef } = usePagination({
     paragraphs: contentParagraphs,
@@ -449,8 +453,10 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
       if (!trimmed) {
         items.push(<br key={i} />);
       } else {
+        // F1: 高亮当前朗读段落
+        const hl = ttsActive && ttsParagraph === i;
         items.push(
-          <p key={i} className="text-justify" style={{ marginBottom: `${paragraphSpacing}px` }}>
+          <p key={i} className={`text-justify ${hl ? "bg-primary/10 border-l-2 border-primary pl-3 rounded-r" : ""}`} style={{ marginBottom: `${paragraphSpacing}px` }}>
             {trimmed}
           </p>
         );
@@ -657,8 +663,10 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
                 {ch.content.split("\n").map((paragraph, i) => {
                   const trimmed = paragraph.trim();
                   if (!trimmed) return <br key={i} />;
+                  // F1: 高亮当前朗读段落
+                  const isHighlighted = ttsActive && ch.id === selectedChapterId && ttsParagraph === i;
                   return (
-                    <p key={i} className="text-justify" style={{ marginBottom: `${paragraphSpacing}px` }}>
+                    <p key={i} className={`text-justify ${isHighlighted ? "bg-primary/10 border-l-2 border-primary pl-3 rounded-r" : ""}`} style={{ marginBottom: `${paragraphSpacing}px` }}>
                       {trimmed}
                     </p>
                   );

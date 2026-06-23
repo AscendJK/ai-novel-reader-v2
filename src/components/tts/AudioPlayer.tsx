@@ -44,7 +44,7 @@ export function AudioPlayer({
     setSpeed,
   } = useTTSStore();
 
-  const { play, togglePause, stop, isActive, isPaused, isPlaying, error, retryCount } = useAudioPlayer({
+  const { play, togglePause, stop, isActive, isPaused, isPlaying, error, retryCount, seekToParagraph } = useAudioPlayer({
     chapterContent,
     chapterIndex,
     novelId,
@@ -144,7 +144,15 @@ export function AudioPlayer({
           </div>
           {isActive && totalParagraphs > 0 && (
             <div className="flex items-center gap-2">
-              <div className="flex-1 h-1 bg-muted rounded-full overflow-hidden">
+              <div className="flex-1 h-1 bg-muted rounded-full overflow-hidden cursor-pointer"
+                onClick={(e) => {
+                  if (!seekToParagraph || totalParagraphs === 0) return;
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                  const targetPara = Math.floor(ratio * (totalParagraphs - 1));
+                  seekToParagraph(targetPara);
+                }}
+                title="点击跳转到指定段落">
                 <div className="h-full bg-primary transition-all duration-300"
                   style={{ width: `${(currentParagraph / totalParagraphs) * 100}%` }} />
               </div>

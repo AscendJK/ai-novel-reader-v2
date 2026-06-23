@@ -179,6 +179,17 @@ export function useAudioPlayer({
     }
   }, [getManager, setPaused]);
 
+  // F2+F3: 跳到指定段落并开始朗读
+  const seekToParagraph = useCallback((index: number) => {
+    const manager = getManager();
+    if (manager.isPlaying() || manager.isPaused()) {
+      manager.seekToChunk(index);
+    } else {
+      // 尚未开始播放，先 play 再 seek
+      play();
+    }
+  }, [getManager, play]);
+
   // 停止
   const stop = useCallback(() => {
     pendingAutoPlayRef.current = false;
@@ -246,5 +257,6 @@ export function useAudioPlayer({
     isPlaying: playing && !paused && isActive,
     error,
     retryCount: retryCountRef.current,
+    seekToParagraph,
   };
 }
