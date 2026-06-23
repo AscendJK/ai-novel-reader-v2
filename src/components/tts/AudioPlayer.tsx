@@ -38,12 +38,13 @@ export function AudioPlayer({
   onPrevChapter,
   onNextChapter,
 }: AudioPlayerProps) {
-  const {
-    generating, generateProgress,
-    currentParagraph, totalParagraphs,
-    speed, engine,
-    setSpeed,
-  } = useTTSStore();
+  const generating = useTTSStore(s => s.generating);
+  const generateProgress = useTTSStore(s => s.generateProgress);
+  const currentParagraph = useTTSStore(s => s.currentParagraph);
+  const totalParagraphs = useTTSStore(s => s.totalParagraphs);
+  const speed = useTTSStore(s => s.speed);
+  const engine = useTTSStore(s => s.engine);
+  const setSpeed = useTTSStore(s => s.setSpeed);
 
   const { play, togglePause, stop, isActive, isPaused, isPlaying, error, retryCount, seekToParagraph } = useAudioPlayer({
     chapterContent,

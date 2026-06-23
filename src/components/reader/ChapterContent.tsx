@@ -267,9 +267,9 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   const contentWidth = Math.max(0, pageWidth - activePadding * 2);
   const contentHeight = Math.max(0, containerSize.height - activePadding * 2);
   const contentParagraphs = useMemo(() => chapter?.content.split("\n") || [], [chapter?.content]);
-  // F1: 跟读高亮当前段落
-  const { currentParagraph: ttsParagraph, playing: ttsPlaying, currentChapterIndex: ttsChapterIndex } = useTTSStore();
-  const ttsActive = ttsPlaying && ttsChapterIndex === currentIndex;
+  // F1: 用 Zustand selector 减少不必要的重渲染
+  const ttsParagraph = useTTSStore(s => s.playing && s.currentChapterIndex === currentIndex ? s.currentParagraph : -1);
+  const ttsActive = ttsParagraph >= 0;
 
   const { pages, totalPages, measureRef } = usePagination({
     paragraphs: contentParagraphs,
