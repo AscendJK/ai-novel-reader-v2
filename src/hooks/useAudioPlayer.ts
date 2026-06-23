@@ -95,6 +95,11 @@ export function useAudioPlayer({
     if (managerRef.current) managerRef.current.setPitch(pitch);
   }, [pitch]);
 
+  // B8: 引擎切换时同步到 manager
+  useEffect(() => {
+    if (managerRef.current) managerRef.current.setEngine(engine);
+  }, [engine]);
+
   // 确保管理器存在
   const getManager = useCallback(() => {
     if (!managerRef.current) {

@@ -64,7 +64,18 @@ class WebSpeechTTSEngine {
   pause(): void {
     if (this.available && speechSynthesis.speaking) { speechSynthesis.pause(); this.paused = true; }
   }
-  resume(): void { if (this.available && this.paused) { speechSynthesis.resume(); this.paused = false; } }
+  resume(): void {
+    if (!this.available || !this.paused) return;
+    speechSynthesis.resume();
+    this.paused = false;
+    // B5: 验证 resume 是否真的生效（Chrome 有时 resume 是 no-op）
+    setTimeout(() => {
+      if (this.paused === false && !speechSynthesis.speaking && !speechSynthesis.pending) {
+        // resume 失败，标记为需重建
+        this.paused = true;
+      }
+    }, 200);
+  }
   stop(): void { if (this.available) speechSynthesis.cancel(); this.utterance = null; this.paused = false; }
   isSpeaking(): boolean { return this.available ? speechSynthesis.speaking : false; }
   isPaused(): boolean { return this.paused; }
@@ -212,8 +223,14 @@ export class TTSManager {
 
   setVoice(voiceId: string) {
     this.voiceId = voiceId;
-    if (this.engine === "webspeech") this.webSpeech.setVoice(voiceId);
-    else if (this.zipvoice) this.zipvoice.setVoice(voiceId);
+    if (this.engine === "webspeech") {
+      this.webSpeech.setVoice(voiceId);
+      // B1: 播放中切音色，中断当前段并用新音色重新朗读
+      if (this.webSpeech.isSpeaking() && this.currentChunkIndex < this.chunks.length) {
+        this.webSpeech.stop();
+        this.speakNextChunk();
+      }
+    } else if (this.zipvoice) this.zipvoice.setVoice(voiceId);
   }
 
   setSpeed(speed: number) { this.speed = Math.max(0.5, Math.min(3.0, speed)); }
