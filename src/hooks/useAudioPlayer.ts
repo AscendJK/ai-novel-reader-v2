@@ -204,6 +204,12 @@ export function useAudioPlayer({
     if (manager.isPaused()) {
       await manager.resume();
       setPaused(false);
+      // EC6c: Chrome 有时 resume 是静默 no-op，稍后验证
+      setTimeout(() => {
+        if (!speechSynthesis.speaking && !speechSynthesis.pending) {
+          setPaused(true); // resume 失败，恢复 paused 状态
+        }
+      }, 300);
     } else if (manager.isPlaying()) {
       manager.pause();
       setPaused(true);

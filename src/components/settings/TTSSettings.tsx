@@ -37,9 +37,12 @@ export function TTSSettings() {
 
   const previewVoice = useCallback((previewVoiceId: string) => {
     if (previewing) return;
-    // B2+B3: 如果正在播放，先停止避免冲突
-    const { playing } = useTTSStore.getState();
-    if (playing) speechSynthesis.cancel();
+    // B2+B3+EC3+EC5b: 如果正在播放，通过 store 通知停止
+    const state = useTTSStore.getState();
+    if (state.playing) {
+      speechSynthesis.cancel();
+      state.reset(); // 清洗 store 状态，防止 UI 卡在"播放中"
+    }
     const utterance = new SpeechSynthesisUtterance("各位村民，大家新年好。近期，湖北省武汉市等多个地区。");
     utterance.lang = "zh-CN";
     const voice = voices.find(v => v.voiceURI === previewVoiceId);

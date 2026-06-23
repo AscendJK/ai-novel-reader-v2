@@ -64,18 +64,7 @@ class WebSpeechTTSEngine {
   pause(): void {
     if (this.available && speechSynthesis.speaking) { speechSynthesis.pause(); this.paused = true; }
   }
-  resume(): void {
-    if (!this.available || !this.paused) return;
-    speechSynthesis.resume();
-    this.paused = false;
-    // B5: 验证 resume 是否真的生效（Chrome 有时 resume 是 no-op）
-    setTimeout(() => {
-      if (this.paused === false && !speechSynthesis.speaking && !speechSynthesis.pending) {
-        // resume 失败，标记为需重建
-        this.paused = true;
-      }
-    }, 200);
-  }
+  resume(): void { if (this.available && this.paused) { speechSynthesis.resume(); this.paused = false; } }
   stop(): void { if (this.available) speechSynthesis.cancel(); this.utterance = null; this.paused = false; }
   isSpeaking(): boolean { return this.available ? speechSynthesis.speaking : false; }
   isPaused(): boolean { return this.paused; }
