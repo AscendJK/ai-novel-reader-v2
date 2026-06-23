@@ -430,9 +430,7 @@ Backend: Local server (Express + better-sqlite3)
 
 ## License
 
-MIT License. Built-in models:
-- **BGE Small ZH v1.5** — from BAAI (Beijing Academy of Artificial Intelligence), MIT licensed
-- **GTE Small** — from Alibaba DAMO Academy, Apache 2.0 licensed
+MIT License. 
 
 ---
 

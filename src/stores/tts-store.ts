@@ -86,7 +86,7 @@ function loadSettings(): PersistedSettings {
         webspeechVoiceId: s.webspeechVoiceId || "",
         speed: s.speed ?? 1.0,
         autoNextChapter: s.autoNextChapter ?? true,
-        engine: s.engine || "zipvoice",
+        engine: "webspeech", // ZipVoice 暂不可用，强制 WebSpeech
         modelDownloaded: s.modelDownloaded ?? false,
       };
     }

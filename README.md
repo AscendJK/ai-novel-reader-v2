@@ -433,10 +433,6 @@ admin.bat        # Windows 双击
 
 MIT License
 
-内置模型协议：
-- **BGE Small ZH v1.5** — 来自北京智源人工智能研究院（BAAI），MIT 协议
-- **GTE Small** — 来自阿里通义实验室（Alibaba DAMO Academy），Apache 2.0 协议
-
 ---
 
 ## 语音朗读（TTS）
