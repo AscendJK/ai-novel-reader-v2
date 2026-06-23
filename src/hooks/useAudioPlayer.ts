@@ -57,11 +57,16 @@ export function useAudioPlayer({
     };
   }, []);
 
-  // M19: 手动翻章时清除自动翻章定时器
+  // M19+R7: 手动翻章时清除定时器+停止旧播放
   useEffect(() => {
     if (autoNextTimerRef.current) {
       clearTimeout(autoNextTimerRef.current);
       autoNextTimerRef.current = null;
+    }
+    // R7: 非自动翻章时停止旧播放（防止旧章音频继续朗读）
+    if (!pendingAutoPlayRef.current) {
+      managerRef.current?.stop();
+      reset();
     }
   }, [chapterIndex]);
 
