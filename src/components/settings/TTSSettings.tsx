@@ -11,8 +11,8 @@ import { useTTSStore } from "@/stores/tts-store";
 
 export function TTSSettings() {
   const {
-    voiceId, speed, autoNextChapter,
-    setVoiceId, setSpeed, setAutoNextChapter,
+    voiceId, speed, volume, pitch, autoNextChapter,
+    setVoiceId, setSpeed, setVolume, setPitch, setAutoNextChapter,
   } = useTTSStore();
 
   // Web Speech API 可用语音列表（中文）
@@ -37,7 +37,7 @@ export function TTSSettings() {
 
   const previewVoice = useCallback((previewVoiceId: string) => {
     if (previewing) return;
-    const utterance = new SpeechSynthesisUtterance("你好，这是一段语音试听。");
+    const utterance = new SpeechSynthesisUtterance("各位村民，大家新年好。近期，湖北省武汉市等多个地区。");
     utterance.lang = "zh-CN";
     const voice = voices.find(v => v.voiceURI === previewVoiceId);
     if (voice) utterance.voice = voice;
@@ -92,6 +92,29 @@ export function TTSSettings() {
           onChange={(e) => setSpeed(parseFloat(e.target.value))} className="w-full h-1.5" />
         <div className="flex justify-between text-[10px] text-muted-foreground">
           <span>0.5x</span><span>1.0x</span><span>2.0x</span><span>3.0x</span>
+        </div>
+      </div>
+
+      {/* F7: 音量 */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-medium text-muted-foreground">音量</p>
+          <span className="text-xs text-muted-foreground">{(volume * 100).toFixed(0)}%</span>
+        </div>
+        <input type="range" min={0} max={1} step={0.05} value={volume}
+          onChange={(e) => setVolume(parseFloat(e.target.value))} className="w-full h-1.5" />
+      </div>
+
+      {/* F8: 音调 */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-medium text-muted-foreground">音调</p>
+          <span className="text-xs text-muted-foreground">{pitch.toFixed(1)}</span>
+        </div>
+        <input type="range" min={0.5} max={2.0} step={0.1} value={pitch}
+          onChange={(e) => setPitch(parseFloat(e.target.value))} className="w-full h-1.5" />
+        <div className="flex justify-between text-[10px] text-muted-foreground">
+          <span>低</span><span>正常</span><span>高</span>
         </div>
       </div>
 

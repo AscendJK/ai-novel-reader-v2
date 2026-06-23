@@ -41,7 +41,7 @@ export function useAudioPlayer({
   const pendingAutoPlayRef = useRef(false);
 
   const {
-    playing, paused, speed, voiceId, engine, autoNextChapter,
+    playing, paused, speed, volume, pitch, voiceId, engine, autoNextChapter,
     currentNovelId, currentChapterIndex,
     setPlaying, setPaused, setCurrentChapter,
     setParagraphProgress, setGenerating, setEngine,
@@ -78,6 +78,14 @@ export function useAudioPlayer({
       managerRef.current.setVoice(voiceId);
     }
   }, [voiceId]);
+
+  useEffect(() => {
+    if (managerRef.current) managerRef.current.setVolume(volume);
+  }, [volume]);
+
+  useEffect(() => {
+    if (managerRef.current) managerRef.current.setPitch(pitch);
+  }, [pitch]);
 
   // 确保管理器存在
   const getManager = useCallback(() => {

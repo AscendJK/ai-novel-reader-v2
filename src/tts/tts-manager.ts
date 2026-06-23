@@ -40,10 +40,12 @@ class WebSpeechTTSEngine {
     this.voice = voices.find(v => v.voiceURI === voiceId) || null;
   }
 
-  speak(text: string, speed: number, callbacks: TTSPlaybackCallbacks): void {
+  speak(text: string, speed: number, volume: number, pitch: number, callbacks: TTSPlaybackCallbacks): void {
     this.stop();
     this.utterance = new SpeechSynthesisUtterance(text);
     this.utterance.rate = speed;
+    this.utterance.volume = volume;
+    this.utterance.pitch = pitch;
     this.utterance.lang = "zh-CN";
     if (this.voice) this.utterance.voice = this.voice;
     this.utterance.onstart = () => callbacks.onPlay?.();
@@ -190,6 +192,8 @@ export class TTSManager {
   private currentChunkIndex = 0;
   private callbacks: TTSPlaybackCallbacks = {};
   private speed = 1.0;
+  private volume = 1.0;
+  private pitch = 1.0;
   private voiceId = "0";
   private stopped = false;
   private generationId = 0;
@@ -205,6 +209,8 @@ export class TTSManager {
   }
 
   setSpeed(speed: number) { this.speed = Math.max(0.5, Math.min(3.0, speed)); }
+  setVolume(volume: number) { this.volume = Math.max(0, Math.min(1, volume)); }
+  setPitch(pitch: number) { this.pitch = Math.max(0.5, Math.min(2.0, pitch)); }
 
   async speak(chunks: TTSChunk[], callbacks: TTSPlaybackCallbacks): Promise<void> {
     // B2: 先保存旧回调，stop后再设置新回调，避免 onStop 丢失
@@ -263,7 +269,7 @@ export class TTSManager {
         onError: (err) => this.callbacks.onError?.(err),
       });
     } else {
-      this.webSpeech.speak(chunk.text, this.speed, {
+      this.webSpeech.speak(chunk.text, this.speed, this.volume, this.pitch, {
         onPlay: () => this.callbacks.onPlay?.(),
         onEnd: () => {
           if (this.stopped || this.generationId !== genId) return;

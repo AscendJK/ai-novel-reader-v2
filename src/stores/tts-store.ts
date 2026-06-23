@@ -43,6 +43,10 @@ export interface TTSState {
   voiceId: string;
   /** 语速 0.5-3.0 */
   speed: number;
+  /** F7: 音量 0-1 */
+  volume: number;
+  /** F8: 音调 0.5-2.0 */
+  pitch: number;
   /** 自动翻章 */
   autoNextChapter: boolean;
   /** TTS 引擎类型 */
@@ -60,6 +64,8 @@ export interface TTSState {
   setModelDownloading: (downloading: boolean, progress?: number) => void;
   setVoiceId: (voiceId: string) => void;
   setSpeed: (speed: number) => void;
+  setVolume: (volume: number) => void;
+  setPitch: (pitch: number) => void;
   setAutoNextChapter: (auto: boolean) => void;
   setEngine: (engine: "zipvoice" | "webspeech") => void;
   reset: () => void;
@@ -71,6 +77,8 @@ interface PersistedSettings {
   zipvoiceVoiceId: string;
   webspeechVoiceId: string;
   speed: number;
+  volume: number;
+  pitch: number;
   autoNextChapter: boolean;
   engine: "zipvoice" | "webspeech";
   modelDownloaded: boolean;
@@ -85,13 +93,15 @@ function loadSettings(): PersistedSettings {
         zipvoiceVoiceId: s.zipvoiceVoiceId || s.voiceId || "0",
         webspeechVoiceId: s.webspeechVoiceId || "",
         speed: s.speed ?? 1.0,
+        volume: s.volume ?? 1.0,
+        pitch: s.pitch ?? 1.0,
         autoNextChapter: s.autoNextChapter ?? true,
         engine: "webspeech", // ZipVoice 暂不可用，强制 WebSpeech
         modelDownloaded: s.modelDownloaded ?? false,
       };
     }
   } catch { /* ignore */ }
-  return { zipvoiceVoiceId: "0", webspeechVoiceId: "", speed: 1.0, autoNextChapter: true, engine: "webspeech", modelDownloaded: false };
+  return { zipvoiceVoiceId: "0", webspeechVoiceId: "", speed: 1.0, volume: 1.0, pitch: 1.0, autoNextChapter: true, engine: "webspeech", modelDownloaded: false };
 }
 
 function saveSettings(s: PersistedSettings) {
@@ -128,6 +138,8 @@ export const useTTSStore = create<TTSState>((set, get) => ({
   // 设置 — M14 fix: 每个引擎独立的 voiceId
   voiceId: getVoiceIdForEngine(defaults.engine, defaults.zipvoiceVoiceId, defaults.webspeechVoiceId),
   speed: defaults.speed,
+  volume: defaults.volume,
+  pitch: defaults.pitch,
   autoNextChapter: defaults.autoNextChapter,
   engine: defaults.engine,
 
@@ -173,6 +185,20 @@ export const useTTSStore = create<TTSState>((set, get) => ({
     const s = get(); set({ speed });
     const settings = loadSettings();
     settings.speed = speed;
+    settings.modelDownloaded = s.modelDownloaded;
+    saveSettings(settings);
+  },
+  setVolume: (volume) => {
+    const s = get(); set({ volume: Math.max(0, Math.min(1, volume)) });
+    const settings = loadSettings();
+    settings.volume = volume;
+    settings.modelDownloaded = s.modelDownloaded;
+    saveSettings(settings);
+  },
+  setPitch: (pitch) => {
+    const s = get(); set({ pitch: Math.max(0.5, Math.min(2, pitch)) });
+    const settings = loadSettings();
+    settings.pitch = pitch;
     settings.modelDownloaded = s.modelDownloaded;
     saveSettings(settings);
   },
