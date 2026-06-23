@@ -33,6 +33,8 @@ export function TTSSettings() {
 
   useEffect(() => () => {
     if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+    // B7: 组件卸载时取消全局 speechSynthesis
+    if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
   }, []);
 
   const previewVoice = useCallback((previewVoiceId: string) => {

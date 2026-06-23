@@ -65,14 +65,7 @@ export function useAudioPlayer({
     }
   }, [chapterIndex]);
 
-  // B5: 自动翻章后等新章节内容加载完成，自动恢复播放
-  useEffect(() => {
-    if (pendingAutoPlayRef.current && chapterContent) {
-      pendingAutoPlayRef.current = false;
-      // 延迟一小段确保章节切换完成
-      setTimeout(() => play(), 300);
-    }
-  }, [chapterContent, chapterIndex]);
+  const playRef = useRef<typeof play>(null!); // B4+B5: 在 play 定义前声明，定义后赋值
 
   // 语速/语音变化时同步到管理器
   useEffect(() => {
@@ -257,9 +250,6 @@ export function useAudioPlayer({
     reset();
   }, [reset, savePosition]);
 
-  // B4: 用 ref 存最新回调，避免 Media Session 闭包捕获旧章节引用
-  const playRef = useRef(play);
-  playRef.current = play;
   const togglePauseRef = useRef(togglePause);
   togglePauseRef.current = togglePause;
   const stopRef = useRef(stop);

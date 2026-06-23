@@ -96,7 +96,7 @@ function loadSettings(): PersistedSettings {
         volume: s.volume ?? 1.0,
         pitch: s.pitch ?? 1.0,
         autoNextChapter: s.autoNextChapter ?? true,
-        engine: "webspeech", // ZipVoice 暂不可用，强制 WebSpeech
+        engine: (s.engine === "zipvoice" || s.engine === "webspeech") ? s.engine : "webspeech", // B12: ZipVoice 暂强制 WebSpeech
         modelDownloaded: s.modelDownloaded ?? false,
       };
     }
@@ -182,9 +182,10 @@ export const useTTSStore = create<TTSState>((set, get) => ({
     saveSettings(settings);
   },
   setSpeed: (speed) => {
-    const s = get(); set({ speed });
+    const clamped = Math.max(0.5, Math.min(3.0, speed)); // B5: clamp
+    const s = get(); set({ speed: clamped });
     const settings = loadSettings();
-    settings.speed = speed;
+    settings.speed = clamped;
     settings.modelDownloaded = s.modelDownloaded;
     saveSettings(settings);
   },

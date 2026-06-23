@@ -109,12 +109,12 @@ class ZipVoiceTTSEngine {
         this.startedAt = ctx.currentTime;
         this.pausedAt = 0;
         this.paused = false;
-        this.pendingPlayResolve = resolve;
         source.onended = () => {
           this.currentSource = null;
           if (!this.paused) { this.currentBuffer = null; this.pendingPlayResolve = null; resolve(); }
         };
         source.start();
+        this.pendingPlayResolve = resolve; // B3: start 成功后再赋值
       };
       if (ctx.state === "suspended") ctx.resume().then(startPlayback);
       else startPlayback();
@@ -205,6 +205,7 @@ export class TTSManager {
   private voiceId = "0";
   private stopped = false;
   private generationId = 0;
+  private seekId = 0; // B1: 防止 stop 后 seekToChunk 的 timeout 激活
 
   constructor() { this.webSpeech = new WebSpeechTTSEngine(); }
 
@@ -227,10 +228,7 @@ export class TTSManager {
   setPitch(pitch: number) { this.pitch = Math.max(0.5, Math.min(2.0, pitch)); }
 
   async speak(chunks: TTSChunk[], callbacks: TTSPlaybackCallbacks): Promise<void> {
-    // B2: 先保存旧回调，stop后再设置新回调，避免 onStop 丢失
-    const oldCallbacks = this.callbacks;
-    this.stop();
-    oldCallbacks.onStop?.();
+    this.stop(); // 内部已调用 this.callbacks.onStop?.()
     this.chunks = chunks;
     this.currentChunkIndex = 0;
     this.callbacks = callbacks;
@@ -316,6 +314,7 @@ export class TTSManager {
 
   stop(): void {
     this.stopped = true;
+    this.seekId++; // B1: 无效化所有待执行的 seekToChunk timeout
     if (this.zipvoice) this.zipvoice.stop();
     this.webSpeech.stop();
     this.callbacks.onStop?.();
@@ -328,14 +327,15 @@ export class TTSManager {
 
   seekToChunk(index: number): void {
     if (index >= 0 && index < this.chunks.length) {
-      // H8 fix: 先递增 generationId 使旧链路的所有回调失效，再停止旧播放
       this.generationId++;
       this.stopped = true;
       if (this.zipvoice) this.zipvoice.stop();
       this.webSpeech.stop();
       this.currentChunkIndex = index;
-      // 使用 setTimeout 确保旧链路的同步回调（如 onChunk）先执行完毕
+      // B1: seekId 防止 stop() 后旧 timeout 激活
+      const sid = ++this.seekId;
       setTimeout(() => {
+        if (this.seekId !== sid) return; // stop() 后 seekId 已递增，放弃
         this.stopped = false;
         this.speakNextChunk();
       }, 0);
