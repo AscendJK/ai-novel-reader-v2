@@ -469,6 +469,21 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     ? `${spreadIndex * 2 + 1}${spreadIndex * 2 + 2 < totalPages ? `-${spreadIndex * 2 + 2}` : ""}`
     : `${safePage + 1}`;
 
+  // TTS AudioPlayer 配置（在两种模式外渲染，切换时不卸载）
+  const audioPlayer = currentNovel && chapter ? (
+    <AudioPlayer
+      novelId={currentNovel.id}
+      chapterContent={chapter.content || null}
+      chapterIndex={currentIndex}
+      chapterTitle={chapter.title}
+      onPrevChapter={currentIndex > 0 ? () => setSelectedChapter(chapters[currentIndex - 1]?.id) : undefined}
+      onNextChapter={currentIndex < chapters.length - 1 ? () => setSelectedChapter(chapters[currentIndex + 1]?.id) : undefined}
+    />
+  ) : null;
+
+  // 构建模式相关的内容（赋值给变量，最后统一 return）
+  let content: React.ReactNode;
+
   // ========================================
   // 翻页模式渲染（完全保留原逻辑）
   // ========================================
@@ -476,7 +491,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     const leftPage = isDouble ? pages[spreadIndex * 2] : pages[safePage];
     const rightPage = isDouble ? pages[spreadIndex * 2 + 1] : undefined;
 
-    return (
+    const renderControls = (
       <div className="flex-1 flex flex-col h-full">
         <TopBar
           chapter={chapter} currentIndex={currentIndex} chapters={chapters}
@@ -565,25 +580,15 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
           />
         )}
 
-        {/* TTS 播放栏（B1：翻页模式也需要） */}
-        {currentNovel && chapter && (
-          <AudioPlayer
-            novelId={currentNovel.id}
-            chapterContent={chapter.content || null}
-            chapterIndex={currentIndex}
-            chapterTitle={chapter.title}
-            onPrevChapter={currentIndex > 0 ? () => setSelectedChapter(chapters[currentIndex - 1]?.id) : undefined}
-            onNextChapter={currentIndex < chapters.length - 1 ? () => setSelectedChapter(chapters[currentIndex + 1]?.id) : undefined}
-          />
-        )}
+        {audioPlayer}
       </div>
     );
-  }
-
+    content = renderControls;
+  } else {
   // ========================================
   // 连续滚动模式渲染
   // ========================================
-  return (
+  content = (
     <div className="flex-1 flex flex-col h-full">
       <TopBar
         chapter={chapter} currentIndex={currentIndex} chapters={chapters}
@@ -602,17 +607,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
         isIndexLoading={isIndexLoading}
       />
 
-      {/* TTS 播放栏 */}
-      {currentNovel && chapter && (
-        <AudioPlayer
-          novelId={currentNovel.id}
-          chapterContent={chapter.content || null}
-          chapterIndex={currentIndex}
-          chapterTitle={chapter.title}
-          onPrevChapter={currentIndex > 0 ? () => setSelectedChapter(chapters[currentIndex - 1]?.id) : undefined}
-          onNextChapter={currentIndex < chapters.length - 1 ? () => setSelectedChapter(chapters[currentIndex + 1]?.id) : undefined}
-        />
-      )}
+      {audioPlayer}
 
       {/* 连续滚动容器 */}
       <div
@@ -709,6 +704,10 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
       )}
     </div>
   );
+  } // end else (scroll mode)
+
+  // 统一 return：内容 + 始终挂载的 AudioPlayer（切换模式不卸载）
+  return <>{content}{audioPlayer}</>;
 }
 
 // ========================================
