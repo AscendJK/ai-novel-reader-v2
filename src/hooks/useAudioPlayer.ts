@@ -66,6 +66,7 @@ export function useAudioPlayer({
   }, [chapterIndex]);
 
   const playRef = useRef<typeof play>(null!); // B4+B5: 在 play 定义前声明，定义后赋值
+  const startIndexRef = useRef(0); // R6: seekToParagraph 偏移修正
 
   // 语速/语音变化时同步到管理器
   useEffect(() => {
@@ -123,6 +124,7 @@ export function useAudioPlayer({
     // F10: 恢复上次朗读位置
     const savedPara = loadPosition();
     const startIndex = savedPara && savedPara > 0 && savedPara < paragraphs.length ? savedPara : 0;
+    startIndexRef.current = startIndex; // R6: seekToParagraph 偏移修正
     setParagraphProgress(startIndex, paragraphs.length);
 
     const chunks = paragraphs.map((text, i) => ({ text, index: i }));
@@ -217,9 +219,9 @@ export function useAudioPlayer({
   const seekToParagraph = useCallback((index: number) => {
     const manager = getManager();
     if (manager.isPlaying() || manager.isPaused()) {
-      manager.seekToChunk(index);
+      manager.seekToChunk(index - startIndexRef.current); // R6: 修正偏移
     } else {
-      // 保存目标位置，play 时会从 saved 位置开始（F10 LoadPosition 已处理）
+      startIndexRef.current = 0; // 从头播放，无偏移
       try { localStorage.setItem(TTS_POS_KEY, JSON.stringify({ novelId, chapterIndex, paragraph: index })); } catch {}
       play();
     }
