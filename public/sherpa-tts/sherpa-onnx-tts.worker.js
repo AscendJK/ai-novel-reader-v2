@@ -85,7 +85,6 @@ async function init(files, origin) {
     let Module;
     try {
       Module = await createModule({
-        // 直接传入 WASM 二进制，避免 fetch
         wasmBinary: files["sherpa-onnx-wasm-main-tts.wasm"],
         // espeak-ng-data 文件包（Emscripten FS 需要）
         getPreloadedPackage: () => files["sherpa-onnx-wasm-main-tts.data"],
@@ -188,12 +187,13 @@ self.onmessage = async (e) => {
     if (!tts) { self.postMessage({ type: "error", id: msg.id, message: "TTS 未初始化" }); return; }
     try {
       // 修复：3秒短参考音频 + referenceText
-      const shortRef = refAudioData.slice(0, 72000);
-      const audio = tts.generateWithConfig(msg.text, {
-        sid: 0,
+      const shortRef = refAudioData.slice(0, 24000); // 1秒
+      const refTxt = "各位村民大家新年好";
+      let audio = tts.generateWithConfig(msg.text, {
         referenceAudio: shortRef,
         referenceSampleRate: 24000,
-        referenceText: "各位村民, 大家新年好! 近期, 湖北省武汉市等多个地区",
+        referenceText: refTxt,
+        silenceScale: 0,
       });
       const copy = new Float32Array(audio.samples);
       self.postMessage({ type: "sherpa-onnx-tts-result", id: msg.id, samples: copy, sampleRate: audio.sampleRate }, [copy.buffer]);

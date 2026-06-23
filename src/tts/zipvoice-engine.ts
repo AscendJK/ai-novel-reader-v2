@@ -24,7 +24,7 @@ export const ZH_VOICES: Record<string, { name: string; gender: string }> = {
 
 const DEFAULT_VOICE = "0";
 const SAMPLE_RATE = 24000;
-const GENERATE_TIMEOUT_MS = 120000; // 2 分钟超时
+const GENERATE_TIMEOUT_MS = 120000;
 
 // ── 状态 ───────────────────────────────────────────────────
 
