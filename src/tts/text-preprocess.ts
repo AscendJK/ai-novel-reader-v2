@@ -14,7 +14,8 @@ export function prepareTextForTTS(content: string, maxChunkLength: number = 300)
   if (!content || content.trim().length === 0) return [];
 
   return content
-    .split(/\n\n+/) // 按空行分割
+    .replace(/<[^>]*>/g, "") // 去除 HTML 标签
+    .split(/\n+/) // 按换行分割（匹配内容的单\n和空行）
     .map(p =>
       p
         .replace(/\s+/g, " ") // 合并连续空白

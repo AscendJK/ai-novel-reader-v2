@@ -35,6 +35,8 @@ export function useAudioPlayer({
   const managerRef = useRef<TTSManager | null>(null);
   // H11 fix: 追踪自动翻章定时器，stop 时清除
   const autoNextTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // B5: 自动翻章后等新章节加载完成再自动播放
+  const pendingAutoPlayRef = useRef(false);
 
   const {
     playing, paused, speed, voiceId, engine, autoNextChapter,
@@ -53,7 +55,16 @@ export function useAudioPlayer({
     };
   }, []);
 
-  // 语速/语音变化时同步到管理器（清除预生成缓冲使新设置立即生效）
+  // B5: 自动翻章后等新章节内容加载完成，自动恢复播放
+  useEffect(() => {
+    if (pendingAutoPlayRef.current && chapterContent) {
+      pendingAutoPlayRef.current = false;
+      // 延迟一小段确保章节切换完成
+      setTimeout(() => play(), 300);
+    }
+  }, [chapterContent, chapterIndex]);
+
+  // 语速/语音变化时同步到管理器
   useEffect(() => {
     if (managerRef.current) {
       managerRef.current.setSpeed(speed);
@@ -104,7 +115,8 @@ export function useAudioPlayer({
       onEnd: () => {
         setPlaying(false);
         if (autoNextChapter && onNextChapter) {
-          // H11 fix: 存储定时器 ID，stop 时可清除
+          // B5: 标记自动翻章进行中，等新章节加载完自动播放
+          pendingAutoPlayRef.current = true;
           autoNextTimerRef.current = setTimeout(() => {
             autoNextTimerRef.current = null;
             onNextChapter();
@@ -155,7 +167,7 @@ export function useAudioPlayer({
 
   // 停止
   const stop = useCallback(() => {
-    // H11 fix: 清除自动翻章定时器
+    pendingAutoPlayRef.current = false;
     if (autoNextTimerRef.current) {
       clearTimeout(autoNextTimerRef.current);
       autoNextTimerRef.current = null;
@@ -163,6 +175,18 @@ export function useAudioPlayer({
     managerRef.current?.stop();
     reset();
   }, [reset]);
+
+  // B4: 用 ref 存最新回调，避免 Media Session 闭包捕获旧章节引用
+  const playRef = useRef(play);
+  playRef.current = play;
+  const togglePauseRef = useRef(togglePause);
+  togglePauseRef.current = togglePause;
+  const stopRef = useRef(stop);
+  stopRef.current = stop;
+  const onPrevRef = useRef(onPrevChapter);
+  onPrevRef.current = onPrevChapter;
+  const onNextRef = useRef(onNextChapter);
+  onNextRef.current = onNextChapter;
 
   // Media Session API（手机锁屏/通知栏控制）
   useEffect(() => {
@@ -173,11 +197,11 @@ export function useAudioPlayer({
       artist: "AI 小说精读助手",
     });
 
-    navigator.mediaSession.setActionHandler("play", () => play());
-    navigator.mediaSession.setActionHandler("pause", () => togglePause());
-    navigator.mediaSession.setActionHandler("stop", () => stop());
-    navigator.mediaSession.setActionHandler("previoustrack", () => onPrevChapter?.());
-    navigator.mediaSession.setActionHandler("nexttrack", () => onNextChapter?.());
+    navigator.mediaSession.setActionHandler("play", () => playRef.current());
+    navigator.mediaSession.setActionHandler("pause", () => togglePauseRef.current());
+    navigator.mediaSession.setActionHandler("stop", () => stopRef.current());
+    navigator.mediaSession.setActionHandler("previoustrack", () => onPrevRef.current?.());
+    navigator.mediaSession.setActionHandler("nexttrack", () => onNextRef.current?.());
 
     return () => {
       navigator.mediaSession.setActionHandler("play", null);
@@ -186,7 +210,7 @@ export function useAudioPlayer({
       navigator.mediaSession.setActionHandler("previoustrack", null);
       navigator.mediaSession.setActionHandler("nexttrack", null);
     };
-  }, [chapterTitle, play, togglePause, stop, onPrevChapter, onNextChapter]);
+  }, [chapterTitle]);
 
   // 是否在当前小说/章节播放
   const isActive = playing && currentNovelId === novelId && currentChapterIndex === chapterIndex;

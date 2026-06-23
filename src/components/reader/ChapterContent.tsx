@@ -558,6 +558,18 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
             pageLabel={`${pageLabel} / ${totalPages}`}
           />
         )}
+
+        {/* TTS 播放栏（B1：翻页模式也需要） */}
+        {currentNovel && chapter && (
+          <AudioPlayer
+            novelId={currentNovel.id}
+            chapterContent={chapter.content || null}
+            chapterIndex={currentIndex}
+            chapterTitle={chapter.title}
+            onPrevChapter={currentIndex > 0 ? () => setSelectedChapter(chapters[currentIndex - 1]?.id) : undefined}
+            onNextChapter={currentIndex < chapters.length - 1 ? () => setSelectedChapter(chapters[currentIndex + 1]?.id) : undefined}
+          />
+        )}
       </div>
     );
   }

@@ -207,8 +207,10 @@ export class TTSManager {
   setSpeed(speed: number) { this.speed = Math.max(0.5, Math.min(3.0, speed)); }
 
   async speak(chunks: TTSChunk[], callbacks: TTSPlaybackCallbacks): Promise<void> {
-    this.callbacks = {};
+    // B2: 先保存旧回调，stop后再设置新回调，避免 onStop 丢失
+    const oldCallbacks = this.callbacks;
     this.stop();
+    oldCallbacks.onStop?.();
     this.chunks = chunks;
     this.currentChunkIndex = 0;
     this.callbacks = callbacks;
