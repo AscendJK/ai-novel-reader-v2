@@ -3,7 +3,7 @@
  * 管理 TTS 播放状态、段落进度、自动翻章
  */
 
-import { useRef, useCallback, useEffect } from "react";
+import { useRef, useCallback, useEffect, useState } from "react";
 import { useTTSStore } from "@/stores/tts-store";
 import { TTSManager } from "@/tts/tts-manager";
 import { prepareTextForTTS } from "@/tts/text-preprocess";
@@ -127,7 +127,21 @@ export function useAudioPlayer({
         console.error("[TTS] Error:", err);
         setGenerating(false);
         setPlaying(false);
-        // M13 fix: 向用户显示错误信息
+        setError(err);
+        // U5: 自动重试（Web Speech API 常见瞬时错误）
+        if (retryCountRef.current < 3) {
+          retryCountRef.current++;
+          setTimeout(() => {
+            if (managerRef.current) {
+              setError(null);
+              setGenerating(true);
+              // 重试当前段落
+              managerRef.current.seekToChunk(
+                managerRef.current.getCurrentChunkIndex()
+              );
+            }
+          }, 2000);
+        }
         showToast(`朗读出错: ${err}`, "warn");
       },
       onStop: () => {
@@ -212,8 +226,16 @@ export function useAudioPlayer({
     };
   }, [chapterTitle]);
 
+  // U5: 错误状态和自动重试
+  const [error, setError] = useState<string | null>(null);
+  const retryCountRef = useRef(0);
+  const maxRetries = 3;
+
+  // 当章节变化时重置错误
+  useEffect(() => { setError(null); retryCountRef.current = 0; }, [chapterIndex, novelId]);
+
   // 是否在当前小说/章节播放
-  const isActive = playing && currentNovelId === novelId && currentChapterIndex === chapterIndex;
+  const isActive = (playing || !!error) && currentNovelId === novelId && currentChapterIndex === chapterIndex;
 
   return {
     play,
@@ -222,5 +244,7 @@ export function useAudioPlayer({
     isActive,
     isPaused: paused,
     isPlaying: playing && !paused && isActive,
+    error,
+    retryCount: retryCountRef.current,
   };
 }

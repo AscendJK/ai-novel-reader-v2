@@ -295,6 +295,9 @@ export class TTSManager {
     this.callbacks.onStop?.();
   }
 
+  /** U5: 获取当前播放段落索引（供错误重试使用） */
+  getCurrentChunkIndex(): number { return this.currentChunkIndex; }
+
   seekToChunk(index: number): void {
     if (index >= 0 && index < this.chunks.length) {
       // H8 fix: 先递增 generationId 使旧链路的所有回调失效，再停止旧播放

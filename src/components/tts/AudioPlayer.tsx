@@ -3,27 +3,30 @@
  * 固定在阅读界面底部，显示播放控制和进度
  */
 
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Play, Pause, Square, SkipForward, SkipBack,
-  Volume2, Loader2, Cpu,
+  Volume2, Loader2, Cpu, ChevronUp, ChevronDown, RefreshCw,
 } from "lucide-react";
 import { useTTSStore } from "@/stores/tts-store";
 import { useAudioPlayer } from "@/hooks/useAudioPlayer";
 
 interface AudioPlayerProps {
-  /** 小说 ID */
   novelId: string;
-  /** 当前章节内容 */
   chapterContent: string | null;
-  /** 当前章节索引 */
   chapterIndex: number;
-  /** 当前章节标题 */
   chapterTitle?: string;
-  /** 翻到上一章 */
   onPrevChapter?: () => void;
-  /** 翻到下一章 */
   onNextChapter?: () => void;
+}
+
+const SPEEDS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0];
+
+function formatTime(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 export function AudioPlayer({
@@ -41,7 +44,7 @@ export function AudioPlayer({
     setSpeed,
   } = useTTSStore();
 
-  const { play, togglePause, stop, isActive, isPaused, isPlaying } = useAudioPlayer({
+  const { play, togglePause, stop, isActive, isPaused, isPlaying, error, retryCount } = useAudioPlayer({
     chapterContent,
     chapterIndex,
     novelId,
@@ -50,10 +53,25 @@ export function AudioPlayer({
     onNextChapter,
   });
 
-  const canPlay = chapterContent && chapterContent.length > 0;
+  const canPlay = chapterContent && chapterContent.length > 0 && !generating;
 
-  // 不显示播放栏的情况
-  if (!canPlay && !isActive) return null;
+  // U1: 计时器
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!isPlaying) { if (!isActive) setElapsed(0); return; }
+    const t = setInterval(() => setElapsed(e => e + 1), 1000);
+    return () => clearInterval(t);
+  }, [isPlaying, isActive]);
+
+  // U4: 播放结束或错误时也保留播放栏
+  const showBar = canPlay || isActive || isPaused || generating || error;
+  if (!showBar) return null;
+
+  // 估算剩余时间
+  const estimatedTotal = totalParagraphs > 0 && currentParagraph > 0
+    ? (elapsed / currentParagraph) * totalParagraphs
+    : 0;
+  const remaining = Math.max(0, estimatedTotal - elapsed);
 
   return (
     <div className="fixed bottom-0 left-0 right-0 z-40 bg-background/95 backdrop-blur border-t shadow-lg">
@@ -70,108 +88,99 @@ export function AudioPlayer({
       <div className="flex items-center gap-3 px-4 py-2 max-w-4xl mx-auto">
         {/* 控制按钮 */}
         <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 w-8 p-0"
-            onClick={onPrevChapter}
-            disabled={!onPrevChapter}
-            title="上一章"
-          >
+          <Button variant="ghost" size="sm" className="h-8 w-8 p-0"
+            onClick={onPrevChapter} disabled={!onPrevChapter} title="上一章">
             <SkipBack className="h-4 w-4" />
           </Button>
 
           {isPlaying ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 w-8 p-0"
-              onClick={togglePause}
-              title="暂停"
-            >
+            <Button variant="ghost" size="sm" className="h-8 w-8 p-0"
+              onClick={togglePause} title="暂停">
               <Pause className="h-4 w-4" />
             </Button>
+          ) : error ? (
+            <Button variant="ghost" size="sm" className="h-8 w-8 p-0"
+              onClick={play} title="重试">
+              <RefreshCw className="h-4 w-4" />
+            </Button>
           ) : (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 w-8 p-0"
+            <Button variant="ghost" size="sm" className="h-8 w-8 p-0"
               onClick={isPaused ? togglePause : play}
-              disabled={!canPlay || generating}
-              title={isPaused ? "继续" : "播放"}
-            >
-              {generating ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Play className="h-4 w-4" />
-              )}
+              disabled={!canPlay || generating} title={isPaused ? "继续" : "播放"}>
+              {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
             </Button>
           )}
 
           {isActive && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 w-8 p-0"
-              onClick={stop}
-              title="停止"
-            >
+            <Button variant="ghost" size="sm" className="h-8 w-8 p-0"
+              onClick={stop} title="停止">
               <Square className="h-4 w-4" />
             </Button>
           )}
 
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 w-8 p-0"
-            onClick={onNextChapter}
-            disabled={!onNextChapter}
-            title="下一章"
-          >
+          <Button variant="ghost" size="sm" className="h-8 w-8 p-0"
+            onClick={onNextChapter} disabled={!onNextChapter} title="下一章">
             <SkipForward className="h-4 w-4" />
           </Button>
         </div>
 
-        {/* 段落进度 */}
+        {/* 进度信息 */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground truncate">
-              {chapterTitle || "未知章节"}
-            </span>
-            {isActive && totalParagraphs > 0 && (
-              <span className="text-xs text-muted-foreground shrink-0">
-                {currentParagraph}/{totalParagraphs} 段
-              </span>
+            {error ? (
+              <span className="text-xs text-destructive truncate">朗读出错{retryCount > 0 ? `（已重试${retryCount}次）` : ""}</span>
+            ) : (
+              <>
+                <span className="text-xs text-muted-foreground truncate">
+                  {chapterTitle || "未知章节"}
+                </span>
+                {isActive && totalParagraphs > 0 && (
+                  <span className="text-xs text-muted-foreground shrink-0">
+                    {currentParagraph}/{totalParagraphs} 段
+                  </span>
+                )}
+              </>
             )}
           </div>
           {isActive && totalParagraphs > 0 && (
-            <div className="w-full h-1 bg-muted rounded-full mt-1 overflow-hidden">
-              <div
-                className="h-full bg-primary transition-all duration-300"
-                style={{ width: `${(currentParagraph / totalParagraphs) * 100}%` }}
-              />
+            <div className="flex items-center gap-2">
+              <div className="flex-1 h-1 bg-muted rounded-full overflow-hidden">
+                <div className="h-full bg-primary transition-all duration-300"
+                  style={{ width: `${(currentParagraph / totalParagraphs) * 100}%` }} />
+              </div>
+              <span className="text-[10px] text-muted-foreground shrink-0">
+                {formatTime(elapsed)}{remaining > 0 ? ` / -${formatTime(remaining)}` : ""}
+              </span>
             </div>
           )}
         </div>
 
-        {/* 语速 */}
-        <div className="flex items-center gap-1 shrink-0">
-          <button
-            className="text-xs text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded hover:bg-muted"
+        {/* U2: 语速双向调节 */}
+        <div className="flex items-center gap-0.5 shrink-0">
+          <Button variant="ghost" size="sm" className="h-6 w-6 p-0"
             onClick={() => {
-              const speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0];
-              // L6 fix: 浮点容差比较，避免 1.2500000001 导致 indexOf 返回 -1
-              const current = speeds.findIndex(s => Math.abs(s - speed) < 0.01);
-              const nextIndex = (current + 1) % speeds.length;
-              setSpeed(speeds[nextIndex]);
-            }}
-            title="点击切换语速"
-          >
+              const idx = SPEEDS.findIndex(s => Math.abs(s - speed) < 0.01);
+              if (idx > 0) setSpeed(SPEEDS[idx - 1]);
+            }} title="减速">
+            <ChevronDown className="h-3 w-3" />
+          </Button>
+          <button className="text-xs text-muted-foreground hover:text-foreground px-1 min-w-[2.5rem] text-center"
+            onClick={() => {
+              const idx = SPEEDS.findIndex(s => Math.abs(s - speed) < 0.01);
+              if (idx >= 0) setSpeed(SPEEDS[(idx + 1) % SPEEDS.length]);
+            }} title="点击切换语速">
             {speed}x
           </button>
+          <Button variant="ghost" size="sm" className="h-6 w-6 p-0"
+            onClick={() => {
+              const idx = SPEEDS.findIndex(s => Math.abs(s - speed) < 0.01);
+              if (idx < SPEEDS.length - 1) setSpeed(SPEEDS[idx + 1]);
+            }} title="加速">
+            <ChevronUp className="h-3 w-3" />
+          </Button>
         </div>
 
-        {/* 推理模式指示 */}
+        {/* 引擎指示 */}
         <div className="shrink-0">
           {engine === "zipvoice" ? (
             <span title="ZipVoice 离线语音"><Cpu className="h-3.5 w-3.5 text-amber-500" /></span>

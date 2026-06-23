@@ -19,9 +19,10 @@ export function prepareTextForTTS(content: string, maxChunkLength: number = 300)
     .map(p =>
       p
         .replace(/\s+/g, " ") // 合并连续空白
-        .replace(/[""]/g, "，") // 中文双引号转逗号（保留对话停顿）
-        .replace(/['']/g, "，") // 中文单引号转逗号
-        .replace(/\s*[—–]\s*/g, "，") // 破折号转逗号
+        .replace(/["""]/g, "，") // 引号替换为逗号停顿
+        .replace(/[''']/g, "，")
+        .replace(/\s*[—–]\s*/g, "，") // 破折号替换为逗号停顿
+        .replace(/[《》〈〉]/g, "，") // 书名号替换为逗号停顿
         .trim()
     )
     .filter(p => p.length >= 5) // 过滤过短段落
