@@ -217,6 +217,7 @@ export class TTSManager {
       this.webSpeech.setVoice(voiceId);
       // B1: 播放中切音色，中断当前段并用新音色重新朗读
       if (this.webSpeech.isSpeaking() && this.currentChunkIndex < this.chunks.length) {
+        this.generationId++; // R5: 无效化旧 onEnd 避免同步级联跳段
         this.webSpeech.stop();
         this.speakNextChunk();
       }
