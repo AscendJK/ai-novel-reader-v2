@@ -34,17 +34,31 @@ class WebSpeechTTSEngine {
   private utterance: SpeechSynthesisUtterance | null = null;
   private paused = false;
   private voice: SpeechSynthesisVoice | null = null;
+  private pendingVoiceId: string | null = null;
   private available = typeof speechSynthesis !== "undefined";
 
   setVoice(voiceId: string) {
     if (!this.available) return;
+    this.pendingVoiceId = voiceId;
     const voices = speechSynthesis.getVoices();
-    this.voice = voices.find(v => v.voiceURI === voiceId) || null;
+    if (voices.length > 0) {
+      this.voice = voices.find(v => v.voiceURI === voiceId) || null;
+      this.pendingVoiceId = null;
+    }
+    // R12: Chrome 异步加载语音，length=0 时保留 pendingVoiceId，speak() 时重试
   }
 
   speak(text: string, speed: number, volume: number, pitch: number, callbacks: TTSPlaybackCallbacks): void {
     if (!this.available) { callbacks.onError?.("Web Speech API 不可用"); return; }
     this.stop();
+    // R12: 如果语音还没加载完，重试 setVoice
+    if (this.pendingVoiceId) {
+      const voices = speechSynthesis.getVoices();
+      if (voices.length > 0) {
+        this.voice = voices.find(v => v.voiceURI === this.pendingVoiceId) || null;
+        this.pendingVoiceId = null;
+      }
+    }
     this.utterance = new SpeechSynthesisUtterance(text);
     this.utterance.rate = speed;
     this.utterance.volume = volume;
