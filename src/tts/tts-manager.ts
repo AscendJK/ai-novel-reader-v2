@@ -136,7 +136,54 @@ class WebSpeechTTSEngine {
     this.paused = false;
   }
 
+  /**
+   * 合并段拆分朗读 — 将多段落的合并 chunk 拆成独立 utterance 一次性入列
+   * 每段独立触发 onParagraphStart/onParagraphEnd，最后一段结束时触发 onAllEnd
+   * 浏器内部音频队列自动无缝衔接，无停顿感
+   */
+  speakMerged(
+    texts: string[],
+    paragraphIndices: number[],
+    speed: number, volume: number, pitch: number,
+    callbacks: {
+      onPlay: () => void;
+      onParagraphStart: (paraIdx: number) => void;
+      onParagraphEnd: (paraIdx: number) => void;
+      onAllEnd: () => void;
+      onError: (err: string) => void;
+    },
+  ): void {
+    if (!this.available) { callbacks.onError("Web Speech API 不可用"); return; }
+    this.stop();
+    this.ensureVoice();
+    const total = texts.length;
+    if (total === 0) return;
+    let playFired = false;
+    for (let i = 0; i < total; i++) {
+      const utterance = new SpeechSynthesisUtterance(texts[i]);
+      utterance.rate = speed;
+      utterance.volume = volume;
+      utterance.pitch = pitch;
+      utterance.lang = "zh-CN";
+      if (this.voice) utterance.voice = this.voice;
+      utterance.onstart = () => {
+        if (!playFired) { playFired = true; callbacks.onPlay(); }
+        callbacks.onParagraphStart(paragraphIndices[i]);
+      };
+      utterance.onend = () => {
+        callbacks.onParagraphEnd(paragraphIndices[i]);
+        if (i === total - 1) callbacks.onAllEnd();
+      };
+      utterance.onerror = (e) => {
+        if (e.error !== "canceled" && e.error !== "interrupted") callbacks.onError(e.error);
+      };
+      if (i === 0) this.utterance = utterance;
+      speechSynthesis.speak(utterance);
+    }
+  }
+
   // U6: 预队列下一段 utterance（不 cancel 当前，浏览器自动衔接）
+  // R13: 支持合并段拆分 — 多段落时拆成独立 utterance 一次性入列
   queue(
     text: string, speed: number, volume: number, pitch: number,
     onStart: () => void, onEnd: () => void, onError: (err: string) => void,
@@ -145,6 +192,42 @@ class WebSpeechTTSEngine {
   ): void {
     if (!this.available) return;
     this.ensureVoice();
+
+    // 合并段：拆成独立 utterance 入列，每段触发 onParagraphChange
+    if (paragraphIndices && paragraphIndices.length > 1) {
+      let endedCount = 0;
+      let hasStarted = false;
+      for (let i = 0; i < paragraphIndices.length; i++) {
+        const start = paragraphBreaks[i];
+        const end = i < paragraphBreaks.length - 1 ? paragraphBreaks[i + 1] : text.length;
+        let paraText = text.slice(start, end);
+        if (i > 0) paraText = paraText.replace(/^[。，,、]/, "").trim();
+        if (!paraText) paraText = text.slice(start, end);
+
+        const utterance = new SpeechSynthesisUtterance(paraText);
+        utterance.rate = speed;
+        utterance.volume = volume;
+        utterance.pitch = pitch;
+        utterance.lang = "zh-CN";
+        if (this.voice) utterance.voice = this.voice;
+        utterance.onstart = () => {
+          if (!hasStarted) { hasStarted = true; onStart(); }
+          onParagraphChange?.(paragraphIndices[i]);
+        };
+        utterance.onend = () => {
+          endedCount++;
+          if (endedCount >= paragraphIndices.length) onEnd();
+        };
+        utterance.onerror = (e) => {
+          if (e.error !== "canceled" && e.error !== "interrupted") onError(e.error);
+        };
+        speechSynthesis.speak(utterance);
+      }
+      this.preQueued = null;
+      return;
+    }
+
+    // 单段：原有预队列逻辑
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = speed;
     utterance.volume = volume;
@@ -419,10 +502,12 @@ export class TTSManager {
       });
     } else {
       // U6: WebSpeech 预队列模式 — 播当前段的同时预队列下一段，消除段落间停顿
+      // R13: 合并段（paragraphIndices.length > 1）拆成独立 utterance 精确追踪高亮
       if (this.currentChunkWasPreQueued) {
-        // 当前段已由上次预队列开始播放，只需预队列下一段
         this.currentChunkWasPreQueued = false;
         this.preQueueNextIfAvailable(genId);
+      } else if (chunk.paragraphIndices.length > 1) {
+        this.speakMergedChunk(chunk, genId);
       } else {
         this.callbacks.onChunkStart?.(this.currentChunkIndex, this.chunks.length, chunk.paragraphIndex);
         this.webSpeech.speak(chunk.text, this.speed, this.volume, this.pitch, {
@@ -463,6 +548,54 @@ export class TTSManager {
       },
     );
     this.currentChunkWasPreQueued = true;
+  }
+
+  /** R13: 将合并段拆成独立 utterance 逐段朗读，精确追踪段落高亮 */
+  private speakMergedChunk(chunk: TTSChunk, genId: number): void {
+    const texts = this.extractParagraphTexts(chunk);
+    // 第一段触发初始高亮
+    this.callbacks.onChunkStart?.(this.currentChunkIndex, this.chunks.length, chunk.paragraphIndices[0]);
+    this.webSpeech.speakMerged(
+      texts, chunk.paragraphIndices, this.speed, this.volume, this.pitch,
+      {
+        onPlay: () => {
+          if (this.stopped || this.generationId !== genId) return;
+          this.callbacks.onPlay?.();
+        },
+        onParagraphStart: (paraIdx) => {
+          if (this.stopped || this.generationId !== genId) return;
+          this.callbacks.onChunkStart?.(this.currentChunkIndex, this.chunks.length, paraIdx);
+        },
+        onParagraphEnd: (paraIdx) => {
+          if (this.stopped || this.generationId !== genId) return;
+          this.callbacks.onChunkEnd?.(this.currentChunkIndex, this.chunks.length, paraIdx);
+        },
+        onAllEnd: () => {
+          if (this.stopped || this.generationId !== genId) return;
+          // 所有段落朗读完毕，预队列下一 chunk 并前进
+          this.preQueueNextIfAvailable(genId);
+          this.currentChunkIndex++;
+          this.speakNextChunk();
+        },
+        onError: (err) => this.handleChunkError(err, genId),
+      },
+    );
+  }
+
+  /** R13: 从合并段文本中提取各段落的独立文本 */
+  private extractParagraphTexts(chunk: TTSChunk): string[] {
+    const texts: string[] = [];
+    for (let i = 0; i < chunk.paragraphIndices.length; i++) {
+      const start = chunk.paragraphBreaks[i];
+      const end = i < chunk.paragraphBreaks.length - 1
+        ? chunk.paragraphBreaks[i + 1]
+        : chunk.text.length;
+      let t = chunk.text.slice(start, end);
+      // 移除合并时添加的句号分隔符前缀
+      if (i > 0) t = t.replace(/^[。，,、]/, "").trim();
+      texts.push(t || chunk.text.slice(start, end));
+    }
+    return texts;
   }
 
   private handleChunkEnded(genId: number): void {

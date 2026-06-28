@@ -15,9 +15,10 @@ export interface TTSChunk {
  * 将章节文本分割为适合 TTS 的段落
  * - 按自然段落分割
  * - 过滤过短段落（< 5 字）
- * - 每个段落独立成 chunk（不合并，移动端 onboundary 不可靠）
+ * - 合并相邻短段落减少 utterance 数量
  * - 超长段落按句号拆分
  * - 清理特殊字符
+ * - paragraphBreaks 供移动端基于时间估算的段落追踪回退
  */
 export function prepareTextForTTS(content: string, maxChunkLength: number = 300): TTSChunk[] {
   if (!content || content.trim().length === 0) return [];
@@ -40,30 +41,71 @@ export function prepareTextForTTS(content: string, maxChunkLength: number = 300)
 
   if (cleaned.length === 0) return [];
 
-  // 步骤2: 每个段落独立成 chunk，不合并相邻短段落
-  // R13: 移除合并逻辑。预队列机制已消除段落间停顿，且合并段落需要 onboundary
-  // 做段内追踪，而移动端 onboundary 对中文文本不可靠。段落高亮改为通过
-  // onChunkStart 精确追踪（每个段落独立触发）。
-  const chunks: TTSChunk[] = [];
+  // 步骤2: 合并相邻短段落（合计 < 150 字），记录段落分割点
+  interface MergedGroup {
+    text: string;
+    indices: number[];
+    breaks: number[]; // 每个段落在 text 中的起始字符位置
+  }
+  const merged: MergedGroup[] = [];
+  let buffer = "";
+  let bufferIndices: number[] = [];
+  let bufferBreaks: number[] = [0];
 
   for (const p of cleaned) {
-    if (p.text.length <= maxChunkLength) {
+    if (buffer.length > 0 && buffer.length + p.text.length + 1 < 150) {
+      // 合并到当前缓冲区
+      bufferBreaks.push(buffer.length + 1); // +1 for "。" separator
+      bufferIndices.push(p.index);
+      buffer += "。" + p.text;
+    } else {
+      // 输出当前缓冲区
+      if (buffer.length > 0) {
+        merged.push({ text: buffer, indices: [...bufferIndices], breaks: [...bufferBreaks] });
+      }
+      buffer = p.text;
+      bufferIndices = [p.index];
+      bufferBreaks = [0];
+    }
+  }
+  if (buffer.length > 0) {
+    merged.push({ text: buffer, indices: [...bufferIndices], breaks: [...bufferBreaks] });
+  }
+
+  // 步骤3: 拆分超长段落（拆分后的各片段共享同一组段落索引）
+  const chunks: TTSChunk[] = [];
+  for (const m of merged) {
+    if (m.text.length <= maxChunkLength) {
       chunks.push({
-        text: p.text,
-        paragraphIndex: p.index,
-        paragraphIndices: [p.index],
-        paragraphBreaks: [0],
+        text: m.text,
+        paragraphIndex: m.indices[0],
+        paragraphIndices: m.indices,
+        paragraphBreaks: m.breaks,
       });
     } else {
-      // 超长段落按句子边界拆分（保留为同一段落的多个片段）
-      const parts = splitBySentence(p.text, maxChunkLength);
+      // 长段落拆分：按句子边界切分
+      const parts = splitBySentence(m.text, maxChunkLength);
+      // 计算每个 part 覆盖哪些段落
+      let charOffset = 0;
       for (const part of parts) {
+        const partStart = charOffset;
+        const partEnd = charOffset + part.length;
+        // 找到起始和结束的段落索引
+        let startPara = 0;
+        let endPara = m.breaks.length - 1;
+        for (let i = 0; i < m.breaks.length; i++) {
+          if (m.breaks[i] <= partStart) startPara = i;
+          if (m.breaks[i] < partEnd) endPara = i;
+        }
+        const indices = m.indices.slice(startPara, endPara + 1);
+        const breaks = m.breaks.slice(startPara, endPara + 1).map(b => b - partStart);
         chunks.push({
           text: part,
-          paragraphIndex: p.index,
-          paragraphIndices: [p.index],
-          paragraphBreaks: [0],
+          paragraphIndex: indices[0],
+          paragraphIndices: indices,
+          paragraphBreaks: breaks,
         });
+        charOffset += part.length;
       }
     }
   }
