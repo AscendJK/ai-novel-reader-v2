@@ -214,20 +214,12 @@ export function useAudioPlayer({
     });
   }, [chapterContent, chapterIndex, novelId, engine, voiceId, speed, pitch, autoNextChapter, getManager, setCurrentChapter, setGenerating, setParagraphProgress, setPlaying, onNextChapter]);
 
-  // 暂停/恢复
+  // R13: 暂停/恢复（WebSpeech 使用 cancel+re-speak 模式，绕过移动端 resume bug）
   const togglePause = useCallback(async () => {
     const manager = getManager();
     if (manager.isPaused()) {
       await manager.resume();
       setPaused(false);
-      // B4: 仅 WebSpeech 需要验证 resume（ZipVoice 用 Web Audio API）
-      if (useTTSStore.getState().engine === "webspeech") {
-        setTimeout(() => {
-          if (!speechSynthesis.speaking && !speechSynthesis.pending) {
-            setPaused(true);
-          }
-        }, 300);
-      }
     } else if (manager.isPlaying()) {
       manager.pause();
       setPaused(true);

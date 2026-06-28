@@ -309,6 +309,7 @@ export class TTSManager {
   private generationId = 0;
   private seekId = 0; // B1: 防止 stop 后 seekToChunk 的 timeout 激活
   private currentChunkWasPreQueued = false; // U6: 预队列标志位
+  private userPaused = false; // R13: 移动端 pause/resume 状态（cancel+re-speak 模式）
 
   constructor() { this.webSpeech = new WebSpeechTTSEngine(); }
 
@@ -483,18 +484,30 @@ export class TTSManager {
 
   pause(): void {
     if (this.engine === "zipvoice" && this.zipvoice) this.zipvoice.pause();
-    else this.webSpeech.pause();
+    else {
+      // R13: 移动端 speechSynthesis.pause/resume 不可靠，改用 cancel+re-speak
+      this.webSpeech.stop();
+      this.currentChunkWasPreQueued = false;
+    }
+    this.userPaused = true;
     this.callbacks.onPause?.();
   }
 
   async resume(): Promise<void> {
     if (this.engine === "zipvoice" && this.zipvoice) await this.zipvoice.resume();
-    else this.webSpeech.resume();
+    else {
+      // R13: 移动端 resume 不可靠，cancel 当前所有 utterance 后从当前 chunk 重新朗读
+      this.webSpeech.stop(); // 确保 all utterances 被清除 + onerror("canceled") 被忽略
+      this.currentChunkWasPreQueued = false;
+      this.userPaused = false;
+      this.speakNextChunk();
+    }
     this.callbacks.onResume?.();
   }
 
   stop(): void {
     this.stopped = true;
+    this.userPaused = false; // R13: 清除暂停状态
     this.generationId++; // R3F2: 无效化 auto-retry 的 setTimeout
     this.seekId++;       // B1: 无效化 seekToChunk timeout
     this.currentChunkWasPreQueued = false;
@@ -512,6 +525,7 @@ export class TTSManager {
     if (index >= 0 && index < this.chunks.length) {
       this.generationId++;
       this.currentChunkWasPreQueued = false;
+      this.userPaused = false; // R13: seek 时清除暂停状态（重新开始播放）
       this.stopped = true;
       if (this.zipvoice) this.zipvoice.stop();
       this.webSpeech.stop();
@@ -533,7 +547,8 @@ export class TTSManager {
 
   isPaused(): boolean {
     if (this.engine === "zipvoice" && this.zipvoice) return this.zipvoice.isPaused();
-    return this.webSpeech.isPaused();
+    // R13: WebSpeech 的 cancel+re-speak 模式使用独立标记位
+    return this.userPaused;
   }
 
   destroy(): void {
