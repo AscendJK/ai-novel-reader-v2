@@ -475,6 +475,7 @@ export class TTSManager {
 
   private async speakNextChunk(): Promise<void> {
     if (this.stopped) return;
+    if (this.userPaused) return; // R13: 暂停状态下不推进 chunk
     if (this.currentChunkIndex >= this.chunks.length) { this.callbacks.onEnd?.(); return; }
 
     const chunk = this.chunks[this.currentChunkIndex];
@@ -626,8 +627,10 @@ export class TTSManager {
 
   destroy(): void {
     this.stopped = true;
+    this.userPaused = false;
     this.generationId++;
     if (this.zipvoice) { this.zipvoice.destroy(); this.zipvoice = null; }
     this.webSpeech.destroy();
+    this.callbacks.onStop?.();
   }
 }

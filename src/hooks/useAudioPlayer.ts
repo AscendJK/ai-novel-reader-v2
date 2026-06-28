@@ -57,17 +57,24 @@ export function useAudioPlayer({
     };
   }, []);
 
-  // M19+R7: 手动翻章时清除定时器+停止旧播放
+  // M19+R7: 翻章时清除定时器+停止旧播放
   useEffect(() => {
+    const hadPendingAutoNext = autoNextTimerRef.current !== null;
     if (autoNextTimerRef.current) {
       clearTimeout(autoNextTimerRef.current);
       autoNextTimerRef.current = null;
     }
-    // R7: 非自动翻章时停止旧播放（防止旧章音频继续朗读）
-    if (!pendingAutoPlayRef.current) {
+    if (hadPendingAutoNext) {
+      // R13: 自动翻章定时器还没触发 — 用户手动切章，清除自动播放标志
+      pendingAutoPlayRef.current = false;
+      managerRef.current?.stop();
+      reset();
+    } else if (!pendingAutoPlayRef.current) {
+      // R7: 非自动翻章场景，正常停止旧播放（防止旧章音频继续朗读）
       managerRef.current?.stop();
       reset();
     }
+    // pendingAutoPlayRef 为 true 且定时器已触发 → 自动翻章正常流程，autoplay effect 处理
   }, [chapterIndex]);
 
   const playRef = useRef<typeof play>(null!); // B4+B5: 在 play 定义前声明，定义后赋值
