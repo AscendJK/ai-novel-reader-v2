@@ -38,7 +38,6 @@ export interface TTSPlaybackCallbacks {
 class WebSpeechTTSEngine {
   private utterance: SpeechSynthesisUtterance | null = null;
   private preQueued: SpeechSynthesisUtterance | null = null;
-  private paused = false;
   private voice: SpeechSynthesisVoice | null = null;
   private pendingVoiceId: string | null = null;
   private available = typeof speechSynthesis !== "undefined";
@@ -181,7 +180,6 @@ class WebSpeechTTSEngine {
       };
     }
     speechSynthesis.speak(this.utterance);
-    this.paused = false;
   }
 
   // U6: 预队列下一段 utterance（不 cancel 当前，浏览器自动衔接）
@@ -246,17 +244,12 @@ class WebSpeechTTSEngine {
     speechSynthesis.speak(utterance);
   }
 
-  pause(): void {
-    if (this.available && speechSynthesis.speaking) { speechSynthesis.pause(); this.paused = true; }
-  }
-  resume(): void { if (this.available && this.paused) { speechSynthesis.resume(); this.paused = false; } }
   stop(): void {
     this.clearParaTimer();
     if (this.available) speechSynthesis.cancel();
-    this.utterance = null; this.preQueued = null; this.paused = false;
+    this.utterance = null; this.preQueued = null;
   }
   isSpeaking(): boolean { return this.available ? speechSynthesis.speaking : false; }
-  isPaused(): boolean { return this.paused; }
   destroy(): void { this.stop(); }
 }
 
@@ -617,7 +610,7 @@ export class TTSManager {
 
   isPlaying(): boolean {
     if (this.engine === "zipvoice" && this.zipvoice) return this.zipvoice.isSpeaking();
-    return this.webSpeech.isSpeaking() && !this.webSpeech.isPaused();
+    return this.webSpeech.isSpeaking();
   }
 
   isPaused(): boolean {

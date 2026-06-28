@@ -32,15 +32,22 @@ export function TTSSettings() {
 
   const voicesLoaded = browserVoices.length > 0;
 
-  // 加载语音列表（Chrome 需要 speak() 触发引擎初始化）
+  // 语音列表加载 — 零宽空格无声触发 Chrome 引擎初始化
+  const loadVoicesRef = useRef<{ poll: ReturnType<typeof setInterval> | null; fallback: ReturnType<typeof setTimeout> | null }>({ poll: null, fallback: null });
+  useEffect(() => () => {
+    const r = loadVoicesRef.current;
+    if (r.poll) clearInterval(r.poll);
+    if (r.fallback) clearTimeout(r.fallback);
+  }, []);
+
   const loadVoices = useCallback(() => {
     if (voicesLoaded) return;
     setLoading(true);
     setLoadAttempted(true);
-    const dummy = new SpeechSynthesisUtterance("加载语音");
+    // 零宽空格 — 触发 Chrome 引擎但不产生 audible 声音
+    const dummy = new SpeechSynthesisUtterance("​");
     dummy.lang = "zh-CN";
     dummy.onstart = () => {
-      // speak 触发后，持续轮询直到 getVoices 返回结果
       let attempts = 0;
       const poll = setInterval(() => {
         attempts++;
@@ -48,16 +55,20 @@ export function TTSSettings() {
         if (all.length > 0) {
           setBrowserVoices(all);
           clearInterval(poll);
+          loadVoicesRef.current.poll = null;
           setLoading(false);
         } else if (attempts > 40) {
           clearInterval(poll);
+          loadVoicesRef.current.poll = null;
           setLoading(false);
         }
       }, 250);
+      loadVoicesRef.current.poll = poll;
     };
     dummy.onerror = () => setLoading(false);
     speechSynthesis.speak(dummy);
-    setTimeout(() => setLoading(false), 12000);
+    const fb = setTimeout(() => setLoading(false), 12000);
+    loadVoicesRef.current.fallback = fb;
   }, [voicesLoaded, setBrowserVoices]);
 
   // 语音试听
