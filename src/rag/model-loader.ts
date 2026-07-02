@@ -172,23 +172,49 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
 
       console.log(`[model-loader] remoteHost=${env.remoteHost || "(none)"}`);
 
+      // 直接测试后端代理是否可达
+      if (env.remoteHost) {
+        try {
+          const testUrl = `${env.remoteHost}/Xenova/bge-small-zh-v1.5/resolve/main/config.json`;
+          console.log(`[model-loader] 测试代理: ${testUrl}`);
+          const testResp = await fetch(testUrl);
+          console.log(`[model-loader] 代理响应: ${testResp.status} ${testResp.headers.get("content-type")}`);
+          if (!testResp.ok) {
+            const body = await testResp.text().catch(() => "(无法读取)");
+            console.error(`[model-loader] 代理返回非 200: ${testResp.status}, body 前 200 字: ${body.substring(0, 200)}`);
+          }
+        } catch (testErr) {
+          console.error(`[model-loader] 代理连接失败:`, testErr);
+        }
+      }
+
       // Download tokenizer
       store.setDownloadProgress("下载 tokenizer...");
-      await AutoTokenizer.from_pretrained(modelKey, {
-        progress_callback: (data: any) => {
-          if (data.status === "progress" && data.file) {
-            const loaded = data.loaded || 0;
-            const total = data.total || 0;
-            if (total > 0 && loaded < total) {
-              const loadedMB = (loaded / 1024 / 1024).toFixed(1);
-              const totalMB = (total / 1024 / 1024).toFixed(0);
-              store.setDownloadProgress(`tokenizer ${loadedMB}/${totalMB}MB`);
-            } else if (total > 0 && loaded >= total) {
-              store.setDownloadProgress("tokenizer ✓");
+      console.log(`[model-loader] 开始下载 tokenizer, remoteHost=${env.remoteHost}`);
+      try {
+        await AutoTokenizer.from_pretrained(modelKey, {
+          progress_callback: (data: any) => {
+            if (data.status === "progress" && data.file) {
+              const loaded = data.loaded || 0;
+              const total = data.total || 0;
+              if (total > 0 && loaded < total) {
+                const loadedMB = (loaded / 1024 / 1024).toFixed(1);
+                const totalMB = (total / 1024 / 1024).toFixed(0);
+                store.setDownloadProgress(`tokenizer ${loadedMB}/${totalMB}MB`);
+              } else if (total > 0 && loaded >= total) {
+                store.setDownloadProgress("tokenizer ✓");
+              }
+            } else if (data.status === "done") {
+              console.log(`[model-loader] tokenizer 下载完成: ${data.file}`);
+            } else if (data.status === "error") {
+              console.error(`[model-loader] tokenizer 下载错误: ${data.file} - ${data.error}`);
             }
-          }
-        },
-      });
+          },
+        });
+      } catch (e) {
+        console.error(`[model-loader] tokenizer 加载失败:`, e);
+        throw e;
+      }
 
       // Download model
       store.setDownloadProgress("下载模型...");
@@ -218,7 +244,12 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
       success = true;
       break;
     } catch (e) {
-      console.warn(`[model-loader] 下载失败 (${attempt}/${maxRetries}):`, e);
+      const errMsg = e instanceof Error ? e.message : String(e);
+      console.error(`[model-loader] 下载失败 (${attempt}/${maxRetries}): ${errMsg}`);
+      // 尝试获取实际请求的 URL
+      if (errMsg.includes("'") && errMsg.includes("404")) {
+        console.error(`[model-loader] 请求可能被重定向到了不存在的路径，请检查后端是否运行`);
+      }
       if (attempt < maxRetries) {
         store.setDownloadProgress(`下载失败，重试中 (${attempt}/${maxRetries})...`);
         await new Promise((r) => setTimeout(r, attempt * 2000));
