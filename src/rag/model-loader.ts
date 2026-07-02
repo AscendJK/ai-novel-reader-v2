@@ -164,40 +164,14 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
       env.allowRemoteModels = true;
       env.useBrowserCache = true;
 
-      // 直接覆盖 env.fetch，确保 transformers.js 的所有请求都走后端代理
+      // 通过 remoteHost 让 transformers.js 所有请求发到后端代理
       const serverUrl = getServerUrl();
       if (serverUrl) {
-        const proxyBase = `${serverUrl}/api/rag/model-proxy`;
-        env.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-          const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-          // HuggingFace 路径 → 代理
-          if (url.includes("huggingface.co/") || url.includes("hf-mirror.com/")) {
-            const pathAfterHost = url.split(/huggingface\.co\/|hf-mirror\.com\//)[1];
-            if (pathAfterHost) {
-              const proxyUrl = `${proxyBase}/${pathAfterHost}`;
-              console.log(`[model-loader] 代理: ${url.substring(0, 80)}... → ${proxyUrl.substring(0, 80)}...`);
-              return fetch(proxyUrl, init);
-            }
-          }
-          return fetch(url, init);
-        };
-        console.log(`[model-loader] env.fetch 已覆盖, proxyBase=${proxyBase}`);
-      }
-
-      // 直接测试后端代理是否可达
-      if (env.remoteHost) {
-        try {
-          const testUrl = `${env.remoteHost}/Xenova/bge-small-zh-v1.5/resolve/main/config.json`;
-          console.log(`[model-loader] 测试代理: ${testUrl}`);
-          const testResp = await fetch(testUrl);
-          console.log(`[model-loader] 代理响应: ${testResp.status} ${testResp.headers.get("content-type")}`);
-          if (!testResp.ok) {
-            const body = await testResp.text().catch(() => "(无法读取)");
-            console.error(`[model-loader] 代理返回非 200: ${testResp.status}, body 前 200 字: ${body.substring(0, 200)}`);
-          }
-        } catch (testErr) {
-          console.error(`[model-loader] 代理连接失败:`, testErr);
-        }
+        env.remoteHost = `${serverUrl}/api/rag/model-proxy`;
+        env.allowCrossOrigin = true;
+        console.log(`[model-loader] remoteHost=${env.remoteHost}`);
+      } else {
+        console.warn(`[model-loader] 未配置服务器地址，模型下载可能失败`);
       }
 
       // Download tokenizer
