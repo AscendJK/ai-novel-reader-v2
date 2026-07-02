@@ -66,7 +66,7 @@ export const Header = memo(function Header({ inBook, bookTitle, onBack, onSettin
         )}
       </div>
 
-      <div className="flex items-center gap-1 md:gap-2">
+      <div className="flex items-center gap-2 md:gap-3">
         {/* 离线模式标识 */}
         {offlineMode && (
           <div className="relative">
@@ -130,11 +130,11 @@ export const Header = memo(function Header({ inBook, bookTitle, onBack, onSettin
           <Button
             variant="ghost"
             size="icon"
-            className="min-h-[44px] min-w-[44px] p-1 md:min-h-0 md:min-w-0 md:h-7 md:w-7 md:p-0 text-green-500"
+            className="min-h-[44px] min-w-[44px] p-1 md:h-8 md:w-8 md:p-0 text-green-500"
             onClick={handleToggleOffline}
             title="在线 - 点击切换到离线模式"
           >
-            <Wifi className="h-3.5 w-3.5" />
+            <Wifi className="h-4 w-4" />
           </Button>
         )}
 
@@ -157,23 +157,23 @@ export const Header = memo(function Header({ inBook, bookTitle, onBack, onSettin
                 </div>
               </>
             )}
-            <Button variant="ghost" size="icon" className="min-h-[44px] min-w-[44px] p-1 md:min-h-0 md:min-w-0 md:h-7 md:w-7 md:p-0" onClick={handleLogout} title="退出登录">
+            <Button variant="ghost" size="icon" className="min-h-[44px] min-w-[44px] p-1 md:h-8 md:w-8 md:p-0" onClick={handleLogout} title="退出登录">
               <LogOut className="h-3.5 w-3.5" />
             </Button>
           </div>
         )}
         {!inBook && (
-          <Button variant="ghost" size="icon" className="min-h-[44px] min-w-[44px] p-1 md:min-h-0 md:min-w-0 md:h-auto md:w-auto md:p-0" onClick={onNotes} title="全部笔记">
+          <Button variant="ghost" size="icon" className="min-h-[44px] min-w-[44px] p-1 md:h-8 md:w-8 md:p-0" onClick={onNotes} title="全部笔记">
             <StickyNote className="h-4 w-4" />
           </Button>
         )}
-        <Button variant="ghost" size="icon" className="min-h-[44px] min-w-[44px] p-1 md:min-h-0 md:min-w-0 md:h-auto md:w-auto md:p-0" onClick={onSettings} title="设置">
+        <Button variant="ghost" size="icon" className="min-h-[44px] min-w-[44px] p-1 md:h-8 md:w-8 md:p-0" onClick={onSettings} title="设置">
           <Settings className="h-4 w-4" />
         </Button>
         <Button
           variant="ghost"
           size="icon"
-          className="min-h-[44px] min-w-[44px] p-1 md:min-h-0 md:min-w-0 md:h-auto md:w-auto md:p-0"
+          className="min-h-[44px] min-w-[44px] p-1 md:h-8 md:w-8 md:p-0"
           onClick={toggleTheme}
           title={theme === "light" ? "暗色模式" : "亮色模式"}
         >
