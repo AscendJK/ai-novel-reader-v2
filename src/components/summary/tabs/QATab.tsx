@@ -116,10 +116,7 @@ export function QATab({
               size="sm"
               variant="outline"
               className="h-6 text-xs"
-              onClick={() => {
-                qaHook.setQaMessages([]);
-                qaHook.handleClearQaCache();
-              }}
+              onClick={() => qaHook.handleClearQaCache()}
             >
               <PlusCircle className="h-3 w-3 mr-1" />
               新会话

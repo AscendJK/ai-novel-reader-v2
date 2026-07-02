@@ -56,6 +56,8 @@ interface BookTabProps {
   onGenerateMap: () => Promise<MapData | null>;
   /** 重新生成小说地图 */
   onRegenerateMap: () => Promise<MapData | null>;
+  /** 地图数据变化回调（同步到 SummaryPanel） */
+  onMapDataChange?: (data: MapData | null) => void;
 }
 
 export function BookTab({
@@ -81,6 +83,7 @@ export function BookTab({
   onRegenerateGlobal,
   onGenerateMap,
   onRegenerateMap,
+  onMapDataChange,
 }: BookTabProps) {
   // 地图数据状态
   const [mapData, setMapData] = useState<MapData | null>(null);
@@ -97,11 +100,13 @@ export function BookTab({
         if (!cancelled) {
           setMapData(data);
           setMapUpdatedAt(updatedAt);
+          onMapDataChange?.(data);
         }
       } catch {
         if (!cancelled) {
           setMapData(null);
           setMapUpdatedAt(undefined);
+          onMapDataChange?.(null);
         }
       } finally {
         if (!cancelled) {
@@ -175,6 +180,7 @@ export function BookTab({
             if (result) {
               setMapData(result);
               setMapUpdatedAt(Date.now());
+              onMapDataChange?.(result);
             }
           } catch (err) {
             console.error("Map generation failed:", err);
@@ -186,6 +192,7 @@ export function BookTab({
             if (result) {
               setMapData(result);
               setMapUpdatedAt(Date.now());
+              onMapDataChange?.(result);
             }
           } catch (err) {
             console.error("Map regeneration failed:", err);

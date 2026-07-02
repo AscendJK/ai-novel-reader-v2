@@ -73,7 +73,12 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
   // 保持最后有效的 novelId，避免 currentNovel 为 null 时 useQA 收到空字符串
   const lastValidNovelIdRef = useRef(currentNovel?.id || "");
   if (currentNovel?.id) lastValidNovelIdRef.current = currentNovel.id;
-  const qaHook = useQA(lastValidNovelIdRef.current);
+  const qaHook = useQA({
+    novelId: lastValidNovelIdRef.current,
+    askCustomQuestion,
+    generateRangeSummary,
+    clearQaCache,
+  });
 
   const searchHook = useSearch({
     novelId: currentNovel?.id || "",
@@ -175,25 +180,29 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
   // 收藏 AI 回答到笔记
   const handleBookmarkAI = async (title: string, content: string, chapterId: string, scope?: "chapter" | "book") => {
     if (!currentNovel) return;
-    const isBook = scope
-      ? scope === "book"
-      : (chapterId === "__global__" || chapterId === "__timeline__" || chapterId === "__characters__" || chapterId === "__book__");
-    const finalChapterId = isBook ? "__book__" : (chapterId || "__book__");
-    const chTitle = isBook ? "全书笔记" : currentNovel.chapters.find((c) => c.id === chapterId)?.title || title;
-    const note: NoteItem = {
-      id: crypto.randomUUID(),
-      novelId: currentNovel.id,
-      chapterId: finalChapterId,
-      chapterTitle: chTitle,
-      content,
-      source: "ai",
-      sourceLabel: title,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-    await saveNote(note);
-    notesHook.setNotes((prev) => [note, ...prev]);
-    syncClient.pushNow();
+    try {
+      const isBook = scope
+        ? scope === "book"
+        : (chapterId === "__global__" || chapterId === "__timeline__" || chapterId === "__characters__" || chapterId === "__book__");
+      const finalChapterId = isBook ? "__book__" : (chapterId || "__book__");
+      const chTitle = isBook ? "全书笔记" : currentNovel.chapters.find((c) => c.id === chapterId)?.title || title;
+      const note: NoteItem = {
+        id: crypto.randomUUID(),
+        novelId: currentNovel.id,
+        chapterId: finalChapterId,
+        chapterTitle: chTitle,
+        content,
+        source: "ai",
+        sourceLabel: title,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      await saveNote(note);
+      notesHook.setNotes((prev) => [note, ...prev]);
+      syncClient.pushNow();
+    } catch (err) {
+      console.error("[SummaryPanel] 收藏笔记失败:", err);
+    }
   };
 
   // 保存图谱
@@ -350,6 +359,7 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
               onRegenerateGlobal={regenerateGlobal}
               onGenerateMap={generateMap}
               onRegenerateMap={regenerateMap}
+              onMapDataChange={setMapData}
             />
           </TabsContent>
 

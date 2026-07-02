@@ -6,7 +6,6 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { create } from "zustand";
-import { useSummarizer } from "@/hooks/useSummarizer";
 
 interface QAMessage {
   id: string;
@@ -77,7 +76,14 @@ interface UseQAReturn {
   addMessage: (role: "user" | "assistant", content: string, tokensUsed?: number) => void;
 }
 
-export function useQA(novelId: string): UseQAReturn {
+interface UseQAOptions {
+  novelId: string;
+  askCustomQuestion: (question: string, history: { role: "user" | "assistant"; content: string }[]) => Promise<{ answer: string; tokensUsed: number } | null>;
+  generateRangeSummary: (from: number, to: number) => Promise<{ id: string; title: string; content: string; tokensUsed: number; createdAt: number } | null>;
+  clearQaCache: () => void;
+}
+
+export function useQA({ novelId, askCustomQuestion, generateRangeSummary, clearQaCache }: UseQAOptions): UseQAReturn {
   const store = useQADataStore();
 
   // 当 novelId 变化时，从 store 恢复数据
@@ -126,16 +132,14 @@ export function useQA(novelId: string): UseQAReturn {
     });
   }, [novelId]);
 
-  const {
-    askCustomQuestion,
-    generateRangeSummary,
-    clearQaCache,
-  } = useSummarizer();
-
   const addMessage = useCallback((role: "user" | "assistant", content: string, tokensUsed?: number) => {
     const message: QAMessage = { id: crypto.randomUUID(), role, content, tokensUsed };
     setQaMessages((prev) => [message, ...prev]);
   }, [setQaMessages]);
+
+  // 用 ref 追踪最新消息列表，避免 handleSubmitQuestion 中的闭包捕获旧值
+  const qaMessagesRef = useRef(qaMessages);
+  qaMessagesRef.current = qaMessages;
 
   const handleSubmitQuestion = useCallback(async () => {
     if (!customQuestion.trim() || qaLoading) return;
@@ -145,13 +149,12 @@ export function useQA(novelId: string): UseQAReturn {
     setQaError(null);
     addMessage("user", question);
     try {
-      // 消息存储为最新在前，API 需要时间顺序，所以反转
-      const currentHistory = qaMessages.map((m) => ({
+      // 用 ref 获取包含刚添加的用户消息的最新列表
+      const currentHistory = qaMessagesRef.current.map((m) => ({
         role: m.role as "user" | "assistant",
         content: m.content,
       })).reverse();
-      const fullHistory = [...currentHistory, { role: "user" as const, content: question }];
-      const result = await askCustomQuestion(question, fullHistory);
+      const result = await askCustomQuestion(question, currentHistory);
       if (result) {
         addMessage("assistant", result.answer, result.tokensUsed);
       } else {
@@ -162,7 +165,7 @@ export function useQA(novelId: string): UseQAReturn {
     } finally {
       setQaLoading(false);
     }
-  }, [customQuestion, qaLoading, qaMessages, askCustomQuestion, addMessage]);
+  }, [customQuestion, qaLoading, askCustomQuestion, addMessage]);
 
   const handleRangeSummary = useCallback(async () => {
     const from = parseInt(rangeFrom, 10);

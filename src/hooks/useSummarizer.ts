@@ -70,12 +70,14 @@ export function useSummarizer() {
     setCurrentTaskType(type || name);
     setIsRunning(true);
     setAiRunning(true);
+    useSummaryStore.getState().setGenerating(true);
     setError(null);
   }, []);
 
   const endTask = useCallback(() => {
     setIsRunning(false);
     setAiRunning(false);
+    useSummaryStore.getState().setGenerating(false);
     setCurrentTask("");
     setCurrentTaskType("");
   }, []);
@@ -318,6 +320,7 @@ export function useSummarizer() {
     const signal = createSignal();
     setProgress({ current: 0, total: chaptersToSummarize.length });
     try {
+      let failedCount = 0;
       for (let i = 0; i < chaptersToSummarize.length; i++) {
         // 检查停止标志
         if (batchStopRef.current) {
@@ -329,8 +332,16 @@ export function useSummarizer() {
         setCurrentTask(`正在总结第 ${i + 1}/${chaptersToSummarize.length} 章...`);
         const result = await summarizerAgent.run({ novelId: currentNovel.id, chapterIds: [chaptersToSummarize[i].id], signal, onStatus: setCurrentTask });
         if (signal.aborted) break;
-        if (result.success) { setCurrentTask("正在保存结果..."); await saveChapterSummary(chaptersToSummarize[i].id, result); }
+        if (result.success) {
+          setCurrentTask("正在保存结果...");
+          await saveChapterSummary(chaptersToSummarize[i].id, result);
+        } else {
+          failedCount++;
+        }
         setProgress({ current: i + 1, total: chaptersToSummarize.length });
+      }
+      if (failedCount > 0) {
+        setError(`批量总结完成，${failedCount} 章失败`);
       }
     } catch (err) { handleError(err); }
     finally {
@@ -475,8 +486,7 @@ export function useSummarizer() {
   const generateRangeSummary = useCallback(
     async (fromChapter: number, toChapter: number): Promise<TempResult | null> => {
       if (!currentNovel || !checkProvider()) return null;
-      const provider = getActiveProvider();
-      if (!provider) return null;
+      const provider = getActiveProvider()!;
 
       startTask(`第${fromChapter}-${toChapter}章 范围总结`, TaskType.RANGE);
       try {
@@ -556,6 +566,9 @@ ${combinedText}`;
       const provider = getActiveProvider();
       if (!provider) return null;
 
+      startTask("问答", TaskType.QA);
+      try {
+
       // Build system context
       const chapterList = currentNovel.chapters.map((c, i) => `${i + 1}. ${c.title}`).join("\n");
 
@@ -606,6 +619,8 @@ ${relevantText || "（无额外参考信息，请基于章节目录回答）"}
       } catch (err) {
         handleError(err);
         return null;
+      } finally {
+        endTask();
       }
     },
     [currentNovel, checkProvider]

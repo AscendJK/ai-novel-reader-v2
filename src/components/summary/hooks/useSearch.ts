@@ -3,7 +3,7 @@
  * 从 SummaryPanel.tsx 中提取
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { buildIndex, retrieveRelevantWithDetails } from "@/rag/index";
 import { isEmbeddingEngine } from "@/rag/engines";
 import { useRAGStore } from "@/stores/rag-store";
@@ -51,47 +51,49 @@ export function useSearch({
   const [searchError, setSearchError] = useState<string | null>(null);
 
   const engine = useRAGStore((s) => s.engine);
+  const abortRef = useRef<AbortController | null>(null);
 
-  // 执行搜索
+  // 执行搜索（取消上一次未完成的搜索）
   const handleSearch = useCallback(async () => {
     if (!searchQuery.trim()) return;
+    // 取消上一次搜索
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setSearchLoading(true);
     setSearchError(null);
 
     try {
-      // 确保索引已加载到内存
       let searchEngine = engine;
       if (isEmbeddingEngine(searchEngine)) {
         try {
           await buildIndex(novelId, chapters, searchEngine, undefined, { cacheOnly: true });
         } catch {
-          // 索引未缓存，降级为 TF-IDF
           searchEngine = "tfidf";
         }
       }
 
-      // 如果是 TF-IDF，需要构建索引
       if (searchEngine === "tfidf") {
-        // 检查章节内容是否完整（懒加载可能导致大部分章节内容为空）
         let buildChapters = chapters;
         const hasEmptyContent = chapters.some(ch => !ch.content);
         if (hasEmptyContent) {
           const fullNovel = await loadNovel(novelId, undefined, true);
-          if (fullNovel) {
-            buildChapters = fullNovel.chapters;
-          }
+          if (fullNovel) buildChapters = fullNovel.chapters;
         }
         await buildIndex(novelId, buildChapters, "tfidf");
       }
 
-      // 执行搜索
+      if (controller.signal.aborted) return; // 已被新搜索取消
       const detail = await retrieveRelevantWithDetails(novelId, searchQuery.trim(), 10, searchEngine);
+      if (controller.signal.aborted) return; // 结果已过期
       setSearchResults(detail.results);
       setSearchEngine(detail.engine);
     } catch (e) {
+      if (controller.signal.aborted) return; // 取消的搜索不显示错误
       setSearchError(e instanceof Error ? e.message : "搜索失败");
     } finally {
-      setSearchLoading(false);
+      if (!controller.signal.aborted) setSearchLoading(false);
     }
   }, [searchQuery, novelId, chapters, engine]);
 
