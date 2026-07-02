@@ -4,8 +4,8 @@ import { VitePWA } from "vite-plugin-pwa";
 import path from "path";
 import fs from "fs";
 
-// Cloudflare Pages 构建时自动设置 CF_PAGES=true，GitHub Pages 和本地开发用 /ai-novel-reader-v2/
-const BASE_PATH = process.env.CF_PAGES ? "/" : "/ai-novel-reader-v2/";
+// GitHub Pages 部署路径（根据仓库名调整）
+const BASE_PATH = "/ai-novel-reader-v2/";
 
 export default defineConfig({
   base: BASE_PATH,

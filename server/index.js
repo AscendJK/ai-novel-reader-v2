@@ -28,8 +28,6 @@ const ALLOWED_ORIGINS = [
   "https://localhost", "https://127.0.0.1",
   // GitHub Pages
   "https://ascendjk.github.io",
-  // Cloudflare Pages
-  "https://ai-novel-reader-v2.pages.dev",
   // 用户自定义前端域名（可通过环境变量配置）
   ...(process.env.CORS_ORIGINS || "").split(",").filter(Boolean),
 ];
