@@ -4,8 +4,8 @@ import { VitePWA } from "vite-plugin-pwa";
 import path from "path";
 import fs from "fs";
 
-// GitHub Pages 部署路径（根据仓库名调整）
-const BASE_PATH = "/ai-novel-reader-v2/";
+// 部署路径：GitHub Pages 需要 /ai-novel-reader-v2/，Cloudflare Pages 用 /
+const BASE_PATH = "/";
 
 export default defineConfig({
   base: BASE_PATH,
@@ -23,7 +23,7 @@ export default defineConfig({
             if (!filePath.startsWith(publicDir)) return next();
             if (!fs.existsSync(filePath)) return next();
             const ext = path.extname(filePath);
-            const mimes = { ".wasm": "application/wasm", ".data": "application/octet-stream", ".mjs": "application/javascript", ".js": "application/javascript", ".txt": "text/plain" };
+            const mimes: Record<string, string> = { ".wasm": "application/wasm", ".data": "application/octet-stream", ".mjs": "application/javascript", ".js": "application/javascript", ".txt": "text/plain" };
             res.setHeader("Content-Type", mimes[ext] || "application/octet-stream");
             res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
             const stream = fs.createReadStream(filePath);
@@ -114,6 +114,7 @@ export default defineConfig({
       "Cross-Origin-Embedder-Policy": "require-corp",
     },
   },
+  // @ts-expect-error — Vitest test config is not part of Vite's UserConfigExport type
   test: {
     globals: true,
     environment: "jsdom",

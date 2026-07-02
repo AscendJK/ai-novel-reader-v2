@@ -64,3 +64,6 @@ CLAUDE.md
 
 # MiMoCode memory
 .mimocode
+
+# Cloudflare Wrangler
+.wrangler

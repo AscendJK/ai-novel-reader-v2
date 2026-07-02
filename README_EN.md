@@ -6,13 +6,15 @@ A browser-based AI-powered novel reading tool. Upload TXT/EPUB files, configure 
 
 ## Quick Start
 
-The project uses a **front-end/back-end separated architecture**: the frontend is deployed on GitHub Pages, and the backend runs on your local machine.
+The project uses a **front-end/back-end separated architecture**: the frontend is deployed on Cloudflare Pages (also available on GitHub Pages), and the backend runs on your local machine.
 
-### Frontend (GitHub Pages)
+### Frontend (Cloudflare Pages)
 
-The frontend is deployed on GitHub Pages. **No installation required** — just visit:
+The frontend is deployed on Cloudflare Pages. **No installation required** — just visit:
 
-**https://ascendjk.github.io/ai-novel-reader-v2/**
+**https://ai-novel-reader-v2.pages.dev/**
+
+Alternative (GitHub Pages): https://ascendjk.github.io/ai-novel-reader-v2/
 
 You can use it without configuring a server (offline mode). Configure a server to enable sync.
 
@@ -85,7 +87,7 @@ Installing mkcert only eliminates this warning; it is not required.
 
 ### Frontend
 
-GitHub Pages provides HTTPS automatically. No extra configuration needed.
+Cloudflare Pages and GitHub Pages both provide HTTPS automatically. No extra configuration needed.
 
 ### Backend
 
@@ -127,14 +129,14 @@ Send `rootCA.pem` to other devices and install:
 | Access method | Without mkcert | With mkcert |
 |--------------|---------------|-------------|
 | `http://LAN-IP:5173` frontend + backend | ✅ Works | ✅ Works |
-| `https://ascendjk.github.io` frontend + HTTP backend | ✅ Works (yellow warning in console) | ✅ Works (no warning) |
-| `https://ascendjk.github.io` frontend + HTTPS backend | — | ✅ Works (no warning) |
+| `https://ai-novel-reader-v2.pages.dev` frontend + HTTP backend | ✅ Works (yellow warning in console) | ✅ Works (no warning) |
+| `https://ai-novel-reader-v2.pages.dev` frontend + HTTPS backend | — | ✅ Works (no warning) |
 
 ---
 
 ## Shared Frontend
 
-The frontend is deployed on GitHub Pages — everyone shares the same frontend URL. Each person runs their own backend on their own machine. Data is fully isolated:
+The frontend is deployed on Cloudflare Pages (also available on GitHub Pages) — everyone shares the same frontend URL. Each person runs their own backend on their own machine. Data is fully isolated:
 
 - Each backend is independent → databases are isolated
 - Each browser's IndexedDB is independent → local data doesn't interfere
@@ -362,7 +364,7 @@ Auto-starts server and opens admin page:
 ## Architecture
 
 ```
-Frontend: GitHub Pages (React 19 + TypeScript + Vite + Tailwind CSS + Zustand)
+Frontend: Cloudflare Pages (React 19 + TypeScript + Vite + Tailwind CSS + Zustand)
 Backend: Local server (Express + better-sqlite3)
 ├─ Front-back separation: frontend connects to backend via user-configured server address
 ├─ Multi-agent engine: summary / characters / timeline / graph / map
@@ -396,7 +398,7 @@ Backend: Local server (Express + better-sqlite3)
 - **Session Token authentication**: Server issues tokens on login, sync endpoints (push/heartbeat) also verify tokens
 - **Single-session enforcement**: Logging in from a new device kicks the previous session; automatic re-registration after server restart
 - **API key local isolation**: Stored per-user in IndexedDB, never uploaded, never synced, preserved on kick
-- **CORS allowlist**: Only localhost, LAN IPs, and `*.github.io` domains allowed
+- **CORS allowlist**: Only localhost, LAN IPs, `*.github.io`, and `*.pages.dev` domains allowed
 - **CSP security policy**: `connect-src` restricted to HTTP/HTTPS protocols only
 - **Rate limiting**: RAG build, encode, and other expensive endpoints are rate-limited per IP
 - **Input validation**: Username length limits, request body size limits (50MB), text length limits
@@ -484,7 +486,7 @@ Uses the browser's built-in **Web Speech API** for Chinese TTS. Click the ▶ Re
 
 ### Browser console shows mixed content warning
 
-**Cause**: GitHub Pages (HTTPS) frontend sends requests to HTTP backend, triggering a yellow warning.
+**Cause**: Cloudflare Pages / GitHub Pages (HTTPS) frontend sends requests to HTTP backend, triggering a yellow warning.
 
 **Impact**: Warning only — **requests are not blocked**, all features work normally.
 

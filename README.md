@@ -6,13 +6,15 @@
 
 ## 快速开始
 
-项目采用**前后端分离架构**：前端部署在 GitHub Pages，后端运行在本地电脑。
+项目采用**前后端分离架构**：前端部署在 Cloudflare Pages（也支持 GitHub Pages），后端运行在本地电脑。
 
-### 前端（GitHub Pages）
+### 前端（Cloudflare Pages）
 
-前端已部署在 GitHub Pages，**无需安装**，直接访问：
+前端已部署在 Cloudflare Pages，**无需安装**，直接访问：
 
-**https://ascendjk.github.io/ai-novel-reader-v2/**
+**https://ai-novel-reader-v2.pages.dev/**
+
+备用地址（GitHub Pages）：https://ascendjk.github.io/ai-novel-reader-v2/
 
 不配置服务器也能使用（离线模式），配置后可同步数据。
 
@@ -85,7 +87,7 @@ npm run dev
 
 ### 前端
 
-GitHub Pages 自动提供 HTTPS，无需额外配置。
+Cloudflare Pages 和 GitHub Pages 均自动提供 HTTPS，无需额外配置。
 
 ### 后端
 
@@ -127,14 +129,14 @@ mkcert -CAROOT     # 获取 CA 根证书路径
 | 访问方式 | 无 mkcert | 有 mkcert |
 |---------|----------|----------|
 | `http://局域网IP:5173` 前端 + 后端 | ✅ 正常 | ✅ 正常 |
-| `https://ascendjk.github.io` 前端 + HTTP 后端 | ✅ 正常（控制台有黄色警告） | ✅ 正常（无警告） |
-| `https://ascendjk.github.io` 前端 + HTTPS 后端 | — | ✅ 正常（无警告） |
+| `https://ai-novel-reader-v2.pages.dev` 前端 + HTTP 后端 | ✅ 正常（控制台有黄色警告） | ✅ 正常（无警告） |
+| `https://ai-novel-reader-v2.pages.dev` 前端 + HTTPS 后端 | — | ✅ 正常（无警告） |
 
 ---
 
 ## 多人共用前端
 
-前端部署在 GitHub Pages，所有人共用同一个前端地址。每个人在自己的电脑上运行后端，数据完全隔离：
+前端部署在 Cloudflare Pages（也支持 GitHub Pages），所有人共用同一个前端地址。每个人在自己的电脑上运行后端，数据完全隔离：
 
 - 后端各自独立 → 数据库隔离
 - 浏览器 IndexedDB 各自独立 → 本地数据互不干扰
@@ -362,7 +364,7 @@ admin.bat        # Windows 双击
 ## 核心架构
 
 ```
-前端：GitHub Pages（React 19 + TypeScript + Vite + Tailwind CSS + Zustand）
+前端：Cloudflare Pages（React 19 + TypeScript + Vite + Tailwind CSS + Zustand）
 后端：本地服务器（Express + better-sqlite3）
 ├─ 前后端分离：前端通过用户配置的服务器地址连接后端
 ├─ 多 Agent 引擎：总结 / 人物 / 时间线 / 图谱 / 地图（实时状态反馈）
@@ -397,7 +399,7 @@ admin.bat        # Windows 双击
 - **自动重注册**：服务器重启或 Token 失效时，客户端自动以已有用户名重新加入，获取新 Token 并拉取全量数据
 - **单设备在线**：同一用户名新设备登录时旧设备自动下线
 - **API Key 本地隔离**：按用户名存储在 IndexedDB，不上传服务器，不同步，被踢下线时自动保留
-- **CORS 白名单**：仅允许 localhost、局域网 IP 和 `*.github.io` 域名访问
+- **CORS 白名单**：仅允许 localhost、局域网 IP、`*.github.io` 和 `*.pages.dev` 域名访问
 - **CSP 安全策略**：限制 `connect-src` 仅允许 HTTP/HTTPS 协议请求
 - **请求限流**：RAG 构建、编码等高开销接口按 IP 限频
 - **输入校验**：用户名长度限制、请求体大小限制（50MB）、文本长度限制
@@ -485,7 +487,7 @@ MIT License
 
 ### 浏览器控制台显示 mixed content 警告
 
-**原因**：GitHub Pages（HTTPS）前端向 HTTP 后端发请求，浏览器会显示黄色警告。
+**原因**：Cloudflare Pages / GitHub Pages（HTTPS）前端向 HTTP 后端发请求，浏览器会显示黄色警告。
 
 **影响**：仅是警告，**不会阻止请求**，所有功能正常工作。
 
