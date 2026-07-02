@@ -6,7 +6,6 @@
 import { useRAGStore } from "@/stores/rag-store";
 import { broadcast } from "@/lib/broadcast";
 import { getServerUrl } from "@/lib/api-client";
-import { installFetchInterceptor, restoreFetch } from "./fetch-proxy";
 
 // Mirror configuration
 const HF_MIRROR_KEY = "novel-reader-hf-mirror";
@@ -159,15 +158,19 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
       console.log(`[model-loader] 下载模型 ${modelKey} (${attempt}/${maxRetries})`);
       store.setDownloadProgress(`下载中 (${attempt}/${maxRetries})...`);
 
-      // 先安装 fetch interceptor，再加载 transformers（模块加载时会捕获 fetch 引用）
-      installFetchInterceptor();
       const transformers = await import("@xenova/transformers");
       const { AutoModel, AutoTokenizer, env } = transformers;
 
       env.allowRemoteModels = true;
       env.useBrowserCache = true;
 
-      console.log(`[model-loader] fetch interceptor ready, serverUrl="${getServerUrl()}"`);
+      // 通过 remoteHost 让 transformers.js 直接请求后端代理（无需 fetch interceptor）
+      const serverUrl = getServerUrl();
+      if (serverUrl) {
+        env.remoteHost = `${serverUrl}/api/rag/model-proxy`;
+      }
+
+      console.log(`[model-loader] remoteHost=${env.remoteHost || "(none)"}`);
 
       // Download tokenizer
       store.setDownloadProgress("下载 tokenizer...");
@@ -205,9 +208,6 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
         },
       });
 
-      // Restore original fetch
-      restoreFetch();
-
       console.log(`[model-loader] 模型下载完成: ${modelKey}`);
       store.addDownloadedModel(modelKey);
       store.setDownloadProgress("下载完成");
@@ -218,8 +218,6 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
       success = true;
       break;
     } catch (e) {
-      // Restore original fetch on error
-      restoreFetch();
       console.warn(`[model-loader] 下载失败 (${attempt}/${maxRetries}):`, e);
       if (attempt < maxRetries) {
         store.setDownloadProgress(`下载失败，重试中 (${attempt}/${maxRetries})...`);

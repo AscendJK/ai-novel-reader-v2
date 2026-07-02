@@ -5,7 +5,6 @@
 
 import { ragLog } from "@/lib/logger";
 import { resolveModelKey } from "./engines";
-import { installFetchInterceptor, restoreFetch } from "./fetch-proxy";
 
 // Resolve engine ID to the model key Transformers.js expects
 function toModelPath(engine: string): string {
@@ -47,13 +46,17 @@ async function getEncoder(engine: string): Promise<any> {
     if (cachedNow) return cachedNow;
 
     const modelPath = toModelPath(engine);
-    // 先安装 fetch interceptor，再加载 transformers
-    installFetchInterceptor();
     const transformers = await import("@xenova/transformers");
     const { env, pipeline } = transformers;
 
     env.allowRemoteModels = true;
     env.useBrowserCache = true;
+
+    // 通过 remoteHost 让 transformers.js 直接请求后端代理
+    const serverUrl = (await import("@/lib/api-client")).getServerUrl();
+    if (serverUrl) {
+      env.remoteHost = `${serverUrl}/api/rag/model-proxy`;
+    }
 
     ragLog(`[client-encoder] 加载模型: ${modelPath}`);
     try {
@@ -63,7 +66,6 @@ async function getEncoder(engine: string): Promise<any> {
       ragLog(`[client-encoder] 模型就绪: ${modelPath}`);
       return extractor;
     } finally {
-      restoreFetch();
     }
   } finally {
     releaseLock();
