@@ -44,8 +44,8 @@ public/models/custom/Xenova/*/tokenizer.json
 public/models/custom/Xenova/*/tokenizer_config.json
 !public/models/custom/Xenova/*/.gitkeep
 
-# Temp files
-*.tmp
+# Build artifacts
+ai-novel-reader-v2-backend.zip
 
 # Promotional post (not part of the project)
 POST.md
