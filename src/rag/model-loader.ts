@@ -159,15 +159,15 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
       console.log(`[model-loader] 下载模型 ${modelKey} (${attempt}/${maxRetries})`);
       store.setDownloadProgress(`下载中 (${attempt}/${maxRetries})...`);
 
+      // 先安装 fetch interceptor，再加载 transformers（模块加载时会捕获 fetch 引用）
+      installFetchInterceptor();
       const transformers = await import("@xenova/transformers");
       const { AutoModel, AutoTokenizer, env } = transformers;
 
       env.allowRemoteModels = true;
       env.useBrowserCache = true;
-      // Don't set remoteHost — use fetch interceptor to route through backend proxy
 
-      // Install fetch interceptor for this download
-      installFetchInterceptor();
+      console.log(`[model-loader] fetch interceptor ready, serverUrl="${getServerUrl()}"`);
 
       // Download tokenizer
       store.setDownloadProgress("下载 tokenizer...");

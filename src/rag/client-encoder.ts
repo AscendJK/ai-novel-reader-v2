@@ -47,14 +47,13 @@ async function getEncoder(engine: string): Promise<any> {
     if (cachedNow) return cachedNow;
 
     const modelPath = toModelPath(engine);
+    // 先安装 fetch interceptor，再加载 transformers
+    installFetchInterceptor();
     const transformers = await import("@xenova/transformers");
     const { env, pipeline } = transformers;
 
     env.allowRemoteModels = true;
     env.useBrowserCache = true;
-
-    // Install fetch interceptor
-    installFetchInterceptor();
 
     ragLog(`[client-encoder] 加载模型: ${modelPath}`);
     try {
