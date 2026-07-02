@@ -567,7 +567,6 @@ ${combinedText}`;
       if (!provider) return null;
 
       startTask("问答", TaskType.QA);
-      try {
 
       // Build system context
       const chapterList = currentNovel.chapters.map((c, i) => `${i + 1}. ${c.title}`).join("\n");
