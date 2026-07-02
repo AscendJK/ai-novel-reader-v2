@@ -36,6 +36,8 @@ jobs:
 
       - name: Build
         run: npm run build
+        env:
+          DEPLOY_TARGET: github-pages
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

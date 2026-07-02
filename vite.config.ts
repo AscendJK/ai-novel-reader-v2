@@ -4,8 +4,9 @@ import { VitePWA } from "vite-plugin-pwa";
 import path from "path";
 import fs from "fs";
 
-// 部署路径：GitHub Pages 需要 /ai-novel-reader-v2/，Cloudflare Pages 用 /
-const BASE_PATH = "/";
+// 部署路径：Cloudflare Pages 用 /，GitHub Pages 用 /ai-novel-reader-v2/
+// 本地开发用 /，CI 通过环境变量覆盖
+const BASE_PATH = process.env.DEPLOY_TARGET === "cloudflare" ? "/" : "/ai-novel-reader-v2/";
 
 export default defineConfig({
   base: BASE_PATH,
