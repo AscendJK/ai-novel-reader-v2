@@ -164,13 +164,25 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
       env.allowRemoteModels = true;
       env.useBrowserCache = true;
 
-      // 通过 remoteHost 让 transformers.js 直接请求后端代理（无需 fetch interceptor）
+      // 直接覆盖 env.fetch，确保 transformers.js 的所有请求都走后端代理
       const serverUrl = getServerUrl();
       if (serverUrl) {
-        env.remoteHost = `${serverUrl}/api/rag/model-proxy`;
+        const proxyBase = `${serverUrl}/api/rag/model-proxy`;
+        env.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+          const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+          // HuggingFace 路径 → 代理
+          if (url.includes("huggingface.co/") || url.includes("hf-mirror.com/")) {
+            const pathAfterHost = url.split(/huggingface\.co\/|hf-mirror\.com\//)[1];
+            if (pathAfterHost) {
+              const proxyUrl = `${proxyBase}/${pathAfterHost}`;
+              console.log(`[model-loader] 代理: ${url.substring(0, 80)}... → ${proxyUrl.substring(0, 80)}...`);
+              return fetch(proxyUrl, init);
+            }
+          }
+          return fetch(url, init);
+        };
+        console.log(`[model-loader] env.fetch 已覆盖, proxyBase=${proxyBase}`);
       }
-
-      console.log(`[model-loader] remoteHost=${env.remoteHost || "(none)"}`);
 
       // 直接测试后端代理是否可达
       if (env.remoteHost) {
