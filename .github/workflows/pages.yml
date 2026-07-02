@@ -22,13 +22,15 @@ jobs:
     steps:
       - name: Clean up old Pages deployments
         uses: strumwolf/delete-deployment-environment@v2.3.0
+        timeout-minutes: 3
+        continue-on-error: true
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           environment: github-pages
-          onlyRemoveDeployments: true # 只删部署记录，不删除环境
+          onlyRemoveDeployments: true
 
   deploy:
-    needs: cleanup # 先清理，再执行构建部署
+    needs: cleanup
     timeout-minutes: 15
     environment:
       name: github-pages
