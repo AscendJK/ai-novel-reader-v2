@@ -9,35 +9,19 @@ permissions:
   contents: read
   pages: write
   id-token: write
-  deployments: write # 新增：允许删除部署记录
 
 concurrency:
   group: "pages"
   cancel-in-progress: false
 
-# 新增清理任务，部署前自动删所有旧部署
 jobs:
-  cleanup:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clean up old Pages deployments
-        uses: strumwolf/delete-deployment-environment@v2.3.0
-        timeout-minutes: 3
-        continue-on-error: true
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          environment: github-pages
-          onlyRemoveDeployments: true
-
   deploy:
-    needs: cleanup
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
     steps:
-      # 你原来的所有步骤不变（Checkout、Node、Build、Deploy等）
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -64,4 +48,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-        timeout-minutes: 12
