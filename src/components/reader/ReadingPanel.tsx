@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, Suspense, lazy } from "react";
 import { ChapterNav } from "./ChapterNav";
 import { ChapterContent } from "./ChapterContent";
-import { SummaryPanel } from "@/components/summary/SummaryPanel";
+const SummaryPanel = lazy(() => import("@/components/summary/SummaryPanel").then(m => ({ default: m.SummaryPanel })));
 import { LocalErrorBoundary } from "@/components/common/LocalErrorBoundary";
 import { PanelRightOpen, PanelRightClose, List, FileText, BookOpen, MessageSquare, StickyNote, Search, X } from "lucide-react";
 import { useSummaryStore } from "@/stores/summary-store";
@@ -27,19 +27,20 @@ export function ReadingPanel() {
     return () => document.documentElement.classList.remove("immersive");
   }, [immersive]);
 
-  const { currentNovel, selectedChapterId } = useNovelStore();
+  const currentNovelId = useNovelStore((s) => s.currentNovel?.id);
+  const selectedChapterId = useNovelStore((s) => s.selectedChapterId);
   const { getSummariesByNovel } = useSummaryStore();
 
-  const hasCurrentSummary = currentNovel
-    ? getSummariesByNovel(currentNovel.id).some(
+  const hasCurrentSummary = useMemo(() => currentNovelId
+    ? getSummariesByNovel(currentNovelId).some(
         (s) => s.chapterId === selectedChapterId && s.type === "chapter"
       )
-    : false;
+    : false, [currentNovelId, selectedChapterId, getSummariesByNovel]);
 
-  const openMobileTab = (tab: string) => {
+  const openMobileTab = useCallback((tab: string) => {
     setMobileAiTab(tab);
     setMobileAiOpen(true);
-  };
+  }, []);
 
   return (
     <div className="flex h-full relative">
@@ -103,12 +104,14 @@ export function ReadingPanel() {
           )}
         </button>
 
-        {/* SummaryPanel - 始终渲染，用 CSS 隐藏 */}
-        <div style={{ display: summaryOpen ? undefined : "none" }}>
+        {/* SummaryPanel — 打开时才挂载，避免章节切换时不必要的重渲染 */}
+        {summaryOpen && (
           <LocalErrorBoundary name="SummaryPanel">
-            <SummaryPanel />
+            <Suspense fallback={null}>
+              <SummaryPanel />
+            </Suspense>
           </LocalErrorBoundary>
-        </div>
+        )}
       </div>
 
       {/* Mobile: chapter nav drawer (left) */}
@@ -134,7 +137,9 @@ export function ReadingPanel() {
             <button onClick={() => setMobileAiOpen(false)} className="p-1 rounded hover:bg-accent"><X className="h-4 w-4" /></button>
           </div>
           <div className="flex-1 min-h-0">
-            <SummaryPanel value={mobileAiTab} onValueChange={setMobileAiTab} />
+            <Suspense fallback={null}>
+              <SummaryPanel value={mobileAiTab} onValueChange={setMobileAiTab} />
+            </Suspense>
           </div>
         </div>
     </div>

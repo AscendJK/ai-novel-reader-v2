@@ -155,63 +155,47 @@ export class EmbeddingRetriever {
     } catch { /* no cached index */ }
 
     // 检查服务器状态，触发构建并轮询
-    ragLog("检查服务器索引状态...");
-    const statusCheck = await apiFetch(`/api/rag/${novelId}/status?engine=${encodeURIComponent(this.engine)}`);
-    const statusData = await statusCheck.json();
-
-    // 如果服务器已有索引，直接下载
-    if (statusData.status === "ready") {
-      ragLog("服务器索引已就绪，下载中...");
-      await downloadAndCacheIndex({ novelId, engine: this.engine, updateStore: false });
-      // 从 IndexedDB 重新加载到内存
-      const cached = await db.ragCache.get(memCacheKey);
-      if (cached && cached.vectorsBuffer && cached.dim > 0 && cached.chunks?.length > 0) {
-        this.loadFromBuffer(cached.vectorsBuffer, cached.chunks, cached.dim);
-        useRAGStore.getState().addCachedKey(memCacheKey);
-        lruAdd(memCacheKey, this.vectors, this.chunks, this.dim);
-      }
-      onProgress?.({ phase: "done" });
-      return;
-    }
-
-    // 触发构建并轮询
-    ragLog("触发服务器构建...");
-    useBuildStore.getState().startBuild(novelId, this.engine);
-
     try {
+      ragLog("检查服务器索引状态...");
+      const statusCheck = await apiFetch(`/api/rag/${novelId}/status?engine=${encodeURIComponent(this.engine)}`);
+      const statusData = await statusCheck.json();
+
+      // 如果服务器已有索引，直接下载
+      if (statusData.status === "ready") {
+        ragLog("服务器索引已就绪，下载中...");
+        await downloadAndCacheIndex({ novelId, engine: this.engine, updateStore: false });
+        // 从 IndexedDB 重新加载到内存
+        const cached = await db.ragCache.get(memCacheKey);
+        if (cached && cached.vectorsBuffer && cached.dim > 0 && cached.chunks?.length > 0) {
+          this.loadFromBuffer(cached.vectorsBuffer, cached.chunks, cached.dim);
+          useRAGStore.getState().addCachedKey(memCacheKey);
+          lruAdd(memCacheKey, this.vectors, this.chunks, this.dim);
+        }
+        onProgress?.({ phase: "done" });
+        return;
+      }
+
+      // 触发构建并轮询
+      ragLog("触发服务器构建...");
+      useBuildStore.getState().startBuild(novelId, this.engine);
       await buildAndPollRAGIndex({
-        novelId,
-        engine: this.engine,
-        signal,
-        onProgress: (progress) => {
-          useBuildStore.getState().updateProgress(novelId, this.engine, {
-            message: progress.message || "",
-            current: progress.current || 0,
-            total: progress.total || _allChunks.length,
-            status: progress.status as any,
-            queuePosition: progress.queuePosition,
-          });
-          if (progress.status === "loading" || progress.status === "building" || progress.status === "encoding") {
-            onProgress?.({ phase: "encoding", current: progress.current || 0, total: progress.total || _allChunks.length });
-          }
-        },
+        novelId, engine: this.engine,
+        onProgress: (p) => onProgress?.({ phase: p.status === "building" || p.status === "encoding" ? "encoding" : "downloading", current: p.current, total: p.total }),
       });
-
-      useBuildStore.getState().finishBuild(novelId, this.engine);
-
-      // 从 IndexedDB 加载到内存
-      const cached = await db.ragCache.get(memCacheKey);
-      if (cached && cached.vectorsBuffer && cached.dim > 0 && cached.chunks?.length > 0) {
-        this.loadFromBuffer(cached.vectorsBuffer, cached.chunks, cached.dim);
+      // 下载并缓存到 IndexedDB
+      await downloadAndCacheIndex({ novelId, engine: this.engine, updateStore: false });
+      const cached2 = await db.ragCache.get(memCacheKey);
+      if (cached2 && cached2.vectorsBuffer && cached2.dim > 0 && cached2.chunks?.length > 0) {
+        this.loadFromBuffer(cached2.vectorsBuffer, cached2.chunks, cached2.dim);
         useRAGStore.getState().addCachedKey(memCacheKey);
         lruAdd(memCacheKey, this.vectors, this.chunks, this.dim);
       }
       onProgress?.({ phase: "done" });
-
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "构建失败";
-      useBuildStore.getState().failBuild(novelId, this.engine, message);
-      throw err;
+    } catch (serverErr) {
+      // 本地没有缓存且服务器不可达，无法获取嵌入索引
+      // init() 返回后，buildIndex 中的 TF-IDF 检索作为替代方案
+      ragLog(`无法连接服务器获取嵌入索引: ${serverErr}`);
+      onProgress?.({ phase: "done" });
     }
   }
 

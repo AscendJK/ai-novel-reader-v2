@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from "react";
 import { useRAGStore } from "@/stores/rag-store";
 import { useUIStore } from "@/stores/ui-store";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { ALL_ENGINES, downloadModel, getMirrorId, setMirrorId, getMirrorOptions } from "@/rag/model-loader";
 import { clearCache } from "@/rag/index";
+import { updateRagCacheSize } from "@/rag/rag-cache-utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -20,7 +22,7 @@ export function RAGSettings() {
     topKDefault, topKTiers, setTopKDefault, setTopKTiers, resetTopKConfig, getTopK,
   } = useRAGStore();
   const { graphCharacterLimit, setGraphCharacterLimit } = useUIStore();
-  const [isMobile] = useState(() => window.innerWidth < 768);
+  const isMobile = useMediaQuery("(max-width: 767px)");
   const mountedRef = useRef(true);
   useEffect(() => { return () => { mountedRef.current = false; }; }, []);
 
@@ -229,7 +231,7 @@ export function RAGSettings() {
                 if (window.confirm("确认清除所有 RAG 索引缓存？清除后需要重新构建。")) {
                   clearCache();
                   // 重新计算缓存大小
-                  import("@/rag/rag-cache-utils").then(m => m.updateRagCacheSize());
+                  updateRagCacheSize();
                 }
               }}
             >
@@ -285,8 +287,8 @@ export function RAGSettings() {
             />
           </div>
 
-          <div className="rounded-lg border overflow-hidden">
-            <table className="w-full text-xs">
+          <div className="rounded-lg border overflow-x-auto">
+            <table className="w-full text-xs min-w-[400px]">
               <thead>
                 <tr className="bg-muted/50">
                   <th className="text-left px-3 py-1.5 font-medium">向量数量上限</th>

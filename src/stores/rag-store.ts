@@ -181,13 +181,17 @@ export const useRAGStore = create<RAGState>((set, get) => ({
   updateRagCacheSize: (bytes) => set({ ragCacheSizeBytes: bytes }),
 
   addCachedKey: (key) => {
-    const next = new Set(get().cachedKeys);
+    const current = get().cachedKeys;
+    if (current.has(key)) return; // Already exists, skip
+    const next = new Set(current);
     next.add(key);
     set({ cachedKeys: next });
   },
 
   removeCachedKey: (key) => {
-    const next = new Set(get().cachedKeys);
+    const current = get().cachedKeys;
+    if (!current.has(key)) return; // Already absent, skip
+    const next = new Set(current);
     next.delete(key);
     set({ cachedKeys: next });
   },
@@ -195,25 +199,33 @@ export const useRAGStore = create<RAGState>((set, get) => ({
   hasCachedKey: (key) => get().cachedKeys.has(key),
 
   addLruKey: (key) => {
-    const next = new Set(get().lruKeys);
+    const current = get().lruKeys;
+    if (current.has(key)) return;
+    const next = new Set(current);
     next.add(key);
     set({ lruKeys: next });
   },
 
   removeLruKey: (key) => {
-    const next = new Set(get().lruKeys);
+    const current = get().lruKeys;
+    if (!current.has(key)) return;
+    const next = new Set(current);
     next.delete(key);
     set({ lruKeys: next });
   },
 
   addIndexLoadingKey: (key) => {
-    const next = new Set(get().indexLoadingKeys);
+    const current = get().indexLoadingKeys;
+    if (current.has(key)) return;
+    const next = new Set(current);
     next.add(key);
     set({ indexLoadingKeys: next });
   },
 
   removeIndexLoadingKey: (key) => {
-    const next = new Set(get().indexLoadingKeys);
+    const current = get().indexLoadingKeys;
+    if (!current.has(key)) return;
+    const next = new Set(current);
     next.delete(key);
     set({ indexLoadingKeys: next });
   },
@@ -222,14 +234,18 @@ export const useRAGStore = create<RAGState>((set, get) => ({
   setDownloadProgress: (progress) => set({ downloadProgress: progress }),
 
   addDownloadedModel: (modelKey) => {
-    const next = new Set(get().downloadedModels);
+    const current = get().downloadedModels;
+    if (current.has(modelKey)) return;
+    const next = new Set(current);
     next.add(modelKey);
     saveDownloadedModels(next);
     set({ downloadedModels: next });
   },
 
   removeDownloadedModel: (modelKey) => {
-    const next = new Set(get().downloadedModels);
+    const current = get().downloadedModels;
+    if (!current.has(modelKey)) return;
+    const next = new Set(current);
     next.delete(modelKey);
     saveDownloadedModels(next);
     set({ downloadedModels: next });

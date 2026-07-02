@@ -144,7 +144,7 @@ export function GlobalNotes({ onBack }: Props) {
                       )}
                     </div>
                     <Button
-                      variant="ghost" size="icon" className="h-7 w-7 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                      variant="ghost" size="icon" className="h-7 w-7 shrink-0 md:opacity-0 md:group-hover:opacity-100 transition-opacity note-delete-btn"
                       onClick={() => handleDelete(note.id)} title="删除"
                     >
                       <Trash2 className="h-3.5 w-3.5 text-destructive" />

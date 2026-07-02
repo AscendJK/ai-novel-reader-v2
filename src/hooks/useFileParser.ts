@@ -5,6 +5,7 @@ import { createNovel } from "@/parsers/utils";
 import { saveNovel } from "@/db/repositories";
 import { useNovelStore } from "@/stores/novel-store";
 import { apiFetch } from "@/lib/api-client";
+import { clearCache } from "@/rag/index";
 import type { Novel } from "@/parsers/types";
 
 // 文件大小限制
@@ -26,7 +27,7 @@ export function useFileParser() {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
-  const { addNovel } = useNovelStore();
+  const addNovel = useNovelStore((s) => s.addNovel);
 
   const parseFile = useCallback(async (file: File): Promise<Novel | null> => {
     setIsParsing(true);
@@ -70,7 +71,6 @@ export function useFileParser() {
 
       // 内容变更后清除旧的 RAG 缓存（重新上传同 ID 小说时避免使用过期索引）
       try {
-        const { clearCache } = await import("@/rag/index");
         clearCache(novel.id);
       } catch { /* ignore */ }
 

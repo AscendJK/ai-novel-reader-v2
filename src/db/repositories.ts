@@ -3,6 +3,7 @@ import type { Novel, NovelMeta } from "@/parsers/types";
 import type { SummaryItem } from "@/stores/summary-store";
 import type { ChapterRecord, MapRecord, GraphRecord } from "./database";
 import { useRAGStore } from "@/stores/rag-store";
+import { clearCache } from "@/rag/index";
 
 export type { MapRecord, GraphRecord };
 
@@ -204,7 +205,6 @@ export async function deleteNovel(novelId: string): Promise<void> {
       useRAGStore.getState().removeCachedKey(entry.id);
     }
     try {
-      const { clearCache } = await import("@/rag/index");
       clearCache(novelId);
     } catch { /* ignore import errors */ }
 

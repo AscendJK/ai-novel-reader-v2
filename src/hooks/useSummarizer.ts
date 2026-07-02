@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { useNovelStore } from "@/stores/novel-store";
 import { useAPIStore } from "@/stores/api-store";
 import { useSummaryStore, type SummaryItem } from "@/stores/summary-store";
@@ -58,7 +58,7 @@ export function useSummarizer() {
   const [currentTask, setCurrentTask] = useState("");
   const [currentTaskType, setCurrentTaskType] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
-  const { currentNovel } = useNovelStore();
+  const currentNovel = useNovelStore((s) => s.currentNovel);
   const { getActiveProvider } = useAPIStore();
   const { addSummary, setProgress } = useSummaryStore();
   const abortRef = useRef<AbortController | null>(null);
@@ -97,6 +97,14 @@ export function useSummarizer() {
 
   // Pre-retrieve relevant text using local RAG. Falls back to TF-IDF if embedding engine not ready.
   const [ragEngineUsed, setRagEngineUsed] = useState<string>("");
+  // 切换小说时清除上次使用的引擎记录，避免显示 stale 值
+  const prevNovelIdRef = useRef(currentNovel?.id);
+  useEffect(() => {
+    if (prevNovelIdRef.current !== currentNovel?.id) {
+      prevNovelIdRef.current = currentNovel?.id;
+      setRagEngineUsed("");
+    }
+  }, [currentNovel?.id]);
   const getRelevantText = useCallback(
     async (query: string): Promise<string> => {
       if (!currentNovel) { ragLog("getRelevantText: currentNovel 为空"); return ""; }
@@ -603,7 +611,10 @@ ${relevantText || "（无额外参考信息，请基于章节目录回答）"}
     [currentNovel, checkProvider]
   );
 
-  return {
+  const clearQaCache = useCallback(() => { qaRagCacheRef.current = null; }, []);
+  const clearError = useCallback(() => setError(null), []);
+
+  return useMemo(() => ({
     isRunning, currentTask, currentTaskType, error,
     summarizeChapter, summarizeAllChapters, stopBatchSummary, regenerateChapter,
     generateGlobalSummary, regenerateGlobal,
@@ -612,9 +623,19 @@ ${relevantText || "（无额外参考信息，请基于章节目录回答）"}
     generateTimeline, regenerateTimeline,
     generateMap, regenerateMap,
     generateRangeSummary, askCustomQuestion,
-    clearQaCache: () => { qaRagCacheRef.current = null; },
-    clearError: () => setError(null),
+    clearQaCache,
+    clearError,
     abortAll,
     ragEngineUsed,
-  };
+  }), [
+    isRunning, currentTask, currentTaskType, error,
+    summarizeChapter, summarizeAllChapters, stopBatchSummary, regenerateChapter,
+    generateGlobalSummary, regenerateGlobal,
+    generateCharacterAnalysis, regenerateCharacters,
+    generateCharacterGraph, regenerateCharacterGraph,
+    generateTimeline, regenerateTimeline,
+    generateMap, regenerateMap,
+    generateRangeSummary, askCustomQuestion,
+    clearQaCache, clearError, abortAll, ragEngineUsed,
+  ]);
 }

@@ -18,10 +18,17 @@ const router = Router();
 // ── RAG: Cached pipeline for test/encode endpoints ────────
 
 const _cachedPipes = new Map(); // modelKey → pipeline
+const MAX_CACHED_PIPES = 3;
 
 async function getEncodePipeline(engine) {
   const modelKey = resolveModelKey(engine);
-  if (_cachedPipes.has(modelKey)) return _cachedPipes.get(modelKey);
+  if (_cachedPipes.has(modelKey)) {
+    // 移到末尾（最近使用）
+    const val = _cachedPipes.get(modelKey);
+    _cachedPipes.delete(modelKey);
+    _cachedPipes.set(modelKey, val);
+    return val;
+  }
   const { pipeline, env } = await import("@xenova/transformers");
   env.allowRemoteModels = true;
   env.cacheDir = path.resolve(__dirname, "../data/models-cache");
@@ -36,6 +43,11 @@ async function getEncodePipeline(engine) {
   if (!env.remoteHost) env.remoteHost = process.env.HF_MIRROR || "https://hf-mirror.com/";
   const pipe = await pipeline("feature-extraction", modelKey);
   _cachedPipes.set(modelKey, pipe);
+  // LRU 淘汰：超过上限时移除最久未使用的
+  while (_cachedPipes.size > MAX_CACHED_PIPES) {
+    const oldest = _cachedPipes.keys().next().value;
+    if (oldest) _cachedPipes.delete(oldest);
+  }
   return pipe;
 }
 
@@ -198,6 +210,12 @@ router.get("/model-proxy/{*path}", async (req, res) => {
 
     // Check local cache first (use normalized path for Transformers.js compatibility)
     const cachePath = path.join(MODEL_CACHE_DIR, toCachePath(subPath));
+    // 防路径穿越：确保解析后的路径在缓存目录内
+    const resolvedCachePath = path.resolve(cachePath);
+    const resolvedModelDir = path.resolve(MODEL_CACHE_DIR);
+    if (!resolvedCachePath.startsWith(resolvedModelDir + path.sep) && resolvedCachePath !== resolvedModelDir) {
+      return res.status(400).json({ error: "invalid path" });
+    }
     if (fs.existsSync(cachePath)) {
       console.log(`[model-proxy] cache hit: ${toCachePath(subPath)}`);
       const data = fs.readFileSync(cachePath);
@@ -722,7 +740,7 @@ function serveFile(res, filePath, contentType) {
 }
 
 // GET /api/rag/tts/wasm/:filename — 获取 WASM 引擎文件
-router.get("/tts/wasm/:filename", async (req, res) => {
+router.get("/tts/wasm/:filename", requireAuth, async (req, res) => {
   const filename = sanitizeFilename(req.params.filename);
   if (!filename) return res.status(400).json({ error: "无效的文件名" });
   const filePath = path.join(TTS_WASM_CACHE, filename);
@@ -739,7 +757,7 @@ router.get("/tts/wasm/:filename", async (req, res) => {
 });
 
 // GET /api/rag/tts/model/:filename — 获取模型文件
-router.get("/tts/model/:filename", async (req, res) => {
+router.get("/tts/model/:filename", requireAuth, async (req, res) => {
   const filename = sanitizeFilename(req.params.filename);
   if (!filename) return res.status(400).json({ error: "无效的文件名" });
   const filePath = path.join(TTS_MODEL_CACHE, filename);
@@ -756,7 +774,7 @@ router.get("/tts/model/:filename", async (req, res) => {
 });
 
 // GET /api/rag/tts/model/espeak-ng-data/:filename — 获取 espeak 数据文件
-router.get("/tts/model/espeak-ng-data/:filename", async (req, res) => {
+router.get("/tts/model/espeak-ng-data/:filename", requireAuth, async (req, res) => {
   const filename = sanitizeFilename(req.params.filename);
   if (!filename) return res.status(400).json({ error: "无效的文件名" });
   const filePath = path.join(TTS_MODEL_CACHE, "espeak-ng-data", filename);
@@ -773,7 +791,7 @@ router.get("/tts/model/espeak-ng-data/:filename", async (req, res) => {
 });
 
 // GET /api/rag/tts/model/vocoder/:filename — 获取 vocoder 模型
-router.get("/tts/model/vocoder/:filename", async (req, res) => {
+router.get("/tts/model/vocoder/:filename", requireAuth, async (req, res) => {
   const filename = sanitizeFilename(req.params.filename);
   if (!filename) return res.status(400).json({ error: "无效的文件名" });
   if (filename !== VOCODER_FILENAME) return res.status(404).json({ error: "file not found" });
@@ -790,7 +808,7 @@ router.get("/tts/model/vocoder/:filename", async (req, res) => {
 });
 
 // GET /api/rag/tts/model/test_wavs/:filename — 获取参考音频文件
-router.get("/tts/model/test_wavs/:filename", async (req, res) => {
+router.get("/tts/model/test_wavs/:filename", requireAuth, async (req, res) => {
   const filename = sanitizeFilename(req.params.filename);
   if (!filename) return res.status(400).json({ error: "无效的文件名" });
   const filePath = path.join(TTS_MODEL_CACHE, "test_wavs", filename);

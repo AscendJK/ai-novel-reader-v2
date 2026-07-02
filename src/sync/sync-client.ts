@@ -333,15 +333,10 @@ export class SyncClient {
         if (pushS || pushN || pullS || pullN) {
           console.log(`[sync] push: s=${pushS} n=${pushN} | pull: s=${pullS} n=${pullN}`);
         }
-        // Always apply server data (even if merged=false, server returns new data for incremental sync)
         if (r.data) {
           await this.applyData(r.data);
         }
-        // Update lastSyncTime from server response
-        if (r.data?.lastSyncAt) {
-          this.lastSyncTime = r.data.lastSyncAt;
-          localStorage.setItem(this.syncTimeKey, String(this.lastSyncTime));
-        }
+
         // 通知其他标签页同步完成
         try {
           broadcast.send('sync-complete');
@@ -351,14 +346,18 @@ export class SyncClient {
         let hasMore = false;
         try {
           hasMore = await hasMoreChanges(this.lastSyncTime);
-          if (hasMore) {
-            console.log("[sync] more data to sync, scheduling next batch...");
-          }
         } catch { /* ignore */ }
 
-        // 释放锁后，如果有更多数据，延迟触发下一批
         if (hasMore) {
+          // 还有数据没同步完，不更新 lastSyncTime（防止下批失败时丢数据）
+          console.log("[sync] more data to sync, scheduling next batch...");
           setTimeout(() => this.syncOnce(), 1000);
+        } else {
+          // 全部同步完成，安全更新 lastSyncTime
+          if (r.data?.lastSyncAt) {
+            this.lastSyncTime = r.data.lastSyncAt;
+            localStorage.setItem(this.syncTimeKey, String(this.lastSyncTime));
+          }
         }
 
         return true;

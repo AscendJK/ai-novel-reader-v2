@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef, useMemo, useState } from "react";
+import React, { useEffect, useCallback, useRef, useMemo, useState, startTransition } from "react";
 import { useNovelStore } from "@/stores/novel-store";
 import { useSummaryStore } from "@/stores/summary-store";
 import { useUIStore } from "@/stores/ui-store";
@@ -10,7 +10,8 @@ import { useContinuousScroll } from "@/hooks/useContinuousScroll";
 import { AudioPlayer } from "@/components/tts/AudioPlayer";
 import type { ScrollControl } from "./ReadingPanel";
 import { Button } from "@/components/ui/button";
-import { Minus, Plus, Sparkles, ChevronLeft, ChevronRight, Type, Loader2, Maximize2, Minimize2, Play } from "lucide-react";
+import { Sparkles, ChevronLeft, ChevronRight, Type, Loader2, Maximize2, Minimize2, Play } from "lucide-react";
+import { ReadingToolbar } from "./ReadingToolbar";
 import { loadChapters } from "@/db/repositories";
 import { userKey } from "@/lib/user-utils";
 
@@ -38,13 +39,26 @@ const MAX_SINGLE_WIDTH = 768;
 type ReadingMode = "scroll" | "single" | "double";
 
 export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immersive, onToggleImmersive, scrollControlRef }: ChapterContentProps) {
-  const { currentNovel, selectedChapterId, setSelectedChapter, addChapters, saveScrollTop, readingPositions } = useNovelStore();
+  const currentNovel = useNovelStore((s) => s.currentNovel);
+  const selectedChapterId = useNovelStore((s) => s.selectedChapterId);
+  const setSelectedChapter = useNovelStore((s) => s.setSelectedChapter);
+  const addChapters = useNovelStore((s) => s.addChapters);
+  const saveScrollTop = useNovelStore((s) => s.saveScrollTop);
   const { getSummariesByNovel } = useSummaryStore();
-  const {
-    fontSize, setFontSize, fontWeight, setFontWeight, lineHeight, setLineHeight,
-    paragraphSpacing, setParagraphSpacing, fontFamily, setFontFamily,
-    readingMode, setReadingMode, autoSwitchPageMode, setAutoSwitchPageMode,
-  } = useUIStore();
+  const fontSize = useUIStore((s) => s.fontSize);
+  const setFontSize = useUIStore((s) => s.setFontSize);
+  const fontWeight = useUIStore((s) => s.fontWeight);
+  const setFontWeight = useUIStore((s) => s.setFontWeight);
+  const lineHeight = useUIStore((s) => s.lineHeight);
+  const setLineHeight = useUIStore((s) => s.setLineHeight);
+  const paragraphSpacing = useUIStore((s) => s.paragraphSpacing);
+  const setParagraphSpacing = useUIStore((s) => s.setParagraphSpacing);
+  const fontFamily = useUIStore((s) => s.fontFamily);
+  const setFontFamily = useUIStore((s) => s.setFontFamily);
+  const readingMode = useUIStore((s) => s.readingMode);
+  const setReadingMode = useUIStore((s) => s.setReadingMode);
+  const autoSwitchPageMode = useUIStore((s) => s.autoSwitchPageMode);
+  const setAutoSwitchPageMode = useUIStore((s) => s.setAutoSwitchPageMode);
   const indexLoadingKeys = useRAGStore((s) => s.indexLoadingKeys);
 
   const [showFontPanel, setShowFontPanel] = useState(false);
@@ -94,12 +108,12 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     }
   }, [setSelectedChapter]);
 
-  // 获取保存的章节偏移量（用于恢复）
+  // 获取保存的章节偏移量（用于恢复，只在挂载时读取一次）
   const savedChapterOffset = useMemo(() => {
     if (!currentNovel) return undefined;
-    const pos = readingPositions[currentNovel.id];
+    const pos = useNovelStore.getState().readingPositions[currentNovel.id];
     return pos?.chapterOffset;
-  }, [currentNovel?.id, readingPositions]);
+  }, [currentNovel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const {
     containerRef: scrollContainerRef,
@@ -332,8 +346,10 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     if (!currentNovel) return;
     const targetChapter = chapters.find((c) => c.id === chapterId);
     if (targetChapter && targetChapter.content) {
-      setSelectedChapter(chapterId);
-      setCurrentPage(0);
+      startTransition(() => {
+        setSelectedChapter(chapterId);
+        setCurrentPage(0);
+      });
     } else {
       const targetIndex = chapters.findIndex((c) => c.id === chapterId);
       if (targetIndex >= 0) {
@@ -342,8 +358,10 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
           const start = Math.max(0, targetIndex - 10);
           const loaded = await loadChapters(currentNovel.id, start, 21);
           addChapters(loaded);
-          setSelectedChapter(chapterId);
-          setCurrentPage(0);
+          startTransition(() => {
+            setSelectedChapter(chapterId);
+            setCurrentPage(0);
+          });
         } catch (err) {
           console.error("Failed to load chapters:", err);
         } finally {
@@ -543,6 +561,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
         <div
           ref={containerRef}
           className="flex-1 min-h-0 flex flex-col overflow-hidden"
+          style={{ touchAction: "none" }}
           onClick={handlePageClick}
           onWheel={handleWheel}
           onTouchStart={handleTouchStart}
@@ -639,7 +658,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
       {/* 连续滚动容器 */}
       <div
         ref={scrollContainerRef}
-        className="flex-1 overflow-y-auto scroll-smooth"
+        className="flex-1 overflow-y-auto scroll-smooth chapter-scroll-container"
         onClick={(e) => {
           // 移动端双击中间区域切换沉浸模式
           if (window.innerWidth >= 768 || !onToggleImmersive) return;
@@ -664,6 +683,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
               key={ch.id}
               data-chapter-id={ch.id}
               className="chapter-section"
+              style={{ contain: "content", contentVisibility: "auto" }}
             >
               {/* 章节分割线 */}
               {ch.id !== loadedChapters[0]?.id && (
@@ -682,17 +702,14 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
 
               {/* 章节内容 */}
               <div className="prose prose-neutral dark:prose-invert max-w-none" style={textStyles}>
-                {ch.content.split(/\n+/).map((paragraph, i) => {
-                  const trimmed = paragraph.trim();
-                  if (!trimmed) return <br key={i} />;
-                  // F1: 高亮当前朗读段落
-                  const isHighlighted = ttsActive && ch.id === selectedChapterId && ttsParagraph === i;
-                  return (
-                    <p key={i} data-tts-paragraph={i} className={`text-justify ${isHighlighted ? "bg-primary/10 border-l-2 border-primary pl-3 rounded-r" : ""}`} style={{ marginBottom: `${paragraphSpacing}px` }}>
-                      {trimmed}
-                    </p>
-                  );
-                })}
+                <ChapterParagraphs
+                  content={ch.content}
+                  paragraphSpacing={paragraphSpacing}
+                  ttsActive={ttsActive}
+                  ttsParagraph={ttsParagraph}
+                  chapterId={ch.id}
+                  selectedChapterId={selectedChapterId}
+                />
               </div>
             </div>
           ))}
@@ -760,7 +777,7 @@ function TTSStartButton() {
   );
 }
 
-function TopBar(props: {
+const TopBar = React.memo(function TopBar(props: {
   chapter: { id: string; title: string; content: string };
   currentIndex: number;
   chapters: Array<{ id: string }>;
@@ -792,7 +809,7 @@ function TopBar(props: {
   const {
     chapter, currentIndex, chapters, summaryOpen, hasSummary,
     showFontPanel, setShowFontPanel, onToggleImmersive,
-    fontSize, setFontSize, cycleFontWeight, currentWeightLabel,
+    fontSize, setFontSize, fontWeight, cycleFontWeight, currentWeightLabel,
     lineHeight, setLineHeight, paragraphSpacing, setParagraphSpacing,
     fontFamily, setFontFamily,
     readingMode, setReadingMode, autoSwitchPageMode, setAutoSwitchPageMode,
@@ -848,82 +865,15 @@ function TopBar(props: {
                 <Type className="h-4 w-4" />
               </Button>
             {showFontPanel && (
-              <div className="absolute right-0 top-full mt-1 p-3 rounded-lg border bg-card shadow-lg z-20 flex flex-col gap-2 min-w-[220px]"
-                onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-muted-foreground">阅读</span>
-                  <div className="flex gap-1">
-                    {(["scroll", "single", "double"] as const)
-                      .filter(m => m !== "double" || window.innerWidth >= 768)
-                      .map((m) => (
-                        <Button key={m} variant={readingMode === m ? "default" : "outline"}
-                          size="sm" className="h-6 text-[10px] px-1.5"
-                          onClick={() => setReadingMode(m)}>
-                          {m === "scroll" ? "滚动" : m === "single" ? "单页" : "双页"}
-                        </Button>
-                      ))}
-                  </div>
-                </div>
-                {readingMode !== "scroll" && window.innerWidth >= 768 && (
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <input type="checkbox" checked={autoSwitchPageMode}
-                      onChange={(e) => setAutoSwitchPageMode(e.target.checked)}
-                      className="rounded border-input" />
-                    <span className="text-[10px] text-muted-foreground">大屏自动双页</span>
-                  </label>
-                )}
-                <div className="h-px bg-border" />
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-muted-foreground">字号</span>
-                  <div className="flex items-center gap-1">
-                    <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={fontSize <= 12}
-                      onClick={() => setFontSize(Math.max(12, fontSize - 1))}><Minus className="h-3 w-3" /></Button>
-                    <span className="text-xs w-7 text-center tabular-nums">{fontSize}</span>
-                    <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={fontSize >= 24}
-                      onClick={() => setFontSize(Math.min(24, fontSize + 1))}><Plus className="h-3 w-3" /></Button>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-muted-foreground">粗细</span>
-                  <Button variant="outline" size="sm" className="h-8 min-h-[44px] md:min-h-0 md:h-6 text-xs"
-                    onClick={cycleFontWeight}>{currentWeightLabel}</Button>
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-muted-foreground">行距</span>
-                  <div className="flex items-center gap-1">
-                    <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={lineHeight <= 1.2}
-                      onClick={() => setLineHeight(lineHeight - 0.1)}><Minus className="h-3 w-3" /></Button>
-                    <span className="text-xs w-7 text-center tabular-nums">{lineHeight.toFixed(1)}</span>
-                    <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={lineHeight >= 2.4}
-                      onClick={() => setLineHeight(lineHeight + 0.1)}><Plus className="h-3 w-3" /></Button>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-muted-foreground">段距</span>
-                  <div className="flex items-center gap-1">
-                    <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={paragraphSpacing <= 0}
-                      onClick={() => setParagraphSpacing(paragraphSpacing - 2)}><Minus className="h-3 w-3" /></Button>
-                    <span className="text-xs w-7 text-center tabular-nums">{paragraphSpacing}</span>
-                    <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={paragraphSpacing >= 20}
-                      onClick={() => setParagraphSpacing(paragraphSpacing + 2)}><Plus className="h-3 w-3" /></Button>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-muted-foreground">字体</span>
-                  <div className="flex gap-1">
-                    {[
-                      { key: "system-ui", label: "默认" },
-                      { key: "SimSun, serif", label: "宋体" },
-                      { key: "KaiTi, serif", label: "楷体" },
-                      { key: "monospace", label: "等宽" },
-                    ].map((f) => (
-                      <Button key={f.key} variant={fontFamily === f.key ? "default" : "outline"}
-                        size="sm" className="h-6 text-[10px] px-1.5"
-                        onClick={() => setFontFamily(f.key)}>{f.label}</Button>
-                    ))}
-                  </div>
-                </div>
-              </div>
+              <ReadingToolbar
+                fontSize={fontSize} setFontSize={setFontSize}
+                fontWeight={fontWeight} cycleFontWeight={cycleFontWeight} currentWeightLabel={currentWeightLabel}
+                lineHeight={lineHeight} setLineHeight={setLineHeight}
+                paragraphSpacing={paragraphSpacing} setParagraphSpacing={setParagraphSpacing}
+                fontFamily={fontFamily} setFontFamily={setFontFamily}
+                readingMode={readingMode} setReadingMode={setReadingMode}
+                autoSwitchPageMode={autoSwitchPageMode} setAutoSwitchPageMode={setAutoSwitchPageMode}
+              />
             )}
           </div>
           {showFontPanel && <div className="fixed inset-0 z-10" onClick={() => setShowFontPanel(false)} />}
@@ -932,9 +882,9 @@ function TopBar(props: {
       </div>
     </div>
   );
-}
+});
 
-function BottomNav(props: {
+const BottomNav = React.memo(function BottomNav(props: {
   immersive: boolean;
   prevLabel: string;
   nextLabel: string;
@@ -979,4 +929,32 @@ function BottomNav(props: {
       </Button>
     </div>
   );
-}
+});
+
+/** Memoized chapter paragraphs - avoids re-splitting content on every render */
+const ChapterParagraphs = React.memo(function ChapterParagraphs({
+  content, paragraphSpacing, ttsActive, ttsParagraph, chapterId, selectedChapterId,
+}: {
+  content: string;
+  paragraphSpacing: number;
+  ttsActive: boolean;
+  ttsParagraph: number;
+  chapterId: string;
+  selectedChapterId: string | null;
+}) {
+  const paragraphs = useMemo(() => content.split(/\n+/), [content]);
+  return (
+    <>
+      {paragraphs.map((paragraph, i) => {
+        const trimmed = paragraph.trim();
+        if (!trimmed) return <br key={i} />;
+        const isHighlighted = ttsActive && chapterId === selectedChapterId && ttsParagraph === i;
+        return (
+          <p key={i} data-tts-paragraph={i} className={`text-justify ${isHighlighted ? "bg-primary/10 border-l-2 border-primary pl-3 rounded-r" : ""}`} style={{ marginBottom: `${paragraphSpacing}px` }}>
+            {trimmed}
+          </p>
+        );
+      })}
+    </>
+  );
+});

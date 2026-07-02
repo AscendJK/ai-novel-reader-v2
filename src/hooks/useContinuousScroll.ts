@@ -45,7 +45,7 @@ export function useContinuousScroll({
   const containerRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const bottomSentinelRef = useRef<HTMLDivElement>(null);
-  const { addChapters } = useNovelStore();
+  const addChapters = useNovelStore((s) => s.addChapters);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const isLoadingRef = useRef(false);
 
@@ -281,18 +281,54 @@ export function useContinuousScroll({
     if (!container) return;
 
     let rafId = 0;
+    let frameCount = 0;
+    // 缓存章节 DOM 元素，避免每帧 querySelectorAll
+    let cachedMarkers: Element[] = [];
+    let markerCount = 0;
+
+    const refreshMarkers = () => {
+      const markers = container.querySelectorAll(".chapter-section[data-chapter-id]");
+      cachedMarkers = Array.from(markers);
+      markerCount = cachedMarkers.length;
+    };
 
     const detectCurrentChapter = () => {
       if (suppressChapterDetectionRef.current) return;
-      const markers = container.querySelectorAll(".chapter-section[data-chapter-id]");
-      if (markers.length === 0) return;
+      if (container.childElementCount !== markerCount) {
+        refreshMarkers();
+      }
+      if (markerCount === 0) return;
 
       const containerRect = container.getBoundingClientRect();
       const zoneTop = containerRect.top + containerRect.height * 0.05;
       const zoneBottom = containerRect.top + containerRect.height * 0.15;
 
-      // 找到检测区（顶部 5%-15%）内的第一个章节标记
-      for (const el of markers) {
+      // 找到当前章节在 markers 中的索引（二分查找）
+      const lastId = lastDetectedChapterRef.current;
+      let currentIdx = -1;
+      if (lastId) {
+        let lo = 0, hi = markerCount - 1;
+        while (lo <= hi) {
+          const mid = (lo + hi) >> 1;
+          if (cachedMarkers[mid].getAttribute("data-chapter-id") === lastId) { currentIdx = mid; break; }
+          // 用 getBoundingClientRect 做不了二分，改用线性但只检查 id
+          if (cachedMarkers[mid].getAttribute("data-chapter-id")! < lastId) lo = mid + 1; else hi = mid - 1;
+        }
+        // fallback：线性查找 id
+        if (currentIdx === -1) {
+          for (let i = 0; i < markerCount; i++) {
+            if (cachedMarkers[i].getAttribute("data-chapter-id") === lastId) { currentIdx = i; break; }
+          }
+        }
+      }
+
+      // 只检查当前章节和前后各 1 个（共最多 3 个 getBoundingClientRect）
+      const checkStart = Math.max(0, (currentIdx === -1 ? 0 : currentIdx) - 1);
+      const checkEnd = Math.min(markerCount - 1, (currentIdx === -1 ? 0 : currentIdx) + 1);
+
+      // 先检查检测区内
+      for (let i = checkStart; i <= checkEnd; i++) {
+        const el = cachedMarkers[i];
         const rect = el.getBoundingClientRect();
         if (rect.top >= zoneTop && rect.top <= zoneBottom) {
           const chapterId = el.getAttribute("data-chapter-id");
@@ -304,11 +340,11 @@ export function useContinuousScroll({
         }
       }
 
-      // 检测区内没有章节标记（可能在两个章节之间，或在小说顶部）
-      // 找到检测区上方最近的章节标记
+      // 检测区内没有，找检测区上方最近的（只检查相邻 3 个）
       let closestId: string | null = null;
       let closestDist = Infinity;
-      for (const el of markers) {
+      for (let i = checkStart; i <= checkEnd; i++) {
+        const el = cachedMarkers[i];
         const rect = el.getBoundingClientRect();
         const dist = zoneTop - rect.top;
         if (dist >= 0 && dist < closestDist) {
@@ -316,9 +352,8 @@ export function useContinuousScroll({
           closestId = el.getAttribute("data-chapter-id");
         }
       }
-      // fallback：如果所有标记都在检测区下方（小说顶部），取第一个标记
-      if (!closestId && markers.length > 0) {
-        closestId = markers[0].getAttribute("data-chapter-id");
+      if (!closestId && markerCount > 0) {
+        closestId = cachedMarkers[0].getAttribute("data-chapter-id");
       }
       if (closestId && closestId !== lastDetectedChapterRef.current) {
         lastDetectedChapterRef.current = closestId;
@@ -328,7 +363,13 @@ export function useContinuousScroll({
 
     const handleScroll = () => {
       cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(detectCurrentChapter);
+      rafId = requestAnimationFrame(() => {
+        frameCount++;
+        // 每 3 帧检测一次，降低 getBoundingClientRect 调用频率
+        if (frameCount % 3 === 0) {
+          detectCurrentChapter();
+        }
+      });
     };
 
     // 暴露主动检测函数，供恢复/suppressIO 解锁后调用
@@ -336,15 +377,18 @@ export function useContinuousScroll({
 
     container.addEventListener("scroll", handleScroll, { passive: true });
 
-    // 初始检测（不依赖 IntersectionObserver 的 isIntersecting 回调）
+    // 初始缓存章节元素
+    refreshMarkers();
     triggerDetectionRef.current();
 
     return () => {
       container.removeEventListener("scroll", handleScroll);
       cancelAnimationFrame(rafId);
       triggerDetectionRef.current = null;
+      cachedMarkers = [];
+      markerCount = 0;
     };
-  }, [loadedChapters, enabled]);
+  }, [chapters.length, enabled]);
 
   // ── IntersectionObserver：边缘加载（使用 React ref 哨兵）──────
   useEffect(() => {
@@ -374,7 +418,7 @@ export function useContinuousScroll({
     edgeObserver.observe(bottomSentinel);
 
     return () => edgeObserver.disconnect();
-  }, [loadedChapters, loadMore, enabled]);
+  }, [chapters.length, loadMore, enabled]);
 
   // ── 临时抑制章节检测和边缘加载（目录点击等场景）──
   const suppressIO = useCallback(() => {

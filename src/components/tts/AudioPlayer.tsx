@@ -115,7 +115,7 @@ export function AudioPlayer({
   const remaining = Math.max(0, estimatedTotal - elapsed);
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-40 bg-background/95 backdrop-blur border-t shadow-lg">
+    <div className="fixed bottom-0 left-0 right-0 z-40 bg-background/95 backdrop-blur border-t shadow-lg safe-area-bottom">
       {/* 生成进度 */}
       {generating && (
         <div className="h-1 bg-muted">
@@ -129,23 +129,23 @@ export function AudioPlayer({
       <div className="flex items-center gap-1 sm:gap-3 px-2 sm:px-4 py-2 max-w-4xl mx-auto">
         {/* 控制按钮 */}
         <div className="flex items-center gap-0.5 sm:gap-1">
-          <Button variant="ghost" size="sm" className="h-8 w-8 sm:h-8 sm:w-8 p-0"
+          <Button variant="ghost" size="sm" className="min-h-[44px] min-w-[44px] p-1.5 sm:h-8 sm:w-8 sm:p-0"
             onClick={onPrevChapter} disabled={!onPrevChapter} title="上一章">
             <SkipBack className="h-4 w-4" />
           </Button>
 
           {isPlaying ? (
-            <Button variant="ghost" size="sm" className="h-8 w-8 p-0"
+            <Button variant="ghost" size="sm" className="min-h-[44px] min-w-[44px] p-1.5 sm:h-8 sm:w-8 sm:p-0"
               onClick={togglePause} title="暂停">
               <Pause className="h-4 w-4" />
             </Button>
           ) : error ? (
-            <Button variant="ghost" size="sm" className="h-8 w-8 p-0"
+            <Button variant="ghost" size="sm" className="min-h-[44px] min-w-[44px] p-1.5 sm:h-8 sm:w-8 sm:p-0"
               onClick={play} title="重试">
               <RefreshCw className="h-4 w-4" />
             </Button>
           ) : (
-            <Button variant="ghost" size="sm" className="h-8 w-8 p-0"
+            <Button variant="ghost" size="sm" className="min-h-[44px] min-w-[44px] p-1.5 sm:h-8 sm:w-8 sm:p-0"
               onClick={isPaused ? togglePause : play}
               disabled={!canPlay || generating} title={isPaused ? "继续" : "播放"}>
               {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
@@ -153,13 +153,13 @@ export function AudioPlayer({
           )}
 
           {isActive && (
-            <Button variant="ghost" size="sm" className="h-8 w-8 p-0"
+            <Button variant="ghost" size="sm" className="min-h-[44px] min-w-[44px] p-1.5 sm:h-8 sm:w-8 sm:p-0"
               onClick={stop} title="停止">
               <Square className="h-4 w-4" />
             </Button>
           )}
 
-          <Button variant="ghost" size="sm" className="h-8 w-8 p-0"
+          <Button variant="ghost" size="sm" className="min-h-[44px] min-w-[44px] p-1.5 sm:h-8 sm:w-8 sm:p-0"
             onClick={onNextChapter} disabled={!onNextChapter} title="下一章">
             <SkipForward className="h-4 w-4" />
           </Button>

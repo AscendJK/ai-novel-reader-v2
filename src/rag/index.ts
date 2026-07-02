@@ -4,8 +4,9 @@ import type { EngineId } from "./engines";
 import { isEmbeddingEngine } from "./engines";
 import { ragLog } from "@/lib/logger";
 import { sharedDB as db } from "@/db/database";
+import { loadChapters } from "@/db/repositories";
 import { useRAGStore } from "@/stores/rag-store";
-import { updateRagCacheSize, updateAccessTime, onCacheEviction } from "./rag-cache-utils";
+import { updateRagCacheSize, updateAccessTime, onCacheEviction, enforceIndexedDBQuota } from "./rag-cache-utils";
 import { normalizeChunks } from "./chunk-utils";
 
 export { updateRagCacheSize } from "./rag-cache-utils";
@@ -23,6 +24,7 @@ interface IndexEntry {
 // Key: "${novelId}-${engine}" — supports multiple engines per novel
 const indexCache = new Map<string, IndexEntry>();
 const buildingNow = new Set<string>();
+const clearingKeys = new Set<string>(); // clearCache 进行中的 key，防止 buildIndex 加载到旧缓存
 
 // LRU eviction only clears memory. IndexedDB is managed by its own quota.
 onLRUEvict((evictedKey) => {
@@ -60,13 +62,20 @@ export async function buildIndex(
   chapterCount?: number
 ): Promise<Retriever | EmbeddingRetriever> {
   const cacheKey = `${novelId}-${engine}`;
+
+  // 1. 检查内存缓存
   const existing = indexCache.get(cacheKey);
   if (existing) {
-    return isEmbeddingEngine(engine) ? existing.embedding! : existing.retriever;
+    if (isEmbeddingEngine(engine)) {
+      if (existing.embedding) return existing.embedding;
+      console.warn(`[rag] embedding cache miss for ${cacheKey}, falling back to TF-IDF`);
+    } else {
+      return existing.retriever;
+    }
   }
 
-  // Check IndexedDB cache first (no lock needed for read-only operations)
-  if (isEmbeddingEngine(engine)) {
+  // 2. 检查 IndexedDB 缓存（clearCache 进行中的 key 跳过）
+  if (isEmbeddingEngine(engine) && !clearingKeys.has(cacheKey)) {
     try {
       const cached = await db.ragCache.get(cacheKey);
       if (cached && cached.vectorsBuffer && cached.dim > 0 && cached.chunks?.length > 0) {
@@ -96,8 +105,8 @@ export async function buildIndex(
     } catch (e) { ragLog(`缓存加载异常: ${e}`); }
   }
 
-  // TF-IDF 缓存检查（与嵌入引擎共用 ragCache 表）
-  if (engine === "tfidf") {
+  // TF-IDF 缓存检查（与嵌入引擎共用 ragCache 表，跳过正在清除的 key）
+  if (engine === "tfidf" && !clearingKeys.has(cacheKey)) {
     try {
       const cached = await db.ragCache.get(cacheKey);
       if (cached && cached.vectorsBuffer && cached.dim > 0 && cached.chunks?.length > 0 && cached.extraData) {
@@ -150,10 +159,9 @@ export async function buildIndex(
       }
     } else if (chapterCount && chapterCount > 0) {
       // 流式构建：逐批从 IndexedDB 加载章节，分块后释放
-      const { loadChapters: loadCh } = await import("@/db/repositories");
       const BATCH = 50;
       for (let start = 0; start < chapterCount; start += BATCH) {
-        const batch = await loadCh(novelId, start, BATCH);
+        const batch = await loadChapters(novelId, start, BATCH);
         for (let ci = 0; ci < batch.length; ci++) {
           const ch = batch[ci];
           let pos = 0;
@@ -214,7 +222,6 @@ export async function buildIndex(
       useRAGStore.getState().addLruKey(cacheKey);
       ragLog(`TF-IDF 已缓存: ${chunks.length}片段`);
       // 清理超限缓存
-      const { enforceIndexedDBQuota } = await import("./rag-cache-utils");
       await enforceIndexedDBQuota();
 
       const entry: IndexEntry = { novelId, engine, retriever, chunkCount: chunks.length, buildTime: Date.now() - t0 };
@@ -250,7 +257,14 @@ export function clearCache(novelId?: string, engine?: string) {
       indexCache.delete(key);
     }
     chunksMemCache.delete(key);
-    db.ragCache.delete(key).then(() => updateRagCacheSize()).catch((e) => console.warn("[rag] delete cache failed:", e));
+    clearingKeys.add(key);
+    db.ragCache.delete(key).then(() => {
+      clearingKeys.delete(key);
+      updateRagCacheSize();
+    }).catch((e) => {
+      clearingKeys.delete(key);
+      console.warn("[rag] delete cache failed:", e);
+    });
     store.removeCachedKey(key);
     store.removeLruKey(key);
   } else if (novelId) {
@@ -259,6 +273,8 @@ export function clearCache(novelId?: string, engine?: string) {
     for (const [key, entry] of indexCache) {
       if (entry.novelId === novelId) keysToDelete.push(key);
     }
+    // 标记正在清除，防止 buildIndex 加载到旧数据
+    for (const key of keysToDelete) clearingKeys.add(key);
     for (const key of keysToDelete) {
       const entry = indexCache.get(key);
       entry?.embedding?.dispose();
@@ -268,9 +284,17 @@ export function clearCache(novelId?: string, engine?: string) {
       store.removeCachedKey(key);
       store.removeLruKey(key);
     }
-    db.ragCache.where("novelId").equals(novelId).delete().then(() => updateRagCacheSize()).catch((e) => console.warn("[rag] delete novel cache failed:", e));
+    db.ragCache.where("novelId").equals(novelId).delete().then(() => {
+      for (const key of keysToDelete) clearingKeys.delete(key);
+      updateRagCacheSize();
+    }).catch((e) => {
+      for (const key of keysToDelete) clearingKeys.delete(key);
+      console.warn("[rag] delete novel cache failed:", e);
+    });
   } else {
     // Clear everything
+    const allKeys = [...indexCache.keys()];
+    for (const key of allKeys) clearingKeys.add(key);
     for (const [key, entry] of indexCache) {
       entry.embedding?.dispose();
       lruDelete(key);
@@ -279,24 +303,49 @@ export function clearCache(novelId?: string, engine?: string) {
     }
     indexCache.clear();
     chunksMemCache.clear();
-    db.ragCache.clear().then(() => store.updateRagCacheSize(0)).catch((e) => console.warn("[rag] clear cache failed:", e));
+    db.ragCache.clear().then(() => {
+      for (const key of allKeys) clearingKeys.delete(key);
+      store.updateRagCacheSize(0);
+    }).catch((e) => {
+      for (const key of allKeys) clearingKeys.delete(key);
+      console.warn("[rag] clear cache failed:", e);
+    });
   }
 }
 
 // chunks 内存缓存：避免每次搜索都从 IndexedDB 读取全部 chunks
-// 淘汰时由 onCacheEviction 清理
+// LRU 淘汰：最多缓存 20 个小说的 chunks
+const MAX_CHUNKS_CACHE = 20;
 const chunksMemCache = new Map<string, Map<string, Chunk>>();
+
+function touchChunksCache(key: string) {
+  // Move to end (most recently used) by re-inserting
+  const val = chunksMemCache.get(key);
+  if (val) {
+    chunksMemCache.delete(key);
+    chunksMemCache.set(key, val);
+  }
+  // Evict oldest entries if over limit
+  while (chunksMemCache.size > MAX_CHUNKS_CACHE) {
+    const oldest = chunksMemCache.keys().next().value;
+    if (oldest) chunksMemCache.delete(oldest);
+  }
+}
 
 /** 从 IndexedDB ragCache 按需加载 chunks（带内存缓存） */
 async function loadChunksFromCache(novelId: string, engine: string): Promise<Map<string, Chunk>> {
   const cacheKey = `${novelId}-${engine}`;
   const cached = chunksMemCache.get(cacheKey);
-  if (cached) return cached;
+  if (cached) {
+    touchChunksCache(cacheKey);
+    return cached;
+  }
 
   const record = await db.ragCache.get(cacheKey);
   const chunks = record ? normalizeChunks(record.chunks) : [];
   const chunkMap = new Map(chunks.map(c => [c.id, c]));
   chunksMemCache.set(cacheKey, chunkMap);
+  touchChunksCache(cacheKey);
   return chunkMap;
 }
 

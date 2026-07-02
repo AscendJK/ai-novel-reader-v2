@@ -11,26 +11,21 @@ import { ragLog } from "@/lib/logger";
 // 缓存大小计算
 // ============================================================
 
-/** Compute total size of all ragCache entries in bytes */
+/** Compute total size of all ragCache entries in bytes (流式计算，避免全表加载) */
 export async function computeRagCacheSize(): Promise<number> {
   try {
-    const all = await db.ragCache.toArray();
     let total = 0;
-    for (const entry of all) {
+    await db.ragCache.each((entry) => {
       if (entry.vectorsBuffer && entry.dim && entry.chunkCount) {
-        // 向量数据大小
         total += entry.chunkCount * entry.dim * 4;
-        // chunks 数据大小（估算）
         if (entry.chunks && entry.chunks.length > 0) {
-          const chunksSize = entry.chunks.reduce((sum, c) => sum + (c.content?.length || 0) * 2, 0);
-          total += chunksSize;
+          total += entry.chunks.reduce((sum, c) => sum + (c.content?.length || 0) * 2, 0);
         }
-        // extraData 大小（TF-IDF 的 idfMap 等）
         if (entry.extraData) {
-          total += entry.extraData.length * 2; // UTF-16
+          total += entry.extraData.length * 2;
         }
       }
-    }
+    });
     return total;
   } catch { return 0; }
 }

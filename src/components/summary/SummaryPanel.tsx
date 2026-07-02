@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useNovelStore } from "@/stores/novel-store";
 import { useRAGStore } from "@/stores/rag-store";
 import { useBuildStore } from "@/stores/build-store";
@@ -46,7 +46,8 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
   // Map data
   const [mapData, setMapData] = useState<MapData | null>(null);
 
-  const { currentNovel, selectedChapterId } = useNovelStore();
+  const currentNovel = useNovelStore((s) => s.currentNovel);
+  const selectedChapterId = useNovelStore((s) => s.selectedChapterId);
   // Ref for latest selectedChapterId to avoid stale closures in callbacks
   const selectedChapterRef = useRef(selectedChapterId);
   selectedChapterRef.current = selectedChapterId;
@@ -105,17 +106,8 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
     if (!currentNovel) { setIndexReady(null); setActualEngine(""); return; }
     let cancelled = false;
 
-    // 使用全局变量避免重复加载（多个 SummaryPanel 实例共享）
-    const preloadKey = `${currentNovel.id}-${engine}`;
-    if ((window as any).__ragPreloaded?.has(preloadKey)) {
-      return;
-    }
-    if (!(window as any).__ragPreloaded) {
-      (window as any).__ragPreloaded = new Set();
-    }
-    (window as any).__ragPreloaded.add(preloadKey);
-
     // 标记开始加载
+    const preloadKey = `${currentNovel.id}-${engine}`;
     addIndexLoadingKey(preloadKey);
 
     // Preload index into memory and determine actual engine
@@ -130,7 +122,6 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
       } else {
         if (!cancelled) setActualEngine("tfidf");
       }
-      // 标记加载完成
       if (!cancelled) removeIndexLoadingKey(preloadKey);
     })();
 
@@ -212,11 +203,11 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
   };
 
   // 计算过滤后的笔记
-  const filteredNotes = notesHook.notes.filter((n) =>
+  const filteredNotes = useMemo(() => notesHook.notes.filter((n) =>
     notesHook.noteTab === "chapter"
       ? n.chapterId === selectedChapterId
       : n.chapterId === "__book__"
-  );
+  ), [notesHook.notes, notesHook.noteTab, selectedChapterId]);
 
   // Load graph + map + notes on novel switch
   useEffect(() => {
@@ -238,13 +229,13 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
     return () => { cancelled = true; };
   }, [currentNovel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!currentNovel) return <div className="md:w-80 w-full border-l md:border-l border-t md:border-t-0 bg-card h-full shrink-0" />;
+  const summaries = useMemo(() => currentNovel ? getSummariesByNovel(currentNovel.id) : [], [currentNovel?.id, getSummariesByNovel]);
+  const chapterSummary = useMemo(() => summaries.find((s) => s.chapterId === selectedChapterId && s.type === "chapter"), [summaries, selectedChapterId]);
+  const globalSummaries = useMemo(() => summaries.filter((s) => s.type === "global"), [summaries]);
+  const charSummaries = useMemo(() => summaries.filter((s) => s.type === "characters"), [summaries]);
+  const tlSummaries = useMemo(() => summaries.filter((s) => s.type === "timeline"), [summaries]);
 
-  const summaries = getSummariesByNovel(currentNovel.id);
-  const chapterSummary = summaries.find((s) => s.chapterId === selectedChapterId && s.type === "chapter");
-  const globalSummaries = summaries.filter((s) => s.type === "global");
-  const charSummaries = summaries.filter((s) => s.type === "characters");
-  const tlSummaries = summaries.filter((s) => s.type === "timeline");
+  if (!currentNovel) return <div className="md:w-80 w-full border-l md:border-l border-t md:border-t-0 bg-card h-full shrink-0" />;
 
   return (
     <div className="md:w-80 w-full border-l md:border-l border-t md:border-t-0 bg-card h-full flex flex-col shrink-0">
@@ -263,9 +254,9 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
         </div>
       )}
 
-      {/* Engine indicator — show actual engine used, or current setting */}
+      {/* Engine indicator — show actual engine used in search, or preloaded engine, or user selection */}
       {(() => {
-        const displayEngine = actualEngine || ragEngineUsed || engine;
+        const displayEngine = ragEngineUsed || actualEngine || engine;
         const isEmb = isEmbeddingEngine(displayEngine);
         return (
           <div className="mx-2.5 mt-2 text-[10px] text-muted-foreground text-center shrink-0">
@@ -298,12 +289,12 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
       {/* Fixed tabs — always visible */}
       <Tabs value={tabValue} onValueChange={setTabValue} className="flex flex-col flex-1 min-h-0">
         <div className="shrink-0 px-2.5 pt-2 border-b">
-          <TabsList className="w-full">
-            <TabsTrigger value="qa" className="text-xs h-7 flex-1">问答</TabsTrigger>
-            <TabsTrigger value="chapter" className="text-xs h-7 flex-1">本章分析</TabsTrigger>
-            <TabsTrigger value="book" className="text-xs h-7 flex-1">全书分析</TabsTrigger>
-            <TabsTrigger value="notes" className="text-xs h-7 flex-1">笔记</TabsTrigger>
-            <TabsTrigger value="search" className="text-xs h-7 flex-1">搜索</TabsTrigger>
+          <TabsList className="w-full overflow-x-auto flex-nowrap">
+            <TabsTrigger value="qa" className="text-xs h-7 flex-1 whitespace-nowrap">问答</TabsTrigger>
+            <TabsTrigger value="chapter" className="text-xs h-7 flex-1 whitespace-nowrap">本章分析</TabsTrigger>
+            <TabsTrigger value="book" className="text-xs h-7 flex-1 whitespace-nowrap">全书分析</TabsTrigger>
+            <TabsTrigger value="notes" className="text-xs h-7 flex-1 whitespace-nowrap">笔记</TabsTrigger>
+            <TabsTrigger value="search" className="text-xs h-7 flex-1 whitespace-nowrap">搜索</TabsTrigger>
           </TabsList>
         </div>
 

@@ -1,9 +1,23 @@
 import { create } from "zustand";
 import type { Novel } from "@/parsers/types";
-import { syncClient } from "@/sync/sync-client";
 import { userKey } from "@/lib/user-utils";
 
 interface ReadPosition { chapterId: string; chapterIndex: number; scrollTop?: number; /** 章节内偏移量（像素），相对于章节元素顶部 */ chapterOffset?: number }
+
+// Shallow equality helper for Zustand selectors
+export function shallow<T>(a: T, b: T): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  const keysA = Object.keys(a as Record<string, unknown>);
+  const keysB = Object.keys(b as Record<string, unknown>);
+  if (keysA.length !== keysB.length) return false;
+  for (const key of keysA) {
+    if (!Object.prototype.hasOwnProperty.call(b, key) || !Object.is((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])) {
+      return false;
+    }
+  }
+  return true;
+}
 
 interface NovelState {
   currentNovel: Novel | null;
@@ -89,13 +103,12 @@ export const useNovelStore = create<NovelState>((set, get) => ({
           chapterId,
           chapterIndex: idx >= 0 ? idx : 0,
           scrollTop: scrollTop !== undefined ? scrollTop : existingPos?.scrollTop,
-          // 保留已有的 chapterOffset，由滚动事件负责更新
           chapterOffset: existingPos?.chapterOffset,
         },
       };
       savePositions(positions);
       set({ selectedChapterId: chapterId, readingPositions: positions });
-      syncClient.pushNow();
+      // 不在这里调用 pushNow()，位置数据由 saveScrollTop 每 3 秒自动同步
     } else {
       set({ selectedChapterId: chapterId });
     }
@@ -122,13 +135,18 @@ export const useNovelStore = create<NovelState>((set, get) => ({
 
   saveReadingPosition: (novelId, chapterId, chapterIndex, scrollTop, chapterOffset?) => {
     const existingPos = get().readingPositions[novelId];
+    const newScrollTop = scrollTop !== undefined ? scrollTop : existingPos?.scrollTop;
+    const newChapterOffset = chapterOffset !== undefined ? chapterOffset : existingPos?.chapterOffset;
+    // Skip update if nothing changed
+    if (existingPos && existingPos.chapterId === chapterId && existingPos.chapterIndex === chapterIndex
+        && existingPos.scrollTop === newScrollTop && existingPos.chapterOffset === newChapterOffset) return;
     const positions = {
       ...get().readingPositions,
       [novelId]: {
         chapterId,
         chapterIndex,
-        scrollTop: scrollTop !== undefined ? scrollTop : existingPos?.scrollTop,
-        chapterOffset: chapterOffset !== undefined ? chapterOffset : existingPos?.chapterOffset,
+        scrollTop: newScrollTop,
+        chapterOffset: newChapterOffset,
       },
     };
     savePositions(positions);
@@ -140,9 +158,12 @@ export const useNovelStore = create<NovelState>((set, get) => ({
     if (!currentNovel) return;
     const existingPos = readingPositions[currentNovel.id];
     if (!existingPos) return;
+    const newChapterOffset = chapterOffset ?? existingPos.chapterOffset;
+    // Skip update if nothing changed
+    if (existingPos.scrollTop === scrollTop && existingPos.chapterOffset === newChapterOffset) return;
     const positions = {
       ...readingPositions,
-      [currentNovel.id]: { ...existingPos, scrollTop, chapterOffset: chapterOffset ?? existingPos.chapterOffset },
+      [currentNovel.id]: { ...existingPos, scrollTop, chapterOffset: newChapterOffset },
     };
     savePositions(positions);
     set({ readingPositions: positions });

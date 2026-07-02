@@ -43,8 +43,8 @@ export function clearDebugEntries() {
 }
 
 export function DebugPanel() {
-  const { currentNovel } = useNovelStore();
-  const { engine: ragEngine } = useRAGStore();
+  const currentNovel = useNovelStore((s) => s.currentNovel);
+  const ragEngine = useRAGStore((s) => s.engine);
   const [, setTick] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);

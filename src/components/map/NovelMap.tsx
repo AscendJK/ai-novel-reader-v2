@@ -231,20 +231,20 @@ export function NovelMap({ mapData, onRegenerate, loading }: NovelMapProps) {
     >
       {/* 控制按钮 */}
       <div className="absolute top-2 right-2 z-10 flex gap-1">
-        <Button size="sm" variant="outline" onClick={() => handleZoom(0.1)} title="放大">
+        <Button size="sm" variant="outline" className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 sm:h-8 sm:w-auto sm:p-2" onClick={() => handleZoom(0.1)} title="放大">
           <ZoomIn className="h-4 w-4" />
         </Button>
-        <Button size="sm" variant="outline" onClick={() => handleZoom(-0.1)} title="缩小">
+        <Button size="sm" variant="outline" className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 sm:h-8 sm:w-auto sm:p-2" onClick={() => handleZoom(-0.1)} title="缩小">
           <ZoomOut className="h-4 w-4" />
         </Button>
-        <Button size="sm" variant="outline" onClick={handleExportImage} title="导出图片">
+        <Button size="sm" variant="outline" className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 sm:h-8 sm:w-auto sm:p-2" onClick={handleExportImage} title="导出图片">
           <Download className="h-4 w-4" />
         </Button>
-        <Button size="sm" variant="outline" onClick={handleExportJson} title="导出 JSON">
+        <Button size="sm" variant="outline" className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 sm:h-8 sm:w-auto sm:p-2" onClick={handleExportJson} title="导出 JSON">
           <FileJson className="h-4 w-4" />
         </Button>
         {onRegenerate && (
-          <Button size="sm" variant="outline" onClick={onRegenerate} disabled={loading} title="重新生成">
+          <Button size="sm" variant="outline" className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 sm:h-8 sm:w-auto sm:p-2" onClick={onRegenerate} disabled={loading} title="重新生成">
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
           </Button>
         )}

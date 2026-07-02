@@ -102,7 +102,7 @@ function loadSettings(): PersistedSettings {
         volume: s.volume ?? 1.0,
         pitch: s.pitch ?? 1.0,
         autoNextChapter: s.autoNextChapter ?? true,
-        engine: (s.engine === "zipvoice" || s.engine === "webspeech") ? s.engine : "webspeech", // B12: ZipVoice 暂强制 WebSpeech
+        engine: (s.engine === "zipvoice" || s.engine === "webspeech") ? s.engine : "webspeech",
         modelDownloaded: s.modelDownloaded ?? false,
       };
     }
@@ -110,7 +110,16 @@ function loadSettings(): PersistedSettings {
   return { zipvoiceVoiceId: "0", webspeechVoiceId: "", speed: 1.0, volume: 1.0, pitch: 1.0, autoNextChapter: true, engine: "webspeech", modelDownloaded: false };
 }
 
+// Cached settings to avoid repeated localStorage reads
+let _cachedSettings: PersistedSettings | null = null;
+
+function getCachedSettings(): PersistedSettings {
+  if (!_cachedSettings) _cachedSettings = loadSettings();
+  return _cachedSettings;
+}
+
 function saveSettings(s: PersistedSettings) {
+  _cachedSettings = s; // Update cache
   try { localStorage.setItem(TTS_SETTINGS_KEY, JSON.stringify(s)); } catch { /* ignore */ }
 }
 
@@ -171,11 +180,12 @@ export const useTTSStore = create<TTSState>((set, get) => ({
   setGenerating: (generating, progress) => set({ generating, generateProgress: progress ?? 0 }),
   setModelDownloaded: (downloaded) => {
     set({ modelDownloaded: downloaded });
-    // C6 fix: 持久化 modelDownloaded
     const s = get();
+    const settings = getCachedSettings();
     saveSettings({
-      zipvoiceVoiceId: s.engine === "zipvoice" ? s.voiceId : loadSettings().zipvoiceVoiceId,
-      webspeechVoiceId: s.engine === "webspeech" ? s.voiceId : loadSettings().webspeechVoiceId,
+      ...settings,
+      zipvoiceVoiceId: s.engine === "zipvoice" ? s.voiceId : settings.zipvoiceVoiceId,
+      webspeechVoiceId: s.engine === "webspeech" ? s.voiceId : settings.webspeechVoiceId,
       speed: s.speed, volume: s.volume, pitch: s.pitch, autoNextChapter: s.autoNextChapter, engine: s.engine, modelDownloaded: downloaded,
     });
   },
@@ -183,8 +193,7 @@ export const useTTSStore = create<TTSState>((set, get) => ({
   setVoiceId: (voiceId) => {
     const s = get();
     set({ voiceId });
-    // M14 fix: 按引擎分别保存 voiceId
-    const settings = loadSettings();
+    const settings = getCachedSettings();
     if (s.engine === "zipvoice") settings.zipvoiceVoiceId = voiceId;
     else settings.webspeechVoiceId = voiceId;
     settings.speed = s.speed;
@@ -194,38 +203,39 @@ export const useTTSStore = create<TTSState>((set, get) => ({
     saveSettings(settings);
   },
   setSpeed: (speed) => {
-    const clamped = Math.max(0.5, Math.min(3.0, speed)); // B5: clamp
+    const clamped = Math.max(0.5, Math.min(3.0, speed));
     const s = get(); set({ speed: clamped });
-    const settings = loadSettings();
+    const settings = getCachedSettings();
     settings.speed = clamped;
     settings.modelDownloaded = s.modelDownloaded;
     saveSettings(settings);
   },
   setVolume: (volume) => {
-    const s = get(); set({ volume: Math.max(0, Math.min(1, volume)) });
-    const settings = loadSettings();
-    settings.volume = volume;
+    const clamped = Math.max(0, Math.min(1, volume));
+    const s = get(); set({ volume: clamped });
+    const settings = getCachedSettings();
+    settings.volume = clamped;
     settings.modelDownloaded = s.modelDownloaded;
     saveSettings(settings);
   },
   setPitch: (pitch) => {
-    const s = get(); set({ pitch: Math.max(0.5, Math.min(2, pitch)) });
-    const settings = loadSettings();
-    settings.pitch = pitch;
+    const clamped = Math.max(0.5, Math.min(2, pitch));
+    const s = get(); set({ pitch: clamped });
+    const settings = getCachedSettings();
+    settings.pitch = clamped;
     settings.modelDownloaded = s.modelDownloaded;
     saveSettings(settings);
   },
   setAutoNextChapter: (autoNextChapter) => {
     const s = get(); set({ autoNextChapter });
-    const settings = loadSettings();
+    const settings = getCachedSettings();
     settings.autoNextChapter = autoNextChapter;
     settings.modelDownloaded = s.modelDownloaded;
     saveSettings(settings);
   },
   setEngine: (engine) => {
     const s = get();
-    // M14 fix: 切换引擎时自动切换到该引擎的 voiceId
-    const settings = loadSettings();
+    const settings = getCachedSettings();
     const newVoiceId = getVoiceIdForEngine(engine, settings.zipvoiceVoiceId, settings.webspeechVoiceId);
     set({ engine, voiceId: newVoiceId });
     settings.engine = engine;

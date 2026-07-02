@@ -73,6 +73,24 @@ export default defineConfig({
   },
   build: {
     chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("@xenova/transformers") || id.includes("onnxruntime-web")) {
+            return "transformers";
+          }
+          if (id.includes("d3-force") || id.includes("d3-selection")) {
+            return "d3";
+          }
+          if (id.includes("react-markdown") || id.includes("remark-gfm") || id.includes("rehype-raw")) {
+            return "markdown";
+          }
+          if (id.includes("jszip")) {
+            return "epub";
+          }
+        },
+      },
+    },
   },
   server: {
     host: "0.0.0.0",

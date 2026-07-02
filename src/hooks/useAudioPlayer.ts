@@ -328,6 +328,18 @@ export function useAudioPlayer({
   // 是否在当前小说/章节播放
   const isActive = (playing || !!error) && currentNovelId === novelId && currentChapterIndex === chapterIndex;
 
+  // 定期保存朗读位置（每 10 秒 + 页面卸载时）
+  useEffect(() => {
+    if (!isActive) return;
+    const timer = setInterval(savePosition, 10000);
+    const handleBeforeUnload = () => savePosition();
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [isActive, savePosition]);
+
   return {
     play,
     togglePause,

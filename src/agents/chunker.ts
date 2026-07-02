@@ -1,4 +1,5 @@
 import type { Agent, AgentContext, AgentResult } from "./types";
+import { loadNovel } from "@/db/repositories";
 
 interface ChunkResult {
   chapterId: string;
@@ -11,7 +12,6 @@ export const chunkerAgent: Agent = {
   description: "将小说文本按语义分块，构建索引",
 
   async run(context: AgentContext): Promise<AgentResult> {
-    const { loadNovel } = await import("@/db/repositories");
     const novel = await loadNovel(context.novelId);
     if (!novel) return { success: false, error: "小说数据未找到" };
 

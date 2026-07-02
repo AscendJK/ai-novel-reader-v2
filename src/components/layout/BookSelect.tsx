@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, useEffect, useMemo } from "react";
-import { Upload, BookOpen, FolderOpen, Clock, ChevronRight, FileText, Trash2, Search, Loader2 } from "lucide-react";
+import { Upload, BookOpen, FolderOpen, FileText, Search, Loader2 } from "lucide-react";
 import { useFileParser } from "@/hooks/useFileParser";
 import { useNovelStore, getLastOpenedTimes } from "@/stores/novel-store";
 import { loadAllNovelMeta, deleteNovel, loadNovel } from "@/db/repositories";
@@ -12,13 +12,13 @@ import { formatCharCount } from "@/lib/text-utils";
 import { useBuildStore } from "@/stores/build-store";
 import { useRAGStore } from "@/stores/rag-store";
 import { useUIStore } from "@/stores/ui-store";
-import { getEngineDisplayName } from "@/rag/engines";
 import { ensureModelReady } from "@/rag/model-loader";
 import { resolveModelKey } from "@/rag/engines";
 import { apiFetch } from "@/lib/api-client";
 import { buildAndPollRAGIndex, downloadAndCacheIndex } from "@/rag/build-index";
 import { onCacheEviction } from "@/rag/rag-cache-utils";
 import { NovelBuildWindow } from "@/components/common/NovelBuildWindow";
+import { NovelCard } from "./NovelCard";
 import type { NovelMeta } from "@/parsers/types";
 
 /** 服务器返回的小说数据类型 */
@@ -37,7 +37,9 @@ interface ServerNovel {
 
 export function BookSelect() {
   const { parseFile, isParsing, progress, warning: parseWarning } = useFileParser();
-  const { setCurrentNovel, readingPositions, addNovel } = useNovelStore();
+  const setCurrentNovel = useNovelStore((s) => s.setCurrentNovel);
+  const readingPositions = useNovelStore((s) => s.readingPositions);
+  const addNovel = useNovelStore((s) => s.addNovel);
   const [savedNovels, setSavedNovels] = useState<NovelMeta[]>([]);
   const [serverNovels, setServerNovels] = useState<ServerNovel[]>([]);
   const [joiningId, setJoiningId] = useState<string | null>(null);
@@ -581,221 +583,25 @@ export function BookSelect() {
               />
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
-              {filteredNovels.map((novel) => {
-                const pos = readingPositions[novel.id];
-                const readIndex = pos ? pos.chapterIndex : -1;
-                const progressPct = novel.chapterCount > 0 && readIndex >= 0
-                  ? (((readIndex + 1) / novel.chapterCount) * 100)
-                  : 0;
-
-                return (
-                  <Card
-                    key={novel.id}
-                    className="cursor-pointer transition-all hover:shadow-md hover:border-primary/50 group relative"
-                    onClick={async () => {
-                      // 根据阅读进度加载对应的章节范围
-                      const pos = readingPositions[novel.id];
-                      const chapterIndex = pos ? pos.chapterIndex : 0;
-                      const full = await loadNovel(novel.id, chapterIndex);
-                      if (full) setCurrentNovel(full);
-                    }}
-                  >
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="absolute top-2 right-2 h-7 w-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                      onClick={(e) => handleDelete(e, novel.id, novel.title)}
-                      title="删除此书"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-
-                    <CardContent className="p-5">
-                      <div className="flex items-start gap-3 mb-3">
-                        <div className="w-10 h-14 rounded bg-primary/10 flex items-center justify-center shrink-0">
-                          <FileText className="h-5 w-5 text-primary" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <h3 className="font-semibold truncate group-hover:text-primary transition-colors pr-6">
-                            《{novel.title}》
-                          </h3>
-                          {novel.author && (
-                            <p className="text-xs text-muted-foreground">{novel.author}</p>
-                          )}
-                          <p className="text-xs text-muted-foreground mt-0.5 truncate">
-                            {novel.fileName}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="flex flex-wrap gap-1.5 mb-3">
-                        <Badge variant="secondary" className="text-xs">
-                          {novel.fileFormat.toUpperCase()}
-                        </Badge>
-                        <Badge variant="secondary" className="text-xs">
-                          {novel.chapterCount} 章
-                        </Badge>
-                        <Badge variant="secondary" className="text-xs">
-                          {formatCharCount(novel.totalChars)}
-                        </Badge>
-                      </div>
-
-                      <div className="space-y-1.5">
-                        <div className="flex justify-between text-xs text-muted-foreground">
-                          <span className="flex items-center gap-1">
-                            <Clock className="h-3 w-3" />
-                            {pos ? `已读至第 ${pos.chapterIndex + 1} 章` : "未开始阅读"}
-                          </span>
-                          <span>{typeof progressPct === "number" ? progressPct.toFixed(2) : progressPct}%</span>
-                        </div>
-                        <Progress value={progressPct} className="h-1.5" />
-                      </div>
-
-                      <div className="flex justify-end items-center mt-3">
-                        <Button variant="ghost" size="sm" className="group-hover:text-primary">
-                          开始阅读
-                          <ChevronRight className="h-4 w-4 ml-1" />
-                        </Button>
-                      </div>
-
-                      {/* Build status indicator — hidden for TF-IDF */}
-                      {engine !== "tfidf" && (() => {
-                        const st = buildStatuses[novel.id]?.[engine] || { status: "none" };
-                        const chunkCount = st.chunkCount || 0;
-                        const dim = st.dim || 0;
-                        const vecCount = chunkCount;  // Float32Array 数量 = chunk 数量
-                        const vecBytes = chunkCount * dim * 4;  // 每个 Float32Array 大小 = dim * 4 bytes
-                        const countLabel = vecCount >= 10000 ? `${(vecCount / 1000).toFixed(1)}k` : `${vecCount}`;
-                        const sizeLabel = vecBytes >= 1048576 ? `${(vecBytes / 1048576).toFixed(1)}MB` : vecBytes >= 1024 ? `${Math.round(vecBytes / 1024)}KB` : `${vecBytes}B`;
-                        const memKey = novel.id + "-" + engine;
-                        const inMemory = lruKeys.has(memKey);
-                        const inIndexedDB = cachedKeys.has(memKey);
-                        const onServer = st.status === "ready";
-                        const el = engine.includes("bge") ? "BGE" : engine.includes("gte") ? "GTE" : engine.includes("e5") ? "E5" : engine.includes("MiniLM") ? "MiniLM" : getEngineDisplayName(engine).split(" ")[0];
-                        const buildKey = `${novel.id}-${engine}`;
-                        const buildStatus = builds.get(buildKey);
-                        const isBuilding = buildStatus && (buildStatus.status === "building" || buildStatus.status === "loading" || buildStatus.status === "encoding" || buildStatus.status === "queued");
-                        const statsText = vecCount > 0 ? ` · ${countLabel}向量 · ${sizeLabel}` : "";
-
-                        // 点击 badge 打开构建窗口
-                        const handleBadgeClick = (e: React.MouseEvent) => {
-                          e.stopPropagation();
-                          if (buildStatus) {
-                            useBuildStore.getState().toggleWindow(novel.id, engine);
-                          }
-                        };
-
-                        // Green: loaded in memory, ready for immediate retrieval
-                        if (inMemory) {
-                          return (
-                            <div className="flex items-center gap-1 mt-2 pt-2 border-t border-border/50">
-                              <Badge variant="outline" className="text-[10px] text-green-500 border-green-500/30">
-                                {`${el} 已加载`}{statsText}
-                              </Badge>
-                            </div>
-                          );
-                        }
-                        // Yellow: in IndexedDB, needs to be loaded into memory
-                        if (inIndexedDB) {
-                          return (
-                            <div className="flex items-center gap-1 mt-2 pt-2 border-t border-border/50">
-                              <Badge variant="outline" className="text-[10px] text-yellow-600 border-yellow-500/30">
-                                {`${el} 已缓存`}{statsText}
-                              </Badge>
-                            </div>
-                          );
-                        }
-                        // Blue: on server only, not downloaded to browser
-                        if (onServer) {
-                          return (
-                            <div className="flex items-center gap-1 mt-2 pt-2 border-t border-border/50">
-                              <Badge variant="outline" className="text-[10px] text-blue-500 border-blue-500/30">
-                                {`${el} 就绪`}{statsText}
-                              </Badge>
-                            </div>
-                          );
-                        }
-                        // 构建中 - 可点击打开窗口
-                        if (buildStatus && (buildStatus.status === "building" || buildStatus.status === "loading" || buildStatus.status === "encoding")) {
-                          return (
-                            <div
-                              className="flex items-center gap-1 mt-2 pt-2 border-t border-border/50 cursor-pointer hover:bg-muted/50 rounded px-1"
-                              onClick={handleBadgeClick}
-                            >
-                              <Loader2 className="h-3 w-3 animate-spin text-yellow-500" />
-                              <span className="text-[10px] text-yellow-500">{el} 构建中...</span>
-                            </div>
-                          );
-                        }
-                        // 排队中 - 可点击打开窗口
-                        if (buildStatus && buildStatus.status === "queued") {
-                          const qpos = buildStatus.queuePosition || "?";
-                          return (
-                            <div
-                              className="flex items-center gap-1 mt-2 pt-2 border-t border-border/50 cursor-pointer hover:bg-muted/50 rounded px-1"
-                              onClick={handleBadgeClick}
-                            >
-                              <Loader2 className="h-3 w-3 text-blue-400" />
-                              <span className="text-[10px] text-blue-400">排队第 {qpos} 位</span>
-                            </div>
-                          );
-                        }
-                        // 构建失败 - 可点击打开窗口或重试
-                        if (buildStatus && buildStatus.status === "error") {
-                          return (
-                            <div className="flex items-center gap-1 mt-2 pt-2 border-t border-border/50">
-                              <span
-                                className="text-[10px] text-red-400 cursor-pointer hover:underline"
-                                onClick={handleBadgeClick}
-                              >
-                                {el} 失败
-                              </span>
-                              <Button variant="ghost" size="sm" className="h-5 text-[10px] px-1" onClick={(e) => { e.stopPropagation(); handleBuild(novel.id); }} disabled={offlineMode}>
-                                {offlineMode ? "离线" : "重试"}
-                              </Button>
-                            </div>
-                          );
-                        }
-                        // 未构建
-                        return (
-                          <div className="flex items-center justify-between mt-2 pt-2 border-t border-border/50">
-                            <span className="text-[10px] text-muted-foreground">{offlineMode ? `${el} 离线不可用` : `${el} 未构建`}</span>
-                            <Button variant="ghost" size="sm" className="h-5 text-[10px] px-1" onClick={(e) => { e.stopPropagation(); handleBuild(novel.id); }} disabled={isBuilding || offlineMode}>
-                              {offlineMode ? "离线" : isBuilding ? "触发中..." : "构建"}
-                            </Button>
-                          </div>
-                        );
-                      })()}
-
-                      {/* TF-IDF 缓存状态 */}
-                      {engine === "tfidf" && (() => {
-                        const tfidfKey = `${novel.id}-tfidf`;
-                        const inMemory = lruKeys.has(tfidfKey);
-                        const inIndexedDB = cachedKeys.has(tfidfKey);
-                        if (inMemory) {
-                          return (
-                            <div className="flex items-center gap-1 mt-2 pt-2 border-t border-border/50">
-                              <Badge variant="outline" className="text-[10px] text-green-500 border-green-500/30">
-                                TF-IDF 已加载
-                              </Badge>
-                            </div>
-                          );
-                        }
-                        if (inIndexedDB) {
-                          return (
-                            <div className="flex items-center gap-1 mt-2 pt-2 border-t border-border/50">
-                              <Badge variant="outline" className="text-[10px] text-yellow-600 border-yellow-500/30">
-                                TF-IDF 已缓存
-                              </Badge>
-                            </div>
-                          );
-                        }
-                        return null;
-                      })()}
-                    </CardContent>
-                  </Card>
-                );
-              })}
+              {filteredNovels.map((novel) => (
+                <NovelCard
+                  key={novel.id}
+                  novel={novel}
+                  position={readingPositions[novel.id]}
+                  engine={engine}
+                  lruKeys={lruKeys}
+                  cachedKeys={cachedKeys}
+                  builds={builds}
+                  buildStatuses={buildStatuses}
+                  offlineMode={offlineMode}
+                  onOpen={async (novelId, chapterIndex) => {
+                    const full = await loadNovel(novelId, chapterIndex);
+                    if (full) setCurrentNovel(full);
+                  }}
+                  onDelete={handleDelete}
+                  onBuild={handleBuild}
+                />
+              ))}
             </div>
           </div>
         )}

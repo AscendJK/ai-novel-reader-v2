@@ -14,6 +14,12 @@ interface SummaryItem {
   deleted?: number;
 }
 
+// Cache for filtered summaries to avoid creating new arrays on every getter call
+let _summariesVersion = 0;
+let _novelCache: { version: number; novelId: string; result: SummaryItem[] } | null = null;
+let _chapterCache: { version: number; chapterId: string; result: SummaryItem[] } | null = null;
+let _globalCache: { version: number; result: SummaryItem[] } | null = null;
+
 interface SummaryState {
   summaries: SummaryItem[];
   isGenerating: boolean;
@@ -34,6 +40,7 @@ export const useSummaryStore = create<SummaryState>((set, get) => ({
 
   addSummary: (summary) =>
     set((s) => {
+      _summariesVersion++;
       const filtered = s.summaries.filter(
         (item) =>
           !(
@@ -45,26 +52,44 @@ export const useSummaryStore = create<SummaryState>((set, get) => ({
       return { summaries: [...filtered, summary] };
     }),
 
-  setSummaries: (summaries) => set((s) => ({
-    summaries: typeof summaries === "function" ? summaries(s.summaries) : summaries,
-  })),
+  setSummaries: (summaries) => set((s) => {
+    _summariesVersion++;
+    return {
+      summaries: typeof summaries === "function" ? summaries(s.summaries) : summaries,
+    };
+  }),
 
   setGenerating: (generating) => set({ isGenerating: generating }),
 
   setProgress: (progress) => set({ generateProgress: progress }),
 
   getSummariesByChapter: (chapterId) => {
-    return get().summaries.filter((s) => s.chapterId === chapterId);
+    if (_chapterCache && _chapterCache.version === _summariesVersion && _chapterCache.chapterId === chapterId) {
+      return _chapterCache.result;
+    }
+    const result = get().summaries.filter((s) => s.chapterId === chapterId);
+    _chapterCache = { version: _summariesVersion, chapterId, result };
+    return result;
   },
 
   getSummariesByNovel: (novelId) => {
-    return get().summaries.filter((s) => s.novelId === novelId);
+    if (_novelCache && _novelCache.version === _summariesVersion && _novelCache.novelId === novelId) {
+      return _novelCache.result;
+    }
+    const result = get().summaries.filter((s) => s.novelId === novelId);
+    _novelCache = { version: _summariesVersion, novelId, result };
+    return result;
   },
 
   getGlobalSummaries: () => {
-    return get().summaries.filter(
+    if (_globalCache && _globalCache.version === _summariesVersion) {
+      return _globalCache.result;
+    }
+    const result = get().summaries.filter(
       (s) => s.type === "global" || s.type === "timeline" || s.type === "characters"
     );
+    _globalCache = { version: _summariesVersion, result };
+    return result;
   },
 }));
 

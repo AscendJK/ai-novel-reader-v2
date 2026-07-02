@@ -12,8 +12,26 @@ function toModelPath(engine: string): string {
   return resolveModelKey(engine);
 }
 
+const MAX_ENCODERS = 2; // 最多缓存 2 个编码器模型，避免内存泄漏
 const encoderCache = new Map<string, any>();
 let encoderLock: Promise<void> = Promise.resolve();
+
+function touchEncoderCache(key: string) {
+  const val = encoderCache.get(key);
+  if (val) {
+    encoderCache.delete(key);
+    encoderCache.set(key, val);
+  }
+  while (encoderCache.size > MAX_ENCODERS) {
+    const oldest = encoderCache.keys().next().value;
+    if (oldest) {
+      const evicted = encoderCache.get(oldest);
+      encoderCache.delete(oldest);
+      // 释放旧模型的内存
+      if (evicted?.dispose) evicted.dispose().catch(() => {});
+    }
+  }
+}
 
 async function getEncoder(engine: string): Promise<any> {
   const cached = encoderCache.get(engine);
@@ -42,6 +60,7 @@ async function getEncoder(engine: string): Promise<any> {
     try {
       const extractor = await pipeline("feature-extraction", modelPath);
       encoderCache.set(engine, extractor);
+      touchEncoderCache(engine);
       ragLog(`[client-encoder] 模型就绪: ${modelPath}`);
       return extractor;
     } finally {

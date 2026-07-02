@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, memo } from "react";
 import { ArrowLeft, Book, Settings, Moon, Sun, LogOut, User, StickyNote, WifiOff, Wifi, Download, CheckCircle2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useUIStore } from "@/stores/ui-store";
@@ -13,7 +13,7 @@ interface HeaderProps {
   onNotes: () => void;
 }
 
-export function Header({ inBook, bookTitle, onBack, onSettings, onNotes }: HeaderProps) {
+export const Header = memo(function Header({ inBook, bookTitle, onBack, onSettings, onNotes }: HeaderProps) {
   const { theme, toggleTheme, offlineMode, setOfflineMode } = useUIStore();
   const username = syncClient.user || localStorage.getItem("sync-username");
   const [showUser, setShowUser] = useState(false);
@@ -46,7 +46,7 @@ export function Header({ inBook, bookTitle, onBack, onSettings, onNotes }: Heade
   };
 
   return (
-    <header className="border-b bg-card px-4 py-2.5 flex items-center justify-between shrink-0">
+    <header className="border-b bg-card px-4 py-2.5 flex items-center justify-between shrink-0 safe-area-top">
       <div className="flex items-center gap-2 min-w-0">
         {inBook ? (
           <>
@@ -130,7 +130,7 @@ export function Header({ inBook, bookTitle, onBack, onSettings, onNotes }: Heade
           <Button
             variant="ghost"
             size="icon"
-            className="h-7 w-7 text-green-500"
+            className="min-h-[44px] min-w-[44px] p-1 md:min-h-0 md:min-w-0 md:h-7 md:w-7 md:p-0 text-green-500"
             onClick={handleToggleOffline}
             title="在线 - 点击切换到离线模式"
           >
@@ -157,22 +157,23 @@ export function Header({ inBook, bookTitle, onBack, onSettings, onNotes }: Heade
                 </div>
               </>
             )}
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleLogout} title="退出登录">
+            <Button variant="ghost" size="icon" className="min-h-[44px] min-w-[44px] p-1 md:min-h-0 md:min-w-0 md:h-7 md:w-7 md:p-0" onClick={handleLogout} title="退出登录">
               <LogOut className="h-3.5 w-3.5" />
             </Button>
           </div>
         )}
         {!inBook && (
-          <Button variant="ghost" size="icon" onClick={onNotes} title="全部笔记">
+          <Button variant="ghost" size="icon" className="min-h-[44px] min-w-[44px] p-1 md:min-h-0 md:min-w-0 md:h-auto md:w-auto md:p-0" onClick={onNotes} title="全部笔记">
             <StickyNote className="h-4 w-4" />
           </Button>
         )}
-        <Button variant="ghost" size="icon" onClick={onSettings} title="设置">
+        <Button variant="ghost" size="icon" className="min-h-[44px] min-w-[44px] p-1 md:min-h-0 md:min-w-0 md:h-auto md:w-auto md:p-0" onClick={onSettings} title="设置">
           <Settings className="h-4 w-4" />
         </Button>
         <Button
           variant="ghost"
           size="icon"
+          className="min-h-[44px] min-w-[44px] p-1 md:min-h-0 md:min-w-0 md:h-auto md:w-auto md:p-0"
           onClick={toggleTheme}
           title={theme === "light" ? "暗色模式" : "亮色模式"}
         >
@@ -181,7 +182,7 @@ export function Header({ inBook, bookTitle, onBack, onSettings, onNotes }: Heade
       </div>
     </header>
   );
-}
+});
 
 function ModelDownloadIndicator() {
   const { currentDownload, downloadProgress } = useRAGStore();

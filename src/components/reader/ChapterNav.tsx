@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, memo } from "react";
 import { useNovelStore } from "@/stores/novel-store";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
@@ -12,8 +12,11 @@ interface ChapterNavProps {
   scrollControlRef?: React.RefObject<{ scrollToChapter: (chapterId: string, chapterOffset?: number) => void; suppressIO: () => () => void } | null>;
 }
 
-export function ChapterNav({ scrollControlRef }: ChapterNavProps) {
-  const { currentNovel, selectedChapterId, setSelectedChapter, addChapters } = useNovelStore();
+export const ChapterNav = memo(function ChapterNav({ scrollControlRef }: ChapterNavProps) {
+  const currentNovel = useNovelStore((s) => s.currentNovel);
+  const selectedChapterId = useNovelStore((s) => s.selectedChapterId);
+  const setSelectedChapter = useNovelStore((s) => s.setSelectedChapter);
+  const addChapters = useNovelStore((s) => s.addChapters);
   const [collapsed, setCollapsed] = useState(false);
   const [loadingChapter, setLoadingChapter] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -103,7 +106,7 @@ export function ChapterNav({ scrollControlRef }: ChapterNavProps) {
             <p className="text-xs text-muted-foreground mt-0.5">共 {currentNovel.chapters.length} 章</p>
           </div>
         </div>
-        <ScrollArea className="h-[calc(100vh-150px)]">
+        <ScrollArea className="h-[calc(100vh-150px)]" style={{ height: "calc(100dvh - 150px)" }}>
           <div className="p-1.5" ref={scrollRef}>
             {currentNovel.chapters.map((ch) => {
               const isLoaded = !!ch.content;
@@ -153,4 +156,4 @@ export function ChapterNav({ scrollControlRef }: ChapterNavProps) {
       </button>
     </div>
   );
-}
+});
