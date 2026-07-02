@@ -66,7 +66,7 @@ export const Header = memo(function Header({ inBook, bookTitle, onBack, onSettin
         )}
       </div>
 
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1 md:gap-2">
         {/* 离线模式标识 */}
         {offlineMode && (
           <div className="relative">
@@ -89,7 +89,7 @@ export const Header = memo(function Header({ inBook, bookTitle, onBack, onSettin
             {showOfflineTip && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setShowOfflineTip(false)} />
-                <div className="absolute top-full right-0 mt-1.5 z-50 bg-popover border rounded-md shadow-md p-3 text-xs whitespace-nowrap">
+                <div className="fixed inset-x-4 top-16 sm:absolute sm:inset-x-auto sm:top-full sm:right-0 sm:mt-1.5 z-50 bg-popover border rounded-md shadow-md p-3 text-xs sm:whitespace-nowrap">
                   <div className="space-y-2">
                     <p className="font-medium">
                       {isManualOffline ? "手动离线模式" : "自动离线模式"}
