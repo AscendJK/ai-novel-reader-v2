@@ -10,12 +10,15 @@ permissions:
   pages: write
   id-token: write
 
+# 修复并发：不取消进行中的部署，避免队列乱掉
 concurrency:
   group: "pages"
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
+    # 整个流水线最长等待15分钟，防止排队超时
+    timeout-minutes: 15
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -47,3 +50,5 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+        # 单独给部署步骤10分钟等待超时
+        timeout-minutes: 10
