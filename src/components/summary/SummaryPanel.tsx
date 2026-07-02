@@ -60,6 +60,7 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
     generateCharacterGraph, regenerateCharacterGraph,
     regenerateCharacters, regenerateTimeline,
     generateMap, regenerateMap,
+    generateRangeSummary, askCustomQuestion, clearQaCache,
     clearError, ragEngineUsed,
   } = useSummarizer();
 
