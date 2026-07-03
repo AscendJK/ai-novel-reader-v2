@@ -245,7 +245,7 @@ export function getEmbeddingMeta(novelId: string, engine: string) {
 
 export { getEmbeddingMeta as getBGEMeta };
 
-export function clearCache(novelId?: string, engine?: string) {
+export async function clearCache(novelId?: string, engine?: string) {
   const store = useRAGStore.getState();
   if (novelId && engine) {
     // Clear specific novel+engine
@@ -258,13 +258,14 @@ export function clearCache(novelId?: string, engine?: string) {
     }
     chunksMemCache.delete(key);
     clearingKeys.add(key);
-    db.ragCache.delete(key).then(() => {
+    try {
+      await db.ragCache.delete(key);
+    } catch (e) {
+      console.warn("[rag] delete cache failed:", e);
+    } finally {
       clearingKeys.delete(key);
       updateRagCacheSize();
-    }).catch((e) => {
-      clearingKeys.delete(key);
-      console.warn("[rag] delete cache failed:", e);
-    });
+    }
     store.removeCachedKey(key);
     store.removeLruKey(key);
   } else if (novelId) {
@@ -284,13 +285,14 @@ export function clearCache(novelId?: string, engine?: string) {
       store.removeCachedKey(key);
       store.removeLruKey(key);
     }
-    db.ragCache.where("novelId").equals(novelId).delete().then(() => {
+    try {
+      await db.ragCache.where("novelId").equals(novelId).delete();
+    } catch (e) {
+      console.warn("[rag] delete novel cache failed:", e);
+    } finally {
       for (const key of keysToDelete) clearingKeys.delete(key);
       updateRagCacheSize();
-    }).catch((e) => {
-      for (const key of keysToDelete) clearingKeys.delete(key);
-      console.warn("[rag] delete novel cache failed:", e);
-    });
+    }
   } else {
     // Clear everything
     const allKeys = [...indexCache.keys()];
@@ -303,13 +305,14 @@ export function clearCache(novelId?: string, engine?: string) {
     }
     indexCache.clear();
     chunksMemCache.clear();
-    db.ragCache.clear().then(() => {
+    try {
+      await db.ragCache.clear();
+    } catch (e) {
+      console.warn("[rag] clear cache failed:", e);
+    } finally {
       for (const key of allKeys) clearingKeys.delete(key);
       store.updateRagCacheSize(0);
-    }).catch((e) => {
-      for (const key of allKeys) clearingKeys.delete(key);
-      console.warn("[rag] clear cache failed:", e);
-    });
+    }
   }
 }
 
@@ -370,6 +373,7 @@ export async function retrieveRelevant(
     ragLog("向量检索为空, 降级为 TF-IDF");
   }
 
+  await entry.retriever.buildDocsIfNeeded();
   const results = entry.retriever.search(query, k);
   const chunkMap = await loadChunksFromCache(novelId, effectiveEngine);
   return results
@@ -403,6 +407,7 @@ export async function retrieveRelevantWithDetails(
     ragLog("向量检索为空, 降级为 TF-IDF");
   }
 
+  await entry.retriever.buildDocsIfNeeded();
   const results = entry.retriever.search(query, k);
   const chunkMap = await loadChunksFromCache(novelId, effectiveEngine);
   const mapped = results
@@ -450,6 +455,7 @@ export async function retrieveRelevantForRange(
     ragLog("向量检索为空, 降级为 TF-IDF");
   }
 
+  await entry.retriever.buildDocsIfNeeded();
   const chunkMap = await loadChunksFromCache(novelId, effectiveEngine);
   const allResults = entry.retriever.search(query, k * 3);
   const mapped = allResults

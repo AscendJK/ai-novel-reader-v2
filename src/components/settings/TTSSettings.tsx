@@ -112,6 +112,7 @@ export function TTSSettings() {
         {voicesLoaded ? (
           <div className="flex gap-2">
             <select
+              aria-label="语音选择"
               className="flex-1 text-xs border rounded px-2 py-1.5 bg-background"
               value={voiceId}
               onChange={(e) => setVoiceId(e.target.value)}
@@ -155,6 +156,7 @@ export function TTSSettings() {
           <span className="text-xs text-muted-foreground">{speed.toFixed(1)}x</span>
         </div>
         <input type="range" min={0.5} max={3.0} step={0.25} value={speed}
+          aria-label="语速"
           onChange={(e) => setSpeed(parseFloat(e.target.value))} className="w-full h-1.5" />
         <div className="flex justify-between text-[10px] text-muted-foreground">
           <span>0.5x</span><span>1.0x</span><span>2.0x</span><span>3.0x</span>
@@ -168,6 +170,7 @@ export function TTSSettings() {
           <span className="text-xs text-muted-foreground">{pitch.toFixed(1)}</span>
         </div>
         <input type="range" min={0.5} max={2.0} step={0.1} value={pitch}
+          aria-label="音调"
           onChange={(e) => setPitch(parseFloat(e.target.value))} className="w-full h-1.5" />
         <div className="flex justify-between text-[10px] text-muted-foreground">
           <span>低</span><span>正常</span><span>高</span>
@@ -181,6 +184,7 @@ export function TTSSettings() {
           <p className="text-[10px] text-muted-foreground">当前章播放完毕后自动播放下一章</p>
         </div>
         <button
+          aria-label={`自动翻章：${autoNextChapter ? "开启" : "关闭"}`}
           className={`w-10 h-5 rounded-full transition-colors ${autoNextChapter ? "bg-primary" : "bg-muted"}`}
           onClick={() => setAutoNextChapter(!autoNextChapter)}
         >

@@ -2,12 +2,14 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { useNovelStore } from "@/stores/novel-store";
 import { useRAGStore } from "@/stores/rag-store";
 import { useBuildStore } from "@/stores/build-store";
+import type { BuildStatusType } from "@/stores/build-store";
 import { useUIStore } from "@/stores/ui-store";
 import { getEngineDisplayName, isEmbeddingEngine } from "@/rag/engines";
 import { apiFetch } from "@/lib/api-client";
 import { useSummaryStore } from "@/stores/summary-store";
 import { useSummarizer } from "@/hooks/useSummarizer";
-import type { GraphData, MapData } from "@/hooks/useSummarizer";
+import type { GraphData } from "@/hooks/useSummarizer";
+import type { MapData } from "@/agents/types";
 import { TaskType } from "@/agents/types";
 import { saveNote, loadMap, saveGraph as saveGraphToDB, loadGraph } from "@/db/repositories";
 import type { NoteItem } from "@/db/repositories";
@@ -51,7 +53,8 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
   // Ref for latest selectedChapterId to avoid stale closures in callbacks
   const selectedChapterRef = useRef(selectedChapterId);
   selectedChapterRef.current = selectedChapterId;
-  const { isGenerating, generateProgress } = useSummaryStore();
+  const isGenerating = useSummaryStore((s) => s.isGenerating);
+  const generateProgress = useSummaryStore((s) => s.generateProgress);
   const {
     isRunning, currentTask, currentTaskType, error,
     summarizeChapter, summarizeAllChapters, stopBatchSummary, regenerateChapter,
@@ -96,7 +99,6 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
   const isCharacterRunning = isRunning && (currentTaskType === TaskType.CHARACTER || currentTaskType === TaskType.GRAPH);
   const isGlobalRunning = isRunning && currentTaskType === TaskType.GLOBAL;
   const isMapRunning = isRunning && currentTaskType === TaskType.MAP;
-  const isChapterRunning = isRunning && !isTimelineRunning && !isCharacterRunning && !isGlobalRunning && !isMapRunning;
 
   // Cleanup build poll on unmount
   useEffect(() => {
@@ -162,7 +164,7 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
         engine: buildEngine,
         onProgress: (progress) => {
           useBuildStore.getState().updateProgress(currentNovel.id, buildEngine, {
-            status: progress.status,
+            status: progress.status === "none" ? "idle" : progress.status as BuildStatusType,
             message: progress.message || "",
             current: progress.current || 0,
             total: progress.total || 0,

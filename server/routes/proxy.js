@@ -15,6 +15,9 @@ router.post("/chat", rateLimit(60), async (req, res) => {
   try {
     const { url, headers, body } = req.body;
     if (!url) return res.status(400).json({ error: "url required" });
+    if (body && JSON.stringify(body).length > 1_000_000) {
+      return res.status(413).json({ error: "请求体过大" });
+    }
 
     // Only allow HTTP/HTTPS URLs
     if (!url.startsWith("https://") && !url.startsWith("http://")) {

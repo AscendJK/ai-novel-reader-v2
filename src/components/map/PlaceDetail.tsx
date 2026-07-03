@@ -61,7 +61,7 @@ export function PlaceDetail({ place, layers, parentPlace, childPlaces, forces, o
               <Badge variant="outline">{place.type}</Badge>
               <Badge variant="secondary">{layerName}</Badge>
             </div>
-            <Button variant="ghost" size="icon" onClick={onClose}>
+            <Button variant="ghost" size="icon" onClick={onClose} aria-label="关闭">
               <X className="h-4 w-4" />
             </Button>
           </div>

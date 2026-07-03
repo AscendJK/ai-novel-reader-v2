@@ -146,7 +146,6 @@ export function NovelMapCard({ novelId, loading }: NovelMapCardProps) {
 
               {/* 地图信息 */}
               <div className="text-xs text-muted-foreground">
-                <p>类型：{mapData.novelInfo.type}</p>
                 <p>地点：{mapData.places.length} 个</p>
                 <p>势力：{mapData.forces.length} 个</p>
                 <p>区域：{mapData.regions.length} 个</p>

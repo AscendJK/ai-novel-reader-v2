@@ -13,13 +13,16 @@ export const ENGINE_MODEL_MAP = {
 
 export const DEFAULT_ENGINE = "Xenova/bge-small-zh-v1.5";
 
+/** Set of valid engine IDs for whitelist validation */
+export const VALID_ENGINES = new Set(Object.keys(ENGINE_MODEL_MAP));
+
 /**
  * Resolve engine ID to Transformers.js model key.
+ * Only accepts engines in the whitelist; unknown engines fall back to default.
  * @param {string} engine - Engine ID (e.g. "Xenova/bge-small-zh-v1.5")
  * @returns {string} Model key for Transformers.js
  */
 export function resolveModelKey(engine) {
   if (ENGINE_MODEL_MAP[engine]) return ENGINE_MODEL_MAP[engine];
-  if (engine && engine.includes("/")) return engine;
   return DEFAULT_ENGINE;
 }

@@ -134,6 +134,7 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
               <Label htmlFor="api-format" className="text-xs">接口格式</Label>
               <select
                 id="api-format" name="api-format"
+                aria-label="接口格式"
                 className="w-full text-sm border rounded px-3 py-1.5 bg-background"
                 value={editing.format}
                 onChange={(e) => setEditing((d) => d ? { ...d, format: e.target.value as ProviderFormat } : d)}

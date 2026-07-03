@@ -59,8 +59,9 @@ export function useSummarizer() {
   const [currentTaskType, setCurrentTaskType] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const currentNovel = useNovelStore((s) => s.currentNovel);
-  const { getActiveProvider } = useAPIStore();
-  const { addSummary, setProgress } = useSummaryStore();
+  const getActiveProvider = useAPIStore((s) => s.getActiveProvider);
+  const addSummary = useSummaryStore((s) => s.addSummary);
+  const setProgress = useSummaryStore((s) => s.setProgress);
   const abortRef = useRef<AbortController | null>(null);
   // Cached RAG context for Q&A session (cleared on new session or every 3 follow-ups)
   const qaRagCacheRef = useRef<{ question: string; text: string; followUps: number } | null>(null);

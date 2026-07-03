@@ -66,17 +66,22 @@ export function mountAdminRoutes(app) {
   app.delete("/api/admin/users/:name", (req, res) => {
     if (!auth(req, res)) return;
     const { name } = req.params;
-    db.db.transaction(() => {
-      db.db.prepare("DELETE FROM summaries WHERE username = ?").run(name);
-      db.db.prepare("DELETE FROM notes WHERE username = ?").run(name);
-      db.db.prepare("DELETE FROM maps WHERE username = ?").run(name);
-      db.db.prepare("DELETE FROM graphs WHERE username = ?").run(name);
-      db.db.prepare("DELETE FROM reading_progress WHERE username = ?").run(name);
-      db.db.prepare("DELETE FROM user_settings WHERE username = ?").run(name);
-      db.db.prepare("DELETE FROM user_novels WHERE username = ?").run(name);
-      db.db.prepare("DELETE FROM users WHERE username = ?").run(name);
-    })();
-    res.json({ ok: true });
+    try {
+      db.db.transaction(() => {
+        db.db.prepare("DELETE FROM summaries WHERE username = ?").run(name);
+        db.db.prepare("DELETE FROM notes WHERE username = ?").run(name);
+        db.db.prepare("DELETE FROM maps WHERE username = ?").run(name);
+        db.db.prepare("DELETE FROM graphs WHERE username = ?").run(name);
+        db.db.prepare("DELETE FROM reading_progress WHERE username = ?").run(name);
+        db.db.prepare("DELETE FROM user_settings WHERE username = ?").run(name);
+        db.db.prepare("DELETE FROM user_novels WHERE username = ?").run(name);
+        db.db.prepare("DELETE FROM users WHERE username = ?").run(name);
+      })();
+      res.json({ ok: true });
+    } catch (e) {
+      console.error("[admin] delete user failed:", e);
+      res.status(500).json({ error: "删除用户失败" });
+    }
   });
 
   // ── Novels ──
@@ -108,8 +113,13 @@ export function mountAdminRoutes(app) {
 
   app.delete("/api/admin/novels/:id", (req, res) => {
     if (!auth(req, res)) return;
-    db.deleteNovel(req.params.id);
-    res.json({ ok: true });
+    try {
+      db.deleteNovel(req.params.id);
+      res.json({ ok: true });
+    } catch (e) {
+      console.error("[admin] delete novel failed:", e);
+      res.status(500).json({ error: "删除小说失败" });
+    }
   });
 
   app.delete("/api/admin/novels/:id/rag/:engine", (req, res) => {
@@ -213,7 +223,10 @@ export function mountAdminRoutes(app) {
     try {
       const result = db.restoreBackup(req.params.filename);
       res.json(result);
-    } catch (e) { res.status(400).json({ error: e.message }); }
+    } catch (e) {
+      console.error("[admin] backup restore failed:", e);
+      res.status(400).json({ error: "备份恢复失败" });
+    }
   });
 
   app.delete("/api/admin/backups/:filename", (req, res) => {
@@ -221,7 +234,10 @@ export function mountAdminRoutes(app) {
     try {
       db.deleteBackup(req.params.filename);
       res.json({ ok: true });
-    } catch (e) { res.status(400).json({ error: e.message }); }
+    } catch (e) {
+      console.error("[admin] backup delete failed:", e);
+      res.status(400).json({ error: "备份删除失败" });
+    }
   });
 
   app.post("/api/admin/backups/clean", (req, res) => {

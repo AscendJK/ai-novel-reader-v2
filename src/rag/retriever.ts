@@ -162,6 +162,63 @@ export class Retriever {
     return hash;
   }
 
+  /** 懒构建 TF-IDF 向量：仅在 docs 为空时执行（用于 embedding 引擎降级场景） */
+  async buildDocsIfNeeded(): Promise<void> {
+    if (this.docs.length > 0 || this.chunks.length === 0) return;
+
+    const BATCH = 200;
+    const docCount = this.chunks.length;
+
+    // Phase 1: tokenize + compute IDF (batched)
+    let totalLength = 0;
+    const allTokenized: string[][] = [];
+    for (let i = 0; i < docCount; i += BATCH) {
+      const end = Math.min(i + BATCH, docCount);
+      for (let j = i; j < end; j++) {
+        const tokens = tokenize(this.chunks[j].content);
+        allTokenized.push(tokens);
+        totalLength += tokens.length;
+        const unique = new Set(tokens);
+        for (const t of unique) {
+          this.idf.set(t, (this.idf.get(t) || 0) + 1);
+        }
+      }
+      if (i + BATCH < docCount) await new Promise(ok => setTimeout(ok, 0));
+    }
+    this.averageDocLength = docCount > 0 ? totalLength / docCount : 1;
+    for (const [t, df] of this.idf) {
+      this.idf.set(t, Math.log((docCount - df + 0.5) / (df + 0.5) + 1));
+    }
+
+    // Phase 2: build document vectors (batched)
+    for (let i = 0; i < docCount; i += BATCH) {
+      const end = Math.min(i + BATCH, docCount);
+      for (let j = i; j < end; j++) {
+        const tokens = allTokenized[j];
+        const tf = new Map<string, number>();
+        for (const t of tokens) tf.set(t, (tf.get(t) || 0) + 1);
+        const docLen = tokens.length;
+        for (const [t, count] of tf) {
+          const normCount = (count * 2.2) / (count + 1.2 * (0.25 + 0.75 * (docLen / this.averageDocLength)));
+          tf.set(t, normCount);
+        }
+        const scored = Array.from(tf.entries())
+          .map(([t, f]) => ({ token: t, score: f * (this.idf.get(t) || 0) }))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 128);
+        const vector = new Float64Array(128);
+        for (const s of scored) {
+          const slot = Math.abs(this.hashToken(s.token)) % 128;
+          vector[slot] += s.score;
+        }
+        const norm = Math.sqrt(vector.reduce((s, v) => s + v * v, 0)) || 1;
+        for (let k = 0; k < 128; k++) vector[k] /= norm;
+        this.docs.push({ id: this.chunks[j].id, vector });
+      }
+      if (i + BATCH < docCount) await new Promise(ok => setTimeout(ok, 0));
+    }
+  }
+
   search(query: string, topK: number = 10): { id: string; score: number }[] {
     const qTokens = tokenize(query);
     if (qTokens.length === 0) return [];

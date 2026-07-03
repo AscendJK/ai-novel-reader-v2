@@ -113,7 +113,7 @@ export class EmbeddingRetriever {
     novelId: string,
     _allChunks: Chunk[],
     onProgress?: (p: EmbeddingProgress) => void,
-    signal?: AbortSignal
+    _signal?: AbortSignal
   ): Promise<void> {
     const memCacheKey = `${novelId}-${this.engine}`;
 
@@ -180,7 +180,7 @@ export class EmbeddingRetriever {
       useBuildStore.getState().startBuild(novelId, this.engine);
       await buildAndPollRAGIndex({
         novelId, engine: this.engine,
-        onProgress: (p) => onProgress?.({ phase: p.status === "building" || p.status === "encoding" ? "encoding" : "downloading", current: p.current, total: p.total }),
+        onProgress: (p) => onProgress?.({ phase: p.status === "building" || p.status === "encoding" ? "encoding" : "loading", current: p.current, total: p.total }),
       });
       // 下载并缓存到 IndexedDB
       await downloadAndCacheIndex({ novelId, engine: this.engine, updateStore: false });

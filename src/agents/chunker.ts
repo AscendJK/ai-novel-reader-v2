@@ -23,6 +23,7 @@ export const chunkerAgent: Agent = {
     const results: ChunkResult[] = [];
 
     for (const chapter of chapters) {
+      context.signal?.throwIfAborted();
       const chunks: ChunkResult["chunks"] = [];
       const text = chapter.content;
 

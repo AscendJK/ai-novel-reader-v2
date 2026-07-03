@@ -107,6 +107,7 @@ export function SubItem({
           className="h-5 w-5"
           onClick={onRegenerate}
           disabled={loading}
+          aria-label="重新生成"
         >
           <RefreshCw className="h-2.5 w-2.5" />
         </Button>

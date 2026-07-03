@@ -126,66 +126,75 @@ export async function hasMoreChanges(lastSyncTime: number): Promise<boolean> {
 export async function applyServerData(data: SyncData): Promise<void> {
   const udb = getUserDB();
 
-  // Summaries — conflict resolution by updatedAt
+  // Summaries — conflict resolution by updatedAt, merge to preserve local-only fields
   if (data.summaries?.length) {
-    await udb.transaction("rw", udb.summaries, async () => {
-      for (const s of data.summaries) {
-        const existing = await udb.summaries.get(s.id);
-        if (!existing || (s.updatedAt || 0) >= (existing.updatedAt || 0)) {
-          await udb.summaries.put(s);
+    try {
+      await udb.transaction("rw", udb.summaries, async () => {
+        for (const s of data.summaries) {
+          const existing = await udb.summaries.get(s.id);
+          if (!existing || (s.updatedAt || 0) >= (existing.updatedAt || 0)) {
+            await udb.summaries.put({ ...existing, ...s });
+          }
         }
-      }
-    });
+      });
+    } catch (e) { console.error("[sync] applyServerData summaries failed:", e); }
   }
 
-  // Notes — conflict resolution by updatedAt
+  // Notes — conflict resolution by updatedAt, merge to preserve local-only fields
   if (data.notes?.length) {
-    await udb.transaction("rw", udb.notes, async () => {
-      for (const n of data.notes) {
-        const existing = await udb.notes.get(n.id);
-        if (!existing || (n.updatedAt || 0) >= (existing.updatedAt || 0)) {
-          await udb.notes.put(n);
+    try {
+      await udb.transaction("rw", udb.notes, async () => {
+        for (const n of data.notes) {
+          const existing = await udb.notes.get(n.id);
+          if (!existing || (n.updatedAt || 0) >= (existing.updatedAt || 0)) {
+            await udb.notes.put({ ...existing, ...n });
+          }
         }
-      }
-    });
+      });
+    } catch (e) { console.error("[sync] applyServerData notes failed:", e); }
   }
 
-  // Maps — conflict resolution by updatedAt
+  // Maps — conflict resolution by updatedAt, merge to preserve local-only fields
   if (data.maps?.length) {
-    await udb.transaction("rw", udb.maps, async () => {
-      for (const m of data.maps) {
-        const existing = await udb.maps.get(m.id);
-        if (!existing || (m.updatedAt || 0) >= (existing.updatedAt || 0)) {
-          await udb.maps.put(m);
+    try {
+      await udb.transaction("rw", udb.maps, async () => {
+        for (const m of data.maps) {
+          const existing = await udb.maps.get(m.id);
+          if (!existing || (m.updatedAt || 0) >= (existing.updatedAt || 0)) {
+            await udb.maps.put({ ...existing, ...m });
+          }
         }
-      }
-    });
+      });
+    } catch (e) { console.error("[sync] applyServerData maps failed:", e); }
   }
 
-  // Graphs — conflict resolution by updatedAt (per-user isolation)
+  // Graphs — conflict resolution by updatedAt (per-user isolation), merge to preserve local-only fields
   if (data.graphs?.length) {
-    await udb.transaction("rw", udb.graphs, async () => {
-      for (const g of data.graphs) {
-        const existing = await udb.graphs.get(g.id);
-        if (!existing || (g.updatedAt || 0) >= (existing.updatedAt || 0)) {
-          await udb.graphs.put(g);
+    try {
+      await udb.transaction("rw", udb.graphs, async () => {
+        for (const g of data.graphs) {
+          const existing = await udb.graphs.get(g.id);
+          if (!existing || (g.updatedAt || 0) >= (existing.updatedAt || 0)) {
+            await udb.graphs.put({ ...existing, ...g });
+          }
         }
-      }
-    });
+      });
+    } catch (e) { console.error("[sync] applyServerData graphs failed:", e); }
   }
 
   // Settings (shared database) — prefix with username for isolation
   if (data.settings) {
     const username = localStorage.getItem("sync-username");
-    for (const [key, value] of Object.entries(data.settings)) {
-      if (value !== null && value !== undefined) {
-        // API provider settings already have username in key; others need prefix
-        // Skip if key already ends with :username (prevents double-prefixing)
-        const alreadyPrefixed = username && key.endsWith(`:${username}`);
-        const needsPrefix = !key.startsWith("api-providers:") && !key.startsWith("api-active-provider:") && !alreadyPrefixed;
-        const storeKey = needsPrefix && username ? `${key}:${username}` : key;
-        await sharedDB.settings.put({ key: storeKey, value });
-      }
+    const entries = Object.entries(data.settings).filter(([, v]) => v !== null && v !== undefined);
+    if (entries.length > 0) {
+      await sharedDB.transaction("rw", sharedDB.settings, async () => {
+        for (const [key, value] of entries) {
+          const alreadyPrefixed = username && key.endsWith(`:${username}`);
+          const needsPrefix = !key.startsWith("api-providers:") && !key.startsWith("api-active-provider:") && !alreadyPrefixed;
+          const storeKey = needsPrefix && username ? `${key}:${username}` : key;
+          await sharedDB.settings.put({ key: storeKey, value });
+        }
+      });
     }
     try {
       await useAPIStore.getState().loadFromDB();

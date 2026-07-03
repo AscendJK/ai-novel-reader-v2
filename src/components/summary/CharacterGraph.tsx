@@ -58,6 +58,7 @@ export function CharacterGraph({ graphData, onRegenerate }: Props) {
   // Pinch-to-zoom state
   const pinchStartDist = useRef(0);
   const pinchStartZoom = useRef(1);
+  const simRafIds = useRef<number[]>([]);
 
   // Reset on expand/collapse
   useEffect(() => { setZoom(1); setPan({ x: 0, y: 0 }); }, [expanded]);
@@ -166,7 +167,8 @@ export function CharacterGraph({ graphData, onRegenerate }: Props) {
     const maxIterations = 300;
     const chunkSize = 50;
     let iteration = 0;
-    let rafId = 0;
+    simRafIds.current = [];
+
     const runChunk = () => {
       const end = Math.min(iteration + chunkSize, maxIterations);
       for (; iteration < end; iteration++) {
@@ -174,7 +176,7 @@ export function CharacterGraph({ graphData, onRegenerate }: Props) {
         if (sim.alpha() < 0.001) break;
       }
       if (iteration < maxIterations && sim.alpha() >= 0.001) {
-        requestAnimationFrame(runChunk);
+        simRafIds.current.push(requestAnimationFrame(runChunk));
       } else {
         // Simulation complete, update state
         const finalNodes = nodes.map((n) => ({ ...n }));
@@ -186,8 +188,8 @@ export function CharacterGraph({ graphData, onRegenerate }: Props) {
         setSimData({ nodes: finalNodes, edges: finalEdges });
       }
     };
-    rafId = requestAnimationFrame(runChunk);
-    return () => cancelAnimationFrame(rafId);
+    simRafIds.current.push(requestAnimationFrame(runChunk));
+    return () => { simRafIds.current.forEach((id) => cancelAnimationFrame(id)); simRafIds.current = []; };
   }, [graphData]);
 
   // Mouse drag handlers for panning
@@ -391,15 +393,15 @@ export function CharacterGraph({ graphData, onRegenerate }: Props) {
           {/* Top bar */}
           <div className="flex items-center justify-between px-4 py-2 border-b shrink-0">
             <div className="flex gap-1.5 items-center">
-              <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => handleZoom(-0.2)} title="缩小">
+              <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => handleZoom(-0.2)} title="缩小" aria-label="缩小">
                 <ZoomOut className="h-3.5 w-3.5" />
               </Button>
               <span className="text-xs text-muted-foreground w-10 text-center">{Math.round(zoom * 100)}%</span>
-              <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => handleZoom(0.2)} title="放大">
+              <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => handleZoom(0.2)} title="放大" aria-label="放大">
                 <ZoomIn className="h-3.5 w-3.5" />
               </Button>
             </div>
-            <Button variant="outline" size="icon" onClick={() => setExpanded(false)}>
+            <Button variant="outline" size="icon" onClick={() => setExpanded(false)} aria-label="关闭全屏">
               <X className="h-4 w-4" />
             </Button>
           </div>

@@ -20,8 +20,8 @@ import { rateLimit } from "../middleware/index.js";
 
 const router = Router();
 
-// GET /api/sync/check-user/:username - 检查用户是否在线
-router.get("/check-user/:username", (req, res) => {
+// GET /api/sync/check-user/:username - 检查用户是否在线（加限流防止枚举）
+router.get("/check-user/:username", rateLimit(10), (req, res) => {
   const { username } = req.params;
   if (!username || typeof username !== "string") {
     return res.status(400).json({ error: "username required" });

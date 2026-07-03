@@ -168,7 +168,6 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
       const serverUrl = getServerUrl();
       if (serverUrl) {
         env.remoteHost = `${serverUrl}/api/rag/model-proxy`;
-        env.allowCrossOrigin = true;
         console.log(`[model-loader] remoteHost=${env.remoteHost}`);
       } else {
         console.warn(`[model-loader] 未配置服务器地址，模型下载可能失败`);

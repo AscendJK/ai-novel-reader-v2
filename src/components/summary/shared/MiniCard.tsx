@@ -113,6 +113,7 @@ export function MiniCard({
                 size="icon"
                 className="h-5 w-5"
                 onClick={onRemove}
+                aria-label="删除"
               >
                 x
               </Button>

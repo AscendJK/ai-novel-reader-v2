@@ -33,7 +33,6 @@ interface NovelMapSectionProps {
 }
 
 export function NovelMapSection({
-  novelId,
   isOpen,
   onClick,
   loading,
@@ -292,7 +291,7 @@ export function NovelMapSection({
 
               <div className="absolute bottom-2 left-2 right-2 flex justify-between items-end">
                 <div className="text-xs text-white">
-                  <p>{mapData.layers.length} 个层级 · {mapData.places.length} 个地点 · {mapData.forces.length} 个势力</p>
+                  {mapData && <p>{mapData.layers.length} 个层级 · {mapData.places.length} 个地点 · {mapData.forces.length} 个势力</p>}
                 </div>
                 <div className="flex gap-1">
                   <Button
@@ -347,12 +346,16 @@ export function NovelMapSection({
 
             {/* 地图信息 */}
             <div className="text-xs text-muted-foreground space-y-0.5">
-              <p>层级：{mapData.layers.map(l => l.name).join(" → ")} · 地点：{mapData.places.length} 个</p>
-              {mapData.forces.length > 0 && (
-                <p>势力：{mapData.forces.map(f => f.name).join("、")}</p>
-              )}
-              {mapData.regions.length > 0 && (
-                <p>区域：{mapData.regions.map(r => r.name).join("、")}</p>
+              {mapData && (
+                <>
+                  <p>层级：{mapData.layers.map(l => l.name).join(" → ")} · 地点：{mapData.places.length} 个</p>
+                  {mapData.forces.length > 0 && (
+                    <p>势力：{mapData.forces.map(f => f.name).join("、")}</p>
+                  )}
+                  {mapData.regions.length > 0 && (
+                    <p>区域：{mapData.regions.map(r => r.name).join("、")}</p>
+                  )}
+                </>
               )}
               {updatedAt && (
                 <p>更新时间：{new Date(updatedAt).toLocaleString("zh-CN")}</p>

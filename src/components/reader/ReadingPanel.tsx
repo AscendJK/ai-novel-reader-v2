@@ -138,9 +138,11 @@ export function ReadingPanel() {
             <button onClick={() => setMobileAiOpen(false)} aria-label="关闭 AI 分析" className="p-1 rounded hover:bg-accent"><X className="h-4 w-4" /></button>
           </div>
           <div className="flex-1 min-h-0">
-            <Suspense fallback={null}>
-              <SummaryPanel value={mobileAiTab} onValueChange={setMobileAiTab} />
-            </Suspense>
+            <LocalErrorBoundary name="SummaryPanel">
+              <Suspense fallback={null}>
+                <SummaryPanel value={mobileAiTab} onValueChange={setMobileAiTab} />
+              </Suspense>
+            </LocalErrorBoundary>
           </div>
         </div>
     </div>

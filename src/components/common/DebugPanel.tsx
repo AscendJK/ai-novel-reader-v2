@@ -143,7 +143,7 @@ export function DebugPanel() {
           &#128295; RAG Debug {collapsed ? "—" : ""}
         </span>
         <div className="flex gap-1">
-          <button className="text-gray-400 hover:text-white px-1 text-xs" onClick={() => setCollapsed(!collapsed)}>
+          <button className="text-gray-400 hover:text-white px-1 text-xs" onClick={() => setCollapsed(!collapsed)} aria-label={collapsed ? "展开面板" : "收起面板"}>
             {collapsed ? "□" : "_"}
           </button>
         </div>

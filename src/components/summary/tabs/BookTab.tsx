@@ -8,7 +8,8 @@ import { Clock, Users, BookOpen } from "lucide-react";
 import { SubItem } from "../shared/SubItem";
 import { NovelMapSection } from "../shared/NovelMapSection";
 import type { SummaryItem } from "@/stores/summary-store";
-import type { GraphData, MapData } from "@/hooks/useSummarizer";
+import type { GraphData } from "@/hooks/useSummarizer";
+import type { MapData } from "@/agents/types";
 import { loadMap } from "@/db/repositories";
 
 interface BookTabProps {

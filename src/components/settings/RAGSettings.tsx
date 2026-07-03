@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { useRAGStore } from "@/stores/rag-store";
 import { useUIStore } from "@/stores/ui-store";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
@@ -195,6 +195,7 @@ export function RAGSettings() {
             </div>
             <select
               id="rag-cache-size" name="rag-cache-size"
+              aria-label="索引缓存上限"
               className="text-xs border rounded px-2 py-1 bg-background"
               value={cacheSizeMB}
               onChange={(e) => setCacheSizeMB(parseInt(e.target.value))}

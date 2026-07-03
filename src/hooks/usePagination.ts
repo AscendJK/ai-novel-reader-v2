@@ -89,17 +89,21 @@ export function usePagination(options: UsePaginationOptions) {
 
   // 延迟触发重新计算，避免频繁调整字体时每帧都测量所有段落
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rafRef = useRef<number | null>(null);
   useEffect(() => {
     if (!enabled || !contentWidth || !contentHeight) {
       setPages([]);
       return;
     }
     if (timerRef.current) clearTimeout(timerRef.current);
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
     timerRef.current = setTimeout(() => {
-      const raf = requestAnimationFrame(doCalculate);
-      return () => cancelAnimationFrame(raf);
+      rafRef.current = requestAnimationFrame(doCalculate);
     }, 100);
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
   }, [doCalculate, enabled, paragraphs, fontSize, lineHeight, fontWeight, fontFamily, paragraphSpacing]);
 
   return { pages, totalPages: pages.length, measureRef };

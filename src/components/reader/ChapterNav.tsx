@@ -90,6 +90,7 @@ export const ChapterNav = memo(function ChapterNav({ scrollControlRef }: Chapter
           onClick={() => setCollapsed(false)}
           className={`${TOGGLE_H} w-full bg-card border border-l-0 rounded-r-md flex items-center justify-center hover:bg-accent transition-colors group`}
           title="展开目录"
+          aria-label="展开目录"
         >
           <PanelLeftOpen className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
         </button>
@@ -148,6 +149,7 @@ export const ChapterNav = memo(function ChapterNav({ scrollControlRef }: Chapter
         onClick={() => setCollapsed(true)}
         className={`${TOGGLE_H} ${TOGGLE_W} hidden md:flex items-center justify-center bg-card border border-l-0 rounded-r-md hover:bg-accent transition-colors group shrink-0`}
         title="收起目录"
+        aria-label="收起目录"
       >
         <PanelLeftClose className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
       </button>

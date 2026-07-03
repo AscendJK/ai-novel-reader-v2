@@ -216,8 +216,14 @@ export class SyncClient {
       return false;
     }
     this.syncing = true;
+    const syncTimeoutMs = 60_000; // 60s overall timeout
+    const syncDeadline = Date.now() + syncTimeoutMs;
+    const checkTimeout = () => {
+      if (Date.now() > syncDeadline) throw new Error("sync timeout");
+    };
     try {
       const changes = await this.gatherChanges(this.lastSyncTime);
+      checkTimeout();
       const pushS = changes.summaries?.length || 0;
       const pushN = changes.notes?.length || 0;
       const pushM = changes.maps?.length || 0;
@@ -227,6 +233,7 @@ export class SyncClient {
         method: "POST",
         body: JSON.stringify({ username: this.username, clientId: this.clientId, token: this.token, changes, lastSyncTime: this.lastSyncTime }),
       });
+      checkTimeout();
       console.log(`[sync] push response: ${resp.status}`);
       if (resp.status === 409) {
         // Username conflict — another device has the same username
@@ -253,6 +260,7 @@ export class SyncClient {
                 const r: PushResult = await retryResp.json();
                 if (r.data) {
                   await this.applyData(r.data);
+                  checkTimeout();
                   if (r.data.lastSyncAt) {
                     this.lastSyncTime = r.data.lastSyncAt;
                     localStorage.setItem(this.syncTimeKey, String(this.lastSyncTime));
@@ -306,6 +314,7 @@ export class SyncClient {
               console.log(`[sync] retry ok, pulled: s=${pullS} n=${pullN}`);
               if (r.data) {
                 await this.applyData(r.data);
+                checkTimeout();
                 if (r.data.lastSyncAt) {
                   this.lastSyncTime = r.data.lastSyncAt;
                   localStorage.setItem(this.syncTimeKey, String(this.lastSyncTime));
@@ -335,6 +344,7 @@ export class SyncClient {
         }
         if (r.data) {
           await this.applyData(r.data);
+          checkTimeout();
         }
 
         // 通知其他标签页同步完成

@@ -94,7 +94,7 @@ router.post("/encode", rateLimit(30), async (req, res) => {
 router.get("/statuses", (req, res) => {
   if (!authNovel(req, res)) return;
   try {
-    const ids = (req.query.ids || "").split(",").filter(Boolean);
+    const ids = (req.query.ids || "").split(",").filter(Boolean).slice(0, 100);
     const engine = req.query.engine || "Xenova/bge-small-zh-v1.5";
     res.json(getStatuses(ids, engine));
   } catch (e) {
@@ -107,7 +107,7 @@ router.get("/statuses", (req, res) => {
 router.get("/statuses/all", (req, res) => {
   if (!authNovel(req, res)) return;
   try {
-    const ids = (req.query.ids || "").split(",").filter(Boolean);
+    const ids = (req.query.ids || "").split(",").filter(Boolean).slice(0, 100);
     res.json(getAllStatuses(ids));
   } catch (e) {
     console.error("[rag] all statuses error:", e);
@@ -196,7 +196,7 @@ function toCachePath(subPath) {
 // Only allows Xenova/ and onnx-community/ model paths to prevent open proxy abuse
 const VALID_MODEL_PATH = /^(Xenova|onnx-community)\/[^/]+\/resolve\/main\/.+/;
 
-router.get("/model-proxy/{*path}", async (req, res) => {
+router.get("/model-proxy/{*path}", rateLimit(10), async (req, res) => {
   console.log(`[model-proxy] 请求: ${req.originalUrl}`);
   try {
     // Express 5 + path-to-regexp v8: {*path} returns an array of segments
@@ -236,6 +236,7 @@ router.get("/model-proxy/{*path}", async (req, res) => {
     const response = await fetch(targetUrl, {
       headers: { "User-Agent": "ai-novel-reader" },
       redirect: "follow",
+      signal: AbortSignal.timeout(120_000), // 2min timeout for large model downloads
     });
 
     if (!response.ok) {

@@ -21,7 +21,7 @@ function useFixViewportDisplay(rootRef: React.RefObject<HTMLDivElement | null>) 
       inner.style.display = "block"
       inner.style.minWidth = "0"
     }
-  })
+  }, [])
 }
 
 const ScrollArea = React.forwardRef<

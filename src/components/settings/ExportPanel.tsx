@@ -113,7 +113,7 @@ export function ExportPanel() {
               <Upload className="h-4 w-4 mr-1" /> {importing ? "导入中..." : "选择文件"}
             </Button>
           </div>
-          <input ref={fileRef} type="file" id="import-backup" name="import-backup" accept=".json" className="hidden" onChange={handleImport} />
+          <input ref={fileRef} type="file" id="import-backup" name="import-backup" aria-label="选择备份文件" accept=".json" className="hidden" onChange={handleImport} />
           {importResult && (
             <p className={`text-xs ${importResult.includes("成功") ? "text-green-500" : "text-destructive"}`}>
               {importResult}

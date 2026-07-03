@@ -21,9 +21,8 @@ interface SyncOrchestrationOptions {
 }
 
 export function useSyncOrchestration({ onSyncReady, setLocalUsers }: SyncOrchestrationOptions) {
-  const setCurrentNovel = useNovelStore((s) => s.setCurrentNovel);
   const addNovel = useNovelStore((s) => s.addNovel);
-  const { setSummaries } = useSummaryStore();
+  const setSummaries = useSummaryStore((s) => s.setSummaries);
   const syncStarted = useRef(false);
   const kickedRef = useRef(false);
 
@@ -96,16 +95,16 @@ export function useSyncOrchestration({ onSyncReady, setLocalUsers }: SyncOrchest
             const notes = await udb.notes.where("novelId").equals(oldId).toArray();
             const maps = await udb.maps.where("novelId").equals(oldId).toArray();
             const graphs = await udb.graphs.where("novelId").equals(oldId).toArray();
-            await udb.transaction("rw", udb.novels, udb.chapters, udb.summaries, udb.notes, udb.maps, udb.graphs, async () => {
-              await udb.novels.delete(oldId);
-              await udb.chapters.where("novelId").equals(oldId).delete();
+            await (udb as any).transaction("rw", udb.novels, udb.chapters, udb.summaries, udb.notes, udb.maps, udb.graphs, async () => {
+              await udb!.novels.delete(oldId);
+              await udb!.chapters.where("novelId").equals(oldId).delete();
               for (const ch of chapters) {
-                await udb.chapters.put({ ...ch, novelId: serverId, id: `${serverId}-ch${ch.index}` });
+                await udb!.chapters.put({ ...ch, novelId: serverId, id: `${serverId}-ch${ch.index}` });
               }
-              for (const s of summaries) { await udb.summaries.put({ ...s, novelId: serverId }); }
-              for (const n of notes) { await udb.notes.put({ ...n, novelId: serverId }); }
-              for (const m of maps) { await udb.maps.put({ ...m, novelId: serverId }); }
-              for (const g of graphs) { await udb.graphs.put({ ...g, novelId: serverId }); }
+              for (const s of summaries) { await udb!.summaries.put({ ...s, novelId: serverId }); }
+              for (const n of notes) { await udb!.notes.put({ ...n, novelId: serverId }); }
+              for (const m of maps) { await udb!.maps.put({ ...m, novelId: serverId }); }
+              for (const g of graphs) { await udb!.graphs.put({ ...g, novelId: serverId }); }
             });
             const { readingPositions } = useNovelStore.getState();
             const oldPos = readingPositions[oldId];
@@ -165,21 +164,21 @@ export function useSyncOrchestration({ onSyncReady, setLocalUsers }: SyncOrchest
         udb = safeGetDB();
         if (!udb) break;
         await udb.transaction("rw", udb.novels, udb.chapters, async () => {
-          await udb.novels.put({
+          await udb!.novels.put({
             id: sn.id, title: sn.title, author: sn.author,
-            fileName: sn.fileName, fileFormat: sn.fileFormat,
-            totalChars: sn.totalChars, chapterCount: chapters.length,
+            fileName: sn.fileName, fileFormat: sn.fileFormat as "txt" | "epub",
+            totalChars: sn.totalChars,
             createdAt: sn.createdAt, updatedAt: sn.updatedAt || Date.now(),
           });
           for (const ch of chapters) {
-            await udb.chapters.put({
+            await udb!.chapters.put({
               id: ch.id, novelId: sn.id, index: ch.index,
               title: ch.title, content: ch.content,
               startOffset: ch.startOffset ?? 0, endOffset: ch.endOffset ?? ch.content?.length ?? 0,
             });
           }
         });
-        addNovel({ ...sn, chapters, chapterCount: chapters.length });
+        addNovel({ ...sn, chapters, chapterCount: chapters.length, fileFormat: sn.fileFormat as "txt" | "epub" });
       }
     } catch (e) { console.error("syncJoinedNovels:", e); }
   }, [addNovel]);
@@ -206,7 +205,7 @@ export function useSyncOrchestration({ onSyncReady, setLocalUsers }: SyncOrchest
     localStorage.setItem("sync-username", newUsername);
     addLocalUser(newUsername);
     const newDb = getUserDB();
-    await newDb.transaction("rw", newDb.novels, newDb.chapters, newDb.summaries, newDb.notes, newDb.maps, newDb.graphs, async () => {
+    await (newDb as any).transaction("rw", newDb.novels, newDb.chapters, newDb.summaries, newDb.notes, newDb.maps, newDb.graphs, async () => {
       if (novels.length) await newDb.novels.bulkPut(novels);
       if (chapters.length) await newDb.chapters.bulkPut(chapters);
       if (summaries.length) await newDb.summaries.bulkPut(summaries);
@@ -397,6 +396,8 @@ export function useSyncOrchestration({ onSyncReady, setLocalUsers }: SyncOrchest
       localStorage.removeItem("sync-username");
       localStorage.removeItem("sync-clientId");
       localStorage.removeItem("sync-token");
+      localStorage.removeItem(`novel-reader-last-sync-time:${username}`);
+      localStorage.removeItem("sync-auto-offline");
     }
   }, [setLocalUsers]);
 
