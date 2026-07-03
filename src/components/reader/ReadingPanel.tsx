@@ -90,7 +90,7 @@ export function ReadingPanel() {
       )}
 
       {/* Desktop: right panel */}
-      <div className="hidden md:flex" data-sidebar="summary-panel">
+      <div className="hidden md:flex overflow-hidden" data-sidebar="summary-panel">
         {/* 折叠按钮 - 始终显示 */}
         <button onClick={() => setSummaryOpen(!summaryOpen)}
           className="h-[85px] w-8 bg-card border border-l-0 rounded-l-md flex items-center justify-center hover:bg-accent transition-colors group shadow-sm shrink-0 relative">
