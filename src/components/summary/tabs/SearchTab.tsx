@@ -59,6 +59,7 @@ export function SearchTab({
         <Input
           id="rag-search-input"
           name="rag-search-input"
+          aria-label="语义搜索"
           className="h-7 text-xs flex-1"
           placeholder="输入关键词或语义查询..."
           value={searchHook.searchQuery}

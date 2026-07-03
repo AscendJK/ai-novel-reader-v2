@@ -93,6 +93,7 @@ export function ReadingPanel() {
       <div className="hidden md:flex overflow-hidden" data-sidebar="summary-panel">
         {/* 折叠按钮 - 始终显示 */}
         <button onClick={() => setSummaryOpen(!summaryOpen)}
+          aria-label={summaryOpen ? "收起 AI 分析面板" : "展开 AI 分析面板"}
           className="h-[85px] w-8 bg-card border border-l-0 rounded-l-md flex items-center justify-center hover:bg-accent transition-colors group shadow-sm shrink-0 relative">
           {summaryOpen ? (
             <PanelRightClose className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
@@ -134,7 +135,7 @@ export function ReadingPanel() {
       <div className="md:hidden fixed inset-0 z-50 bg-card flex flex-col" style={{ display: mobileAiOpen ? undefined : "none" }}>
           <div className="flex items-center justify-between p-3 border-b shrink-0">
             <span className="font-semibold text-sm">AI 分析</span>
-            <button onClick={() => setMobileAiOpen(false)} className="p-1 rounded hover:bg-accent"><X className="h-4 w-4" /></button>
+            <button onClick={() => setMobileAiOpen(false)} aria-label="关闭 AI 分析" className="p-1 rounded hover:bg-accent"><X className="h-4 w-4" /></button>
           </div>
           <div className="flex-1 min-h-0">
             <Suspense fallback={null}>

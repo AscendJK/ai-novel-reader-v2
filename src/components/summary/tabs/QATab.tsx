@@ -58,6 +58,7 @@ export function QATab({
                 <Input
                   id="range-from"
                   name="range-from"
+                  aria-label="起始章节"
                   className="h-6 text-xs w-16 text-center"
                   placeholder="1"
                   value={qaHook.rangeFrom}
@@ -67,6 +68,7 @@ export function QATab({
                 <Input
                   id="range-to"
                   name="range-to"
+                  aria-label="结束章节"
                   className="h-6 text-xs w-16 text-center"
                   placeholder={String(chapterCount)}
                   value={qaHook.rangeTo}
