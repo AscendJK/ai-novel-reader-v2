@@ -65,7 +65,7 @@ export function MiniCard({
   const showMetadata = metadata?.usedFallback || metadata?.truncated;
 
   return (
-    <Card className={`shadow-none overflow-hidden ${isTemp ? "border-dashed border-amber-300 dark:border-amber-700" : ""}`}>
+    <Card className={`shadow-none overflow-hidden max-w-full ${isTemp ? "border-dashed border-amber-300 dark:border-amber-700" : ""}`}>
       <CardHeader className="p-2 pb-0.5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1 min-w-0">

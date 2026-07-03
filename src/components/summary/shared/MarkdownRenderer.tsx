@@ -25,7 +25,7 @@ export const summaryComponents: Components = {
     <h4 className="text-xs font-medium mt-1.5 mb-0.5">{children}</h4>
   ),
   p: ({ children }: { children: ReactNode }) => (
-    <p className="text-foreground/80 leading-relaxed">{children}</p>
+    <p className="text-foreground/80 leading-relaxed break-words">{children}</p>
   ),
   ul: ({ children }: { children: ReactNode }) => (
     <ul className="list-disc pl-3 space-y-0.5 text-foreground/75">{children}</ul>
@@ -44,13 +44,13 @@ export const summaryComponents: Components = {
   ),
   hr: () => <hr className="my-2 border-border" />,
   blockquote: ({ children }: { children: ReactNode }) => (
-    <blockquote className="border-l-2 border-primary/30 pl-2 italic">{children}</blockquote>
+    <blockquote className="border-l-2 border-primary/30 pl-2 italic break-words">{children}</blockquote>
   ),
   code: ({ children }: { children: ReactNode }) => (
-    <code className="bg-muted px-1 py-0.5 rounded text-xs">{children}</code>
+    <code className="bg-muted px-1 py-0.5 rounded text-xs break-all">{children}</code>
   ),
   table: ({ children }: { children: ReactNode }) => (
-    <div className="overflow-x-auto my-1">
+    <div className="overflow-x-auto my-1 max-w-full">
       <table className="w-full text-xs border-collapse">{children}</table>
     </div>
   ),
