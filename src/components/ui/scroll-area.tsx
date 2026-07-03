@@ -2,22 +2,46 @@ import * as React from "react"
 import * as ScrollAreaPrimitive from "@radix-ui/react-scroll-area"
 import { cn } from "@/lib/utils"
 
+/**
+ * Override Radix Viewport's inline `display:table` which causes content overflow.
+ * Radix applies this via JS style prop, so CSS alone can't reliably override it.
+ */
+function useFixViewportDisplay(rootRef: React.RefObject<HTMLDivElement | null>) {
+  React.useEffect(() => {
+    if (!rootRef.current) return
+    const viewport = rootRef.current.querySelector<HTMLElement>("[data-radix-scroll-area-viewport]")
+    if (!viewport) return
+    viewport.style.display = "block"
+    viewport.style.minWidth = "0"
+  })
+}
+
 const ScrollArea = React.forwardRef<
   React.ElementRef<typeof ScrollAreaPrimitive.Root>,
   React.ComponentPropsWithoutRef<typeof ScrollAreaPrimitive.Root>
->(({ className, children, ...props }, ref) => (
-  <ScrollAreaPrimitive.Root
-    ref={ref}
-    className={cn("relative overflow-hidden", className)}
-    {...props}
-  >
-    <ScrollAreaPrimitive.Viewport className="h-full w-full rounded-[inherit]">
-      {children}
-    </ScrollAreaPrimitive.Viewport>
-    <ScrollBar />
-    <ScrollAreaPrimitive.Corner />
-  </ScrollAreaPrimitive.Root>
-))
+>(({ className, children, ...props }, ref) => {
+  const internalRef = React.useRef<HTMLDivElement>(null)
+  const composedRef = (node: HTMLDivElement | null) => {
+    ;(internalRef as React.MutableRefObject<HTMLDivElement | null>).current = node
+    if (typeof ref === "function") ref(node)
+    else if (ref) (ref as React.MutableRefObject<HTMLDivElement | null>).current = node
+  }
+  useFixViewportDisplay(internalRef)
+
+  return (
+    <ScrollAreaPrimitive.Root
+      ref={composedRef}
+      className={cn("relative overflow-hidden", className)}
+      {...props}
+    >
+      <ScrollAreaPrimitive.Viewport className="h-full w-full rounded-[inherit]">
+        {children}
+      </ScrollAreaPrimitive.Viewport>
+      <ScrollBar />
+      <ScrollAreaPrimitive.Corner />
+    </ScrollAreaPrimitive.Root>
+  )
+})
 ScrollArea.displayName = ScrollAreaPrimitive.Root.displayName
 
 const ScrollBar = React.forwardRef<
