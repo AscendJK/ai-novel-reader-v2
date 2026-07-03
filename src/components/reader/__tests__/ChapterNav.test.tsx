@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { ChapterNav } from "../ChapterNav";
 import { useNovelStore } from "@/stores/novel-store";
 
@@ -24,9 +24,9 @@ const mockNovel = {
   createdAt: Date.now(),
   updatedAt: Date.now(),
   chapters: [
-    { id: "ch-1", title: "第一章", index: 0, content: "内容1" },
-    { id: "ch-2", title: "第二章", index: 1, content: "" },
-    { id: "ch-3", title: "第三章", index: 2, content: "" },
+    { id: "ch-1", title: "第一章", index: 0, content: "内容1", novelId: "novel-1", startOffset: 0, endOffset: 3 },
+    { id: "ch-2", title: "第二章", index: 1, content: "", novelId: "novel-1", startOffset: 3, endOffset: 3 },
+    { id: "ch-3", title: "第三章", index: 2, content: "", novelId: "novel-1", startOffset: 3, endOffset: 3 },
   ],
 };
 

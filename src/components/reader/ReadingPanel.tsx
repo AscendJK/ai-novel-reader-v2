@@ -122,7 +122,7 @@ export function ReadingPanel() {
           <div className="md:hidden fixed inset-y-0 left-0 w-[min(280px,80vw)] bg-card z-50 shadow-xl animate-in slide-in-from-left">
             <div className="flex items-center justify-between p-3 border-b">
               <span className="font-semibold text-sm">目录</span>
-              <button onClick={() => setMobileNavOpen(false)} className="p-1 rounded hover:bg-accent"><X className="h-4 w-4" /></button>
+              <button onClick={() => setMobileNavOpen(false)} aria-label="关闭目录" className="p-1 rounded hover:bg-accent"><X className="h-4 w-4" /></button>
             </div>
             <div className="h-[calc(100vh-48px)]">
               <ChapterNav scrollControlRef={scrollControlRef} />

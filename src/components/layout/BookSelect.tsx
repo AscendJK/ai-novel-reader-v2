@@ -310,7 +310,7 @@ export function BookSelect() {
         await udb.novels.put({
           id: novel.id, title: novel.title, author: novel.author,
           fileName: novel.fileName, fileFormat: novel.fileFormat,
-          totalChars: novel.totalChars, chapterCount: chapters.length,
+          totalChars: novel.totalChars,
           createdAt: novel.createdAt, updatedAt: Date.now(),
         });
         for (const ch of chapters) {

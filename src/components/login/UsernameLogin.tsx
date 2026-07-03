@@ -166,6 +166,7 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
                           <span className="truncate">{url}</span>
                         </div>
                         <button className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-destructive"
+                          aria-label="删除"
                           onClick={(e) => { e.stopPropagation(); removeRecentUrl(url); setServerUrlState(getServerUrl()); }}>
                           <X className="h-3 w-3" />
                         </button>

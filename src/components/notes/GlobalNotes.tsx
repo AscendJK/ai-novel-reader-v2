@@ -84,6 +84,7 @@ export function GlobalNotes({ onBack }: Props) {
         </div>
         <select
           id="notes-novel-filter" name="notes-novel-filter"
+          aria-label="按小说筛选"
           value={novelFilter}
           onChange={(e) => setNovelFilter(e.target.value)}
           className="px-3 py-2 text-sm rounded-md border bg-background"
@@ -95,6 +96,7 @@ export function GlobalNotes({ onBack }: Props) {
         </select>
         <select
           id="notes-source-filter" name="notes-source-filter"
+          aria-label="按来源筛选"
           value={sourceFilter}
           onChange={(e) => setSourceFilter(e.target.value as "all" | "user" | "ai")}
           className="px-3 py-2 text-sm rounded-md border bg-background"
