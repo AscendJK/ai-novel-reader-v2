@@ -29,13 +29,13 @@ export function ReadingPanel() {
 
   const currentNovelId = useNovelStore((s) => s.currentNovel?.id);
   const selectedChapterId = useNovelStore((s) => s.selectedChapterId);
-  const { getSummariesByNovel } = useSummaryStore();
+  const storeSummaries = useSummaryStore((s) => s.summaries);
 
   const hasCurrentSummary = useMemo(() => currentNovelId
-    ? getSummariesByNovel(currentNovelId).some(
-        (s) => s.chapterId === selectedChapterId && s.type === "chapter"
+    ? storeSummaries.some(
+        (s) => s.novelId === currentNovelId && s.chapterId === selectedChapterId && s.type === "chapter"
       )
-    : false, [currentNovelId, selectedChapterId, getSummariesByNovel]);
+    : false, [currentNovelId, selectedChapterId, storeSummaries]);
 
   const openMobileTab = useCallback((tab: string) => {
     setMobileAiTab(tab);

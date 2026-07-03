@@ -51,7 +51,7 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
   // Ref for latest selectedChapterId to avoid stale closures in callbacks
   const selectedChapterRef = useRef(selectedChapterId);
   selectedChapterRef.current = selectedChapterId;
-  const { getSummariesByNovel, isGenerating, generateProgress } = useSummaryStore();
+  const { isGenerating, generateProgress } = useSummaryStore();
   const {
     isRunning, currentTask, currentTaskType, error,
     summarizeChapter, summarizeAllChapters, stopBatchSummary, regenerateChapter,
@@ -239,7 +239,8 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
     return () => { cancelled = true; };
   }, [currentNovel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const summaries = useMemo(() => currentNovel ? getSummariesByNovel(currentNovel.id) : [], [currentNovel?.id, getSummariesByNovel]);
+  const storeSummaries = useSummaryStore((s) => s.summaries);
+  const summaries = useMemo(() => currentNovel ? storeSummaries.filter((s) => s.novelId === currentNovel.id) : [], [currentNovel?.id, storeSummaries]);
   const chapterSummary = useMemo(() => summaries.find((s) => s.chapterId === selectedChapterId && s.type === "chapter"), [summaries, selectedChapterId]);
   const globalSummaries = useMemo(() => summaries.filter((s) => s.type === "global"), [summaries]);
   const charSummaries = useMemo(() => summaries.filter((s) => s.type === "characters"), [summaries]);
