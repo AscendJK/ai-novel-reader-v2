@@ -18,7 +18,7 @@ const mockNovel = {
   title: "测试小说",
   author: "作者",
   fileName: "test.txt",
-  fileFormat: "txt",
+  fileFormat: "txt" as const,
   totalChars: 10000,
   chapterCount: 3,
   createdAt: Date.now(),
