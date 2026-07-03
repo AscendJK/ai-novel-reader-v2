@@ -4,6 +4,7 @@
  */
 
 import { ragLog } from "@/lib/logger";
+import { getServerUrl } from "@/lib/api-client";
 import { resolveModelKey } from "./engines";
 
 // Resolve engine ID to the model key Transformers.js expects
@@ -53,7 +54,7 @@ async function getEncoder(engine: string): Promise<any> {
     env.useBrowserCache = true;
 
     // 通过 remoteHost 让 transformers.js 直接请求后端代理
-    const serverUrl = (await import("@/lib/api-client")).getServerUrl();
+    const serverUrl = getServerUrl();
     if (serverUrl) {
       env.remoteHost = `${serverUrl}/api/rag/model-proxy`;
     }
