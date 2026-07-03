@@ -63,22 +63,6 @@ describe("ChapterNav", () => {
     expect(ch2Button.className).toContain("text-primary");
   });
 
-  it("未加载的章节显示(未加载)标签", () => {
-    useNovelStore.setState({ currentNovel: mockNovel, selectedChapterId: "ch-1" });
-    render(<ChapterNav />);
-    // ch-2 and ch-3 have empty content, both show "(未加载)"
-    const unloadedLabels = screen.getAllByText("(未加载)");
-    expect(unloadedLabels.length).toBe(2);
-  });
-
-  it("已加载的章节不显示(未加载)标签", () => {
-    useNovelStore.setState({ currentNovel: mockNovel, selectedChapterId: "ch-1" });
-    render(<ChapterNav />);
-    // ch-1 has content, should not show "(未加载)"
-    const ch1Button = screen.getByText("第一章").closest("button")!;
-    expect(ch1Button.textContent).not.toContain("未加载");
-  });
-
   it("点击已加载的章节调用 setSelectedChapter", async () => {
     const setSelectedChapter = vi.fn();
     useNovelStore.setState({

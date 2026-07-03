@@ -137,9 +137,6 @@ export const ChapterNav = memo(function ChapterNav({ scrollControlRef }: Chapter
                     />
                   )}
                   <span className="truncate">{ch.title}</span>
-                  {!isLoaded && !isLoading && (
-                    <span className="text-[10px] text-muted-foreground ml-auto">(未加载)</span>
-                  )}
                 </button>
               );
             })}
