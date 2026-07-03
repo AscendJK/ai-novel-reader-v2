@@ -195,3 +195,9 @@
     display: none !important;
   }
 }
+
+/* ── Radix ScrollArea Viewport: 覆盖 display:table 内联样式 ── */
+[data-radix-scroll-area-viewport] {
+  display: block !important;
+  min-width: 0 !important;
+}
