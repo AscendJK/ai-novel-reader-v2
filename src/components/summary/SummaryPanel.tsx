@@ -249,7 +249,7 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
   if (!currentNovel) return <div className="md:w-80 w-full border-l md:border-l border-t md:border-t-0 bg-card h-full shrink-0" />;
 
   return (
-    <div className="md:w-80 w-full border-l md:border-l border-t md:border-t-0 bg-card h-full flex flex-col shrink-0">
+    <div className="md:w-80 w-full border-l md:border-l border-t md:border-t-0 bg-card h-full flex flex-col shrink-0 overflow-hidden">
       {/* Header */}
       <div className="p-2.5 border-b shrink-0">
         <h3 className="font-semibold text-xs flex items-center gap-1.5">
