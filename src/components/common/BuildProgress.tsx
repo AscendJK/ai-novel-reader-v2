@@ -19,7 +19,7 @@ interface Props {
   onDismiss: () => void;
 }
 
-export function BuildProgress({ open, engine, status, message, current, total, error, novelId, queuePosition, onRetry, onFallbackToTFIDF, onDismiss }: Props) {
+export function BuildProgress({ open, engine, status, message, current, total, error, queuePosition, onRetry, onFallbackToTFIDF, onDismiss }: Props) {
   // 跟踪是否已经开始构建（避免状态回退到 queued）
   // Hooks 必须在条件判断之前调用，遵循 React Rules of Hooks
   const [hasStartedBuilding, setHasStartedBuilding] = useState(false);
@@ -48,7 +48,7 @@ export function BuildProgress({ open, engine, status, message, current, total, e
   return (
     <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-background/30">
       <Card className="w-full max-w-md mx-4 relative">
-        <button className="absolute top-2 right-2 text-muted-foreground hover:text-foreground" onClick={onDismiss}>
+        <button className="absolute top-2 right-2 text-muted-foreground hover:text-foreground" onClick={onDismiss} aria-label="关闭">
           <X className="h-4 w-4" />
         </button>
         <CardHeader className="text-center">

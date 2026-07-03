@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, useEffect, useMemo } from "react";
-import { Upload, BookOpen, FolderOpen, FileText, Search, Loader2 } from "lucide-react";
+import { Upload, BookOpen, FolderOpen, FileText, Search } from "lucide-react";
 import { useFileParser } from "@/hooks/useFileParser";
 import { useNovelStore, getLastOpenedTimes } from "@/stores/novel-store";
 import { loadAllNovelMeta, deleteNovel, loadNovel } from "@/db/repositories";
@@ -27,7 +27,7 @@ interface ServerNovel {
   title: string;
   author?: string;
   fileName: string;
-  fileFormat: string;
+  fileFormat: "txt" | "epub";
   totalChars: number;
   chapterCount: number;
   createdAt: number;
@@ -90,7 +90,7 @@ export function BookSelect() {
   const lruKeys = useRAGStore((s) => s.lruKeys);
   const offlineMode = useUIStore((s) => s.offlineMode);
   const addCachedKey = useRAGStore((s) => s.addCachedKey);
-  const [buildingKeys, setBuildingKeys] = useState<Set<string>>(new Set());
+  const [, setBuildingKeys] = useState<Set<string>>(new Set());
   const [buildStatuses, setBuildStatuses] = useState<Record<string, Record<string, any>>>({});
 
   // Scan ragCache when novel count changes (new novel added or novel deleted)
@@ -505,6 +505,7 @@ export function BookSelect() {
                 ref={fileInputRef}
                 type="file"
                 id="novel-file-input" name="novel-file-input"
+                aria-label="选择小说文件"
                 accept=".txt,.epub"
                 multiple
                 className="hidden"
@@ -525,6 +526,7 @@ export function BookSelect() {
                 ref={folderInputRef}
                 type="file"
                 id="novel-folder-input" name="novel-folder-input"
+                aria-label="选择小说文件夹"
                 /* @ts-expect-error webkitdirectory */
                 webkitdirectory=""
                 className="hidden"

@@ -36,6 +36,7 @@ export function NovelBuildWindow({ build, onRetry, onFallbackToTFIDF }: NovelBui
         <button
           className="absolute top-2 right-2 text-muted-foreground hover:text-foreground"
           onClick={() => dismissWindow(novelId, engine)}
+          aria-label="关闭"
         >
           <X className="h-4 w-4" />
         </button>

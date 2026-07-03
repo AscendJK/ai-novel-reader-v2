@@ -70,6 +70,7 @@ export function ToastContainer() {
           <button
             className="text-muted-foreground hover:text-foreground shrink-0"
             onClick={() => _setToasts?.((prev) => prev.filter((x) => x.id !== t.id))}
+            aria-label="关闭通知"
           >
             <X className="h-3.5 w-3.5" />
           </button>
