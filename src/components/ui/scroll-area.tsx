@@ -3,16 +3,24 @@ import * as ScrollAreaPrimitive from "@radix-ui/react-scroll-area"
 import { cn } from "@/lib/utils"
 
 /**
- * Override Radix Viewport's inline `display:table` which causes content overflow.
- * Radix applies this via JS style prop, so CSS alone can't reliably override it.
+ * Radix ScrollArea Viewport 内部有一个 display:table 的包裹层，
+ * table 自动布局会按内容宽度撑开，导致溢出父容器。
+ * 用 ref 在挂载后强制覆盖两层的 display 和 minWidth。
  */
 function useFixViewportDisplay(rootRef: React.RefObject<HTMLDivElement | null>) {
   React.useEffect(() => {
     if (!rootRef.current) return
     const viewport = rootRef.current.querySelector<HTMLElement>("[data-radix-scroll-area-viewport]")
     if (!viewport) return
+    // 外层 Viewport
     viewport.style.display = "block"
     viewport.style.minWidth = "0"
+    // 内层内容包裹 div（Radix 硬编码的 display:table）
+    const inner = viewport.querySelector<HTMLElement>("div")
+    if (inner) {
+      inner.style.display = "block"
+      inner.style.minWidth = "0"
+    }
   })
 }
 
