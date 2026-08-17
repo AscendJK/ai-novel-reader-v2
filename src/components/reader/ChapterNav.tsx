@@ -9,7 +9,7 @@ const TOGGLE_W = "w-8";
 const TOGGLE_H = "h-[85px]"; // matches ChapterContent top bar height
 
 interface ChapterNavProps {
-  scrollControlRef?: React.RefObject<{ scrollToChapter: (chapterId: string, chapterOffset?: number) => void; suppressIO: () => () => void } | null>;
+  scrollControlRef?: React.RefObject<{ scrollToChapter: (chapterId: string, chapterOffset?: number) => void; suppressIO: (targetChapterId?: string) => () => void } | null>;
 }
 
 export const ChapterNav = memo(function ChapterNav({ scrollControlRef }: ChapterNavProps) {
@@ -107,7 +107,7 @@ export const ChapterNav = memo(function ChapterNav({ scrollControlRef }: Chapter
             <p className="text-xs text-muted-foreground mt-0.5">共 {currentNovel.chapters.length} 章</p>
           </div>
         </div>
-        <ScrollArea className="h-[calc(100vh-150px)]" style={{ height: "calc(100dvh - 150px)" }}>
+        <ScrollArea style={{ height: "calc(100dvh - 150px)" }}>
           <div className="p-1.5" ref={scrollRef}>
             {currentNovel.chapters.map((ch) => {
               const isLoaded = !!ch.content;

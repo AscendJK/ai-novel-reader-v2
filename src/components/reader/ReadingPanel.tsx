@@ -10,7 +10,7 @@ import { useNovelStore } from "@/stores/novel-store";
 /** ChapterContent 暴露给 ChapterNav 的滚动控制函数 */
 export interface ScrollControl {
   scrollToChapter: (chapterId: string, chapterOffset?: number) => void;
-  suppressIO: () => () => void;
+  suppressIO: (targetChapterId?: string) => () => void;
 }
 
 export function ReadingPanel() {

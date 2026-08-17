@@ -689,7 +689,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
               key={ch.id}
               data-chapter-id={ch.id}
               className="chapter-section"
-              style={{ contain: "content", contentVisibility: "auto" }}
+              style={{ contain: "content", contentVisibility: "auto", containIntrinsicSize: "0 500px" }}
             >
               {/* 章节分割线 */}
               {ch.id !== loadedChapters[0]?.id && (
@@ -741,10 +741,20 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
           prevLabel={prevChapter ? prevChapter.title : "已是第一章"}
           nextLabel={nextChapter ? nextChapter.title : "已是最后一章"}
           onPrev={() => {
-            if (prevChapter) scrollToChapter(prevChapter.id);
+            if (prevChapter) {
+              const release = suppressIO(prevChapter.id);
+              setSelectedChapter(prevChapter.id);
+              scrollToChapter(prevChapter.id);
+              setTimeout(release, 500);
+            }
           }}
           onNext={() => {
-            if (nextChapter) scrollToChapter(nextChapter.id);
+            if (nextChapter) {
+              const release = suppressIO(nextChapter.id);
+              setSelectedChapter(nextChapter.id);
+              scrollToChapter(nextChapter.id);
+              setTimeout(release, 500);
+            }
           }}
           prevDisabled={!prevChapter}
           nextDisabled={!nextChapter}
