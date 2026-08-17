@@ -421,17 +421,19 @@ export function useContinuousScroll({
   }, [chapters.length, loadMore, enabled, loadedChapters.length]);
 
   // ── 临时抑制章节检测和边缘加载（目录点击等场景）──
-  // targetChapterId 可选，传入后释放时会同步更新 lastDetectedChapterRef，
+  // targetChapterId 可选，传入后立即更新 lastDetectedChapterRef，
   // 避免释放后 detectCurrentChapter 因旧 lastDetected 找不到目标而回退到第一章
   const suppressIO = useCallback((targetChapterId?: string) => {
     suppressChapterDetectionRef.current = true;
     hasRestoredRef.current = true;
     restoreTargetRef.current = null;
+    // 立即更新 lastDetectedChapterRef，防止恢复 effect 清理函数
+    // 重置 suppressChapterDetectionRef 后检测提前触发时仍用旧值
+    if (targetChapterId) {
+      lastDetectedChapterRef.current = targetChapterId;
+    }
     return () => {
       suppressChapterDetectionRef.current = false;
-      if (targetChapterId) {
-        lastDetectedChapterRef.current = targetChapterId;
-      }
       triggerDetectionRef.current?.();
     };
   }, []);
