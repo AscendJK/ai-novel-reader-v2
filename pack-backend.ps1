@@ -5,7 +5,9 @@ $ErrorActionPreference = "Stop"
 
 # 清理旧的临时目录和压缩包
 if (Test-Path "backend-pack-tmp") { Remove-Item -Recurse -Force "backend-pack-tmp" }
+# 清理历史遗留的旧文件名和当前实际输出文件
 if (Test-Path "release-backend.zip") { Remove-Item -Force "release-backend.zip" }
+if (Test-Path "ai-novel-reader-v2-backend.zip") { Remove-Item -Force "ai-novel-reader-v2-backend.zip" }
 
 # 创建目录结构
 New-Item -ItemType Directory -Force -Path "backend-pack-tmp\server\routes" | Out-Null
