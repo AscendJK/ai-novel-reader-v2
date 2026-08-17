@@ -1,7 +1,15 @@
-# 后端精简包打包脚本
-# 用法: powershell -ExecutionPolicy Bypass -File pack-backend.ps1
+# 后端精简包打包脚本（跨平台：Windows PowerShell / macOS / Linux pwsh）
+# 用法:
+#   Windows:  powershell -NoProfile -ExecutionPolicy Bypass -File pack-backend.ps1
+#   跨平台:   pwsh -File pack-backend.ps1
+#   或:       npm run pack:backend
 
 $ErrorActionPreference = "Stop"
+
+# 基于脚本所在目录，保证从任意工作目录运行都正确
+$root = $PSScriptRoot
+if (-not $root) { $root = (Get-Location).Path }
+Set-Location $root
 
 # 清理旧的临时目录和压缩包
 if (Test-Path "backend-pack-tmp") { Remove-Item -Recurse -Force "backend-pack-tmp" }
@@ -10,38 +18,38 @@ if (Test-Path "release-backend.zip") { Remove-Item -Force "release-backend.zip" 
 if (Test-Path "ai-novel-reader-v2-backend.zip") { Remove-Item -Force "ai-novel-reader-v2-backend.zip" }
 
 # 创建目录结构
-New-Item -ItemType Directory -Force -Path "backend-pack-tmp\server\routes" | Out-Null
-New-Item -ItemType Directory -Force -Path "backend-pack-tmp\server\middleware" | Out-Null
-New-Item -ItemType Directory -Force -Path "backend-pack-tmp\server\lib" | Out-Null
+New-Item -ItemType Directory -Force -Path "backend-pack-tmp/server/routes" | Out-Null
+New-Item -ItemType Directory -Force -Path "backend-pack-tmp/server/middleware" | Out-Null
+New-Item -ItemType Directory -Force -Path "backend-pack-tmp/server/lib" | Out-Null
 
 # 复制服务器核心文件
 $serverFiles = @(
-    "server\index.js",
-    "server\database.js",
-    "server\admin.js",
-    "server\admin.html",
-    "server\rag-builder.js",
-    "server\rag-worker.mjs",
-    "server\sync-handler.js"
+    "server/index.js",
+    "server/database.js",
+    "server/admin.js",
+    "server/admin.html",
+    "server/rag-builder.js",
+    "server/rag-worker.mjs",
+    "server/sync-handler.js"
 )
 foreach ($f in $serverFiles) {
-    Copy-Item $f "backend-pack-tmp\server\"
+    Copy-Item $f "backend-pack-tmp/server/"
 }
 
 # 复制目录
-Copy-Item "server\routes\*.js" "backend-pack-tmp\server\routes\"
-Copy-Item "server\middleware\*.js" "backend-pack-tmp\server\middleware\"
-Copy-Item "server\lib\engine-config.js" "backend-pack-tmp\server\lib\"
+Copy-Item "server/routes/*.js" "backend-pack-tmp/server/routes/"
+Copy-Item "server/middleware/*.js" "backend-pack-tmp/server/middleware/"
+Copy-Item "server/lib/engine-config.js" "backend-pack-tmp/server/lib/"
 
 # 复制并重命名配置和脚本
-Copy-Item "package-server.json" "backend-pack-tmp\package.json"
-Copy-Item "start-backend.bat" "backend-pack-tmp\start.bat"
-Copy-Item "start-backend.sh" "backend-pack-tmp\start.sh"
-Copy-Item "admin-backend.bat" "backend-pack-tmp\admin.bat"
-Copy-Item "admin-backend.sh" "backend-pack-tmp\admin.sh"
+Copy-Item "package-server.json" "backend-pack-tmp/package.json"
+Copy-Item "start-backend.bat" "backend-pack-tmp/start.bat"
+Copy-Item "start-backend.sh" "backend-pack-tmp/start.sh"
+Copy-Item "admin-backend.bat" "backend-pack-tmp/admin.bat"
+Copy-Item "admin-backend.sh" "backend-pack-tmp/admin.sh"
 
 # 压缩
-Compress-Archive -Path "backend-pack-tmp\*" -DestinationPath "ai-novel-reader-v2-backend.zip" -Force
+Compress-Archive -Path "backend-pack-tmp/*" -DestinationPath "ai-novel-reader-v2-backend.zip" -Force
 
 # 清理临时目录
 Remove-Item -Recurse -Force "backend-pack-tmp"

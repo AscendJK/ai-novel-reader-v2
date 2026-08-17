@@ -1,0 +1,39 @@
+name: Package backend release
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: "backend-release"
+  cancel-in-progress: false
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Package backend (pwsh, cross-platform)
+        shell: pwsh
+        run: ./pack-backend.ps1
+
+      - name: Verify package contents
+        shell: pwsh
+        run: |
+          $zip = Get-Item "ai-novel-reader-v2-backend.zip"
+          if (-not $zip -or $zip.Length -lt 10000) {
+            Write-Error "Package missing or too small: $($zip.Length) bytes"
+          }
+          Write-Host "Package OK: $($zip.Length) bytes"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ai-novel-reader-v2-backend.zip
+          generate_release_notes: true
