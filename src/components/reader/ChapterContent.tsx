@@ -573,6 +573,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
           readingMode={readingMode} setReadingMode={setReadingMode}
           autoSwitchPageMode={autoSwitchPageMode} setAutoSwitchPageMode={setAutoSwitchPageMode}
           immersive={immersive}
+          windowWidth={windowWidth}
           isIndexLoading={isIndexLoading}
         />
 
@@ -662,16 +663,17 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
         hasSummary={hasSummary}
         showFontPanel={showFontPanel} setShowFontPanel={setShowFontPanel}
         onToggleImmersive={onToggleImmersive}
-        fontSize={fontSize} setFontSize={setFontSize}
-        fontWeight={fontWeight} cycleFontWeight={cycleFontWeight} currentWeightLabel={currentWeightLabel}
-        lineHeight={lineHeight} setLineHeight={setLineHeight}
-        paragraphSpacing={paragraphSpacing} setParagraphSpacing={setParagraphSpacing}
-        fontFamily={fontFamily} setFontFamily={setFontFamily}
-        readingMode={readingMode} setReadingMode={setReadingMode}
-        immersive={immersive}
-        autoSwitchPageMode={autoSwitchPageMode} setAutoSwitchPageMode={setAutoSwitchPageMode}
-        isIndexLoading={isIndexLoading}
-      />
+                  fontSize={fontSize} setFontSize={setFontSize}
+                  fontWeight={fontWeight} cycleFontWeight={cycleFontWeight} currentWeightLabel={currentWeightLabel}
+                  lineHeight={lineHeight} setLineHeight={setLineHeight}
+                  paragraphSpacing={paragraphSpacing} setParagraphSpacing={setParagraphSpacing}
+                  fontFamily={fontFamily} setFontFamily={setFontFamily}
+                  readingMode={readingMode} setReadingMode={setReadingMode}
+                  autoSwitchPageMode={autoSwitchPageMode} setAutoSwitchPageMode={setAutoSwitchPageMode}
+                  immersive={immersive}
+                  windowWidth={windowWidth}
+                  isIndexLoading={isIndexLoading}
+              />
 
       {/* 连续滚动容器 */}
       <div
@@ -833,6 +835,7 @@ const TopBar = React.memo(function TopBar(props: {
   setAutoSwitchPageMode: (v: boolean) => void;
   immersive?: boolean;
   isIndexLoading?: boolean;
+  windowWidth?: number;
 }) {
   const {
     chapter, currentIndex, chapters, summaryOpen, hasSummary,
@@ -843,6 +846,7 @@ const TopBar = React.memo(function TopBar(props: {
     readingMode, setReadingMode, autoSwitchPageMode, setAutoSwitchPageMode,
     immersive,
     isIndexLoading,
+    windowWidth,
   } = props;
 
   const isImmersive = immersive || false;
