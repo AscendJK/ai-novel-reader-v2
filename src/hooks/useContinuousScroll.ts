@@ -149,7 +149,7 @@ export function useContinuousScroll({
           const relativeTop = elRect.top - containerRect.top + container.scrollTop;
           container.scrollTop = relativeTop + chapterOffset;
         } else {
-          el.scrollIntoView({ behavior: "smooth", block: "start" });
+          el.scrollIntoView({ behavior: "instant", block: "start" });
         }
       };
 

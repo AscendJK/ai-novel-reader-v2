@@ -50,7 +50,7 @@ export const ChapterNav = memo(function ChapterNav({ scrollControlRef }: Chapter
         setTimeout(release, 500);
       } else {
         const el = document.querySelector(`.chapter-section[data-chapter-id="${chapterId}"]`);
-        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+        if (el) el.scrollIntoView({ behavior: "instant", block: "start" });
       }
     } else {
       // 未加载，需要懒加载
@@ -68,7 +68,7 @@ export const ChapterNav = memo(function ChapterNav({ scrollControlRef }: Chapter
           requestAnimationFrame(() => {
             requestAnimationFrame(() => {
               const el = document.querySelector(`.chapter-section[data-chapter-id="${chapterId}"]`);
-              if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+              if (el) el.scrollIntoView({ behavior: "instant", block: "start" });
             });
           });
         }
