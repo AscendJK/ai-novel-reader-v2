@@ -12,7 +12,7 @@ import fs from "node:fs";
 import https from "node:https";
 import { fileURLToPath } from "node:url";
 import { checkpointWAL, createBackup, cleanupDeletedRecords, getBackupConfig, isRestoringBackup } from "./database.js";
-import { novelsRouter, ragRouter, syncRouter, proxyRouter } from "./routes/index.js";
+import { novelsRouter, ragRouter, syncRouter, proxyRouter, versionRouter } from "./routes/index.js";
 
 import { mountAdminRoutes } from "./admin.js";
 
@@ -64,6 +64,7 @@ app.use((req, res, next) => {
 mountAdminRoutes(app);
 
 // ── Mount API Routes ────────────────────────────────────────
+versionRouter(app);
 app.use("/api/novels", novelsRouter);
 app.use("/api/rag", ragRouter);
 app.use("/api/sync", syncRouter);

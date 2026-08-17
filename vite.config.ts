@@ -6,9 +6,13 @@ import fs from "fs";
 
 // GitHub Pages 部署路径（根据仓库名调整）
 const BASE_PATH = "/ai-novel-reader-v2/";
+const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf-8"));
 
 export default defineConfig({
   base: BASE_PATH,
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   plugins: [
     // sherpa-onnx 需要正确的 MIME 类型和 CORP header
     {

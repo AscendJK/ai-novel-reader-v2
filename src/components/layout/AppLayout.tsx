@@ -14,6 +14,9 @@ import { setupModelLoader } from "@/rag/model-loader";
 import { broadcast } from "@/lib/broadcast";
 import { setCurrentNovelIdGetter } from "@/rag/rag-cache-utils";
 import { useSyncOrchestration } from "@/hooks/useSyncOrchestration";
+import { checkVersion } from "@/lib/check-version";
+import { getServerUrl } from "@/lib/api-client";
+import { VersionMismatchDialog } from "@/components/common/VersionMismatchDialog";
 
 // Configure Transformers.js to load models from local public/models/
 setupModelLoader();
@@ -40,6 +43,7 @@ export function AppLayout() {
   const [localUsers, setLocalUsers] = useState<string[]>(getLocalUsers);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
   const [showShortcutHelp, setShowShortcutHelp] = useState(false);
+  const [versionMismatch, setVersionMismatch] = useState<{ frontend: string; backend: string } | null>(null);
   const dbInitialized = useRef(false);
 
   const onSyncReady = useCallback(() => setSyncReady(true), []);
@@ -151,6 +155,18 @@ export function AppLayout() {
     return () => unsubs.forEach(unsub => unsub());
   }, [offlineMode]);
 
+  // 登录成功后检测前后端版本号是否一致
+  useEffect(() => {
+    if (!syncReady) return;
+    const url = getServerUrl();
+    if (!url) return;
+    checkVersion().then((result) => {
+      if (!result.match && result.backend) {
+        setVersionMismatch({ frontend: result.frontend, backend: result.backend });
+      }
+    });
+  }, [syncReady]);
+
   const handleBackToLibrary = useCallback(() => {
     setShowSettings(false);
     setCurrentNovel(null);
@@ -216,6 +232,13 @@ export function AppLayout() {
             { key: "i", action: () => {}, description: "切换沉浸模式" },
           ]}
           onClose={() => setShowShortcutHelp(false)}
+        />
+      )}
+      {versionMismatch && (
+        <VersionMismatchDialog
+          frontend={versionMismatch.frontend}
+          backend={versionMismatch.backend}
+          onClose={() => setVersionMismatch(null)}
         />
       )}
     </div>
