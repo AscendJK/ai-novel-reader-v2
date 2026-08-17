@@ -42,6 +42,7 @@ class WebSpeechTTSEngine {
   private pendingVoiceId: string | null = null;
   private available = typeof speechSynthesis !== "undefined";
   private paraTimer: ReturnType<typeof setInterval> | null = null;
+  private fallbackCheckTimer: ReturnType<typeof setTimeout> | null = null;
 
   // 段落追踪状态
   private boundaryEventCount = 0;
@@ -135,6 +136,7 @@ class WebSpeechTTSEngine {
 
   private clearParaTimer(): void {
     if (this.paraTimer) { clearInterval(this.paraTimer); this.paraTimer = null; }
+    if (this.fallbackCheckTimer) { clearTimeout(this.fallbackCheckTimer); this.fallbackCheckTimer = null; }
   }
 
   /** 设置段落追踪：onboundary 字符映射 + 检测降级 */
@@ -178,8 +180,12 @@ class WebSpeechTTSEngine {
     };
 
     // 启动降级检测：播放 1.5 秒后如果没有收到 onboundary，启动定时器
-    setTimeout(() => {
-      if (!this.boundaryDetectionDone) {
+    // 保存 timer 引用并在播放结束/停止时清理，防止 interval 泄漏
+    if (this.fallbackCheckTimer) clearTimeout(this.fallbackCheckTimer);
+    this.fallbackCheckTimer = setTimeout(() => {
+      this.fallbackCheckTimer = null;
+      // 仅在当前 utterance 仍在播放时启动降级（stop/新 speak 后跳过）
+      if (!this.boundaryDetectionDone && this.utterance === utterance) {
         this.boundaryDetectionDone = true;
         this.onboundaryAvailable = false;
         this.startFallbackTimer(text, speed, breaks, indices, onParagraphChange);

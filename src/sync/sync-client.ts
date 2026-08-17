@@ -93,8 +93,12 @@ export class SyncClient {
   async login(username: string, mode: "create" | "join" = "create"): Promise<{ success: boolean; isNew: boolean; activeCount: number; error?: string }> {
     try {
       console.log("[sync] login:", username, mode);
+      // 提前保存 username，这样即使网络错误，心跳也能用它来重试
+      this.username = username;
+      localStorage.setItem("sync-username", username);
       const resp = await apiFetch("/api/sync/register", {
         method: "POST",
+        body: JSON.stringify({ username, mode, clientId: this.clientId }),
       });
       console.log("[sync] register response:", resp.status);
       if (resp.status === 404) {
