@@ -231,6 +231,7 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
   // Load graph + map + notes on novel switch
   useEffect(() => {
     notesHook.setNoteContent(""); searchHook.setSearchQuery(""); searchHook.clearSearch();
+    let cancelled = false;
     let cancelRaf = 0;
     if (currentNovel) {
       loadGraph(currentNovel.id).then((result) => {
