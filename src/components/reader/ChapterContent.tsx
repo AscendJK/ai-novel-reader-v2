@@ -526,11 +526,23 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
       // U8: 翻章时根据模式触发放内容加载（懒加载兼容）
       onPrevChapter={currentIndex > 0 ? () => {
         const prevId = chapters[currentIndex - 1]?.id;
-        if (isPaginated) goToChapter(prevId); else scrollToChapter(prevId);
+        if (isPaginated) goToChapter(prevId);
+        else {
+          const release = suppressIO(prevId);
+          setSelectedChapter(prevId);
+          scrollToChapter(prevId);
+          setTimeout(release, 500);
+        }
       } : undefined}
       onNextChapter={currentIndex < chapters.length - 1 ? () => {
         const nextId = chapters[currentIndex + 1]?.id;
-        if (isPaginated) goToChapter(nextId); else scrollToChapter(nextId);
+        if (isPaginated) goToChapter(nextId);
+        else {
+          const release = suppressIO(nextId);
+          setSelectedChapter(nextId);
+          scrollToChapter(nextId);
+          setTimeout(release, 500);
+        }
       } : undefined}
     />
   ) : null;
