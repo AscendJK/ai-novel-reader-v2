@@ -107,7 +107,7 @@ export const ChapterNav = memo(function ChapterNav({ scrollControlRef }: Chapter
             <p className="text-xs text-muted-foreground mt-0.5">共 {currentNovel.chapters.length} 章</p>
           </div>
         </div>
-        <ScrollArea style={{ height: "calc(100dvh - 150px)" }}>
+        <ScrollArea className="flex-1" style={{ minHeight: 0 }}>
           <div className="p-1.5" ref={scrollRef}>
             {currentNovel.chapters.map((ch) => {
               const isLoaded = !!ch.content;

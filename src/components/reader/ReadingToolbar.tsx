@@ -20,6 +20,7 @@ interface ReadingToolbarProps {
   setReadingMode: (m: ReadingMode) => void;
   autoSwitchPageMode: boolean;
   setAutoSwitchPageMode: (v: boolean) => void;
+  windowWidth: number;
 }
 
 export const ReadingToolbar = React.memo(function ReadingToolbar(props: ReadingToolbarProps) {
@@ -28,6 +29,7 @@ export const ReadingToolbar = React.memo(function ReadingToolbar(props: ReadingT
     lineHeight, setLineHeight, paragraphSpacing, setParagraphSpacing,
     fontFamily, setFontFamily,
     readingMode, setReadingMode, autoSwitchPageMode, setAutoSwitchPageMode,
+    windowWidth,
   } = props;
 
   return (
@@ -37,7 +39,7 @@ export const ReadingToolbar = React.memo(function ReadingToolbar(props: ReadingT
         <span className="text-xs text-muted-foreground">阅读</span>
         <div className="flex gap-1">
           {(["scroll", "single", "double"] as const)
-            .filter(m => m !== "double" || window.innerWidth >= 768)
+            .filter(m => m !== "double" || windowWidth >= 768)
             .map((m) => (
               <Button key={m} variant={readingMode === m ? "default" : "outline"}
                 size="sm" className="h-6 text-[10px] px-1.5"
@@ -47,7 +49,7 @@ export const ReadingToolbar = React.memo(function ReadingToolbar(props: ReadingT
             ))}
         </div>
       </div>
-      {readingMode !== "scroll" && window.innerWidth >= 768 && (
+      {readingMode !== "scroll" && windowWidth >= 768 && (
         <label className="flex items-center gap-2 cursor-pointer select-none">
           <input type="checkbox" checked={autoSwitchPageMode}
             onChange={(e) => setAutoSwitchPageMode(e.target.checked)}

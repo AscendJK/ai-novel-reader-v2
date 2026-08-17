@@ -190,8 +190,4 @@
 }
 
 /* ── 横屏模式自动最大化阅读区域 ── */
-@media (max-width: 767px) and (orientation: landscape) {
-  html.immersive .mobile-bottom-bar {
-    display: none !important;
-  }
-}
+/* 已由 JSX 条件渲染（{!immersive && ...}）处理，无需额外 CSS */
