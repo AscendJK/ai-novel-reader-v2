@@ -45,7 +45,12 @@ function detectEncoding(bytes: Uint8Array): string {
     }
   }
 
-  return utf8Score >= gbkScore ? "UTF-8" : "GBK";
+  // 只有 ASCII 字符时默认为 UTF-8
+  if (utf8Score === 0 && gbkScore === 0) return "UTF-8";
+  // 当命中 GBK 模式的比例显著时，更倾向于 GBK（避免纯 ASCII 段落误判）
+  // GBK 双字节序列通常比 UTF-8 多字节序列更可靠（因为 UTF-8 有严格的 follow byte 校验）
+  const gbkRatio = gbkScore / Math.max(1, utf8Score + gbkScore);
+  return gbkRatio > 0.15 ? "GBK" : "UTF-8";
 }
 
 export async function parseTxt(file: File, options?: ParserOptions): Promise<ParseResult> {

@@ -1,12 +1,7 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { RefreshCw, WifiOff } from "lucide-react";
-
-let _updateSW: ((reloadPage?: boolean) => Promise<void>) | null = null;
-
-export function setUpdateSW(fn: (reloadPage?: boolean) => Promise<void>) {
-  _updateSW = fn;
-}
+import { getUpdateSW } from "@/lib/sw-update";
 
 export function UpdateBanner() {
   const [needRefresh, setNeedRefresh] = useState(false);
@@ -32,8 +27,9 @@ export function UpdateBanner() {
           <RefreshCw className="h-4 w-4 text-primary shrink-0" />
           <span>有新版本可用</span>
           <Button size="sm" className="h-7 text-xs" onClick={async () => {
-            if (_updateSW) {
-              await _updateSW(true);
+            const updateSW = getUpdateSW();
+            if (updateSW) {
+              await updateSW(true);
             } else {
               // Fallback: just reload the page
               window.location.reload();

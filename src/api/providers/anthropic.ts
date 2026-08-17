@@ -95,7 +95,7 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
         // 其他错误（包括 CORS、网络错误等）都走代理
         try {
           return parseResponse(await doProxy(req));
-        } catch (proxyErr) {
+        } catch {
           // 代理也失败了，抛出原始错误
           throw err;
         }

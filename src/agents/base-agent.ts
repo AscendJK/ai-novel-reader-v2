@@ -7,7 +7,7 @@ import type { Agent, AgentContext, AgentResult } from "./types";
 import type { AIProvider } from "@/api/types";
 import type { TokenBudget } from "@/api/token-manager";
 import type { Novel } from "@/parsers/types";
-import { prepareAgentContext, formatAgentError } from "./utils";
+import { prepareAgentContext } from "./utils";
 import { normalizeError, getUserFriendlyMessage } from "@/lib/error-handler";
 
 /** Agent 运行环境 */

@@ -72,7 +72,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   const touchRef = useRef<{ x: number; y: number } | null>(null);
   const lastTapRef = useRef(0); // 双击检测
 
-  const chapters = currentNovel?.chapters || [];
+  const chapters = useMemo(() => currentNovel?.chapters || [], [currentNovel?.chapters]);
   const currentIndex = chapters.findIndex((c) => c.id === selectedChapterId);
   const chapter = currentIndex >= 0 ? chapters[currentIndex] : undefined;
   const prevChapter = currentIndex > 0 ? chapters[currentIndex - 1] : null;
@@ -84,7 +84,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     const engine = useRAGStore.getState().engine;
     const preloadKey = `${currentNovel.id}-${engine}`;
     return indexLoadingKeys.has(preloadKey);
-  }, [currentNovel?.id, indexLoadingKeys]);
+  }, [currentNovel?.id, indexLoadingKeys]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 阅读模式计算
   const effectiveMode = useMemo<ReadingMode>(() => {
@@ -100,7 +100,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
 
   // ── 连续滚动 hook（仅滚动模式启用） ───────────────────────────
   const selectedChapterRef = useRef(selectedChapterId);
-  selectedChapterRef.current = selectedChapterId;
+  useEffect(() => { selectedChapterRef.current = selectedChapterId; }, [selectedChapterId]);
 
   const handleChapterChange = useCallback((chapterId: string) => {
     if (chapterId !== selectedChapterRef.current) {
@@ -132,14 +132,18 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     initialChapterOffset: savedChapterOffset,
   });
 
-  // 暴露 scrollToChapter 和 suppressIO 给 ChapterNav
-  if (scrollControlRef) {
-    (scrollControlRef as React.MutableRefObject<ScrollControl | null>).current = { scrollToChapter, suppressIO };
-  }
+  // 暴露 scrollToChapter 和 suppressIO 给 ChapterNav（effect 中更新，供事件处理器读取）
+  useEffect(() => {
+    const control: ScrollControl = { scrollToChapter, suppressIO };
+    const ref = scrollControlRef as React.MutableRefObject<ScrollControl | null> | undefined;
+    if (ref) {
+      ref.current = control;
+    }
+  }, [scrollControlRef, scrollToChapter, suppressIO]);
 
   // ── 滚动位置保存（节流 + 页面退出时立即保存）──────────────────
   const saveScrollTopRef = useRef(saveScrollTop);
-  saveScrollTopRef.current = saveScrollTop;
+  useEffect(() => { saveScrollTopRef.current = saveScrollTop; }, [saveScrollTop]);
 
   // 缓存当前章节元素，避免每次滚动都遍历所有章节
   const cachedChapterElRef = useRef<HTMLElement | null>(null);
@@ -249,7 +253,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
       container.removeEventListener("scroll", handleScroll);
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
-  }, [isPaginated, currentNovel?.id, scrollContainerRef, savePositionNow]);
+  }, [isPaginated, currentNovel?.id, scrollContainerRef, savePositionNow]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 页面退出时立即保存滚动位置
   useEffect(() => {
@@ -268,7 +272,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
       window.removeEventListener("pagehide", savePositionNow);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [isPaginated, currentNovel?.id, savePositionNow]);
+  }, [isPaginated, currentNovel?.id, savePositionNow]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 翻页模式相关 ──────────────────────────────────────────────
   const pageWidth = useMemo(() => {
@@ -326,7 +330,9 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
       if (pages.length > 0) {
         const pageIdx = pages.findIndex(p => ttsParagraph >= p.startIndex && ttsParagraph <= p.endIndex);
         if (pageIdx >= 0 && pageIdx !== currentPage) {
-          setCurrentPage(pageIdx);
+          // 延迟到下一帧，避免 effect 中同步 setState 造成级联渲染
+          const raf = requestAnimationFrame(() => setCurrentPage(pageIdx));
+          return () => cancelAnimationFrame(raf);
         }
       }
     } else {
@@ -339,7 +345,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
         el.scrollIntoView({ behavior: "smooth", block: "nearest" });
       }
     }
-  }, [ttsParagraph, isPaginated, pages, selectedChapterId, scrollContainerRef]);
+  }, [ttsParagraph, isPaginated, pages, selectedChapterId, scrollContainerRef]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 翻页模式章节切换
   const goToChapter = useCallback(async (chapterId: string) => {
@@ -426,7 +432,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
       { key: "-", action: () => setFontSize(Math.max(12, fontSize - 1)), description: "减小字号" },
       { key: "i", action: onToggleImmersive, description: "切换沉浸模式" },
     ];
-  }, [isPaginated, fontSize, setFontSize, onToggleImmersive, scrollContainerRefForKeys]);
+  }, [isPaginated, fontSize, setFontSize, onToggleImmersive, scrollContainerRefForKeys]); // eslint-disable-line react-hooks/exhaustive-deps
   useKeyboardShortcuts(readingShortcuts);
 
   // 翻页模式触摸滑动
@@ -438,7 +444,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     const dx = e.changedTouches[0].clientX - touchRef.current.x;
     const dy = e.changedTouches[0].clientY - touchRef.current.y;
     if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-      dx < 0 ? goNextPage() : goPrevPage();
+      if (dx < 0) goNextPage(); else goPrevPage();
     }
     touchRef.current = null;
   };
@@ -451,7 +457,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     if (now - lastWheelRef.current < 300) return;
     if (Math.abs(e.deltaY) < 30) return;
     lastWheelRef.current = now;
-    e.deltaY > 0 ? goNextPage() : goPrevPage();
+    if (e.deltaY > 0) goNextPage(); else goPrevPage();
   }, [isPaginated, goNextPage, goPrevPage]);
 
   // 翻页模式点击

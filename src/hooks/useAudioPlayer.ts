@@ -7,7 +7,7 @@ import { useRef, useCallback, useEffect, useState } from "react";
 import { useTTSStore } from "@/stores/tts-store";
 import { TTSManager, type TTSChunk } from "@/tts/tts-manager";
 import { prepareTextForTTS } from "@/tts/text-preprocess";
-import { showToast } from "@/components/common/Toast";
+import { showToast } from "@/lib/toast-store";
 
 const TTS_POS_KEY = "novel-reader-tts-position";
 
@@ -75,10 +75,15 @@ export function useAudioPlayer({
       reset();
     }
     // pendingAutoPlayRef 为 true 且定时器已触发 → 自动翻章正常流程，autoplay effect 处理
-  }, [chapterIndex]);
+  }, [chapterIndex, reset]);
 
   const playRef = useRef<typeof play>(null!); // B4+B5: 在 play 定义前声明，定义后赋值
   const chunksRef = useRef<TTSChunk[]>([]); // 存储当前 chunk 列表，供 seekToParagraph 查找
+
+  // 错误状态和重试计数（在 play 前声明，供 play 回调引用）
+  const [error, setError] = useState<string | null>(null);
+  const retryCountRef = useRef(0);
+  const [retryCount, setRetryCount] = useState(0); // 用于渲染层读取
 
   // 语速/语音变化时同步到管理器
   useEffect(() => {
@@ -110,6 +115,17 @@ export function useAudioPlayer({
     return managerRef.current;
   }, []);
 
+  // F10: 恢复上次朗读位置（基于原始段落索引）
+  const loadPosition = useCallback((): number | null => {
+    try {
+      const raw = localStorage.getItem(TTS_POS_KEY);
+      if (!raw) return null;
+      const pos = JSON.parse(raw);
+      if (pos.novelId === novelId && pos.chapterIndex === chapterIndex) return pos.paragraph;
+    } catch { /* 缓存损坏时忽略 */ }
+    return null;
+  }, [novelId, chapterIndex]);
+
   // 播放当前章节
   const play = useCallback(async () => {
     if (!chapterContent || chapterIndex == null || !novelId) return;
@@ -124,8 +140,9 @@ export function useAudioPlayer({
     setGenerating(true);
 
     const prepared = prepareTextForTTS(chapterContent);
-    // 用原始段落数（/\n+/ 分割）做进度条分母
-    const totalParaCount = chapterContent.split(/\n+/).filter(p => p.trim().length > 0).length;
+    // 从 prepareTextForTTS 结果中提取段落总数（已过滤短段落）
+    // 每个 chunk 的 paragraphIndices 长度之和即为实际段落数
+    const totalParaCount = prepared.reduce((sum, c) => sum + c.paragraphIndices.length, 0);
     setParagraphProgress(0, totalParaCount);
     if (prepared.length === 0) {
       setGenerating(false);
@@ -179,6 +196,7 @@ export function useAudioPlayer({
         // U5: 自动重试（Web Speech API 常见瞬时错误）
         if (count < 3) {
           retryCountRef.current = count + 1;
+          setRetryCount(count + 1);
           setError(`${err}（自动重试 ${count + 1}/3...）`);
           const retryGen = manager.getCurrentGenerationId(); // H6: 防止并发重试
           setTimeout(() => {
@@ -219,7 +237,7 @@ export function useAudioPlayer({
       setGenerating(false);
       setPlaying(false);
     });
-  }, [chapterContent, chapterIndex, novelId, engine, voiceId, speed, pitch, autoNextChapter, getManager, setCurrentChapter, setGenerating, setParagraphProgress, setPlaying, onNextChapter]);
+  }, [chapterContent, chapterIndex, novelId, engine, voiceId, speed, pitch, autoNextChapter, getManager, setCurrentChapter, setGenerating, setParagraphProgress, setPlaying, onNextChapter, loadPosition, setBrowserVoices, setEngine, setModelDownloaded, setModelDownloading]);
 
   // R13: 暂停/恢复（WebSpeech 使用 cancel+re-speak 模式，绕过移动端 resume bug）
   const togglePause = useCallback(async () => {
@@ -243,7 +261,7 @@ export function useAudioPlayer({
       if (chunkIdx >= 0) manager.seekToChunk(chunkIdx);
       else if (chunks.length > 0) manager.seekToChunk(chunks.length - 1);
     } else {
-      try { localStorage.setItem(TTS_POS_KEY, JSON.stringify({ novelId, chapterIndex, paragraph: paraIndex })); } catch {}
+      try { localStorage.setItem(TTS_POS_KEY, JSON.stringify({ novelId, chapterIndex, paragraph: paraIndex })); } catch { /* localStorage 不可用时忽略 */ }
       play();
     }
   }, [getManager, play, novelId, chapterIndex]);
@@ -252,18 +270,9 @@ export function useAudioPlayer({
   const savePosition = useCallback(() => {
     const s = useTTSStore.getState();
     if (s.currentNovelId && s.currentChapterIndex != null) {
-      try { localStorage.setItem(TTS_POS_KEY, JSON.stringify({ novelId: s.currentNovelId, chapterIndex: s.currentChapterIndex, paragraph: s.currentParagraph })); } catch {}
+      try { localStorage.setItem(TTS_POS_KEY, JSON.stringify({ novelId: s.currentNovelId, chapterIndex: s.currentChapterIndex, paragraph: s.currentParagraph })); } catch { /* localStorage 不可用时忽略 */ }
     }
   }, []);
-  const loadPosition = useCallback((): number | null => {
-    try {
-      const raw = localStorage.getItem(TTS_POS_KEY);
-      if (!raw) return null;
-      const pos = JSON.parse(raw);
-      if (pos.novelId === novelId && pos.chapterIndex === chapterIndex) return pos.paragraph;
-    } catch {}
-    return null;
-  }, [novelId, chapterIndex]);
 
   // 停止时保存位置
   const stop = useCallback(() => {
@@ -278,8 +287,8 @@ export function useAudioPlayer({
   }, [reset, savePosition]);
 
   const togglePauseRef = useRef(togglePause);
-  togglePauseRef.current = togglePause;
-  playRef.current = play; // B1+B2 fix
+  useEffect(() => { togglePauseRef.current = togglePause; }, [togglePause]);
+  useEffect(() => { playRef.current = play; }, [play]); // B1+B2 fix
   const stopRef = useRef(stop);
   // B2: 自动翻章后章节加载完自动播放
   useEffect(() => {
@@ -288,11 +297,11 @@ export function useAudioPlayer({
       setTimeout(() => playRef.current(), 300);
     }
   }, [chapterContent, chapterIndex]);
-  stopRef.current = stop;
+  useEffect(() => { stopRef.current = stop; }, [stop]);
   const onPrevRef = useRef(onPrevChapter);
-  onPrevRef.current = onPrevChapter;
+  useEffect(() => { onPrevRef.current = onPrevChapter; }, [onPrevChapter]);
   const onNextRef = useRef(onNextChapter);
-  onNextRef.current = onNextChapter;
+  useEffect(() => { onNextRef.current = onNextChapter; }, [onNextChapter]);
 
   // Media Session API（手机锁屏/通知栏控制）
   useEffect(() => {
@@ -318,14 +327,15 @@ export function useAudioPlayer({
     };
   }, [chapterTitle]);
 
-  // U5: 错误状态和自动重试
-  const [error, setError] = useState<string | null>(null);
-  const retryCountRef = useRef(0);
-
-  // 当章节变化时重置错误
-  useEffect(() => { setError(null); retryCountRef.current = 0; }, [chapterIndex, novelId]);
-
-  // 是否在当前小说/章节播放
+  // 当章节变化时重置错误和重试计数
+  useEffect(() => {
+    retryCountRef.current = 0;
+    const raf = requestAnimationFrame(() => {
+      setError(null);
+      setRetryCount(0);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [chapterIndex, novelId]);
   const isActive = (playing || !!error) && currentNovelId === novelId && currentChapterIndex === chapterIndex;
 
   // 定期保存朗读位置（每 10 秒 + 页面卸载时）
@@ -348,7 +358,7 @@ export function useAudioPlayer({
     isPaused: paused,
     isPlaying: playing && !paused && isActive,
     error,
-    retryCount: retryCountRef.current,
+    retryCount,
     seekToParagraph,
   };
 }

@@ -2,9 +2,9 @@
  * SummaryPanel 共享组件导出
  */
 
-export { MarkdownRenderer, summaryComponents, chatComponents, getMarkdownComponents } from "./MarkdownRenderer";
-export type { MarkdownVariant } from "./MarkdownRenderer";
-
+export { MarkdownRenderer } from "./MarkdownRenderer";
+export { summaryComponents, chatComponents, getMarkdownComponents } from "./markdown-config";
+export type { MarkdownVariant } from "./markdown-config";
 export { SubItem } from "./SubItem";
 export { MiniCard } from "./MiniCard";
 export type { AnalysisMetadata } from "./MiniCard";

@@ -35,7 +35,7 @@ export function AppLayout() {
   const { setSummaries } = useSummaryStore();
   const [showSettings, setShowSettings] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
-  const [syncReady, setSyncReady] = useState(false);
+  const [syncReady, setSyncReady] = useState(() => !!localStorage.getItem("sync-username"));
   const [loginError] = useState<string | null>(null);
   const [localUsers, setLocalUsers] = useState<string[]>(getLocalUsers);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
@@ -44,13 +44,14 @@ export function AppLayout() {
 
   const onSyncReady = useCallback(() => setSyncReady(true), []);
 
-  const { handleLogin, handleDeleteUser, startSync, syncJoinedNovels } = useSyncOrchestration({
+  const { handleLogin, handleDeleteUser, startSync } = useSyncOrchestration({
     onSyncReady,
     setLocalUsers,
   });
 
-  // 同步初始化用户数据库（只在首次渲染时执行）
-  if (!dbInitialized.current) {
+  // 同步初始化用户数据库（只在首次挂载时执行一次）
+  useEffect(() => {
+    if (dbInitialized.current) return;
     dbInitialized.current = true;
     const storedUser = localStorage.getItem("sync-username");
     if (storedUser) {
@@ -59,7 +60,7 @@ export function AppLayout() {
       } catch { /* ignore */ }
     }
     setCurrentNovelIdGetter(() => useNovelStore.getState().currentNovel?.id);
-  }
+  }, []);
 
   const globalShortcuts = useMemo<ShortcutBinding[]>(() => [
     { key: "t", action: () => useUIStore.getState().toggleTheme(), description: "切换主题" },
@@ -115,7 +116,6 @@ export function AppLayout() {
   // ── Sync integration (auto-login from stored session) ──
   useEffect(() => {
     const hasStoredSession = !!localStorage.getItem("sync-username");
-    if (hasStoredSession) setSyncReady(true);
     if (offlineMode || !hasStoredSession) return;
     startSync();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps

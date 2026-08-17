@@ -6,7 +6,6 @@ import { describe, it, expect } from "vitest";
 import {
   sampleChapterContent,
   splitTextIntoSegments,
-  findKeyParagraphs,
   formatAgentError,
 } from "../utils";
 

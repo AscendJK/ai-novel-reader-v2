@@ -1,5 +1,5 @@
 import { useState, memo } from "react";
-import { ArrowLeft, Book, Settings, Moon, Sun, LogOut, User, StickyNote, WifiOff, Wifi, Download, CheckCircle2, Loader2 } from "lucide-react";
+import { ArrowLeft, Book, Settings, Moon, Sun, LogOut, User, StickyNote, WifiOff, Wifi, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useUIStore } from "@/stores/ui-store";
 import { useRAGStore } from "@/stores/rag-store";

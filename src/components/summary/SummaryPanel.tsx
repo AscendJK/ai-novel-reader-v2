@@ -33,9 +33,11 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
     setInternalTab(v);
     onValueChange?.(v);
   };
-  // 外部 value 变化时同步内部状态
+  // 外部 value 变化时同步内部状态（仅在受控模式切换时更新，延迟避免级联渲染）
   useEffect(() => {
-    if (value !== undefined) setInternalTab(value);
+    if (value === undefined) return;
+    const raf = requestAnimationFrame(() => setInternalTab(value));
+    return () => cancelAnimationFrame(raf);
   }, [value]);
 
   // Book sub-items: "timeline" | "characters" | "global" | null
@@ -50,9 +52,6 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
 
   const currentNovel = useNovelStore((s) => s.currentNovel);
   const selectedChapterId = useNovelStore((s) => s.selectedChapterId);
-  // Ref for latest selectedChapterId to avoid stale closures in callbacks
-  const selectedChapterRef = useRef(selectedChapterId);
-  selectedChapterRef.current = selectedChapterId;
   const isGenerating = useSummaryStore((s) => s.isGenerating);
   const generateProgress = useSummaryStore((s) => s.generateProgress);
   const {
@@ -75,10 +74,14 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
   });
 
   // 保持最后有效的 novelId，避免 currentNovel 为 null 时 useQA 收到空字符串
-  const lastValidNovelIdRef = useRef(currentNovel?.id || "");
-  if (currentNovel?.id) lastValidNovelIdRef.current = currentNovel.id;
+  const [lastValidNovelId, setLastValidNovelId] = useState(currentNovel?.id || "");
+  useEffect(() => {
+    if (!currentNovel?.id) return;
+    const raf = requestAnimationFrame(() => setLastValidNovelId(currentNovel.id));
+    return () => cancelAnimationFrame(raf);
+  }, [currentNovel?.id]);
   const qaHook = useQA({
-    novelId: lastValidNovelIdRef.current,
+    novelId: lastValidNovelId,
     askCustomQuestion,
     generateRangeSummary,
     clearQaCache,
@@ -111,7 +114,10 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
   const addIndexLoadingKey = useRAGStore((s) => s.addIndexLoadingKey);
   const removeIndexLoadingKey = useRAGStore((s) => s.removeIndexLoadingKey);
   useEffect(() => {
-    if (!currentNovel) { setIndexReady(null); setActualEngine(""); return; }
+    if (!currentNovel) {
+      const raf = requestAnimationFrame(() => { setIndexReady(null); setActualEngine(""); });
+      return () => cancelAnimationFrame(raf);
+    }
     let cancelled = false;
 
     // 标记开始加载
@@ -143,11 +149,12 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
           if (!cancelled) setIndexReady(null);
         });
     } else {
-      setIndexReady(null);
+      const raf = requestAnimationFrame(() => setIndexReady(null));
+      return () => { cancelled = true; cancelAnimationFrame(raf); };
     }
 
     return () => { cancelled = true; };
-  }, [currentNovel?.id, engine]);
+  }, [currentNovel?.id, engine, addIndexLoadingKey, removeIndexLoadingKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleBuildFromPanel = async () => {
     if (!currentNovel) return;
@@ -224,7 +231,7 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
   // Load graph + map + notes on novel switch
   useEffect(() => {
     notesHook.setNoteContent(""); searchHook.setSearchQuery(""); searchHook.clearSearch();
-    let cancelled = false;
+    let cancelRaf = 0;
     if (currentNovel) {
       loadGraph(currentNovel.id).then((result) => {
         if (!cancelled) setCharacterGraphData(result.data);
@@ -234,15 +241,17 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
       });
       notesHook.loadNotesList();
     } else {
-      setCharacterGraphData(null);
-      setMapData(null);
-      notesHook.setNotes([]);
+      cancelRaf = requestAnimationFrame(() => {
+        setCharacterGraphData(null);
+        setMapData(null);
+        notesHook.setNotes([]);
+      });
     }
-    return () => { cancelled = true; };
+    return () => { cancelled = true; if (cancelRaf) cancelAnimationFrame(cancelRaf); };
   }, [currentNovel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const storeSummaries = useSummaryStore((s) => s.summaries);
-  const summaries = useMemo(() => currentNovel ? storeSummaries.filter((s) => s.novelId === currentNovel.id) : [], [currentNovel?.id, storeSummaries]);
+  const summaries = useMemo(() => currentNovel ? storeSummaries.filter((s) => s.novelId === currentNovel.id) : [], [currentNovel?.id, storeSummaries]); // eslint-disable-line react-hooks/exhaustive-deps
   const chapterSummary = useMemo(() => summaries.find((s) => s.chapterId === selectedChapterId && s.type === "chapter"), [summaries, selectedChapterId]);
   const globalSummaries = useMemo(() => summaries.filter((s) => s.type === "global"), [summaries]);
   const charSummaries = useMemo(() => summaries.filter((s) => s.type === "characters"), [summaries]);
@@ -318,7 +327,7 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
               qaHook={qaHook}
               loading={loading}
               chapterCount={currentNovel.chapters.length}
-              selectedChapterId={selectedChapterRef.current}
+              selectedChapterId={selectedChapterId}
               onBookmark={handleBookmarkAI}
             />
           </TabsContent>

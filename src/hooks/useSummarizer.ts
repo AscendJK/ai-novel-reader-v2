@@ -16,7 +16,7 @@ import { getTokenBudget } from "@/api/token-manager";
 import { buildIndex, retrieveRelevantWithDetails } from "@/rag/index";
 import { useRAGStore } from "@/stores/rag-store";
 import { syncClient } from "@/sync/sync-client";
-import { addDebugEntry } from "@/components/common/DebugPanel";
+import { addDebugEntry } from "@/lib/debug-store";
 import { ragLog } from "@/lib/logger";
 import { setAiRunning } from "@/lib/ai-state";
 
@@ -134,7 +134,7 @@ export function useSummarizer() {
         }
 
         // TF-IDF 路径：先检查缓存，缓存未命中时才加载全书
-        let chapters = currentNovel.chapters;
+        const chapters = currentNovel.chapters;
         if (engine === "tfidf") {
           // 尝试从缓存加载 TF-IDF 索引
           try {
@@ -277,7 +277,7 @@ export function useSummarizer() {
       errorMessage: "总结生成失败",
       onSuccess: (result) => saveChapterSummary(chapterId, result),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveChapterSummary]);
+  }, [currentNovel, checkProvider, runAgentTask, saveChapterSummary, createSignal]);
 
   const regenerateChapter = useCallback(async (chapterId: string) => {
     if (!currentNovel || !checkProvider()) return;
@@ -288,7 +288,7 @@ export function useSummarizer() {
       errorMessage: "重新生成失败",
       onSuccess: (result) => saveChapterSummary(chapterId, result),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveChapterSummary]);
+  }, [currentNovel, checkProvider, runAgentTask, saveChapterSummary, createSignal]);
 
   // 批量总结停止标志
   const batchStopRef = useRef(false);
@@ -351,7 +351,7 @@ export function useSummarizer() {
       // 推送数据到服务器
       syncClient.pushNow();
     }
-  }, [currentNovel, checkProvider, saveChapterSummary, setProgress, handleError]);
+  }, [currentNovel, checkProvider, saveChapterSummary, setProgress, handleError, startTask, endTask, createSignal]);
 
   const stopBatchSummary = useCallback(() => {
     batchStopRef.current = true;
@@ -367,7 +367,7 @@ export function useSummarizer() {
       errorMessage: "全局总结生成失败",
       onSuccess: (result) => saveGlobalSummary(result, "global", "全书总结", "__global__"),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary]);
+  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, getRelevantText]);
 
   const regenerateGlobal = useCallback(async () => {
     if (!currentNovel || !checkProvider()) return;
@@ -378,7 +378,7 @@ export function useSummarizer() {
       errorMessage: "重新生成失败",
       onSuccess: (result) => saveGlobalSummary(result, "global", "全书总结", "__global__"),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary]);
+  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, getRelevantText]);
 
   // --- Character analysis ---
   const generateCharacterAnalysis = useCallback(async () => {
@@ -390,7 +390,7 @@ export function useSummarizer() {
       errorMessage: "人物分析失败",
       onSuccess: (result) => saveGlobalSummary(result, "characters", "人物关系分析", "__characters__"),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary]);
+  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, getRelevantText]);
 
   const regenerateCharacters = useCallback(async () => {
     if (!currentNovel || !checkProvider()) return;
@@ -401,7 +401,7 @@ export function useSummarizer() {
       errorMessage: "重新生成失败",
       onSuccess: (result) => saveGlobalSummary(result, "characters", "人物关系分析", "__characters__"),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary]);
+  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, getRelevantText]);
 
   // --- Character graph only (no text analysis) ---
   const generateCharacterGraph = useCallback(async (): Promise<GraphData | null> => {
@@ -418,7 +418,7 @@ export function useSummarizer() {
       return null;
     }
     return result?.graphData || null;
-  }, [currentNovel, checkProvider, runAgentTask]);
+  }, [currentNovel, checkProvider, runAgentTask, createSignal, getRelevantText]);
 
   const regenerateCharacterGraph = useCallback(async (): Promise<GraphData | null> => {
     if (!currentNovel || !checkProvider()) return null;
@@ -434,7 +434,7 @@ export function useSummarizer() {
       return null;
     }
     return result?.graphData || null;
-  }, [currentNovel, checkProvider, runAgentTask]);
+  }, [currentNovel, checkProvider, runAgentTask, createSignal, getRelevantText]);
 
   // --- Timeline ---
   const generateTimeline = useCallback(async () => {
@@ -446,7 +446,7 @@ export function useSummarizer() {
       errorMessage: "时间线生成失败",
       onSuccess: (result) => saveGlobalSummary(result, "timeline", "剧情时间线", "__timeline__"),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary]);
+  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, getRelevantText]);
 
   const regenerateTimeline = useCallback(async () => {
     if (!currentNovel || !checkProvider()) return;
@@ -457,7 +457,7 @@ export function useSummarizer() {
       errorMessage: "重新生成失败",
       onSuccess: (result) => saveGlobalSummary(result, "timeline", "剧情时间线", "__timeline__"),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary]);
+  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, getRelevantText]);
 
   // --- Map generation ---
   const generateMap = useCallback(async (): Promise<MapData | null> => {
@@ -475,7 +475,7 @@ export function useSummarizer() {
       return mapData;
     }
     return null;
-  }, [currentNovel, checkProvider, runAgentTask]);
+  }, [currentNovel, checkProvider, runAgentTask, createSignal]);
 
   const regenerateMap = useCallback(async (): Promise<MapData | null> => {
     if (!currentNovel) return null;
@@ -554,7 +554,7 @@ ${combinedText}`;
         endTask();
       }
     },
-    [currentNovel, checkProvider]
+    [currentNovel, checkProvider, createSignal, endTask, getActiveProvider, handleError, startTask]
   );
 
   // --- Temporary: custom question with conversation history ---
@@ -623,7 +623,7 @@ ${relevantText || "（无额外参考信息，请基于章节目录回答）"}
         endTask();
       }
     },
-    [currentNovel, checkProvider]
+    [currentNovel, checkProvider, createSignal, endTask, getActiveProvider, getRelevantText, handleError, startTask]
   );
 
   const clearQaCache = useCallback(() => { qaRagCacheRef.current = null; }, []);

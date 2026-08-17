@@ -92,8 +92,8 @@ export function usePagination(options: UsePaginationOptions) {
   const rafRef = useRef<number | null>(null);
   useEffect(() => {
     if (!enabled || !contentWidth || !contentHeight) {
-      setPages([]);
-      return;
+      const raf = requestAnimationFrame(() => setPages([]));
+      return () => cancelAnimationFrame(raf);
     }
     if (timerRef.current) clearTimeout(timerRef.current);
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -104,7 +104,7 @@ export function usePagination(options: UsePaginationOptions) {
       if (timerRef.current) clearTimeout(timerRef.current);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [doCalculate, enabled, paragraphs, fontSize, lineHeight, fontWeight, fontFamily, paragraphSpacing]);
+  }, [doCalculate, enabled, paragraphs, fontSize, lineHeight, fontWeight, fontFamily, paragraphSpacing, contentWidth, contentHeight]);
 
   return { pages, totalPages: pages.length, measureRef };
 }

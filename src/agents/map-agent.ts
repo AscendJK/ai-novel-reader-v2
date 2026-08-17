@@ -24,7 +24,7 @@ class MapAgent extends BaseAgent {
   }
 
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
-    const { novel, provider, budget } = env;
+    const { novel, provider } = env;
 
     // 1. 构建章节目录
     context.onStatus?.("正在准备分析数据...");

@@ -48,13 +48,6 @@ export class AppError extends Error {
   }
 }
 
-/** API 错误响应 */
-interface ApiErrorResponse {
-  error?: string;
-  message?: string;
-  details?: unknown;
-}
-
 // ============================================================
 // 错误处理函数
 // ============================================================
@@ -76,7 +69,7 @@ const API_ERROR_CODE_MAP: Record<string, ErrorCode> = {
  * 标准化错误对象
  * 将各种类型的错误转换为 AppError
  */
-export function normalizeError(error: unknown, context?: string): AppError {
+export function normalizeError(error: unknown): AppError {
   // 已经是 AppError
   if (error instanceof AppError) {
     return error;
@@ -84,7 +77,7 @@ export function normalizeError(error: unknown, context?: string): AppError {
 
   // 检查是否是 APIError（通过 name 属性判断，避免循环依赖）
   if (error instanceof Error && error.name === 'APIError') {
-    const apiError = error as any;
+    const apiError = error as { code?: string; message?: string; statusCode?: number; originalBody?: unknown };
     const mappedCode = API_ERROR_CODE_MAP[apiError.code] || 'API_ERROR';
     return new AppError(
       apiError.message,
@@ -154,7 +147,7 @@ export function handleError(
   context: string = 'Unknown',
   silent: boolean = true
 ): AppError {
-  const appError = normalizeError(error, context);
+  const appError = normalizeError(error);
 
   // 记录日志
   const logMessage = `[${appError.code}] ${context}: ${appError.message}`;

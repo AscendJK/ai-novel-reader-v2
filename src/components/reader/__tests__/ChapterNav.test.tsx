@@ -10,7 +10,7 @@ vi.mock("@/db/repositories", () => ({
 
 // Mock ScrollArea to just render children
 vi.mock("@/components/ui/scroll-area", () => ({
-  ScrollArea: ({ children, ...props }: any) => <div data-testid="scroll-area" {...props}>{children}</div>,
+  ScrollArea: ({ children, ...props }: React.HTMLAttributes<HTMLDivElement>) => <div data-testid="scroll-area" {...props}>{children}</div>,
 }));
 
 const mockNovel = {

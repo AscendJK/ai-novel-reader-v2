@@ -26,23 +26,40 @@ router.post("/chat", rateLimit(60), async (req, res) => {
 
     const urlObj = new URL(url);
     // 去除 IPv6 方括号，统一处理
-    const hostname = urlObj.hostname.replace(/^\[|\]$/g, "");
+    let hostname = urlObj.hostname.replace(/^\[|\]$/g, "");
+    // 将 IPv4-mapped IPv6（::ffff:x.x.x.x）还原为纯 IPv4，避免被宽泛的前缀匹配绕过
+    const ipv4Mapped = hostname.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (ipv4Mapped) hostname = ipv4Mapped[1];
+
+    // 将点分 IPv4 转为 32 位整数；非法格式返回 null
+    function ipv4ToInt(ip) {
+      if (!/^\d+\.\d+\.\d+\.\d+$/.test(ip)) return null;
+      const parts = ip.split(".").map(Number);
+      if (parts.some((p) => p > 255)) return null;
+      return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+    }
+    function isIPv4Private(ip) {
+      const int = ipv4ToInt(ip);
+      if (int === null) return false;
+      // 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10 (CGNAT), 127.0.0.0/8,
+      // 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16
+      const ranges = [
+        [0x00000000, 0x00ffffff], [0x0a000000, 0x0affffff],
+        [0x64400000, 0x647fffff], [0x7f000000, 0x7fffffff],
+        [0xa9fe0000, 0xa9feffff], [0xac100000, 0xac1fffff],
+        [0xc0a80000, 0xc0a8ffff],
+      ];
+      return ranges.some(([lo, hi]) => int >= lo && int <= hi);
+    }
+
     const isPrivateIP =
       hostname === "localhost" ||
-      hostname === "127.0.0.1" ||
       hostname === "::1" ||
-      hostname === "0.0.0.0" ||
       hostname === "::" ||
-      hostname.startsWith("169.254.") ||
-      hostname.startsWith("10.") ||
-      hostname.startsWith("192.168.") ||
-      /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
-      /^100\.(6[4-9]|[7-9]\d|1[0-2][0-7])\./.test(hostname) || // CGNAT
+      isIPv4Private(hostname) ||
       hostname.startsWith("fd") || // IPv6 ULA
       hostname.startsWith("fc") ||
-      hostname.startsWith("fe80") || // IPv6 link-local
-      hostname.startsWith("::ffff:") || // IPv4-mapped IPv6
-      /^::ffff:\d+\.\d+\.\d+\.\d+$/.test(hostname); // IPv4-mapped IPv6 (完整格式)
+      hostname.startsWith("fe80"); // IPv6 link-local
 
     // HTTP only allowed for LAN/private IPs; external must use HTTPS
     if (url.startsWith("http://") && !isPrivateIP) {

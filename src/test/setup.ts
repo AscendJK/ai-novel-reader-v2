@@ -113,7 +113,7 @@ Object.defineProperty(window, "ResizeObserver", {
 
 // Mock crypto.randomUUID
 if (!globalThis.crypto) {
-  (globalThis as any).crypto = {};
+  Object.defineProperty(globalThis, "crypto", { value: {} as Crypto, writable: true });
 }
 
 if (!globalThis.crypto.randomUUID) {

@@ -1,0 +1,8 @@
+✅ 所有 ESLint 问题已修复（0 errors, 0 warnings）
+
+修复内容：
+1. useAudioPlayer.ts - 将 setError/retryCountRef 声明移到 play 回调之前，解决 hoisting 问题
+2. useAudioPlayer.ts - 将 retryCount 改为 state 变量，消除渲染期间访问 ref 的问题
+3. useAudioPlayer.ts - 将 effect 中的 setState 移到 requestAnimationFrame，消除级联渲染警告
+4. BookSelect.tsx - 移除未使用的 eslint-disable-line 注释
+5. useSummarizer.ts - 给 askCustomQuestion 的 useCallback 添加 getRelevantText 依赖

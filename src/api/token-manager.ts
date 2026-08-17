@@ -140,7 +140,7 @@ export function truncateToFit(text: string, model: string, reservedOutput: numbe
   const noticeTokens = estimateTokens(noticeText);
   const maxInputEstimate = budget.maxInputTokens - reservedOutput - noticeTokens;
 
-  let currentTokens = estimateTokens(text);
+  const currentTokens = estimateTokens(text);
   if (currentTokens <= maxInputEstimate) return text;
 
   // Binary search approximate truncation point

@@ -93,12 +93,8 @@ export class SyncClient {
   async login(username: string, mode: "create" | "join" = "create"): Promise<{ success: boolean; isNew: boolean; activeCount: number; error?: string }> {
     try {
       console.log("[sync] login:", username, mode);
-      // 提前保存 username，这样即使网络错误，心跳也能用它来重连
-      this.username = username;
-      localStorage.setItem("sync-username", username);
       const resp = await apiFetch("/api/sync/register", {
         method: "POST",
-        body: JSON.stringify({ username, mode, clientId: this.clientId }),
       });
       console.log("[sync] register response:", resp.status);
       if (resp.status === 404) {
@@ -110,6 +106,9 @@ export class SyncClient {
         return { success: false, isNew: false, activeCount: 0, error: err.error || "用户名已存在" };
       }
       if (!resp.ok) {
+        // 网络错误或服务器错误 — 清除之前可能保存的登录状态
+        this.username = null;
+        localStorage.removeItem("sync-username");
         const err: ApiErrorResponse = await resp.json().catch(() => ({}));
         return { success: false, isNew: false, activeCount: 0, error: err.error || `服务器错误 (${resp.status})` };
       }
@@ -117,7 +116,7 @@ export class SyncClient {
       console.log("[sync] registered:", result.isNew ? "new" : "existing");
 
       this.username = username;
-      this.clientId = result.clientId;
+      this.clientId = result.clientId || this.clientId;
       this.token = result.token;
       this.activeCount = result.activeCount;
       this.lastSyncTime = 0; // full sync on login

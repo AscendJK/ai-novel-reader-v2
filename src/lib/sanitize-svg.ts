@@ -28,6 +28,6 @@ export function sanitizeSvg(svg: string): string {
       "onfocus", "onblur", "onresize", "onscroll", "onunload",
       "onabort", "onanimationend", "onanimationstart",
     ],
-    FORBID_TAGS: ["script", "iframe", "object", "embed", "foreignObject"],
+    FORBID_TAGS: ["script", "iframe", "object", "embed", "foreignObject", "animate", "set", "animateTransform", "animateColor"],
   });
 }

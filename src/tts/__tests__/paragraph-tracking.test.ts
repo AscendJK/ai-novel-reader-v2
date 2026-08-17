@@ -28,7 +28,6 @@ function estimateParagraphFromTime(
 
 describe("段落追踪 - 字符位置映射", () => {
   const breaks = [0, 12, 25]; // 三个段落的起始字符位置
-  const indices = [0, 1, 2];   // 对应的原始段落索引
 
   it("字符位置 0 映射到第一个段落", () => {
     expect(findParagraphByCharIndex(0, breaks)).toBe(0);
@@ -53,7 +52,6 @@ describe("段落追踪 - 字符位置映射", () => {
 
   it("只有两个段落时映射正确", () => {
     const b2 = [0, 20];
-    const i2 = [5, 10]; // 原始段落索引是 5 和 10
     expect(findParagraphByCharIndex(0, b2)).toBe(0);
     expect(findParagraphByCharIndex(15, b2)).toBe(0);
     expect(findParagraphByCharIndex(20, b2)).toBe(1);

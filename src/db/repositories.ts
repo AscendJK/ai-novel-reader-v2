@@ -33,7 +33,11 @@ export async function saveNovel(novel: Novel): Promise<void> {
       }));
 
       await db.chapters.where("novelId").equals(novel.id).delete();
-      await db.chapters.bulkPut(chapterRecords);
+      // 分批写入以防止 IndexedDB 事务超时（每批 500 条）
+      const BATCH_SIZE = 500;
+      for (let i = 0; i < chapterRecords.length; i += BATCH_SIZE) {
+        await db.chapters.bulkPut(chapterRecords.slice(i, i + BATCH_SIZE));
+      }
     });
   } catch (e) {
     console.error("saveNovel failed:", e);

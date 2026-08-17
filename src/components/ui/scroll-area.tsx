@@ -9,8 +9,9 @@ import { cn } from "@/lib/utils"
  */
 function useFixViewportDisplay(rootRef: React.RefObject<HTMLDivElement | null>) {
   React.useEffect(() => {
-    if (!rootRef.current) return
-    const viewport = rootRef.current.querySelector<HTMLElement>("[data-radix-scroll-area-viewport]")
+    const ref = rootRef;
+    if (!ref.current) return
+    const viewport = ref.current.querySelector<HTMLElement>("[data-radix-scroll-area-viewport]")
     if (!viewport) return
     // 外层 Viewport
     viewport.style.display = "block"
@@ -21,7 +22,7 @@ function useFixViewportDisplay(rootRef: React.RefObject<HTMLDivElement | null>) 
       inner.style.display = "block"
       inner.style.minWidth = "0"
     }
-  }, [])
+  }, [rootRef])
 }
 
 const ScrollArea = React.forwardRef<

@@ -12,8 +12,8 @@ export interface ShortcutBinding {
 
 export function useKeyboardShortcuts(bindings: ShortcutBinding[]) {
   const bindingsRef = useRef(bindings);
-  // 每次渲染更新 ref，保持 handler 引用稳定
-  bindingsRef.current = bindings;
+  // 每次渲染后更新 ref，保持 handler 引用稳定
+  useEffect(() => { bindingsRef.current = bindings; }, [bindings]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {

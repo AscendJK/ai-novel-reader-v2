@@ -193,69 +193,6 @@ function getLevelScale(level: number, maxLevel: number): number {
 }
 
 // ── 渲染函数 ──────────────────────────────────────────────────────
-
-/** 渲染羊皮卷背景（真实效果） */
-function renderBackground(width: number = BASE_WIDTH, height: number = BASE_HEIGHT): string {
-  return `
-    <defs>
-      <!-- 纸张纹理 -->
-      <filter id="paper-noise" x="0%" y="0%" width="100%" height="100%">
-        <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="5" stitchTiles="stitch" seed="3" result="noise" />
-        <feColorMatrix type="saturate" values="0" in="noise" result="grayNoise" />
-        <feBlend in="SourceGraphic" in2="grayNoise" mode="multiply" result="blended" />
-      </filter>
-      <!-- 边缘暗角（四个边都深） -->
-      <linearGradient id="edge-top" x1="0%" y1="0%" x2="0%" y2="15%">
-        <stop offset="0%" stop-color="rgba(80,50,20,0.5)" />
-        <stop offset="100%" stop-color="rgba(80,50,20,0)" />
-      </linearGradient>
-      <linearGradient id="edge-bottom" x1="0%" y1="85%" x2="0%" y2="100%">
-        <stop offset="0%" stop-color="rgba(80,50,20,0)" />
-        <stop offset="100%" stop-color="rgba(80,50,20,0.5)" />
-      </linearGradient>
-      <linearGradient id="edge-left" x1="0%" y1="0%" x2="15%" y2="0%">
-        <stop offset="0%" stop-color="rgba(80,50,20,0.5)" />
-        <stop offset="100%" stop-color="rgba(80,50,20,0)" />
-      </linearGradient>
-      <linearGradient id="edge-right" x1="85%" y1="0%" x2="100%" y2="0%">
-        <stop offset="0%" stop-color="rgba(80,50,20,0)" />
-        <stop offset="100%" stop-color="rgba(80,50,20,0.5)" />
-      </linearGradient>
-      <!-- 中间深浅变化 -->
-      <radialGradient id="spot-1" cx="30%" cy="40%" r="25%">
-        <stop offset="0%" stop-color="rgba(60,40,15,0.15)" />
-        <stop offset="100%" stop-color="rgba(60,40,15,0)" />
-      </radialGradient>
-      <radialGradient id="spot-2" cx="70%" cy="60%" r="20%">
-        <stop offset="0%" stop-color="rgba(60,40,15,0.12)" />
-        <stop offset="100%" stop-color="rgba(60,40,15,0)" />
-      </radialGradient>
-      <radialGradient id="spot-3" cx="50%" cy="25%" r="18%">
-        <stop offset="0%" stop-color="rgba(60,40,15,0.1)" />
-        <stop offset="100%" stop-color="rgba(60,40,15,0)" />
-      </radialGradient>
-    </defs>
-    <!-- 基础羊皮色 -->
-    <rect width="${width}" height="${height}" fill="#d4a76a" />
-    <!-- 纹理叠加 -->
-    <rect width="${width}" height="${height}" filter="url(#paper-noise)" opacity="0.12" />
-    <!-- 中间深浅变化（不规则斑点） -->
-    <rect width="${width}" height="${height}" fill="url(#spot-1)" />
-    <rect width="${width}" height="${height}" fill="url(#spot-2)" />
-    <rect width="${width}" height="${height}" fill="url(#spot-3)" />
-    <!-- 边缘暗角（四个边） -->
-    <rect width="${width}" height="${height}" fill="url(#edge-top)" />
-    <rect width="${width}" height="${height}" fill="url(#edge-bottom)" />
-    <rect width="${width}" height="${height}" fill="url(#edge-left)" />
-    <rect width="${width}" height="${height}" fill="url(#edge-right)" />
-    <!-- 边框 -->
-    <rect x="2" y="2" width="${width - 4}" height="${height - 4}"
-          fill="none" stroke="#8b6914" stroke-width="2" rx="3" />
-    <rect x="6" y="6" width="${width - 12}" height="${height - 12}"
-          fill="none" stroke="#a07828" stroke-width="1" rx="2" opacity="0.4" />
-  `;
-}
-
 /** 渲染连线（父子关系） */
 function renderConnections(mapData: MapData, svgWidth: number = BASE_WIDTH, svgHeight: number = BASE_HEIGHT): string {
   if (!mapData.places?.length || !mapData.layers?.length) return "";
@@ -374,7 +311,7 @@ function renderCompass(width: number = BASE_WIDTH): string {
 }
 
 /** 渲染侧边栏内容（地理层级 + 势力，不渲染背景和边框） */
-function renderSidebarContent(mapData: MapData, svgHeight: number = BASE_HEIGHT): string {
+function renderSidebarContent(mapData: MapData): string {
   // 地理层级
   const layerItems = mapData.layers.map((layer, i) => {
     const itemY = i * 22;
@@ -512,7 +449,7 @@ export function renderMapToSvg(mapData: MapData, useForceLayout: boolean = false
         stroke="#8b6914" stroke-width="1" opacity="0.5" />
 
   <!-- 侧边栏内容（地理层级 + 势力） -->
-  ${renderSidebarContent(mapData, svgHeight)}
+  ${renderSidebarContent(mapData)}
 
   <!-- 连线（父子关系） -->
   ${renderConnections(adjustedMapData, svgWidth, svgHeight)}

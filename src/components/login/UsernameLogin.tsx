@@ -78,9 +78,13 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
     inputRef.current?.focus();
   };
 
-  // 初始检查
+  // 初始检查（延迟到微任务，避免 effect 中同步 setState 造成级联渲染）
   useEffect(() => {
-    if (getServerUrl()) checkServer(getServerUrl());
+    const url = getServerUrl();
+    if (url) {
+      const t = setTimeout(() => { void checkServer(url); }, 0);
+      return () => clearTimeout(t);
+    }
   }, []);
 
   // 点击外部关闭下拉

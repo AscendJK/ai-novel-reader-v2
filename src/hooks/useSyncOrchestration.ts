@@ -12,7 +12,7 @@ import { apiFetch, getServerUrl } from "@/lib/api-client";
 import { getAiRunning } from "@/lib/ai-state";
 import { dedupSummaries } from "@/lib/dedup-utils";
 import { downloadModel } from "@/rag/model-loader";
-import { showToast } from "@/components/common/Toast";
+import { showToast } from "@/lib/toast-store";
 import { addLocalUser, removeLocalUser, getLocalUsers } from "@/db/repositories";
 
 interface SyncOrchestrationOptions {
@@ -36,23 +36,6 @@ export function useSyncOrchestration({ onSyncReady, setLocalUsers }: SyncOrchest
     ].forEach((k) => localStorage.removeItem(k));
     window.location.reload();
   }, []);
-
-  const applySyncData = useCallback(async (data: SyncData) => {
-    await applyServerData(data);
-    if (data.progress?.readingPositions) {
-      useNovelStore.setState((s) => ({
-        readingPositions: { ...s.readingPositions, ...data.progress!.readingPositions },
-      }));
-    }
-    const { currentNovel: cn } = useNovelStore.getState();
-    if (cn) {
-      const s = await loadSummaries(cn.id);
-      if (s.length > 0) {
-        setSummaries(dedupSummaries(s));
-      }
-    }
-    syncJoinedNovels();
-  }, [setSummaries]); // syncJoinedNovels is defined below, stable via useCallback
 
   const syncJoinedNovels = useCallback(async () => {
     try {
@@ -95,7 +78,7 @@ export function useSyncOrchestration({ onSyncReady, setLocalUsers }: SyncOrchest
             const notes = await udb.notes.where("novelId").equals(oldId).toArray();
             const maps = await udb.maps.where("novelId").equals(oldId).toArray();
             const graphs = await udb.graphs.where("novelId").equals(oldId).toArray();
-            await (udb as any).transaction("rw", udb.novels, udb.chapters, udb.summaries, udb.notes, udb.maps, udb.graphs, async () => {
+            await udb.transaction("rw", [udb.novels, udb.chapters, udb.summaries, udb.notes, udb.maps, udb.graphs], async () => {
               await udb!.novels.delete(oldId);
               await udb!.chapters.where("novelId").equals(oldId).delete();
               for (const ch of chapters) {
@@ -182,6 +165,23 @@ export function useSyncOrchestration({ onSyncReady, setLocalUsers }: SyncOrchest
       }
     } catch (e) { console.error("syncJoinedNovels:", e); }
   }, [addNovel]);
+const applySyncData = useCallback(async (data: SyncData) => {
+    await applyServerData(data);
+    if (data.progress?.readingPositions) {
+      useNovelStore.setState((s) => ({
+        readingPositions: { ...s.readingPositions, ...data.progress!.readingPositions },
+      }));
+    }
+    const { currentNovel: cn } = useNovelStore.getState();
+    if (cn) {
+      const s = await loadSummaries(cn.id);
+      if (s.length > 0) {
+        setSummaries(dedupSummaries(s));
+      }
+    }
+    syncJoinedNovels();
+  }, [setSummaries, syncJoinedNovels]); // syncJoinedNovels is defined below, stable via useCallback
+
 
   const clearLocalData = useCallback(async () => {
     const currentUser = localStorage.getItem("sync-username");
@@ -205,7 +205,7 @@ export function useSyncOrchestration({ onSyncReady, setLocalUsers }: SyncOrchest
     localStorage.setItem("sync-username", newUsername);
     addLocalUser(newUsername);
     const newDb = getUserDB();
-    await (newDb as any).transaction("rw", newDb.novels, newDb.chapters, newDb.summaries, newDb.notes, newDb.maps, newDb.graphs, async () => {
+    await newDb.transaction("rw", [newDb.novels, newDb.chapters, newDb.summaries, newDb.notes, newDb.maps, newDb.graphs], async () => {
       if (novels.length) await newDb.novels.bulkPut(novels);
       if (chapters.length) await newDb.chapters.bulkPut(chapters);
       if (summaries.length) await newDb.summaries.bulkPut(summaries);

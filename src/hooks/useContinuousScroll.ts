@@ -51,7 +51,7 @@ export function useContinuousScroll({
 
   // 用 ref 读取最新 chapters，避免 stale closure
   const chaptersRef = useRef(chapters);
-  chaptersRef.current = chapters;
+  useEffect(() => { chaptersRef.current = chapters; }, [chapters]);
 
   // 已加载内容的章节
   const loadedChapters = useMemo(
@@ -189,7 +189,7 @@ export function useContinuousScroll({
 
   // ── 章节检测相关 refs（声明在恢复 effect 之前，确保可用）──
   const onChapterChangeRef = useRef(onChapterChange);
-  onChapterChangeRef.current = onChapterChange;
+  useEffect(() => { onChapterChangeRef.current = onChapterChange; }, [onChapterChange]);
   const lastDetectedChapterRef = useRef<string | null>(null);
   // 恢复/导航期间抑制检测，防止中间状态更新目录
   const suppressChapterDetectionRef = useRef(false);
@@ -205,7 +205,7 @@ export function useContinuousScroll({
   const restoreTargetRef = useRef<{ chapterId: string; offset?: number } | null>(null);
   // 用 ref 存储 scrollToChapter，避免 effect 依赖它（否则 addChapters 会重建它导致 effect 重运行清除定时器）
   const scrollToChapterRef = useRef(scrollToChapter);
-  scrollToChapterRef.current = scrollToChapter;
+  useEffect(() => { scrollToChapterRef.current = scrollToChapter; }, [scrollToChapter]);
 
   useEffect(() => {
     if (!enabled || !novelId) {
@@ -270,7 +270,7 @@ export function useContinuousScroll({
       clearTimeout(timer);
       suppressChapterDetectionRef.current = false;
     };
-  }, [novelId, enabled, chapters, initialChapterId, initialChapterOffset]);
+  }, [novelId, enabled, chapters, initialChapterId, initialChapterOffset, chapterIndexMap]);
 
   // ── 章节检测（scroll 事件 + requestAnimationFrame 节流）────────────
   // 用 scroll 事件替代 IntersectionObserver，彻底消除"已在视口不触发"的时序问题
@@ -418,7 +418,7 @@ export function useContinuousScroll({
     edgeObserver.observe(bottomSentinel);
 
     return () => edgeObserver.disconnect();
-  }, [chapters.length, loadMore, enabled]);
+  }, [chapters.length, loadMore, enabled, loadedChapters.length]);
 
   // ── 临时抑制章节检测和边缘加载（目录点击等场景）──
   const suppressIO = useCallback(() => {

@@ -9,6 +9,15 @@ import { getEngineDisplayName } from "@/rag/engines";
 import { useBuildStore, type NovelBuildStatus } from "@/stores/build-store";
 import type { NovelMeta } from "@/parsers/types";
 
+/** 服务器返回的构建状态（字段可选） */
+interface ServerBuildStatus {
+  status?: string;
+  message?: string;
+  current?: number;
+  total?: number;
+  queuePosition?: number;
+}
+
 interface ReadPosition {
   chapterId: string;
   chapterIndex: number;
@@ -23,7 +32,7 @@ interface NovelCardProps {
   lruKeys: Set<string>;
   cachedKeys: Set<string>;
   builds: Map<string, NovelBuildStatus>;
-  buildStatuses: Record<string, Record<string, any>>;
+  buildStatuses: Record<string, Record<string, ServerBuildStatus>>;
   offlineMode: boolean;
   onOpen: (novelId: string, chapterIndex: number) => void;
   onDelete: (e: React.MouseEvent, novelId: string, title: string) => void;

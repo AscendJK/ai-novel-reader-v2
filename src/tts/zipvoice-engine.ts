@@ -198,7 +198,7 @@ export async function loadModel(
     try {
       // 1. 检查 IndexedDB 缓存
       options?.onProgress?.(5);
-      let cached = await isCacheReady();
+      const cached = await isCacheReady();
 
       if (!cached) {
         // 2. 服务器端准备（下载 + 解压）

@@ -378,7 +378,7 @@ class ZipVoiceTTSEngine {
 
   stop(): void {
     this.stopped = true;
-    if (this.currentSource) { try { this.currentSource.stop(); } catch {} this.currentSource = null; }
+    if (this.currentSource) { try { this.currentSource.stop(); } catch { /* 已停止的 source 忽略 */ } this.currentSource = null; }
     if (this.pendingPlayResolve) { this.pendingPlayResolve(); this.pendingPlayResolve = null; }
     this.currentBuffer = null;
     this.paused = false;

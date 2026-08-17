@@ -78,7 +78,7 @@ export async function gatherChanges(lastSyncTime: number): Promise<Partial<SyncD
   });
 
   return {
-    summaries: summaries as any,
+    summaries,
     notes,
     maps,
     graphs,

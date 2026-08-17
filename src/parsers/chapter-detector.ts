@@ -2,11 +2,11 @@ const CHAPTER_PATTERNS = [
   /第[零一二三四五六七八九十百千万0-9]+[章节回卷篇集]/,
   /Chapter\s+\d+/i,
   /CHAPTER\s+\d+/,
-  /^\s*\d+[\.、．]\s*[^\n]{1,50}$/m,     // "1. xxx" or "1、xxx"
+  /^\s*\d+[.、．]\s*[^\n]{1,50}$/m,     // "1. xxx" or "1、xxx"
   /^\s*第[零一二三四五六七八九十百千万0-9]+[章节]?\s+[^\n]{1,50}$/m,
 ];
 
-const PLAIN_NUMBER_PATTERN = /^\s*(\d+)[\.、．\s]+(.+)$/;
+const PLAIN_NUMBER_PATTERN = /^\s*(\d+)[.、．\s]+(.+)$/;
 
 export interface DetectedChapter {
   title: string;
@@ -41,7 +41,14 @@ export function detectChapters(text: string): DetectedChapter[] {
       if (plainMatch) {
         const num = parseInt(plainMatch[1], 10);
         if (num >= 1 && num <= 100000 && plainMatch[2].length >= 2) {
-          chapters.push({ title: line, startIndex: lineStart });
+          // 防误判：排除常见对话/非章节开头模式
+          const content = plainMatch[2];
+          const isDialogue = /^[""'']/.test(content) || /^[：:]/.test(content);
+          const isContinuation = /^[还但而并且因所于或与及]/.test(content);
+          const isNegative = /^[0-9]+$/.test(content); // 纯数字后缀
+          if (!isDialogue && !isContinuation && !isNegative) {
+            chapters.push({ title: line, startIndex: lineStart });
+          }
         }
       }
     }

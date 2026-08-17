@@ -94,8 +94,8 @@ export function BookTab({
   // 从 IndexedDB 加载地图数据
   useEffect(() => {
     let cancelled = false;
-    setLoadingMap(true);
     const load = async () => {
+      setLoadingMap(true);
       try {
         const { data, updatedAt } = await loadMap(novelId);
         if (!cancelled) {
@@ -117,7 +117,7 @@ export function BookTab({
     };
     load();
     return () => { cancelled = true; };
-  }, [novelId]);
+  }, [novelId, onMapDataChange]);
 
   return (
     <div className="px-2.5 pt-2 pb-2 space-y-1">

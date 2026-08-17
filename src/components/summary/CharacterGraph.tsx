@@ -60,8 +60,11 @@ export function CharacterGraph({ graphData, onRegenerate }: Props) {
   const pinchStartZoom = useRef(1);
   const simRafIds = useRef<number[]>([]);
 
-  // Reset on expand/collapse
-  useEffect(() => { setZoom(1); setPan({ x: 0, y: 0 }); }, [expanded]);
+  // Reset on expand/collapse（延迟到下一帧，避免 effect 中同步 setState）
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => { setZoom(1); setPan({ x: 0, y: 0 }); });
+    return () => cancelAnimationFrame(raf);
+  }, [expanded]);
 
   const handleZoom = useCallback((delta: number) => {
     setZoom((z) => Math.max(0.3, Math.min(5, z + delta)));
@@ -310,7 +313,7 @@ export function CharacterGraph({ graphData, onRegenerate }: Props) {
                     onMouseEnter={(e) => { setTooltip({ desc: n.description, x: n.x, y: n.y }); setTTScreen({ sx: e.clientX, sy: e.clientY }); }}
                     onMouseMove={(e) => setTTScreen({ sx: e.clientX, sy: e.clientY })}
                     onMouseLeave={() => setTooltip(null)}
-                    onClick={(e) => setTooltip((prev) => prev ? null : { desc: n.description, x: n.x, y: n.y })}
+                    onClick={() => setTooltip((prev) => prev ? null : { desc: n.description, x: n.x, y: n.y })}
                   />
                 )}
               </g>
@@ -458,7 +461,7 @@ export function CharacterGraph({ graphData, onRegenerate }: Props) {
                         onMouseEnter={(e) => { setTooltip({ desc: n.description, x: n.x, y: n.y }); setTTScreen({ sx: e.clientX, sy: e.clientY }); }}
                         onMouseMove={(e) => setTTScreen({ sx: e.clientX, sy: e.clientY })}
                         onMouseLeave={() => setTooltip(null)}
-                        onClick={(e) => setTooltip((prev) => prev ? null : { desc: n.description, x: n.x, y: n.y }) as any}
+                        onClick={() => setTooltip((prev) => prev ? null : { desc: n.description, x: n.x, y: n.y })}
                       />
                     )}
                   </g>

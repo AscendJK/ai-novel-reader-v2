@@ -193,15 +193,16 @@ export function NovelMap({ mapData, onRegenerate, loading }: NovelMapProps) {
       el.addEventListener("mouseleave", handleMouseLeave);
 
       // 存储清理函数
-      (el as any).__tooltipCleanup = () => {
+      (el as unknown as { __tooltipCleanup: () => void }).__tooltipCleanup = () => {
         el.removeEventListener("mousemove", handleMouseMove);
         el.removeEventListener("mouseleave", handleMouseLeave);
       };
     }
 
     return () => {
-      if ((container as any).__tooltipCleanup) {
-        (container as any).__tooltipCleanup();
+      const cleanup = (container as unknown as { __tooltipCleanup?: () => void }).__tooltipCleanup;
+      if (cleanup) {
+        cleanup();
       }
     };
   }, []);

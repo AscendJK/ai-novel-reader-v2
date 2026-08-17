@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
 import { registerSW } from "virtual:pwa-register";
-import { setUpdateSW } from "@/components/common/UpdateBanner";
+import { setUpdateSW } from "@/lib/sw-update";
 
 // 前端开发版本号（每次发布时手动更新）
 const DEV_VERSION = "2025.06.20.7";

@@ -5,7 +5,7 @@ describe("prepareTextForTTS", () => {
   it("空内容返回空数组", () => {
     expect(prepareTextForTTS("")).toEqual([]);
     expect(prepareTextForTTS("   ")).toEqual([]);
-    expect(prepareTextForTTS(null as any)).toEqual([]);
+    expect(prepareTextForTTS(null as unknown as string)).toEqual([]);
   });
 
   it("单段落不合并", () => {

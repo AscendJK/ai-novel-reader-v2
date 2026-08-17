@@ -115,6 +115,7 @@ export class EmbeddingRetriever {
     onProgress?: (p: EmbeddingProgress) => void,
     _signal?: AbortSignal
   ): Promise<void> {
+    void _signal; // 兼容接口签名：init 目前不使用 AbortSignal
     const memCacheKey = `${novelId}-${this.engine}`;
 
     // Check LRU memory cache first

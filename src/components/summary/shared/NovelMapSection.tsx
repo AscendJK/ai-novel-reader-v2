@@ -86,7 +86,14 @@ export function NovelMapSection({
   }, [showFullscreen, handleZoom]);
 
   // 触摸状态 ref
-  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  interface TouchStartState {
+    x: number;
+    y: number;
+    posX?: number;
+    posY?: number;
+    placeId?: string | null;
+  }
+  const touchStartRef = useRef<TouchStartState | null>(null);
   const pinchStartRef = useRef<{ dist: number; scale: number } | null>(null);
 
   // 使用原生事件监听器处理触摸（支持 preventDefault）
@@ -104,10 +111,10 @@ export function NovelMapSection({
         touchStartRef.current = {
           x: e.touches[0].clientX,
           y: e.touches[0].clientY,
+          posX: fullscreenPos.x,
+          posY: fullscreenPos.y,
+          placeId: placeId || null,
         };
-        (touchStartRef.current as any).posX = fullscreenPos.x;
-        (touchStartRef.current as any).posY = fullscreenPos.y;
-        (touchStartRef.current as any).placeId = placeId || null;
 
         if (!placeId) {
           setIsDragging(true);
@@ -121,13 +128,13 @@ export function NovelMapSection({
 
     const handleTouchMove = (e: TouchEvent) => {
       e.preventDefault(); // 阻止浏览器默认行为
-      if (e.touches.length === 1 && touchStartRef.current && !(touchStartRef.current as any).placeId) {
+      if (e.touches.length === 1 && touchStartRef.current && !touchStartRef.current.placeId) {
         // 计算手指移动距离，乘以 3 倍系数提高灵敏度
         const dx = (e.touches[0].clientX - touchStartRef.current.x) * 3;
         const dy = (e.touches[0].clientY - touchStartRef.current.y) * 3;
         setFullscreenPos({
-          x: (touchStartRef.current as any).posX + dx,
-          y: (touchStartRef.current as any).posY + dy,
+          x: (touchStartRef.current.posX ?? fullscreenPos.x) + dx,
+          y: (touchStartRef.current.posY ?? fullscreenPos.y) + dy,
         });
       } else if (e.touches.length === 2 && pinchStartRef.current) {
         const dx = e.touches[0].clientX - e.touches[1].clientX;
@@ -148,7 +155,7 @@ export function NovelMapSection({
         const dy = Math.abs(e.changedTouches[0].clientY - touchStartRef.current.y);
         if (dx < 10 && dy < 10) {
           // 是点击，检查是否有地点 ID
-          const placeId = (touchStartRef.current as any).placeId;
+          const placeId = touchStartRef.current.placeId;
           if (placeId) {
             setSelectedPlace(placeId);
           }

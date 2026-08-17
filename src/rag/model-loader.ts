@@ -110,7 +110,7 @@ export const ALL_ENGINES: EngineInfo[] = [
 
 // ── Download queue (one at a time) ──
 
-let downloadQueue: Array<{ modelKey: string; resolve: (ok: boolean) => void }> = [];
+const downloadQueue: Array<{ modelKey: string; resolve: (ok: boolean) => void }> = [];
 let isDownloading = false;
 // Waiters for in-progress downloads: modelKey → resolve functions
 const downloadWaiters = new Map<string, Array<(ok: boolean) => void>>();
@@ -178,7 +178,7 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
       console.log(`[model-loader] 开始下载 tokenizer, remoteHost=${env.remoteHost}`);
       try {
         await AutoTokenizer.from_pretrained(modelKey, {
-          progress_callback: (data: any) => {
+          progress_callback: (data: { status?: string; file?: string; loaded?: number; total?: number; error?: string }) => {
             if (data.status === "progress" && data.file) {
               const loaded = data.loaded || 0;
               const total = data.total || 0;
@@ -204,7 +204,7 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
       // Download model
       store.setDownloadProgress("下载模型...");
       await AutoModel.from_pretrained(modelKey, {
-        progress_callback: (data: any) => {
+        progress_callback: (data: { status?: string; file?: string; loaded?: number; total?: number }) => {
           if (data.status === "progress" && data.file) {
             const loaded = data.loaded || 0;
             const total = data.total || 0;

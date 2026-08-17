@@ -82,23 +82,33 @@ export function AudioPlayer({
     const t = setInterval(() => setElapsed(e => e + 1), 1000);
     return () => clearInterval(t);
   }, [isPlaying]);
-  useEffect(() => { if (!isActive) setElapsed(0); }, [isActive]);
+  useEffect(() => {
+    if (isActive) return;
+    const raf = requestAnimationFrame(() => setElapsed(0));
+    return () => cancelAnimationFrame(raf);
+  }, [isActive]);
 
   // F4: 睡眠定时器
   const [sleepTimer, setSleepTimer] = useState(0);
   const [sleepRemaining, setSleepRemaining] = useState(0);
   const sleepTimerRef = useRef(sleepTimer);
-  sleepTimerRef.current = sleepTimer;
+  useEffect(() => { sleepTimerRef.current = sleepTimer; }, [sleepTimer]);
   useEffect(() => {
     if (sleepTimer > 0 && isPlaying) {
-      setSleepRemaining(r => r > 0 ? r : sleepTimer);
+      // 在下一帧初始化剩余时间并启动倒计时，避免 effect 中同步 setState
+      const raf = requestAnimationFrame(() => {
+        setSleepRemaining(r => r > 0 ? r : sleepTimer);
+      });
       const t = setInterval(() => setSleepRemaining(r => {
         if (r <= 1) { clearInterval(t); if (sleepTimerRef.current > 0) stop(); return 0; }
         return r - 1;
       }), 60000);
-      return () => clearInterval(t);
-    } else if (sleepTimer === 0) { setSleepRemaining(0); }
-  }, [sleepTimer, isPlaying]);
+      return () => { cancelAnimationFrame(raf); clearInterval(t); };
+    } else if (sleepTimer === 0) {
+      const raf = requestAnimationFrame(() => setSleepRemaining(0));
+      return () => cancelAnimationFrame(raf);
+    }
+  }, [sleepTimer, isPlaying, stop]);
 
   // 弹出面板状态
   const [showSleepPopup, setShowSleepPopup] = useState(false);

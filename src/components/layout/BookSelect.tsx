@@ -9,7 +9,17 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatCharCount } from "@/lib/text-utils";
-import { useBuildStore } from "@/stores/build-store";
+import { useBuildStore, type BuildStatusType } from "@/stores/build-store";
+import type { BuildStatus } from "@/rag/build-index";
+
+/** 服务器返回的构建状态（字段可选） */
+interface ServerBuildStatus {
+  status?: BuildStatus;
+  message?: string;
+  current?: number;
+  total?: number;
+  queuePosition?: number;
+}
 import { useRAGStore } from "@/stores/rag-store";
 import { useUIStore } from "@/stores/ui-store";
 import { ensureModelReady } from "@/rag/model-loader";
@@ -56,7 +66,8 @@ export function BookSelect() {
 
   // Cleanup build polling on unmount
   useEffect(() => {
-    return () => { if (buildPollRef.current) clearInterval(buildPollRef.current); };
+    const pollRef = buildPollRef;
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
 
   useEffect(() => {
@@ -71,7 +82,7 @@ export function BookSelect() {
     }).catch((err) => {
       console.error("loadAllNovelMeta failed:", err);
     });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   const filteredNovels = useMemo(() => {
     if (!searchQuery.trim()) return savedNovels;
@@ -91,7 +102,7 @@ export function BookSelect() {
   const offlineMode = useUIStore((s) => s.offlineMode);
   const addCachedKey = useRAGStore((s) => s.addCachedKey);
   const [, setBuildingKeys] = useState<Set<string>>(new Set());
-  const [buildStatuses, setBuildStatuses] = useState<Record<string, Record<string, any>>>({});
+  const [buildStatuses, setBuildStatuses] = useState<Record<string, Record<string, ServerBuildStatus>>>({});
 
   // Scan ragCache when novel count changes (new novel added or novel deleted)
   const prevNovelCountRef = useRef(savedNovels.length);
@@ -139,7 +150,7 @@ export function BookSelect() {
 
         // 同步更新 Zustand store（用于构建状态窗口显示）
         const buildStore = useBuildStore.getState();
-        for (const [novelId, engines] of Object.entries(statuses) as [string, Record<string, any>][]) {
+        for (const [novelId, engines] of Object.entries(statuses) as [string, Record<string, ServerBuildStatus>][]) {
           for (const [engine, st] of Object.entries(engines)) {
             if (st && typeof st === "object" && st.status) {
               const existing = buildStore.getBuildStatus(novelId, engine);
@@ -151,7 +162,7 @@ export function BookSelect() {
               if (!existing && isBuilding) {
                 buildStore.startBuild(novelId, engine);
                 buildStore.updateProgress(novelId, engine, {
-                  status: st.status as any,
+                  status: st.status as BuildStatusType,
                   message: st.message || "正在构建...",
                   current: st.current || 0,
                   total: st.total || 0,
@@ -161,7 +172,7 @@ export function BookSelect() {
                 // 更新现有状态
                 if (isBuilding) {
                   buildStore.updateProgress(novelId, engine, {
-                    status: st.status as any,
+                    status: st.status as BuildStatusType,
                     message: st.message || "正在构建...",
                     current: st.current || 0,
                     total: st.total || 0,
@@ -255,7 +266,7 @@ export function BookSelect() {
         engine: buildEngine,
         onProgress: (progress) => {
           buildStore.updateProgress(novelId, buildEngine, {
-            status: progress.status as any,
+            status: progress.status as BuildStatusType,
             message: progress.message,
             current: progress.current || 0,
             total: progress.total || 0,
@@ -386,7 +397,13 @@ export function BookSelect() {
     try {
       // Primary: showOpenFilePicker - shows individual files with proper type filtering
       if ("showOpenFilePicker" in window) {
-        const fileHandles = await (window as any).showOpenFilePicker({
+        const picker = (window as unknown as {
+          showOpenFilePicker: (options?: {
+            multiple?: boolean;
+            types?: Array<{ description?: string; accept: Record<string, string[]> }>;
+          }) => Promise<Array<{ getFile: () => Promise<File> }>>;
+        }).showOpenFilePicker;
+        const fileHandles = await picker({
           types: [
             {
               description: "小说文件",

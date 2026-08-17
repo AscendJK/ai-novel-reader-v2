@@ -49,7 +49,8 @@ const useQADataStore = create<QADataStore>((set, get) => ({
 
   clear: (novelId) =>
     set((s) => {
-      const { [novelId]: _, ...rest } = s.data;
+      const rest = { ...s.data };
+      delete rest[novelId];
       return { data: rest };
     }),
 }));
@@ -113,7 +114,7 @@ export function useQA({ novelId, askCustomQuestion, generateRangeSummary, clearQ
       setQaError(null);
     }
     prevNovelIdRef.current = novelId;
-  }, [novelId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [novelId, store]);
 
   // 包装 setState：每次更新同时写入 store
   const setQaMessages: typeof _setQaMessages = useCallback((value) => {
@@ -122,7 +123,7 @@ export function useQA({ novelId, askCustomQuestion, generateRangeSummary, clearQ
       if (novelId) store.save(novelId, { qaMessages: next });
       return next;
     });
-  }, [novelId]);
+  }, [novelId, store]);
 
   const setRangeResults: typeof _setRangeResults = useCallback((value) => {
     _setRangeResults((prev) => {
@@ -130,7 +131,7 @@ export function useQA({ novelId, askCustomQuestion, generateRangeSummary, clearQ
       if (novelId) store.save(novelId, { rangeResults: next });
       return next;
     });
-  }, [novelId]);
+  }, [novelId, store]);
 
   const addMessage = useCallback((role: "user" | "assistant", content: string, tokensUsed?: number) => {
     const message: QAMessage = { id: crypto.randomUUID(), role, content, tokensUsed };
@@ -139,7 +140,7 @@ export function useQA({ novelId, askCustomQuestion, generateRangeSummary, clearQ
 
   // 用 ref 追踪最新消息列表，避免 handleSubmitQuestion 中的闭包捕获旧值
   const qaMessagesRef = useRef(qaMessages);
-  qaMessagesRef.current = qaMessages;
+  useEffect(() => { qaMessagesRef.current = qaMessages; }, [qaMessages]);
 
   const handleSubmitQuestion = useCallback(async () => {
     if (!customQuestion.trim() || qaLoading) return;
@@ -200,7 +201,7 @@ export function useQA({ novelId, askCustomQuestion, generateRangeSummary, clearQ
     _setRangeResults([]);
     setQaError(null);
     if (novelId) store.clear(novelId);
-  }, [clearQaCache, novelId]);
+  }, [clearQaCache, novelId, store]);
 
   return {
     qaMessages,

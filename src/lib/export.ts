@@ -86,16 +86,34 @@ export async function importFromJSON(file: File): Promise<{ novels: number; chap
 
   await udb.transaction("rw", udb.novels, udb.chapters, udb.summaries, udb.notes, async () => {
     if (data.novels?.length) {
-      for (const n of data.novels) { await udb.novels.put(n as any); novelCount++; }
+      for (const n of data.novels) {
+        await udb.novels.put(n as unknown as Parameters<typeof udb.novels.put>[0]);
+        novelCount++;
+      }
     }
     if (data.chapters?.length) {
-      for (const ch of data.chapters) { await udb.chapters.put(ch as any); chapterCount++; }
+      for (const ch of data.chapters) {
+        await udb.chapters.put(ch as unknown as Parameters<typeof udb.chapters.put>[0]);
+        chapterCount++;
+      }
     }
     if (data.summaries?.length) {
-      for (const s of data.summaries) { await udb.summaries.put({ ...s, updatedAt: (s as any).updatedAt || Date.now() } as any); summaryCount++; }
+      for (const s of data.summaries) {
+        await udb.summaries.put({
+          ...s,
+          updatedAt: (s.updatedAt as number | undefined) || Date.now(),
+        } as unknown as Parameters<typeof udb.summaries.put>[0]);
+        summaryCount++;
+      }
     }
     if (data.notes?.length) {
-      for (const n of data.notes) { await udb.notes.put({ ...n, updatedAt: (n as any).updatedAt || Date.now() } as any); noteCount++; }
+      for (const n of data.notes) {
+        await udb.notes.put({
+          ...n,
+          updatedAt: (n.updatedAt as number | undefined) || Date.now(),
+        } as unknown as Parameters<typeof udb.notes.put>[0]);
+        noteCount++;
+      }
     }
   });
   // Settings go to shared DB

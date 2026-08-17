@@ -13,7 +13,13 @@ function toModelPath(engine: string): string {
 }
 
 const MAX_ENCODERS = 2; // 最多缓存 2 个编码器模型，避免内存泄漏
-const encoderCache = new Map<string, any>();
+
+/** Transformers.js feature-extraction pipeline 的最小接口 */
+interface FeatureExtractor {
+  (text: string, options?: { pooling?: string; normalize?: boolean }): Promise<{ data: Float32Array | number[] }>;
+  dispose?: () => Promise<void>;
+}
+const encoderCache = new Map<string, FeatureExtractor>();
 let encoderLock: Promise<void> = Promise.resolve();
 
 function touchEncoderCache(key: string) {
@@ -33,7 +39,7 @@ function touchEncoderCache(key: string) {
   }
 }
 
-async function getEncoder(engine: string): Promise<any> {
+async function getEncoder(engine: string): Promise<FeatureExtractor> {
   const cached = encoderCache.get(engine);
   if (cached) return cached;
 
@@ -60,14 +66,11 @@ async function getEncoder(engine: string): Promise<any> {
     }
 
     ragLog(`[client-encoder] 加载模型: ${modelPath}`);
-    try {
-      const extractor = await pipeline("feature-extraction", modelPath);
-      encoderCache.set(engine, extractor);
-      touchEncoderCache(engine);
-      ragLog(`[client-encoder] 模型就绪: ${modelPath}`);
-      return extractor;
-    } finally {
-    }
+    const extractor = await pipeline("feature-extraction", modelPath);
+    encoderCache.set(engine, extractor);
+    touchEncoderCache(engine);
+    ragLog(`[client-encoder] 模型就绪: ${modelPath}`);
+    return extractor;
   } finally {
     releaseLock();
   }

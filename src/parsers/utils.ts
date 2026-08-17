@@ -18,7 +18,10 @@ export function createNovel(parseResult: import("./types").ParseResult, fileName
   const novelId = uuid();
   return {
     id: novelId,
-    title: fileName.replace(/\.[^.]+$/, "").replace(/^《/, "").replace(/》$/, ""),
+    // 优先使用解析结果中的标题（EPUB 从 OPF 元数据提取），无则回退到文件名
+    title: (parseResult.title && parseResult.title.trim())
+      ? parseResult.title.trim()
+      : fileName.replace(/\.[^.]+$/, "").replace(/^《/, "").replace(/》$/, ""),
     author: parseResult.author,
     fileName,
     fileFormat,
