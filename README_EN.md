@@ -27,7 +27,7 @@ The backend provides RAG building, data sync, book library management, and other
 
 **Option 1: Download backend package (Recommended)**
 
-Download `ai-novel-reader-backend-v2.x.x.zip` (~36 KB) from [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases), then:
+Download `ai-novel-reader-backend-v2.x.x.zip` (~40-45 KB) from [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases), then:
 
 - **Windows**: Double-click `start.bat`
 - **macOS / Linux**: `chmod +x start.sh && ./start.sh`
@@ -35,6 +35,25 @@ Download `ai-novel-reader-backend-v2.x.x.zip` (~36 KB) from [Releases](https://g
 The script will auto-install dependencies (server-side only, no frontend build) and start the backend. Models will be downloaded from the mirror on first index build (requires network).
 
 > **Package contents**: Only `server/` source code, `package.json` (5 backend dependencies), and start scripts. The start script only runs `npm install` + `node server/index.js` (no frontend build). Runtime data (database, model cache, certificates) is created automatically on first server start.
+
+**For maintainers: how to build / publish the backend package**
+
+Build locally (cross-platform; works with PowerShell 7 or Windows PowerShell):
+
+```bash
+npm run pack:backend
+```
+
+Produces `ai-novel-reader-v2-backend.zip` (~40-45 KB).
+
+**Auto-publish a Release**: Pushing to `main` only triggers the frontend deployment — it does not package the backend. To release a new version, create a tag:
+
+```bash
+git tag v2.1.8
+git push origin v2.1.8
+```
+
+GitHub Actions (`.github/workflows/release-backend.yml`) then runs `pack-backend.ps1`, verifies the artifact, creates a Release, and uploads the zip. You can also trigger it manually from the Actions tab (workflow_dispatch).
 
 **Option 2: Clone the entire repo**
 

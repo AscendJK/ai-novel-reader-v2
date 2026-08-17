@@ -27,7 +27,7 @@
 
 **方式一：下载后端包（推荐）**
 
-从 [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases) 下载 `ai-novel-reader-backend-v2.x.x.zip`（约 36 KB），解压后：
+从 [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases) 下载 `ai-novel-reader-backend-v2.x.x.zip`（约 40-45 KB），解压后：
 
 - **Windows**：双击 `start.bat`
 - **macOS / Linux**：`chmod +x start.sh && ./start.sh`
@@ -35,6 +35,25 @@
 脚本会自动安装依赖并启动后端（仅安装服务端依赖，不构建前端）。首次构建索引时会自动从镜像下载模型（需要网络）。
 
 > **精简包内容**：仅包含 `server/` 源码、`package.json`（5 个后端依赖）和启动脚本。启动脚本只执行 `npm install` + `node server/index.js`，不构建前端。运行时数据（数据库、模型缓存、证书）由服务器启动后自动创建。
+
+**维护者：如何打包 / 发布后端包**
+
+本地打包（跨平台，PowerShell 7 或 Windows PowerShell 均可）：
+
+```bash
+npm run pack:backend
+```
+
+生成 `ai-novel-reader-v2-backend.zip`（约 40-45 KB）。
+
+**自动发布 Release**：推送到 `main` 分支只触发前端部署，不会打包后端。需要发布新版本时打 tag：
+
+```bash
+git tag v2.1.8
+git push origin v2.1.8
+```
+
+GitHub Actions（`.github/workflows/release-backend.yml`）会自动运行 `pack-backend.ps1`、校验产物，并创建 Release、上传 zip。也可以在 Actions 页面手动触发（workflow_dispatch）。
 
 **方式二：Clone 整个仓库**
 
