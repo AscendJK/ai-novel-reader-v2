@@ -377,7 +377,7 @@ Backend: Local server (Express + better-sqlite3)
 ├─ Username system + Session Token auth + Server-side centralized sync
 ├─ Three-tier RAG cache: Memory LRU (100MB) → IndexedDB (100-500MB) → Server SQLite
 ├─ Periodic WAL checkpoint + automatic database backup (24h)
-└─ Unit test coverage: 117 test cases (Vitest + Testing Library)
+└─ Unit test coverage: 152 test cases (Vitest + Testing Library)
 ```
 
 ---
@@ -385,7 +385,7 @@ Backend: Local server (Express + better-sqlite3)
 ## Design Principles
 
 - **Browser-first data**: Reading, notes, summaries, settings, and API keys all live in local IndexedDB
-- **Server for RAG building and backup only**: Most features work when the server is unreachable
+- **Server participates only when needed (RAG building, sync, shared book library, model/API proxy)**: Core features (reading, summaries, Q&A, local search) work when the server is unreachable
 - **Login is local**: Username validation happens in the browser; the server only participates in sync
 - **Offline-first**: Auto-detects server status, clearly indicates unavailable features, never blocks the user
 
