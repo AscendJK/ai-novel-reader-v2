@@ -45,7 +45,7 @@ export const ChapterNav = memo(function ChapterNav({ scrollControlRef }: Chapter
       // 已加载：使用 scrollToChapter（抑制 IO 干扰）
       setSelectedChapter(chapterId);
       if (scrollControlRef?.current) {
-        const release = scrollControlRef.current.suppressIO();
+        const release = scrollControlRef.current.suppressIO(chapterId);
         scrollControlRef.current.scrollToChapter(chapterId);
         setTimeout(release, 500);
       } else {
@@ -59,7 +59,7 @@ export const ChapterNav = memo(function ChapterNav({ scrollControlRef }: Chapter
         const start = Math.max(0, chapterIndex - 10);
         const loaded = await loadChapters(currentNovel.id, start, 21);
         // 先抑制 IO，再加载章节和滚动
-        const release = scrollControlRef?.current?.suppressIO();
+        const release = scrollControlRef?.current?.suppressIO(chapterId);
         addChapters(loaded);
         setSelectedChapter(chapterId);
         if (scrollControlRef?.current) {

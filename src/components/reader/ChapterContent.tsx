@@ -21,7 +21,7 @@ interface ChapterContentProps {
   hasSummary: boolean;
   immersive: boolean;
   onToggleImmersive: () => void;
-  scrollControlRef?: React.RefObject<{ scrollToChapter: (chapterId: string, chapterOffset?: number) => void; suppressIO: () => () => void } | null>;
+  scrollControlRef?: React.RefObject<{ scrollToChapter: (chapterId: string, chapterOffset?: number) => void; suppressIO: (targetChapterId?: string) => () => void } | null>;
 }
 
 const FONT_WEIGHTS = [

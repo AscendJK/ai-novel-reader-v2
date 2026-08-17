@@ -25,8 +25,8 @@ interface UseContinuousScrollReturn {
   loadedChapters: Chapter[];
   scrollToChapter: (chapterId: string, chapterOffset?: number) => void;
   isLoadingMore: boolean;
-  /** 临时抑制 IO 回调（用于目录点击等场景），返回解锁函数 */
-  suppressIO: () => () => void;
+  /** 临时抑制 IO 回调（用于目录点击等场景），传入目标章节 ID 可避免释放后检测回退，返回解锁函数 */
+  suppressIO: (targetChapterId?: string) => () => void;
 }
 
 const LOAD_BATCH = 10;
@@ -421,12 +421,17 @@ export function useContinuousScroll({
   }, [chapters.length, loadMore, enabled, loadedChapters.length]);
 
   // ── 临时抑制章节检测和边缘加载（目录点击等场景）──
-  const suppressIO = useCallback(() => {
+  // targetChapterId 可选，传入后释放时会同步更新 lastDetectedChapterRef，
+  // 避免释放后 detectCurrentChapter 因旧 lastDetected 找不到目标而回退到第一章
+  const suppressIO = useCallback((targetChapterId?: string) => {
     suppressChapterDetectionRef.current = true;
     hasRestoredRef.current = true;
     restoreTargetRef.current = null;
     return () => {
       suppressChapterDetectionRef.current = false;
+      if (targetChapterId) {
+        lastDetectedChapterRef.current = targetChapterId;
+      }
       triggerDetectionRef.current?.();
     };
   }, []);
