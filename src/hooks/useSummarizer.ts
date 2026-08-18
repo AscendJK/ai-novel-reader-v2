@@ -8,6 +8,7 @@ import { characterGraphAgent } from "@/agents/graph-agent";
 import { mapAgent } from "@/agents/map-agent";
 import type { Agent, AgentContext, AgentResult, MapData, TaskTypeValue } from "@/agents/types";
 import { TaskType } from "@/agents/types";
+import { runAgentTask as runAgentTaskPure, formatAPIError } from "@/agents/runTask";
 import { getProvider } from "@/api/registry";
 import { saveSummary, saveMap, deleteMap, loadChapters } from "@/db/repositories";
 import { getUserDB } from "@/db/database";
@@ -182,18 +183,7 @@ export function useSummarizer() {
   }, [getActiveProvider]);
 
   const handleError = useCallback((err: unknown) => {
-    if (err instanceof APIError) {
-      // 使用 apiCode（API 专用代码）显示错误
-      const code = err.apiCode || err.code;
-      if (code === "context_length") setError(`[上下文超限] ${err.message}`);
-      else if (code === "auth") setError(`[认证失败] ${err.message}`);
-      else if (code === "quota_exceeded") setError(`[额度用尽] ${err.message}`);
-      else if (code === "rate_limit") setError(`[频率限制] ${err.message}`);
-      else if (code === "network") setError(`[网络错误] ${err.message}`);
-      else setError(`[${code}] ${err.message}`);
-    } else {
-      setError(err instanceof Error ? err.message : "未知错误");
-    }
+    setError(formatAPIError(err));
   }, []);
 
   const saveChapterSummary = useCallback(
@@ -233,7 +223,7 @@ export function useSummarizer() {
     [currentNovel, addSummary]
   );
 
-  // --- 通用 Agent 任务执行器 ---
+  // --- 通用 Agent 任务执行器（薄封装：注入 React 状态回调 + 复用纯逻辑层）---
   const runAgentTask = useCallback(async (options: {
     taskName: string;
     agent: Agent;
@@ -244,28 +234,14 @@ export function useSummarizer() {
     /** 任务类型标识，优先使用，其次使用 agent.taskType，最后回退到 taskName */
     taskType?: TaskTypeValue;
   }): Promise<unknown> => {
-    const { taskName, agent, context, errorMessage, onSuccess, returnData, taskType } = options;
-    startTask(taskName, taskType || agent.taskType);
-    try {
-      const result = await agent.run(context);
-      if (result.success) {
-        if (onSuccess) {
-          setCurrentTask("正在保存结果...");
-          await onSuccess(result);
-        }
-        return returnData ? result.data : undefined;
-      } else {
-        setError(result.error || errorMessage);
-        return returnData ? null : undefined;
-      }
-    } catch (err) {
-      handleError(err);
-      return returnData ? null : undefined;
-    } finally {
-      endTask();
-      syncClient.pushNow();
-    }
-  }, [startTask, endTask, handleError, setCurrentTask]);
+    return runAgentTaskPure({
+      onStart: (name, type) => startTask(name, type || ""),
+      onStatus: setCurrentTask,
+      onError: (msg) => setError(msg),
+      onDone: endTask,
+      onPush: () => syncClient.pushNow(),
+    }, options);
+  }, [startTask, setCurrentTask, setError, endTask]);
 
   // --- Chapter summary ---
   const summarizeChapter = useCallback(async (chapterId: string) => {
