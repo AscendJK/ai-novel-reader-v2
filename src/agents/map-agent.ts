@@ -24,7 +24,7 @@ class MapAgent extends BaseAgent {
   }
 
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
-    const { novel, provider } = env;
+    const { novel, provider, budget } = env;
 
     // 1. 构建章节目录
     context.onStatus?.("正在准备分析数据...");
@@ -45,7 +45,7 @@ class MapAgent extends BaseAgent {
           { role: "system", content: "你是一个 JSON 数据生成器。只输出 JSON，不要任何解释文字。" },
           { role: "user", content: prompt },
         ],
-        max_tokens: 8192, // 匹配常见模型输出上限（Qwen3-8B 为 8192；地图 JSON 通常远小于此）
+        max_tokens: Math.min(8192, budget.maxOutputTokens),
         temperature: 0.3,
         signal: context.signal,
       });

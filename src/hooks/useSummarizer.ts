@@ -536,7 +536,7 @@ ${combinedText}`;
         const providerInstance = getProvider(provider);
         const response = await providerInstance.chat({
           model: "", messages: [{ role: "user", content: prompt }],
-          max_tokens: 2048, temperature: 0.5,
+          max_tokens: Math.min(2048, budget?.maxOutputTokens ?? 2048),
           signal: createSignal(),
         });
 

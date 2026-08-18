@@ -60,7 +60,7 @@ class SummarizerAgent extends BaseAgent {
         const response = await provider.chat({
           model: "",
           messages: [{ role: "user", content: prompt }],
-          max_tokens: 1024,
+          max_tokens: Math.min(1024, budget.maxOutputTokens),
           temperature: 0.5,
           signal: context.signal,
         });
@@ -164,7 +164,7 @@ class GlobalSummarizerAgent extends BaseAgent {
           },
           { role: "user", content: usePrompt },
         ],
-        max_tokens: 4096,
+        max_tokens: Math.min(4096, budget.maxOutputTokens),
         temperature: 0.5,
         signal: context.signal,
       });

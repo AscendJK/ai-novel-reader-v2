@@ -64,7 +64,7 @@ ${relevantContent}
           { role: "system", content: "你是一位资深的小说人物分析师，擅长深入剖析角色性格、关系网络和人物弧光。" },
           { role: "user", content: usePrompt },
         ],
-        max_tokens: 4096,
+        max_tokens: Math.min(4096, budget.maxOutputTokens),
         temperature: 0.4,
         signal: context.signal,
       });
@@ -155,7 +155,7 @@ ${relevantContent}
           { role: "system", content: "你是一位资深的小说剧情分析师，擅长提取和梳理剧情时间线。" },
           { role: "user", content: usePrompt },
         ],
-        max_tokens: 4096,
+        max_tokens: Math.min(4096, budget.maxOutputTokens),
         temperature: 0.4,
         signal: context.signal,
       });
