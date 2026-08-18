@@ -62,10 +62,11 @@ async function getEncoder(engine: string, serverUrl: string): Promise<FeatureExt
     env.useBrowserCache = typeof caches !== 'undefined' && typeof caches.open === 'function';
     env.allowLocalModels = false; // 不检查本地 /models/ 路径（public/models 为空），直接走远端
 
-    // 通过 remoteHost 让 transformers.js 直接请求后端代理（绕过 CORS）
-    if (serverUrl) {
-      env.remoteHost = `${serverUrl}/api/rag/model-proxy`;
+    // 模型统一从后端代理拉取；未配置服务器地址时直接失败
+    if (!serverUrl) {
+      throw new Error("未配置服务器地址，无法从后端加载模型。请在设置中配置服务器地址。");
     }
+    env.remoteHost = `${serverUrl}/api/rag/model-proxy`;
 
     ragLog(`[encode] 加载模型: ${modelPath}${globalThis.constructor?.name === "WorkerGlobalScope" ? " (worker)" : ""}`);
     const extractor = await pipeline("feature-extraction", modelPath);

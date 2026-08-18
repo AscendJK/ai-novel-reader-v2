@@ -32,23 +32,25 @@ async function getEncodePipeline(engine) {
   const { pipeline, env } = await import("@xenova/transformers");
   env.allowRemoteModels = true;
   env.cacheDir = path.resolve(__dirname, "../data/models-cache");
-  // Read mirror config
-  try {
-    const configPath = path.resolve(__dirname, "../data/rag-config.json");
-    if (fs.existsSync(configPath)) {
-      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-      if (config.mirrorHost) env.remoteHost = config.mirrorHost;
+  // 依次尝试镜像源：磁盘缓存（cacheDir）未命中时 → 配置/环境变量 → hf-mirror → HuggingFace
+  let lastErr = null;
+  for (const host of getMirrorHosts()) {
+    env.remoteHost = host;
+    try {
+      const pipe = await pipeline("feature-extraction", modelKey);
+      _cachedPipes.set(modelKey, pipe);
+      // LRU 淘汰：超过上限时移除最久未使用的
+      while (_cachedPipes.size > MAX_CACHED_PIPES) {
+        const oldest = _cachedPipes.keys().next().value;
+        if (oldest) _cachedPipes.delete(oldest);
+      }
+      return pipe;
+    } catch (e) {
+      lastErr = e;
+      console.warn(`[rag] 从 ${host} 加载模型失败，尝试下一镜像: ${e.message}`);
     }
-  } catch { /* ignore */ }
-  if (!env.remoteHost) env.remoteHost = process.env.HF_MIRROR || "https://hf-mirror.com/";
-  const pipe = await pipeline("feature-extraction", modelKey);
-  _cachedPipes.set(modelKey, pipe);
-  // LRU 淘汰：超过上限时移除最久未使用的
-  while (_cachedPipes.size > MAX_CACHED_PIPES) {
-    const oldest = _cachedPipes.keys().next().value;
-    if (oldest) _cachedPipes.delete(oldest);
   }
-  return pipe;
+  throw lastErr || new Error("模型加载失败：所有镜像均不可用");
 }
 
 // ── RAG: Quick test endpoint ──────────────────────────────
@@ -173,17 +175,32 @@ router.get("/:novelId/index", (req, res) => {
 
 const MODEL_CACHE_DIR = path.resolve(__dirname, "../data/models-cache");
 
-function getMirrorHost() {
-  let host = process.env.HF_MIRROR || "https://hf-mirror.com/";
+/**
+ * 获取按优先级排列的镜像源列表（磁盘缓存命中后按此顺序回源下载）：
+ * 1. 管理界面配置的 mirrorHost（rag-config.json，用户显式选择，最高优先）
+ * 2. 环境变量 HF_MIRROR
+ * 3. 默认国内镜像 hf-mirror.com
+ * 4. HuggingFace 官方（最后兜底）
+ */
+function getMirrorHosts() {
+  const hosts = [];
+  const norm = (h) => (h.endsWith("/") ? h : h + "/");
   try {
     const configPath = path.resolve(__dirname, "../data/rag-config.json");
     if (fs.existsSync(configPath)) {
       const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-      if (config.mirrorHost) host = config.mirrorHost;
+      if (config.mirrorHost) hosts.push(norm(config.mirrorHost));
     }
   } catch { /* ignore */ }
-  // Normalize trailing slash
-  return host.endsWith("/") ? host : host + "/";
+  if (process.env.HF_MIRROR) hosts.push(norm(process.env.HF_MIRROR));
+  hosts.push("https://hf-mirror.com/");
+  hosts.push("https://huggingface.co/");
+  return [...new Set(hosts)];
+}
+
+/** 兼容旧接口：返回第一个镜像（主要用于日志/兼容） */
+function getMirrorHost() {
+  return getMirrorHosts()[0] || "https://hf-mirror.com/";
 }
 
 // Normalize cache path: strip "resolve/main/" to match Transformers.js directory structure
@@ -231,38 +248,50 @@ router.get("/model-proxy/{*path}", rateLimit(10), async (req, res) => {
       return res.send(data);
     }
 
-    // Fetch from mirror
-    console.log(`[model-proxy] fetching: ${targetUrl}`);
-    const response = await fetch(targetUrl, {
-      headers: { "User-Agent": "ai-novel-reader" },
-      redirect: "follow",
-      signal: AbortSignal.timeout(120_000), // 2min timeout for large model downloads
-    });
+    // 依次尝试镜像源下载：磁盘缓存未命中 → 配置/环境变量 → hf-mirror → HuggingFace
+    let lastError = null;
+    for (const mirrorHost of getMirrorHosts()) {
+      const targetUrl = `${mirrorHost}${subPath}`;
+      try {
+        console.log(`[model-proxy] fetching: ${targetUrl}`);
+        const response = await fetch(targetUrl, {
+          headers: { "User-Agent": "ai-novel-reader" },
+          redirect: "follow",
+          signal: AbortSignal.timeout(120_000), // 2min timeout for large model downloads
+        });
 
-    if (!response.ok) {
-      console.error(`[model-proxy] upstream error: ${response.status} ${response.statusText}`);
-      return res.status(response.status).json({ error: `upstream error: ${response.status}` });
+        if (!response.ok) {
+          lastError = `upstream ${response.status} from ${mirrorHost}`;
+          console.warn(`[model-proxy] ${mirrorHost} 返回 ${response.status}，尝试下一镜像`);
+          continue;
+        }
+
+        // 成功：流式返回 + 写入磁盘缓存
+        const contentType = response.headers.get("content-type") || "application/octet-stream";
+        const contentLength = response.headers.get("content-length");
+        res.setHeader("Content-Type", contentType);
+        if (contentLength) res.setHeader("Content-Length", contentLength);
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Cache-Control", "no-cache");
+
+        const buffer = Buffer.from(await response.arrayBuffer());
+        res.send(buffer);
+
+        // Cache to disk with normalized path (async, don't block response)
+        const dir = path.dirname(cachePath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFile(cachePath, buffer, (err) => {
+          if (err) console.warn(`[model-proxy] cache write failed: ${err.message}`);
+          else console.log(`[model-proxy] cached: ${toCachePath(subPath)} (${(buffer.length / 1024 / 1024).toFixed(1)} MB)`);
+        });
+        return;
+      } catch (e) {
+        lastError = `${mirrorHost}: ${e.message}`;
+        console.warn(`[model-proxy] ${mirrorHost} 请求失败，尝试下一镜像: ${e.message}`);
+      }
     }
-
-    // Stream response to client
-    const contentType = response.headers.get("content-type") || "application/octet-stream";
-    const contentLength = response.headers.get("content-length");
-    res.setHeader("Content-Type", contentType);
-    if (contentLength) res.setHeader("Content-Length", contentLength);
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Cache-Control", "no-cache");
-
-    // Read body and send
-    const buffer = Buffer.from(await response.arrayBuffer());
-    res.send(buffer);
-
-    // Cache to disk with normalized path (async, don't block response)
-    const dir = path.dirname(cachePath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFile(cachePath, buffer, (err) => {
-      if (err) console.warn(`[model-proxy] cache write failed: ${err.message}`);
-      else console.log(`[model-proxy] cached: ${toCachePath(subPath)} (${(buffer.length / 1024 / 1024).toFixed(1)} MB)`);
-    });
+    console.error(`[model-proxy] 所有镜像均失败: ${lastError}`);
+    return res.status(502).json({ error: `所有镜像均失败: ${lastError}` });
   } catch (e) {
     console.error("[model-proxy] error:", e);
     res.status(500).json({ error: "代理请求失败" });

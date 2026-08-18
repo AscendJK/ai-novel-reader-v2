@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useRAGStore } from "@/stores/rag-store";
 import { useUIStore } from "@/stores/ui-store";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
-import { ALL_ENGINES, downloadModel, getMirrorId, setMirrorId, getMirrorOptions } from "@/rag/model-loader";
+import { ALL_ENGINES, downloadModel, getMirrorOptions } from "@/rag/model-loader";
 import { clearCache } from "@/rag/index";
 import { updateRagCacheSize } from "@/rag/rag-cache-utils";
 import { Button } from "@/components/ui/button";
@@ -76,19 +76,14 @@ export function RAGSettings() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Download source mirror */}
+        {/* Download source: only backend proxy (backend handles mirror fallback: hf-mirror → HuggingFace) */}
         <div className="flex items-center gap-2 text-xs">
           <span className="text-muted-foreground">下载源：</span>
           {getMirrorOptions().map((mirror) => (
-            <Button
-              key={mirror.id}
-              variant={getMirrorId() === mirror.id ? "default" : "outline"}
-              size="sm"
-              className="h-6 text-[10px] px-2"
-              onClick={() => setMirrorId(mirror.id)}
-            >
+            <Badge key={mirror.id} variant="outline" className="text-[10px]">
               {mirror.name}
-            </Button>
+              {mirror.url ? ` · ${mirror.url}` : " · 未配置服务器地址"}
+            </Badge>
           ))}
         </div>
 

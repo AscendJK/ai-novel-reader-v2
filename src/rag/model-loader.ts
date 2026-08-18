@@ -1,56 +1,33 @@
 /**
- * Model loader — unified download from HuggingFace (or mirror).
- * No more builtin/custom distinction. All models downloaded on demand.
+ * Model loader — 统一从后端代理下载模型。
+ * 前端不再直连 HuggingFace / hf-mirror；所有模型文件通过后端
+ * /api/rag/model-proxy 拉取，后端负责磁盘缓存与镜像回源
+ * （配置/环境变量 → hf-mirror → HuggingFace）。
  */
 
 import { useRAGStore } from "@/stores/rag-store";
 import { broadcast } from "@/lib/broadcast";
 import { getServerUrl } from "@/lib/api-client";
 
-// Mirror configuration
-const HF_MIRROR_KEY = "novel-reader-hf-mirror";
-
-// Built-in mirror options (direct, may have CORS issues from GitHub Pages)
-const DIRECT_MIRRORS: Record<string, string> = {
-  "huggingface": "https://huggingface.co/",
-  "hf-mirror": "https://hf-mirror.com/",
-};
-
-export function getMirrorId(): string {
-  try { return localStorage.getItem(HF_MIRROR_KEY) || "backend-proxy"; } catch { return "backend-proxy"; }
-}
-
-export function setMirrorId(id: string): void {
-  try { localStorage.setItem(HF_MIRROR_KEY, id); } catch { /* ignore */ }
+/**
+ * 获取后端模型代理地址。仅支持后端代理一种来源。
+ * 未配置服务器地址时返回空串（调用方应直接失败，不再回退直连镜像）。
+ */
+export function getRemoteHost(): string {
+  const serverUrl = getServerUrl();
+  return serverUrl ? `${serverUrl}/api/rag/model-proxy/` : "";
 }
 
 /**
- * Get the remote host URL for model downloads.
- * - "backend-proxy": uses the user's backend server as proxy (bypasses CORS)
- * - "huggingface" / "hf-mirror": direct download (may have CORS issues)
+ * 获取前端模型下载源信息（仅后端代理一种来源）。
+ * 模型统一通过后端 /api/rag/model-proxy 拉取，后端负责缓存与镜像回源。
  */
-export function getRemoteHost(): string {
-  const mirrorId = getMirrorId();
-  if (mirrorId === "backend-proxy") {
-    const serverUrl = getServerUrl();
-    if (serverUrl) return `${serverUrl}/api/rag/model-proxy/`;
-    // Fallback to hf-mirror if no server configured
-    return DIRECT_MIRRORS["hf-mirror"];
-  }
-  return DIRECT_MIRRORS[mirrorId] || DIRECT_MIRRORS["hf-mirror"];
-}
-
 export function getMirrorOptions(): { id: string; name: string; url: string }[] {
   const serverUrl = getServerUrl();
-  const options: { id: string; name: string; url: string }[] = [];
   if (serverUrl) {
-    options.push({ id: "backend-proxy", name: "后端代理（推荐）", url: `${serverUrl}/api/rag/model-proxy/` });
+    return [{ id: "backend-proxy", name: "后端代理", url: `${serverUrl}/api/rag/model-proxy/` }];
   }
-  options.push(
-    { id: "huggingface", name: "HuggingFace（官方）", url: "https://huggingface.co" },
-    { id: "hf-mirror", name: "hf-mirror（国内镜像）", url: "https://hf-mirror.com" },
-  );
-  return options;
+  return [{ id: "backend-proxy", name: "后端代理", url: "" }];
 }
 
 // ── Engine list (unified, no builtin/custom distinction) ──
@@ -164,14 +141,13 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
       env.allowRemoteModels = true;
       env.useBrowserCache = typeof caches !== 'undefined' && typeof caches.open === 'function';
 
-      // 通过 remoteHost 让 transformers.js 所有请求发到后端代理
+      // 模型统一从后端代理拉取；未配置服务器地址时直接失败
       const serverUrl = getServerUrl();
-      if (serverUrl) {
-        env.remoteHost = `${serverUrl}/api/rag/model-proxy`;
-        console.log(`[model-loader] remoteHost=${env.remoteHost}`);
-      } else {
-        console.warn(`[model-loader] 未配置服务器地址，模型下载可能失败`);
+      if (!serverUrl) {
+        throw new Error("未配置服务器地址，无法从后端下载模型。请在设置中配置服务器地址。");
       }
+      env.remoteHost = `${serverUrl}/api/rag/model-proxy`;
+      console.log(`[model-loader] remoteHost=${env.remoteHost}`);
 
       // Download tokenizer
       store.setDownloadProgress("下载 tokenizer...");
