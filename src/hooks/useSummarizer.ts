@@ -476,7 +476,7 @@ export function useSummarizer() {
         const count = toChapter - fromChapter + 1;
         const rangeChapters = await loadChapters(currentNovel.id, startIndex, count);
         // 根据模型 Token 预算精确计算最大字符数（可用输入 = 上下文 - 输出预算2048 - 安全余量）
-        const budget = provider ? getTokenBudget(provider.model, provider.contextWindow) : null;
+        const budget = provider ? getTokenBudget(provider.model, provider.contextWindow, provider.maxTokens) : null;
         const maxTokens = budget ? computeAvailableInput(budget, 2048) : 40000;
         const maxChars = Math.floor(maxTokens); // 中文约 1 字 = 1 token
         let combinedText = "";

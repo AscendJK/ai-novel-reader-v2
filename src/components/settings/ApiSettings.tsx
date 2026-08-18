@@ -229,6 +229,17 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
                 </div>
               </details>
             </div>
+            <div className="space-y-1">
+              <Label htmlFor="api-max-output" className="text-xs">最大输出 token（可选）</Label>
+              <Input id="api-max-output" name="api-max-output" type="number" min={128} step={128}
+                placeholder={modelInfo ? String(modelInfo.budget.maxOutputTokens) : "4096"}
+                value={editing.maxTokens || ""}
+                onChange={(e) => setEditing((d) => d ? { ...d, maxTokens: e.target.value ? parseInt(e.target.value) : undefined } : d)}
+                className="h-7 text-xs" />
+              <p className="text-[10px] text-muted-foreground">
+                模型单次调用的最大输出 token 数。留空则使用上方匹配到的默认值{modelInfo ? `（${modelInfo.budget.maxOutputTokens.toLocaleString()}）` : "（4,096）"}，填写后优先使用。此值决定了 AI 生成内容的长度上限，设为模型自身上限即可避免回答被截断。
+              </p>
+            </div>
             <div className="flex gap-2 pt-1">
               <Button size="sm" onClick={handleSave} disabled={!editing.apiKey.trim()}>保存</Button>
               <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>取消</Button>

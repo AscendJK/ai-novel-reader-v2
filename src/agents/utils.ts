@@ -30,7 +30,7 @@ export function getActiveProvider(): AIProvider {
 export function getProviderBudget(): { config: ProviderConfig | null; budget: TokenBudget; model: string } {
   const config = useAPIStore.getState().getActiveProvider() as ProviderConfig | null;
   const model = config?.model || "";
-  const budget = getTokenBudget(model, config?.contextWindow);
+  const budget = getTokenBudget(model, config?.contextWindow, config?.maxTokens);
   return { config, budget, model };
 }
 

@@ -70,16 +70,11 @@ ${relevantContent}
             { role: "system", content: "你是一位资深的小说人物分析师，擅长深入剖析角色性格、关系网络和人物弧光。" },
             { role: "user", content: useP },
           ],
-          max_tokens: Math.min(4096, b.maxOutputTokens),
+          max_tokens: b.maxOutputTokens,
           temperature: 0.4,
           signal: context.signal,
         });
       });
-
-      // 防御：即使 API 返回 200，空内容也视为失败，避免保存空白分析
-      if (!response.content || !response.content.trim()) {
-        return { success: false, error: "API 返回了空内容" };
-      }
 
       return {
         success: true,
@@ -168,16 +163,11 @@ ${relevantContent}
             { role: "system", content: "你是一位资深的小说剧情分析师，擅长提取和梳理剧情时间线。" },
             { role: "user", content: useP },
           ],
-          max_tokens: Math.min(4096, b.maxOutputTokens),
+          max_tokens: b.maxOutputTokens,
           temperature: 0.4,
           signal: context.signal,
         });
       });
-
-      // 防御：即使 API 返回 200，空内容也视为失败，避免保存空白分析
-      if (!response.content || !response.content.trim()) {
-        return { success: false, error: "API 返回了空内容" };
-      }
 
       return {
         success: true,

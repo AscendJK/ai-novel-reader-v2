@@ -68,7 +68,7 @@ ${relevantContent}
             { role: "system", content: "你是一个JSON数据生成器。只输出JSON，不要任何解释文字。" },
             { role: "user", content: useP },
           ],
-          max_tokens: Math.min(8192, b.maxOutputTokens),
+          max_tokens: b.maxOutputTokens,
           temperature: 0.3,
           signal: context.signal,
         });

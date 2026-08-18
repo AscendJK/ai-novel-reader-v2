@@ -167,7 +167,7 @@ export function getDiscoveredContextWindow(model: string): number | undefined {
   return discoveredContextWindows.get(model);
 }
 
-export function getTokenBudget(model: string, contextWindow?: number): TokenBudget {
+export function getTokenBudget(model: string, contextWindow?: number, maxOutputTokens?: number): TokenBudget {
   // Look up model's known output token limit
   let knownOutput = DEFAULT_BUDGET.maxOutputTokens;
   if (MODEL_LIMITS[model]) {
@@ -176,6 +176,10 @@ export function getTokenBudget(model: string, contextWindow?: number): TokenBudg
     for (const [key, budget] of SORTED_MODEL_ENTRIES) {
       if (model.startsWith(key)) { knownOutput = budget.maxOutputTokens; break; }
     }
+  }
+  // User-configured max output tokens takes priority
+  if (maxOutputTokens && maxOutputTokens > 0) {
+    knownOutput = maxOutputTokens;
   }
   // User-configured context window takes priority for input tokens
   if (contextWindow && contextWindow > 0) {
@@ -222,6 +226,18 @@ export function getModelContextHint(model: string): string {
     return `未匹配到已知模型，默认使用 ${DEFAULT_BUDGET.contextWindow.toLocaleString()} tokens`;
   }
   return `匹配到 ${info.matchedKey}，上下文 ${info.budget.contextWindow.toLocaleString()} tokens`;
+}
+
+/**
+ * 获取人类可读的模型最大输出 token 提示文字
+ * 例如："Qwen3 系列，8,192 tokens" 或 "未匹配，默认 4,096 tokens"
+ */
+export function getModelMaxOutputHint(model: string): string {
+  const info = getMatchedModelInfo(model);
+  if (!info) {
+    return `未匹配到已知模型，默认使用 ${DEFAULT_BUDGET.maxOutputTokens.toLocaleString()} tokens`;
+  }
+  return `匹配到 ${info.matchedKey}，最大输出 ${info.budget.maxOutputTokens.toLocaleString()} tokens`;
 }
 
 /**
