@@ -37,7 +37,10 @@ interface NovelState {
 function loadPositions(): Record<string, ReadPosition> {
   try {
     return JSON.parse(localStorage.getItem(userKey("novel-reader-positions")) || "{}");
-  } catch { return {}; }
+  } catch (e) {
+    console.debug("[novel-store] 读取阅读位置失败:", e instanceof Error ? e.message : e);
+    return {};
+  }
 }
 
 function savePositions(positions: Record<string, ReadPosition>) {

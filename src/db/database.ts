@@ -178,7 +178,9 @@ export function setCurrentUser(username: string) {
   if (oldDB) {
     try {
       oldDB.close();
-    } catch { /* ignore close errors */ }
+    } catch (e) {
+      console.debug("[database] 关闭旧数据库连接失败:", e instanceof Error ? e.message : e);
+    }
   }
 }
 

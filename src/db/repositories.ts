@@ -468,7 +468,10 @@ const LOCAL_USERS_KEY = "novel-reader-local-users";
 export function getLocalUsers(): string[] {
   try {
     return JSON.parse(localStorage.getItem(LOCAL_USERS_KEY) || "[]");
-  } catch { return []; }
+  } catch (e) {
+    console.debug("[repositories] 读取本地用户列表失败:", e instanceof Error ? e.message : e);
+    return [];
+  }
 }
 
 /** Add a username to the local users list */

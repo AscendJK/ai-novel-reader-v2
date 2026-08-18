@@ -181,7 +181,8 @@ function tryFixAndClose(json: string): string | null {
     // 验证修复后的 JSON 是否有效
     JSON.parse(fixed);
     return fixed;
-  } catch {
-    return null;
-  }
+  } catch (e) {
+        console.debug("[json-extractor] JSON 修复后仍无效:", e instanceof Error ? e.message : e);
+        return null;
+      }
 }

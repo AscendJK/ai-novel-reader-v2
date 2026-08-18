@@ -177,7 +177,11 @@ export function AppLayout() {
     runCheck();
 
     // 每 60 秒轮询，捕获后端延迟启动的场景
-    const interval = setInterval(runCheck, 60_000);
+    // 页面不可见时跳过（如切换到其他标签页）
+    const interval = setInterval(() => {
+      if (document.hidden) return;
+      runCheck();
+    }, 60_000);
     return () => clearInterval(interval);
   }, [syncReady]);
 

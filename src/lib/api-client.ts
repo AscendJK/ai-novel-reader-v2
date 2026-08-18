@@ -56,7 +56,7 @@ export function hasServerUrl(): boolean {
  * @returns Promise<Response>
  * @throws Error 未配置服务器地址时抛出
  */
-export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+export async function apiFetch(path: string, init?: RequestInit, skipAuth?: boolean): Promise<Response> {
   const base = getServerUrl();
   if (!base) {
     throw new Error("未配置服务器地址，请在登录页面配置后端地址");
@@ -64,11 +64,10 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
 
   const url = `${base}${path}`;
 
-  // 合并认证头
-  const headers = {
-    ...authHeaders(),
-    ...(init?.headers || {}),
-  };
+  // 合并认证头（skipAuth 时跳过）
+  const headers = skipAuth
+    ? { ...(init?.headers || {}) }
+    : { ...authHeaders(), ...(init?.headers || {}) };
 
   return fetch(url, {
     ...init,
@@ -101,7 +100,8 @@ export async function checkServerReachable(url: string): Promise<boolean> {
 
     clearTimeout(timeout);
     return response.ok || response.status === 404; // 404 也算可达
-  } catch {
+  } catch (e) {
+    console.debug("[api-client] 服务器不可达:", url, e instanceof Error ? e.message : e);
     return false;
   }
 }

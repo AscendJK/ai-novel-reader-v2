@@ -4,7 +4,7 @@
  */
 
 import { APP_VERSION } from "@/config/version";
-import { getServerUrl } from "./api-client";
+import { getServerUrl, apiFetch } from "./api-client";
 
 export interface VersionCheckResult {
   /** 版本是否一致（后端不可达时视为一致） */
@@ -28,10 +28,9 @@ export async function checkVersion(): Promise<VersionCheckResult> {
   }
 
   try {
-    const res = await fetch(`${base}/api/version`, {
-      method: "GET",
+    const res = await apiFetch("/api/version", {
       signal: AbortSignal.timeout(5000),
-    });
+    }, true);
     if (!res.ok) {
       return {
         match: false,
@@ -46,8 +45,14 @@ export async function checkVersion(): Promise<VersionCheckResult> {
       frontend: APP_VERSION,
       backend: data.version,
     };
-  } catch {
-    // 服务器不可达，不阻塞
+  } catch (e) {
+    // 区分超时和其他错误，方便调试
+    if (e instanceof DOMException && e.name === "AbortError") {
+      console.debug("[checkVersion] 请求超时");
+    } else if (e instanceof TypeError) {
+      console.debug("[checkVersion] 网络错误:", e.message);
+    }
+    // 后端不可达，不阻塞使用
     return { match: true, frontend: APP_VERSION, backend: null };
   }
 }

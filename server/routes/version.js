@@ -8,14 +8,25 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// 尝试多个路径查找 package.json，兼容开发模式和打包后结构
+const possiblePaths = [
+  path.join(__dirname, "..", "..", "package.json"), // 开发模式: server/routes/ → ../../
+  path.join(__dirname, "..", "package.json"),        // 打包后可能的结构
+  path.join(process.cwd(), "package.json"),           // 以工作目录为基准
+];
+
 let version = "0.0.0";
-try {
-  const pkg = JSON.parse(
-    readFileSync(path.join(__dirname, "..", "..", "package.json"), "utf-8")
-  );
-  version = pkg.version || "0.0.0";
-} catch (e) {
-  console.error("[version] Failed to read package.json:", e.message);
+for (const p of possiblePaths) {
+  try {
+    const pkg = JSON.parse(readFileSync(p, "utf-8"));
+    if (pkg.version) {
+      version = pkg.version;
+      break;
+    }
+  } catch {
+    // 继续尝试下一个路径
+  }
 }
 
 export default function versionRouter(app) {
