@@ -31,6 +31,7 @@ export function useSyncOrchestration({ onSyncReady, setLocalUsers }: SyncOrchest
     kickedRef.current = true;
     alert("该账号已在另一设备登录，当前会话已下线。\n\n您的本地数据已保留，重新登录后可继续使用。");
     ["sync-username", "sync-token",
+     `sync-clientId`,
      `novel-reader-last-sync-time:${kickedUser}`,
      "sync-auto-offline",
     ].forEach((k) => localStorage.removeItem(k));

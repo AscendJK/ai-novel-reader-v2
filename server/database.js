@@ -340,11 +340,9 @@ export function upsertNote(n) {
 }
 
 export function deleteNote(noteId, username) {
-  if (username) {
-    db.prepare("DELETE FROM notes WHERE id = ? AND username = ?").run(noteId, username);
-  } else {
-    db.prepare("DELETE FROM notes WHERE id = ?").run(noteId);
-  }
+  // 强制按用户删除，避免误删其他用户的笔记；无 username 时不执行
+  if (!username) return;
+  db.prepare("DELETE FROM notes WHERE id = ? AND username = ?").run(noteId, username);
 }
 
 export function deleteNotesByChapter(username, novelId, chapterId) {

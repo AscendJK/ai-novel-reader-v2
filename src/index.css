@@ -143,11 +143,6 @@
   to { opacity: 1; }
 }
 
-/* ── 连续滚动模式 ── */
-.chapter-section {
-  /* 不使用 content-visibility: auto，因为它会干扰 IntersectionObserver 的位置检测 */
-}
-
 /* ── 移动端安全区域适配 ── */
 @supports (padding-bottom: env(safe-area-inset-bottom)) {
   .safe-area-bottom {
