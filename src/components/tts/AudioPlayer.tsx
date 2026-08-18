@@ -95,10 +95,8 @@ export function AudioPlayer({
   useEffect(() => { sleepTimerRef.current = sleepTimer; }, [sleepTimer]);
   useEffect(() => {
     if (sleepTimer > 0 && isPlaying) {
-      // 在下一帧初始化剩余时间并启动倒计时，避免 effect 中同步 setState
-      const raf = requestAnimationFrame(() => {
-        setSleepRemaining(r => r > 0 ? r : sleepTimer);
-      });
+      // 先重置剩余时间为新设值，再启动倒计时。用 rAF 避免 effect 中同步 setState
+      const raf = requestAnimationFrame(() => setSleepRemaining(sleepTimer));
       const t = setInterval(() => setSleepRemaining(r => {
         if (r <= 1) { clearInterval(t); if (sleepTimerRef.current > 0) stop(); return 0; }
         return r - 1;
@@ -253,7 +251,7 @@ export function AudioPlayer({
             className={`
               fixed z-50
               sm:absolute sm:bottom-full sm:right-2 sm:mb-2 sm:w-auto
-              bottom-14 left-4 right-4 sm:left-auto sm:right-2
+              bottom-14 left-4 right-4 sm:left-auto
               p-4 rounded-xl border bg-card shadow-2xl
             `}
             onClick={(e) => e.stopPropagation()}
@@ -301,7 +299,7 @@ export function AudioPlayer({
             className={`
               fixed z-50
               sm:absolute sm:bottom-full sm:right-14 sm:mb-2 sm:w-auto
-              bottom-14 left-4 right-4 sm:left-auto sm:right-14
+              bottom-14 left-4 right-4 sm:left-auto
               p-4 rounded-xl border bg-card shadow-2xl
             `}
             onClick={(e) => e.stopPropagation()}

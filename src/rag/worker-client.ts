@@ -62,11 +62,19 @@ export async function encodeQueryWithWorker(text: string, engine: string, opts?:
       const w = ensureWorker();
       const result = await new Promise<EncodeResult>((resolve, reject) => {
         const id = nextId++;
-        pending.set(id, { resolve, reject, signal: opts?.signal });
+        const signal = opts?.signal;
+        // 监听 AbortSignal：取消时立即拒绝 promise，避免悬空
+        const onAbort = () => {
+          pending.delete(id);
+          reject(new DOMException("Aborted", "AbortError"));
+        };
+        signal?.addEventListener("abort", onAbort, { once: true });
+        pending.set(id, { resolve, reject, signal });
         const serverUrl = getServerUrl();
         try {
           w.postMessage({ type: "main", id, text, engine, serverUrl });
         } catch (err) {
+          signal?.removeEventListener("abort", onAbort);
           pending.delete(id);
           reject(err instanceof Error ? err : new Error(String(err)));
         }

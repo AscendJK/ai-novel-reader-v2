@@ -68,7 +68,7 @@ async function getEncoder(engine: string, serverUrl: string): Promise<FeatureExt
     }
     env.remoteHost = `${serverUrl}/api/rag/model-proxy`;
 
-    ragLog(`[encode] 加载模型: ${modelPath}${globalThis.constructor?.name === "WorkerGlobalScope" ? " (worker)" : ""}`);
+    ragLog(`[encode] 加载模型: ${modelPath}${typeof self !== "undefined" && !("document" in self) ? " (worker)" : ""}`);
     const extractor = await pipeline("feature-extraction", modelPath);
     encoderCache.set(engine, extractor);
     touchEncoderCache(engine);

@@ -20,15 +20,14 @@ self.onmessage = (e: MessageEvent) => {
   const text = msg.text ?? "";
   const engine = msg.engine ?? "";
   const serverUrl = msg.serverUrl ?? "";
-  const post = (payload: Record<string, unknown>) => {
-    try { (self as unknown as Worker).postMessage(payload); } catch { /* 忽略 */ }
+  const post = (payload: Record<string, unknown>, transfer?: Transferable[]) => {
+    try { (self as unknown as Worker).postMessage(payload, { transfer }); } catch { /* 忽略 */ }
   };
   encodeQueryCore(text, engine, serverUrl)
     .then((vec) => {
       if (!vec) { post({ type: "encode-result", id, ok: false, error: "encoding returned null" }); return; }
-      // 转 ArrayBuffer 可 transfer，避免结构拷贝
-      const tvec = vec as Float32Array & { buffer: ArrayBuffer };
-      post({ type: "encode-result", id, ok: true, data: new Float32Array(tvec.buffer.slice(0)), dim: vec.length });
+      // 用 transfer 传递 ArrayBuffer，避免结构拷贝
+      post({ type: "encode-result", id, ok: true, data: new Float32Array(vec.buffer), dim: vec.length }, [vec.buffer]);
     })
     .catch((err: unknown) => {
       post({ type: "encode-result", id, ok: false, error: err instanceof Error ? err.message : String(err) });

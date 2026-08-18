@@ -141,17 +141,17 @@ export class EmbeddingRetriever {
         if (cached.vectorsBuffer.byteLength !== expectedBytes) {
           ragLog(`缓存数据损坏: 期望 ${expectedBytes} 字节, 实际 ${cached.vectorsBuffer.byteLength} 字节`);
           await db.ragCache.delete(memCacheKey);
+          // 不清空 this.vectors——fallthrough 到服务器构建
+        } else {
+          // 零拷贝加载
+          this.loadFromBuffer(cached.vectorsBuffer, cached.chunks, cached.dim);
+          useRAGStore.getState().addCachedKey(memCacheKey);
+          lruAdd(memCacheKey, this.vectors, this.chunks, this.dim);
+          // 更新访问记录（用于智能淘汰策略）
+          updateAccessTime(novelId, this.engine);
+          onProgress?.({ phase: "done" });
           return;
         }
-
-        // 零拷贝加载
-        this.loadFromBuffer(cached.vectorsBuffer, cached.chunks, cached.dim);
-        useRAGStore.getState().addCachedKey(memCacheKey);
-        lruAdd(memCacheKey, this.vectors, this.chunks, this.dim);
-        // 更新访问记录（用于智能淘汰策略）
-        updateAccessTime(novelId, this.engine);
-        onProgress?.({ phase: "done" });
-        return;
       }
     } catch { /* no cached index */ }
 
