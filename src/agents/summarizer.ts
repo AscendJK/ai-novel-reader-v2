@@ -8,7 +8,7 @@ import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
 import { buildChapterSummaryPrompt } from "@/lib/prompt-templates";
 import { sampleChapterContent, prepareAgentContext } from "./utils";
-import { estimateTokens } from "@/api/token-manager";
+import { estimateTokens, computeAvailableInput } from "@/api/token-manager";
 import { APIError } from "@/api/error-handler";
 
 /**
@@ -26,8 +26,8 @@ class SummarizerAgent extends BaseAgent {
 
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider, budget } = env;
-    // 内容占输入预算的 50%；中文约 1 字 = 1 token（与 estimateTokens 一致）
-    const maxChapterChars = Math.floor(budget.maxInputTokens * 0.5);
+    // 精确计算：可用输入空间 = 上下文总长 - 输出预算(1024) - 安全余量(5%)
+    const maxChapterChars = Math.floor(computeAvailableInput(budget, 1024));
 
     const targetChapterIds = context.chapterIds || novel.chapters.map((c) => c.id);
     const chapters = novel.chapters.filter((c) => targetChapterIds.includes(c.id));
@@ -145,12 +145,12 @@ class GlobalSummarizerAgent extends BaseAgent {
     const promptLabel = context.preRetrieved ? "语义检索相关段落" : "内容样本（开头几章+中间+结尾的片段）";
 
     const metadataPrompt = this.buildMetadataPrompt(novel, chapterList, promptLabel, relevantContent);
-    const fallbackPrompt = this.buildFallbackPrompt(novel, chapterList, relevantContent, budget.maxInputTokens);
+    const fallbackPrompt = this.buildFallbackPrompt(novel, chapterList, relevantContent, budget.contextWindow);
 
     // If the full prompt is too large, use the fallback
     context.onStatus?.("正在准备分析数据...");
     const estimatedInput = estimateTokens(metadataPrompt);
-    const useFallback = estimatedInput >= budget.maxInputTokens * 0.7;
+    const useFallback = estimatedInput >= computeAvailableInput(budget, 4096);
     const usePrompt = useFallback ? fallbackPrompt : metadataPrompt;
 
     try {
@@ -247,7 +247,7 @@ ${relevantContent}
     novel: { title: string; author?: string; totalChars: number; chapters: Array<{ title: string }> },
     chapterList: string,
     relevantContent: string,
-    maxInputTokens: number
+    contextWindow: number
   ): string {
     return `你是一位专业的小说分析助手。请根据以下小说基本信息生成分析报告。
 
@@ -259,7 +259,7 @@ ${relevantContent}
 章节目录：
 ${chapterList}
 
-${relevantContent.length > 0 ? `**语义检索相关段落（节选）：**\n${relevantContent.slice(0, Math.floor(maxInputTokens * 0.3))}` : "（无内容样本）"}
+${relevantContent.length > 0 ? `**语义检索相关段落（节选）：**\n${relevantContent.slice(0, Math.floor(contextWindow * 0.3))}` : "（无内容样本）"}
 
 请基于以上信息生成：
 1. 故事主线推断

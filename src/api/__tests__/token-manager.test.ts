@@ -41,37 +41,37 @@ describe("estimateTokens", () => {
 describe("getTokenBudget", () => {
   it("应该返回已知模型的 budget", () => {
     const budget = getTokenBudget("gpt-4o");
-    expect(budget.maxInputTokens).toBe(128000);
+    expect(budget.contextWindow).toBe(128000);
     expect(budget.maxOutputTokens).toBe(16384);
   });
 
   it("应该通过前缀匹配返回 budget", () => {
     const budget = getTokenBudget("gpt-4o-mini-2024-07-18");
-    expect(budget.maxInputTokens).toBe(128000);
+    expect(budget.contextWindow).toBe(128000);
     expect(budget.maxOutputTokens).toBe(16384);
   });
 
   it("应该返回默认 budget（未知模型）", () => {
     const budget = getTokenBudget("unknown-model");
-    expect(budget.maxInputTokens).toBe(128000);
+    expect(budget.contextWindow).toBe(128000);
     expect(budget.maxOutputTokens).toBe(4096);
   });
 
   it("应该优先使用用户配置的 contextWindow", () => {
     const budget = getTokenBudget("gpt-4o", 100000);
-    expect(budget.maxInputTokens).toBe(100000);
+    expect(budget.contextWindow).toBe(100000);
     expect(budget.maxOutputTokens).toBe(16384); // 仍然使用已知的 output 限制
   });
 
   it("应该处理 Claude 模型", () => {
     const budget = getTokenBudget("claude-sonnet-4-6");
-    expect(budget.maxInputTokens).toBe(200000);
+    expect(budget.contextWindow).toBe(200000);
     expect(budget.maxOutputTokens).toBe(8192);
   });
 
   it("应该处理 DeepSeek 模型", () => {
     const budget = getTokenBudget("deepseek-chat");
-    expect(budget.maxInputTokens).toBe(128000);
+    expect(budget.contextWindow).toBe(128000);
     expect(budget.maxOutputTokens).toBe(8192);
   });
 });

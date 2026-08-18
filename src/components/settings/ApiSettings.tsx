@@ -167,7 +167,7 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
               {editing.model && (
                 modelInfo ? (
                   <p className="text-[10px] text-green-600 dark:text-green-500">
-                    ✅ 匹配到 {modelInfo.matchedKey}，上下文 {modelInfo.budget.maxInputTokens.toLocaleString()} tokens
+                    ✅ 匹配到 {modelInfo.matchedKey}，上下文 {modelInfo.budget.contextWindow.toLocaleString()} tokens
                   </p>
                 ) : (
                   <p className="text-[10px] text-amber-600 dark:text-amber-500">
@@ -193,12 +193,12 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
             <div className="space-y-1">
               <Label htmlFor="api-ctx" className="text-xs">上下文窗口（可选）</Label>
               <Input id="api-ctx" name="api-ctx" type="number" min={1024} step={1024}
-                placeholder={modelInfo ? String(modelInfo.budget.maxInputTokens) : "128000"}
+                placeholder={modelInfo ? String(modelInfo.budget.contextWindow) : "128000"}
                 value={editing.contextWindow || ""}
                 onChange={(e) => setEditing((d) => d ? { ...d, contextWindow: e.target.value ? parseInt(e.target.value) : undefined } : d)}
                 className="h-7 text-xs" />
               <p className="text-[10px] text-muted-foreground">
-                模型的最大输入 token 数。留空则使用上方匹配到的默认值{modelInfo ? `（${modelInfo.budget.maxInputTokens.toLocaleString()}）` : "（128,000）"}，填写后优先使用。此值决定了发送给 AI 的文本最大长度，超过会被自动截断。
+                模型的最大输入 token 数。留空则使用上方匹配到的默认值{modelInfo ? `（${modelInfo.budget.contextWindow.toLocaleString()}）` : "（128,000）"}，填写后优先使用。此值决定了发送给 AI 的文本最大长度，超过会被自动截断。
               </p>
               <details className="text-[10px] text-muted-foreground">
                 <summary className="cursor-pointer hover:text-foreground">查看常用模型参考值</summary>

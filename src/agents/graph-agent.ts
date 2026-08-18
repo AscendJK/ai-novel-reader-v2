@@ -9,7 +9,7 @@ import { BaseAgent } from "./base-agent";
 import { getRelevantContent } from "./utils";
 import { extractJSON } from "./json-extractor";
 import { useUIStore } from "@/stores/ui-store";
-import { estimateTokens } from "@/api/token-manager";
+import { estimateTokens, computeAvailableInput } from "@/api/token-manager";
 
 interface GraphData {
   nodes: { id: string; group: string; description: string }[];
@@ -54,7 +54,7 @@ ${relevantContent}
 - 确保所有source和target都在nodes中存在`;
 
     const estimatedInput = estimateTokens(prompt);
-    const useFallback = estimatedInput >= budget.maxInputTokens * 0.7;
+    const useFallback = estimatedInput >= computeAvailableInput(budget, 8192);
     const usePrompt = useFallback
       ? `请根据小说《${novel.title}》的章节目录生成人物关系图谱JSON。\n章节目录：\n${chapterList}\n请只输出JSON。`
       : prompt;

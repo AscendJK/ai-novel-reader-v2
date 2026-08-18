@@ -7,7 +7,7 @@ import { TaskType } from "./types";
 import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
 import { getRelevantContent } from "./utils";
-import { estimateTokens } from "@/api/token-manager";
+import { estimateTokens, computeAvailableInput } from "@/api/token-manager";
 
 /**
  * 人物分析 Agent
@@ -51,7 +51,7 @@ ${relevantContent}
 5. **人物重要性评估**：按剧情推动作用排序，说明每个角色对主线的影响`;
 
     const estimatedInput = estimateTokens(prompt);
-    const usedFallback = estimatedInput >= budget.maxInputTokens * 0.7;
+    const usedFallback = estimatedInput >= computeAvailableInput(budget, 4096);
     const usePrompt = usedFallback
       ? `请根据小说《${novel.title}》的章节目录分析人物关系。\n\n章节目录：\n${chapterList}\n\n请分析主要人物的关系网络、性格特征与成长变化。`
       : prompt;
@@ -142,7 +142,7 @@ ${relevantContent}
 列出重要的伏笔及其回收章节。`;
 
     const estimatedInput = estimateTokens(prompt);
-    const usedFallback = estimatedInput >= budget.maxInputTokens * 0.7;
+    const usedFallback = estimatedInput >= computeAvailableInput(budget, 4096);
     const usePrompt = usedFallback
       ? `请根据《${novel.title}》的章节目录推断剧情时间线。\n章节目录：\n${chapterList}\n\n请按时间顺序逐条列出关键事件（不要用表格，不要在列表项内使用子列表），每个事件格式：\n1. **【事件名称】**（第X章 · 类型）发生了什么。→ 因果关系。\n\n标注"基于目录推断"。`
       : prompt;
