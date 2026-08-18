@@ -60,6 +60,7 @@ async function getEncoder(engine: string, serverUrl: string): Promise<FeatureExt
 
     env.allowRemoteModels = true;
     env.useBrowserCache = true;
+    env.allowLocalModels = false; // 不检查本地 /models/ 路径（public/models 为空），直接走远端
 
     // 通过 remoteHost 让 transformers.js 直接请求后端代理（绕过 CORS）
     if (serverUrl) {

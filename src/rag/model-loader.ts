@@ -298,7 +298,12 @@ export async function setupModelLoader(): Promise<void> {
     const { env } = transformers;
     env.allowRemoteModels = true;
     env.useBrowserCache = true;
-    // Don't set remoteHost — the fetch interceptor routes requests through backend proxy
+    env.allowLocalModels = false; // public/models 为空，不检查本地路径
+    // 有 serverUrl 时设置 remoteHost，让 transformers.js 请求后端代理
+    const serverUrl = getServerUrl();
+    if (serverUrl) {
+      env.remoteHost = `${serverUrl}/api/rag/model-proxy`;
+    }
     console.log("[model-loader] 初始化完成");
   } catch (e) {
     console.error("[model-loader] 初始化失败:", e);
