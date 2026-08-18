@@ -164,6 +164,20 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
                 onChange={(e) => setEditing((d) => d ? { ...d, model: e.target.value } : d)} />
             </div>
             <div className="space-y-1">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={editing.stream !== false}
+                  onChange={(e) => setEditing((d) => d ? { ...d, stream: e.target.checked } : d)}
+                  className="rounded border-input"
+                />
+                <span className="text-xs">流式响应</span>
+              </label>
+              <p className="text-[10px] text-muted-foreground pl-5">
+                开启后通过 SSE 流式接收回答（默认开启）。ModelScope 等服务商强制要求流式；若你的 API 不支持流式（返回普通 JSON），请关闭此选项。
+              </p>
+            </div>
+            <div className="space-y-1">
               <Label htmlFor="api-ctx" className="text-xs">上下文窗口（可选）</Label>
               <Input id="api-ctx" name="api-ctx" type="number" min={1024} step={1024}
                 placeholder="留空使用默认值" value={editing.contextWindow || ""}

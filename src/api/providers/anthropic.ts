@@ -26,7 +26,8 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
       model: config.model || req.model || "claude-sonnet-4-6",
       max_tokens: req.max_tokens ?? config.maxTokens ?? 2048,
       messages,
-      stream: true, // 统一使用流式，避免部分 API 非流式返回空壳
+      // 默认开启流式；可在 API 设置中关闭，支持请求级覆盖
+      stream: req.stream ?? config.stream !== false,
     };
     if (systemPrompt) body.system = systemPrompt;
     return body;

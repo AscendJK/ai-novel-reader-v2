@@ -35,6 +35,19 @@ function mockFetchResponse(body: unknown, status = 200) {
   );
 }
 
+/** 捕获 fetch 请求参数，返回普通 JSON 响应（body 默认 OpenAI 格式） */
+function mockFetchCapture(body?: unknown) {
+  const calls: { url: string; init?: RequestInit }[] = [];
+  (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(async (url: string, init?: RequestInit) => {
+    calls.push({ url, init });
+    return new Response(
+      JSON.stringify(body ?? { choices: [{ message: { content: "ok" } }] }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  });
+  return calls;
+}
+
 /** 构造 OpenAI 格式的 SSE 流式响应 */
 function mockOpenAIStream(chunks: { content?: string; reasoning?: string }[], usage?: unknown) {
   const lines: string[] = [];
@@ -233,6 +246,30 @@ describe("OpenAI provider parseResponse", () => {
       apiCode: "server",
     });
   });
+
+  it("默认请求体包含 stream: true", async () => {
+    const calls = mockFetchCapture();
+    const provider = createOpenAIProvider(openaiConfig);
+    await provider.chat({ messages: [{ role: "user", content: "hi" }] });
+    const body = JSON.parse(calls[0].init?.body as string);
+    expect(body.stream).toBe(true);
+  });
+
+  it("config.stream 为 false 时请求体包含 stream: false", async () => {
+    const calls = mockFetchCapture();
+    const provider = createOpenAIProvider({ ...openaiConfig, stream: false });
+    await provider.chat({ messages: [{ role: "user", content: "hi" }] });
+    const body = JSON.parse(calls[0].init?.body as string);
+    expect(body.stream).toBe(false);
+  });
+
+  it("请求级 stream 覆盖 config 配置", async () => {
+    const calls = mockFetchCapture();
+    const provider = createOpenAIProvider({ ...openaiConfig, stream: true });
+    await provider.chat({ messages: [{ role: "user", content: "hi" }], stream: false });
+    const body = JSON.parse(calls[0].init?.body as string);
+    expect(body.stream).toBe(false);
+  });
 });
 
 describe("Anthropic provider parseResponse", () => {
@@ -329,5 +366,21 @@ describe("Anthropic provider parseResponse", () => {
       name: "APIError",
       apiCode: "server",
     });
+  });
+
+  it("默认请求体包含 stream: true", async () => {
+    const calls = mockFetchCapture({ id: "msg-1", content: [{ type: "text", text: "ok" }], usage: {} });
+    const provider = createAnthropicProvider(anthropicConfig);
+    await provider.chat({ messages: [{ role: "user", content: "hi" }] });
+    const body = JSON.parse(calls[0].init?.body as string);
+    expect(body.stream).toBe(true);
+  });
+
+  it("config.stream 为 false 时请求体包含 stream: false", async () => {
+    const calls = mockFetchCapture({ id: "msg-1", content: [{ type: "text", text: "ok" }], usage: {} });
+    const provider = createAnthropicProvider({ ...anthropicConfig, stream: false });
+    await provider.chat({ messages: [{ role: "user", content: "hi" }] });
+    const body = JSON.parse(calls[0].init?.body as string);
+    expect(body.stream).toBe(false);
   });
 });

@@ -13,7 +13,8 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
       messages: req.messages,
       max_tokens: req.max_tokens ?? config.maxTokens ?? 2048,
       temperature: req.temperature ?? 0.7,
-      stream: true, // 部分 API（如 ModelScope）强制要求流式，非流式会返回空壳响应
+      // 默认开启流式（ModelScope 强制要求）；可在 API 设置中关闭，支持请求级覆盖
+      stream: req.stream ?? config.stream !== false,
     };
   }
 

@@ -9,6 +9,8 @@ export interface ProviderConfig {
   model: string;
   contextWindow?: number;
   maxTokens?: number;
+  /** 是否使用流式响应（默认 true）。ModelScope 等服务商强制要求流式；不支持流式的 API 请设为 false */
+  stream?: boolean;
 }
 
 export interface ChatMessage {
