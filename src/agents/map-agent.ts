@@ -16,7 +16,7 @@ import { prepareAgentContext, chatWithContextRetry } from "./utils";
 class MapAgent extends BaseAgent {
   name = "map-generator";
   description = "生成小说地图，分析地理位置和势力分布";
-  taskType = TaskType.MAP as const;
+  taskType = TaskType.MAP;
 
   /** 地图只需要章节目录（标题），不需要章节内容，避免加载全书 */
   protected async prepareEnvironment(context: AgentContext) {

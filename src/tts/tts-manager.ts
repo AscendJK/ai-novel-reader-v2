@@ -46,7 +46,6 @@ class WebSpeechTTSEngine {
 
   // 段落追踪状态
   private boundaryEventCount = 0;
-  private onboundaryAvailable = false;
   private boundaryDetectionDone = false;
   private calibratedCharsPerSec = 4; // 默认值，会被首个 onboundary 事件校准
   private chunkStartTime = 0;
@@ -152,7 +151,6 @@ class WebSpeechTTSEngine {
 
     // 重置检测状态
     this.boundaryEventCount = 0;
-    this.onboundaryAvailable = false;
     this.boundaryDetectionDone = false;
     this.chunkStartTime = performance.now();
 
@@ -163,7 +161,6 @@ class WebSpeechTTSEngine {
       // 首次收到 onboundary：校准语速
       if (!this.boundaryDetectionDone) {
         this.boundaryDetectionDone = true;
-        this.onboundaryAvailable = true;
         const elapsed = (performance.now() - this.chunkStartTime) / 1000;
         if (elapsed > 0.1) {
           this.calibratedCharsPerSec = e.charIndex / elapsed;
@@ -187,7 +184,6 @@ class WebSpeechTTSEngine {
       // 仅在当前 utterance 仍在播放时启动降级（stop/新 speak 后跳过）
       if (!this.boundaryDetectionDone && this.utterance === utterance) {
         this.boundaryDetectionDone = true;
-        this.onboundaryAvailable = false;
         this.startFallbackTimer(text, speed, breaks, indices, onParagraphChange);
       }
     }, 1500);

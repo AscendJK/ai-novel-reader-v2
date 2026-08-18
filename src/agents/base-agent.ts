@@ -65,7 +65,7 @@ export abstract class BaseAgent implements Agent {
    * 子类可覆写此方法强制加载全书内容（如 SummarizerAgent）
    */
   protected async prepareEnvironment(context: AgentContext): Promise<
-    | { success: true; novel: Novel; provider: AIProvider; budget: TokenBudget }
+    | { success: true; novel: Novel; provider: AIProvider; budget: TokenBudget; modelName: string }
     | { success: false; error: string }
   > {
     const hasRetrieved = !!context.preRetrieved && context.preRetrieved.length >= 100;

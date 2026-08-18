@@ -22,7 +22,7 @@ interface GraphData {
 class CharacterGraphAgent extends BaseAgent {
   name = "character-graph";
   description = "只生成人物关系图谱JSON数据";
-  taskType = TaskType.GRAPH as const;
+  taskType = TaskType.GRAPH;
 
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider } = env;

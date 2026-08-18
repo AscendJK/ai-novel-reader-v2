@@ -15,8 +15,9 @@ function toModelPath(engine: string): string {
 const MAX_ENCODERS = 2; // 最多缓存 2 个编码器模型，避免内存泄漏
 
 /** Transformers.js feature-extraction pipeline 的最小接口 */
+type PoolingOption = "none" | "mean" | "cls";
 interface FeatureExtractor {
-  (text: string, options?: { pooling?: string; normalize?: boolean }): Promise<{ data: Float32Array | number[] }>;
+  (text: string, options?: { pooling?: PoolingOption; normalize?: boolean }): Promise<{ data: unknown }>;
   dispose?: () => Promise<void>;
 }
 const encoderCache = new Map<string, FeatureExtractor>();
@@ -80,7 +81,7 @@ export async function encodeQuery(text: string, engine: string): Promise<Float32
   try {
     const extractor = await getEncoder(engine);
     const output = await extractor(text, { pooling: "mean", normalize: true });
-    return new Float32Array(output.data);
+    return new Float32Array(output.data as Float32Array | number[]);
   } catch (e) {
     ragLog(`[client-encoder] 编码失败: ${e instanceof Error ? e.message : e}`);
     return null;

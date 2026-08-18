@@ -124,7 +124,7 @@ describe("normalizeError", () => {
 // ── getUserFriendlyMessage ──
 
 describe("getUserFriendlyMessage", () => {
-  const testCases: [string, string, string][] = [
+  const testCases: [string, string][] = [
     ["NETWORK", "网络连接失败，请检查网络设置"],
     ["AUTH", "认证失败，请检查 API Key 是否正确"],
     ["DATABASE", "数据访问失败，请刷新页面重试"],

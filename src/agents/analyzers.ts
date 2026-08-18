@@ -15,7 +15,7 @@ import { estimateTokens, computeAvailableInput } from "@/api/token-manager";
 class CharacterAnalysisAgent extends BaseAgent {
   name = "character-analysis";
   description = "分析小说主要人物及其关系";
-  taskType = TaskType.CHARACTER as const;
+  taskType = TaskType.CHARACTER;
 
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider, budget } = env;
@@ -103,7 +103,7 @@ ${relevantContent}
 class TimelineAgent extends BaseAgent {
   name = "timeline";
   description = "提取小说剧情时间线";
-  taskType = TaskType.TIMELINE as const;
+  taskType = TaskType.TIMELINE;
 
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider, budget } = env;

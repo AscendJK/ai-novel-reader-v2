@@ -19,6 +19,9 @@ interface ServerBuildStatus {
   current?: number;
   total?: number;
   queuePosition?: number;
+  error?: string;
+  chunkCount?: number;
+  dim?: number;
 }
 import { useRAGStore } from "@/stores/rag-store";
 import { useUIStore } from "@/stores/ui-store";
@@ -155,7 +158,7 @@ export function BookSelect() {
             if (st && typeof st === "object" && st.status) {
               const existing = buildStore.getBuildStatus(novelId, engine);
               const isBuilding = st.status === "building" || st.status === "loading" || st.status === "encoding" || st.status === "queued";
-              const isDone = st.status === "ready" || st.status === "done";
+              const isDone = st.status === "ready";
               const isError = st.status === "error";
 
               // 如果 Zustand store 中没有这个构建状态，且服务器显示正在构建中，则添加

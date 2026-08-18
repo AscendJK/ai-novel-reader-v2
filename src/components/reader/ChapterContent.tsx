@@ -905,7 +905,7 @@ const TopBar = React.memo(function TopBar(props: {
                 fontFamily={fontFamily} setFontFamily={setFontFamily}
                 readingMode={readingMode} setReadingMode={setReadingMode}
                 autoSwitchPageMode={autoSwitchPageMode} setAutoSwitchPageMode={setAutoSwitchPageMode}
-                windowWidth={windowWidth}
+                windowWidth={windowWidth ?? 1024}
               />
             )}
           </div>

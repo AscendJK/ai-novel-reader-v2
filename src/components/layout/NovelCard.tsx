@@ -16,6 +16,9 @@ interface ServerBuildStatus {
   current?: number;
   total?: number;
   queuePosition?: number;
+  error?: string;
+  chunkCount?: number;
+  dim?: number;
 }
 
 interface ReadPosition {

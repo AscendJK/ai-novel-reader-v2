@@ -17,7 +17,7 @@ import { APIError } from "@/api/error-handler";
 class SummarizerAgent extends BaseAgent {
   name = "summarizer";
   description = "生成章节摘要或全书总结";
-  taskType = TaskType.CHAPTER as const;
+  taskType = TaskType.CHAPTER;
 
   /** 章节总结需要读取原文内容，强制加载全书 */
   protected async prepareEnvironment(context: AgentContext) {
@@ -134,7 +134,7 @@ class SummarizerAgent extends BaseAgent {
 class GlobalSummarizerAgent extends BaseAgent {
   name = "global-summarizer";
   description = "生成全书总结（发送小说结构信息+内容样本，让大模型自行分析）";
-  taskType = TaskType.GLOBAL as const;
+  taskType = TaskType.GLOBAL;
 
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider, budget } = env;

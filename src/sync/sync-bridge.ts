@@ -1,4 +1,5 @@
 import type { SyncData } from "./types";
+import type { SummaryItem } from "@/stores/summary-store";
 import { sharedDB, getUserDB } from "@/db/database";
 import { useAPIStore } from "@/stores/api-store";
 import { userKey } from "@/lib/user-utils";
@@ -78,7 +79,7 @@ export async function gatherChanges(lastSyncTime: number): Promise<Partial<SyncD
   });
 
   return {
-    summaries,
+    summaries: summaries.map((s) => ({ ...s, type: s.type as SummaryItem["type"] })),
     notes,
     maps,
     graphs,

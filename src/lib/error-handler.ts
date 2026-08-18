@@ -78,9 +78,10 @@ export function normalizeError(error: unknown): AppError {
   // 检查是否是 APIError（通过 name 属性判断，避免循环依赖）
   if (error instanceof Error && error.name === 'APIError') {
     const apiError = error as { code?: string; message?: string; statusCode?: number; originalBody?: unknown };
-    const mappedCode = API_ERROR_CODE_MAP[apiError.code] || 'API_ERROR';
+    const apiCode = apiError.code;
+    const mappedCode = (apiCode && API_ERROR_CODE_MAP[apiCode]) || 'API_ERROR';
     return new AppError(
-      apiError.message,
+      apiError.message || '未知 API 错误',
       mappedCode,
       mappedCode === 'AUTH' ? 'high' : 'medium',
       {

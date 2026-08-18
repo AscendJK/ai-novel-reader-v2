@@ -19,7 +19,8 @@ export interface ChatMessage {
 }
 
 export interface ChatCompletionRequest {
-  model: string;
+  /** 模型名覆盖；缺省时使用 ProviderConfig.model */
+  model?: string;
   messages: ChatMessage[];
   max_tokens?: number;
   temperature?: number;
