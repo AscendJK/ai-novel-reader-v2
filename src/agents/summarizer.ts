@@ -64,6 +64,16 @@ class SummarizerAgent extends BaseAgent {
           signal: context.signal,
         });
 
+        // 防御：即使 API 返回 200，空内容也视为失败，避免保存空白总结
+        if (!response.content || !response.content.trim()) {
+          results.push({
+            chapterTitle: chapter.title,
+            content: "总结生成失败: API 返回了空内容",
+            tokens: 0,
+          });
+          continue;
+        }
+
         results.push({
           chapterTitle: chapter.title,
           content: response.content,
@@ -157,6 +167,11 @@ class GlobalSummarizerAgent extends BaseAgent {
         temperature: 0.5,
         signal: context.signal,
       });
+
+      // 防御：即使 API 返回 200，空内容也视为失败，避免保存空白分析
+      if (!response.content || !response.content.trim()) {
+        return { success: false, error: "API 返回了空内容" };
+      }
 
       return {
         success: true,

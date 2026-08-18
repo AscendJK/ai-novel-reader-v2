@@ -60,17 +60,42 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
 
   async function parseResponse(response: Response): Promise<ChatCompletionResponse> {
     if (!response.ok) await handleFetchError(response);
-    const data = await response.json();
-    if (!data || typeof data !== "object") {
-      throw new APIError("API 返回了无法识别的响应格式，请检查 API 地址和密钥。", "unknown");
+    const raw = await response.text();
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      throw new APIError(
+        `API 返回了无法解析的响应：${raw.slice(0, 200)}。请检查 API 地址和密钥。`,
+        "unknown",
+        response.status,
+        raw
+      );
     }
-    const content = typeof data.content?.[0]?.text === "string" ? data.content[0].text : "";
+
+    // 检测 200 状态下的空壳响应（content 缺失/为空时抛错，避免静默返回空内容）
+    const contentArr = data.content as Array<{ text?: unknown }> | null | undefined;
+    const content = typeof contentArr?.[0]?.text === "string" ? contentArr[0].text : null;
+    if (content === null) {
+      const model = typeof data.model === "string" ? data.model : "";
+      const errBody = typeof data.error === "string" ? data.error
+        : data.error ? JSON.stringify(data.error)
+        : raw.slice(0, 300);
+      throw new APIError(
+        `API 返回了空结果（content 为空）${model ? `，模型：${model}` : ""}。` +
+        `可能原因：模型名称不存在或无权访问、请求参数不被支持。原始响应：${errBody}`,
+        "server",
+        response.status,
+        raw
+      );
+    }
+
     return {
       content,
       tokensUsed: {
-        input: data.usage?.input_tokens || 0,
-        output: data.usage?.output_tokens || 0,
-        total: (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0),
+        input: (data.usage as { input_tokens?: number } | undefined)?.input_tokens || 0,
+        output: (data.usage as { output_tokens?: number } | undefined)?.output_tokens || 0,
+        total: ((data.usage as { input_tokens?: number } | undefined)?.input_tokens || 0) + ((data.usage as { output_tokens?: number } | undefined)?.output_tokens || 0),
       },
     };
   }

@@ -69,6 +69,11 @@ ${relevantContent}
         signal: context.signal,
       });
 
+      // 防御：即使 API 返回 200，空内容也视为失败，避免保存空白分析
+      if (!response.content || !response.content.trim()) {
+        return { success: false, error: "API 返回了空内容" };
+      }
+
       return {
         success: true,
         data: { content: response.content, usedFallback },
@@ -154,6 +159,11 @@ ${relevantContent}
         temperature: 0.4,
         signal: context.signal,
       });
+
+      // 防御：即使 API 返回 200，空内容也视为失败，避免保存空白分析
+      if (!response.content || !response.content.trim()) {
+        return { success: false, error: "API 返回了空内容" };
+      }
 
       return {
         success: true,
