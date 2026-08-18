@@ -95,7 +95,7 @@ ${relevantContent}
         return { success: false, error: validationError };
       }
 
-      return { success: true, data: { graphData }, tokensUsed: response.tokensUsed.total };
+      return { success: true, data: { graphData }, tokensUsed: response.content.length };
     } catch (err) {
       return { success: false, error: this.formatError(err) };
     }

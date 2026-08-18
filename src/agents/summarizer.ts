@@ -37,7 +37,7 @@ class SummarizerAgent extends BaseAgent {
     }
 
     const results: { chapterTitle: string; content: string; tokens: number }[] = [];
-    let totalTokens = 0;
+    let totalChars = 0;
     let usedFallback = false;
     let truncated = false;
 
@@ -87,9 +87,9 @@ class SummarizerAgent extends BaseAgent {
         results.push({
           chapterTitle: chapter.title,
           content: response.content,
-          tokens: response.tokensUsed.total,
+          tokens: response.content.length,
         });
-        totalTokens += response.tokensUsed.total;
+        totalChars += response.content.length;
       } catch (err) {
         results.push({
           chapterTitle: chapter.title,
@@ -111,8 +111,8 @@ class SummarizerAgent extends BaseAgent {
 
     return {
       success: hasAnySuccess || results.length === 0,
-      data: { summaries: results, totalTokens },
-      tokensUsed: totalTokens,
+      data: { summaries: results, totalChars },
+      tokensUsed: totalChars,
       metadata,
     };
   }
@@ -196,7 +196,7 @@ class GlobalSummarizerAgent extends BaseAgent {
           content: response.content,
           usedFallback: effectiveFallback,
         },
-        tokensUsed: response.tokensUsed.total,
+        tokensUsed: response.content.length,
       };
     } catch (err) {
       if (err instanceof APIError) {

@@ -28,7 +28,7 @@ interface MiniCardProps {
   title: string;
   /** 内容（Markdown 格式） */
   content: string;
-  /** Token 数量 */
+  /** 字数（回答内容的字符数） */
   tokens: number;
   /** 日期时间戳 */
   date: number;

@@ -84,7 +84,7 @@ ${relevantContent}
       return {
         success: true,
         data: { content: response.content, usedFallback: effectiveFallback },
-        tokensUsed: response.tokensUsed.total,
+        tokensUsed: response.content.length,
       };
     } catch (err) {
       return { success: false, error: this.formatError(err) };
@@ -182,7 +182,7 @@ ${relevantContent}
       return {
         success: true,
         data: { content: response.content, usedFallback: effectiveFallback },
-        tokensUsed: response.tokensUsed.total,
+        tokensUsed: response.content.length,
       };
     } catch (err) {
       return { success: false, error: this.formatError(err) };

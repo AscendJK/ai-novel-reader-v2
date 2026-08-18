@@ -82,7 +82,7 @@ class MapAgent extends BaseAgent {
     return {
       success: true,
       data: { mapData },
-      tokensUsed: response.tokensUsed.total,
+      tokensUsed: response.content.length,
     };
   }
 

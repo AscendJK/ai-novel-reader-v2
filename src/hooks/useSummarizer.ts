@@ -550,7 +550,7 @@ ${combinedText}`;
           id: crypto.randomUUID(),
           title: `第${fromChapter}-${toChapter}章 范围总结`,
           content: response.content,
-          tokensUsed: response.tokensUsed.total,
+          tokensUsed: response.content.length,
           createdAt: Date.now(),
         };
       } catch (err) {
@@ -627,7 +627,7 @@ ${relevantText || "（无额外参考信息，请基于章节目录回答）"}
           return null;
         }
 
-        return { answer: response.content, tokensUsed: response.tokensUsed.total };
+        return { answer: response.content, tokensUsed: response.content.length };
       } catch (err) {
         handleError(err);
         return null;
