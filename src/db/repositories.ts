@@ -50,7 +50,8 @@ export async function loadNovel(novelId: string, chapterIndex?: number, loadAllC
     const record = await db.novels.get(novelId);
     if (!record) return null;
 
-    const allChapterRecords = await db.chapters.where("novelId").equals(novelId).sortBy("index");
+    const allChapterRecords = (await db.chapters.where("novelId").equals(novelId).sortBy("index"))
+      .filter((ch) => !ch.deleted);
     const totalCount = allChapterRecords.length;
 
     // 确定需要加载内容的章节范围
@@ -98,7 +99,7 @@ export async function loadChapter(novelId: string, chapterIndex: number): Promis
     const chapter = await db.chapters
       .where("novelId")
       .equals(novelId)
-      .and((ch) => ch.index === chapterIndex)
+      .and((ch) => ch.index === chapterIndex && !ch.deleted)
       .first();
     return chapter || null;
   } catch (e) {
@@ -115,7 +116,7 @@ export async function loadChapters(novelId: string, startIndex: number, count: n
     const chapters = await db.chapters
       .where("novelId")
       .equals(novelId)
-      .and((ch) => ch.index >= startIndex && ch.index < startIndex + count)
+      .and((ch) => ch.index >= startIndex && ch.index < startIndex + count && !ch.deleted)
       .sortBy("index");
     return chapters;
   } catch (e) {
@@ -154,10 +155,10 @@ export async function loadAllNovels(): Promise<Novel[]> {
     const records = await db.novels.orderBy("createdAt").reverse().toArray();
     // Load chapters per novel instead of all at once
     return await Promise.all(records.map(async (record) => {
-      const chapterRecords = await db.chapters
+      const chapterRecords = (await db.chapters
         .where("novelId")
         .equals(record.id)
-        .sortBy("index");
+        .sortBy("index")).filter((ch) => !ch.deleted);
       return {
         id: record.id, title: record.title, author: record.author,
         fileName: record.fileName, fileFormat: record.fileFormat,
@@ -181,9 +182,13 @@ export async function deleteNovel(novelId: string): Promise<void> {
   try {
     // Dexie TS 重载最多支持 4 表参数，运行时支持更多，用类型断言绕过
     await (udb.transaction as (...args: unknown[]) => Promise<void>)("rw", udb.chapters, udb.summaries, udb.notes, udb.novels, udb.graphs, udb.maps, async () => {
-      await udb.chapters.where("novelId").equals(novelId).delete();
-      // Soft-delete summaries, notes, graphs, and maps so sync propagates the deletion
+      // Soft-delete chapters so sync stays consistent with summaries/soft-deleted data
       const now = Date.now();
+      const novelChapters = await udb.chapters.where("novelId").equals(novelId).toArray();
+      for (const ch of novelChapters) {
+        if (!ch.deleted) await udb.chapters.put({ ...ch, deleted: now });
+      }
+      // Soft-delete summaries, notes, graphs, and maps so sync propagates the deletion
       const novelSummaries = await udb.summaries.where("novelId").equals(novelId).toArray();
       for (const s of novelSummaries) {
         if (!s.deleted) await udb.summaries.put({ ...s, deleted: now, updatedAt: now });
@@ -228,7 +233,7 @@ export async function deleteNovel(novelId: string): Promise<void> {
         delete map[novelId];
         localStorage.setItem(openedKey, JSON.stringify(map));
       }
-    } catch { /* ignore */ }
+    } catch (e) { console.warn("[deleteNovel] cleanup error:", e); }
   } catch (e) {
     console.error("deleteNovel failed:", e);
   }
@@ -439,11 +444,15 @@ export async function cleanupDeletedRecords() {
   try {
     // deleted field is a timestamp (Date.now()) when soft-deleted, undefined when not deleted
     // Filter in JS because compound index queries don't work well with undefined values
+    const oldChapters = (await db.chapters.toArray()).filter(c => c.deleted && c.deleted < cutoff);
     const oldMaps = (await db.maps.toArray()).filter(m => m.deleted && m.deleted < cutoff);
     const oldGraphs = (await db.graphs.toArray()).filter(g => g.deleted && g.deleted < cutoff);
     const oldSummaries = (await db.summaries.toArray()).filter(s => s.deleted && s.deleted < cutoff);
     const oldNotes = (await db.notes.toArray()).filter(n => n.deleted && n.deleted < cutoff);
-    let sCount = 0, nCount = 0, gCount = 0, mCount = 0;
+    let cCount = 0, sCount = 0, nCount = 0, gCount = 0, mCount = 0;
+    for (const c of oldChapters) {
+      await db.chapters.delete(c.id); cCount++;
+    }
     for (const s of oldSummaries) {
       await db.summaries.delete(s.id); sCount++;
     }
@@ -456,7 +465,7 @@ export async function cleanupDeletedRecords() {
     for (const m of oldMaps) {
       await db.maps.delete(m.id); mCount++;
     }
-    if (sCount || nCount || gCount || mCount) console.log(`[gc] cleaned ${sCount} summaries, ${nCount} notes, ${gCount} graphs, ${mCount} maps`);
+    if (cCount || sCount || nCount || gCount || mCount) console.log(`[gc] cleaned ${cCount} chapters, ${sCount} summaries, ${nCount} notes, ${gCount} graphs, ${mCount} maps`);
   } catch (e) { console.error("[gc] cleanupDeletedRecords failed:", e); }
 }
 
@@ -513,7 +522,7 @@ export async function deleteUserData(username: string) {
         localStorage.removeItem(`map-data-${novel.id}`);
       }
     }
-  } catch { /* ignore */ }
+  } catch (e) { console.warn("[deleteUserData] 读取待删小说列表失败:", e); }
 
   // 2. 并行收集其他本地用户的 novelId，用于判断哪些 RAG 缓存可以安全删除
   const otherUsersNovelIds = new Set<string>();
@@ -554,7 +563,7 @@ export async function deleteUserData(username: string) {
         await sharedDB.ragCache.delete(entry.id);
       }
     }
-  } catch { /* ignore */ }
+  } catch (e) { console.warn("[deleteUserData] 删除 RAG 缓存失败:", e); }
 
   // 5. 删除用户专属 localStorage 数据
   const userKeys = [
@@ -572,7 +581,7 @@ export async function deleteUserData(username: string) {
       sharedDB.settings.delete(`api-providers:${username}`),
       sharedDB.settings.delete(`api-active-provider:${username}`),
     ]);
-  } catch { /* ignore */ }
+  } catch (e) { console.warn("[deleteUserData] 删除 API 配置失败:", e); }
 
   // 7. 从本地用户列表移除
   removeLocalUser(username);

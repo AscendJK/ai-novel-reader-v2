@@ -159,7 +159,12 @@ export class EmbeddingRetriever {
     try {
       ragLog("检查服务器索引状态...");
       const statusCheck = await apiFetch(`/api/rag/${novelId}/status?engine=${encodeURIComponent(this.engine)}`);
-      const statusData = await statusCheck.json();
+      if (!statusCheck.ok) {
+        ragLog(`服务器状态查询失败: HTTP ${statusCheck.status}`);
+        onProgress?.({ phase: "done" });
+        return;
+      }
+      const statusData = (await statusCheck.json()) as { status?: string };
 
       // 如果服务器已有索引，直接下载
       if (statusData.status === "ready") {
@@ -211,8 +216,11 @@ export class EmbeddingRetriever {
         body: JSON.stringify({ texts: [query], engine: this.engine }),
       });
       if (resp.ok) {
-        const { vectors: [qArr] } = await resp.json();
-        qVec = new Float32Array(qArr);
+        const data = (await resp.json()) as { vectors?: unknown[] };
+        // 校验服务器响应结构，避免意外数据损坏
+        if (Array.isArray(data.vectors) && data.vectors[0] !== undefined) {
+          qVec = new Float32Array(data.vectors[0] as number[]);
+        }
       }
     } catch {
       // Server offline — try client-side

@@ -71,7 +71,7 @@ function notifyEviction(evicted: EvictedEntry[]) {
   for (const listener of evictionListeners) {
     try {
       listener(evicted);
-    } catch { /* ignore */ }
+    } catch (e) { console.warn("[rag] 淘汰监听器执行失败:", e); }
   }
 }
 
@@ -169,7 +169,7 @@ export async function updateAccessTime(novelId: string, engine: string) {
         accessCount: (entry.accessCount || 0) + 1,
       });
     }
-  } catch { /* ignore */ }
+  } catch (e) { console.warn("[rag] 更新访问时间失败:", e); }
 }
 
 // ============================================================

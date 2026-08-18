@@ -8,7 +8,7 @@ import { TaskType } from "./types";
 import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
 import { extractJSON } from "./json-extractor";
-import { prepareAgentContext } from "./utils";
+import { prepareAgentContext, chatWithContextRetry } from "./utils";
 
 /**
  * 地图生成 Agent
@@ -24,7 +24,7 @@ class MapAgent extends BaseAgent {
   }
 
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
-    const { novel, provider, budget } = env;
+    const { novel, provider } = env;
 
     // 1. 构建章节目录
     context.onStatus?.("正在准备分析数据...");
@@ -32,22 +32,21 @@ class MapAgent extends BaseAgent {
       .map((c, i) => `${i + 1}. ${c.title}`)
       .join("\n");
 
-    // 2. 构建提示词（不使用 RAG 检索）
-    const prompt = this.buildPrompt(novel, chapterList);
-
-    // 4. 调用 AI
+    // 2. 调用 AI（带 context_length 自愈重试，与其他 agent 一致）
     context.onStatus?.("AI 正在生成分析...");
     let response;
     try {
-      response = await provider.chat({
-        model: "",
-        messages: [
-          { role: "system", content: "你是一个 JSON 数据生成器。只输出 JSON，不要任何解释文字。" },
-          { role: "user", content: prompt },
-        ],
-        max_tokens: Math.min(8192, budget.maxOutputTokens),
-        temperature: 0.3,
-        signal: context.signal,
+      response = await chatWithContextRetry(env, async (b) => {
+        return provider.chat({
+          model: "",
+          messages: [
+            { role: "system", content: "你是一个 JSON 数据生成器。只输出 JSON，不要任何解释文字。" },
+            { role: "user", content: this.buildPrompt(novel, chapterList) },
+          ],
+          max_tokens: Math.min(8192, b.maxOutputTokens),
+          temperature: 0.3,
+          signal: context.signal,
+        });
       });
     } catch (err) {
       if (err instanceof Error) {
@@ -82,7 +81,7 @@ class MapAgent extends BaseAgent {
     return {
       success: true,
       data: { mapData },
-      tokensUsed: response.content.length,
+      tokensUsed: response.tokensUsed?.output || response.content.length,
     };
   }
 

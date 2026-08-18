@@ -3,7 +3,7 @@
  * Zustand store，直接测试状态和方法
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { useNovelStore, shallow } from "../novel-store";
 import type { Novel } from "@/parsers/types";
 
@@ -55,8 +55,11 @@ describe("shallow", () => {
   });
 
   it("null/非对象处理", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect(shallow(null as any, null as any)).toBe(true);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect(shallow(null as any, { a: 1 })).toBe(false);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect(shallow({ a: 1 }, null as any)).toBe(false);
   });
 

@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect } from "react";
-import { Clock, Users, BookOpen, Network } from "lucide-react";
+import { Clock, Users, BookOpen } from "lucide-react";
 import { SubItem } from "../shared/SubItem";
 import { NovelMapSection } from "../shared/NovelMapSection";
 import { CharacterGraphSection } from "../shared/CharacterGraphSection";

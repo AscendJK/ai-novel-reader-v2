@@ -72,7 +72,7 @@ export function useFileParser() {
       // 内容变更后清除旧的 RAG 缓存（重新上传同 ID 小说时避免使用过期索引）
       try {
         clearCache(novel.id);
-      } catch { /* ignore */ }
+      } catch (e) { console.warn("[useFileParser] 清除 RAG 缓存失败:", e); }
 
       // Upload to server + auto-join
       apiFetch(`/api/novels`, {

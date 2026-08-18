@@ -25,7 +25,7 @@ class CharacterGraphAgent extends BaseAgent {
   taskType = TaskType.GRAPH as const;
 
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
-    const { novel, provider, budget } = env;
+    const { novel, provider } = env;
 
     const chapterList = novel.chapters.map((c, i) => `${i + 1}. ${c.title}`).join("\n");
 
@@ -52,8 +52,6 @@ ${relevantContent}
 - label 用于描述人物关系，你可以根据小说特点自定义关系类型，常见的有：亲情/友情/爱情/敌对/师徒/利用/暗恋/仇敌/合作/主仆/同门/邻居/信任/背叛/保护/被保护
 - 确保同一类别的值保持一致（如不要同时使用"主角"和"主要角色"）
 - 确保所有source和target都在nodes中存在`;
-
-    const estimatedInput = estimateTokens(prompt);
 
     try {
       context.onStatus?.("AI 正在生成分析...");
@@ -95,7 +93,7 @@ ${relevantContent}
         return { success: false, error: validationError };
       }
 
-      return { success: true, data: { graphData }, tokensUsed: response.content.length };
+      return { success: true, data: { graphData }, tokensUsed: response.tokensUsed?.output || response.content.length };
     } catch (err) {
       return { success: false, error: this.formatError(err) };
     }

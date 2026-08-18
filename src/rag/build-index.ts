@@ -223,7 +223,7 @@ export async function downloadAndCacheIndex(options: DownloadOptions): Promise<D
   if (updateStore) {
     try {
       useRAGStore.getState().addCachedKey(cacheKey);
-    } catch { /* ignore */ }
+    } catch (e) { console.warn("[rag] 更新缓存 key 失败:", e); }
   }
 
   // 清理超限缓存（合并了 ensureCacheSpace 的逻辑，只执行一次全表扫描）
@@ -448,6 +448,6 @@ export async function checkAndDownloadIfReady(
     if (status.status === "ready") {
       return await downloadAndCacheIndex({ novelId, engine });
     }
-  } catch { /* ignore */ }
+  } catch (e) { console.warn(`[rag] 下载/缓存索引检查失败 (${novelId}-${engine}):`, e); }
   return null;
 }

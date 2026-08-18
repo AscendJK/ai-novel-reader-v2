@@ -58,7 +58,7 @@ export async function gatherChanges(lastSyncTime: number): Promise<Partial<SyncD
       if (s.key.startsWith("character-graph:")) continue;
       settings[s.key] = s.value;
     }
-  } catch { /* ignore */ }
+  } catch (e) { console.warn("[sync] 读取 settings 失败:", e); }
 
   // Reading progress (per-user keys)
   let readingPositions = {};
@@ -66,7 +66,7 @@ export async function gatherChanges(lastSyncTime: number): Promise<Partial<SyncD
   try {
     readingPositions = JSON.parse(localStorage.getItem(userKey("novel-reader-positions")) || "{}");
     lastOpened = JSON.parse(localStorage.getItem(userKey("novel-reader-last-opened")) || "{}");
-  } catch { /* ignore */ }
+  } catch (e) { console.warn("[sync] 读取阅读进度失败:", e); }
 
   // 调试日志
   console.log("[sync] gatherChanges:", {
@@ -214,6 +214,6 @@ export async function applyServerData(data: SyncData): Promise<void> {
         localStorage.setItem(userKey("novel-reader-last-opened"),
           JSON.stringify({ ...existing, ...data.progress.lastOpened }));
       }
-    } catch { /* ignore */ }
+    } catch (e) { console.warn("[sync] 应用阅读进度失败:", e); }
   }
 }

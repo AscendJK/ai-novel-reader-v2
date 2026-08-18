@@ -40,20 +40,20 @@ class SummarizerAgent extends BaseAgent {
     let totalChars = 0;
     let usedFallback = false;
     let truncated = false;
+    let consecutiveFailures = 0;
+    const MAX_CONSECUTIVE_FAILURES = 3;
 
     for (const chapter of chapters) {
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        console.warn(`[summarizer] 连续 ${MAX_CONSECUTIVE_FAILURES} 章失败，提前终止（剩余 ${chapters.length - results.length} 章）`);
+        break;
+      }
       context.onStatus?.("正在准备分析数据...");
-      const originalLength = chapter.content.length;
-      let chapterContent = chapter.content;
-
-      // 检查是否需要截断
-      if (originalLength > maxChapterChars) {
-        chapterContent = sampleChapterContent(chapter.content, maxChapterChars);
+      // 预判：当前预算下该章是否需要截断（实际 prompt 截断在重试回调内按最新预算执行）
+      if (chapter.content.length > maxChapterChars) {
         usedFallback = true;
         truncated = true;
       }
-
-      const prompt = buildChapterSummaryPrompt(chapter.title, chapterContent);
 
       try {
         context.onStatus?.("AI 正在生成分析...");
@@ -81,21 +81,24 @@ class SummarizerAgent extends BaseAgent {
             content: "总结生成失败: API 返回了空内容",
             tokens: 0,
           });
+          consecutiveFailures++;
           continue;
         }
 
         results.push({
           chapterTitle: chapter.title,
           content: response.content,
-          tokens: response.content.length,
+          tokens: response.tokensUsed?.output || response.content.length,
         });
         totalChars += response.content.length;
+        consecutiveFailures = 0; // 重置连续失败计数
       } catch (err) {
         results.push({
           chapterTitle: chapter.title,
           content: `总结生成失败: ${this.formatError(err)}`,
           tokens: 0,
         });
+        consecutiveFailures++;
       }
     }
 
@@ -112,7 +115,7 @@ class SummarizerAgent extends BaseAgent {
     return {
       success: hasAnySuccess || results.length === 0,
       data: { summaries: results, totalChars },
-      tokensUsed: totalChars,
+      tokensUsed: results.reduce((sum, r) => sum + r.tokens, 0),
       metadata,
     };
   }
@@ -196,7 +199,7 @@ class GlobalSummarizerAgent extends BaseAgent {
           content: response.content,
           usedFallback: effectiveFallback,
         },
-        tokensUsed: response.content.length,
+        tokensUsed: response.tokensUsed?.output || response.content.length,
       };
     } catch (err) {
       if (err instanceof APIError) {

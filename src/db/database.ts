@@ -21,6 +21,7 @@ export interface ChapterRecord {
   content: string;
   startOffset: number;
   endOffset: number;
+  deleted?: number;
 }
 
 export interface SummaryRecord {

@@ -5,12 +5,12 @@
 import { Router } from "express";
 import crypto from "node:crypto";
 import * as db from "../database.js";
-import { authNovel } from "../middleware/auth.js";
+import { authNovel, optionalAuth } from "../middleware/auth.js";
 
 const router = Router();
 
 // GET /api/novels?username=xxx — list all novels with user join status
-router.get("/", (req, res) => {
+router.get("/", optionalAuth, (req, res) => {
   try {
     const username = req.query.username;
     if (username) {

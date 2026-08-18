@@ -4,6 +4,7 @@
  */
 
 import { Router } from "express";
+import dns from "node:dns";
 import { authNovel } from "../middleware/auth.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 
@@ -64,6 +65,23 @@ router.post("/chat", rateLimit(60), async (req, res) => {
     // HTTP only allowed for LAN/private IPs; external must use HTTPS
     if (url.startsWith("http://") && !isPrivateIP) {
       return res.status(400).json({ error: "外部地址必须使用 HTTPS" });
+    }
+
+    // DNS 预解析：防御 DNS 重绑定攻击（在 IP 检查后、fetch 前二次验证）
+    try {
+      const { address } = await dns.promises.lookup(hostname, { family: 0 });
+      const resolvedIsPrivate = address === "::1" || address === "127.0.0.1" || isIPv4Private(address);
+      // 外部 URL 解析到私有 IP → 拒绝
+      if (!isPrivateIP && resolvedIsPrivate) {
+        console.warn(`[proxy] DNS 重绑定检测: ${hostname} → ${address}（私有 IP，已拒绝）`);
+        return res.status(400).json({ error: "DNS 解析到私有地址，请求被拒绝" });
+      }
+    } catch (e) {
+      console.warn(`[proxy] DNS 解析失败: ${hostname}`, e.message);
+      // DNS 解析失败时，非私有 IP 的请求继续（可能是临时网络问题）
+      if (isPrivateIP) {
+        return res.status(400).json({ error: `DNS 解析失败: ${e.message}` });
+      }
     }
 
     // Only forward specific headers

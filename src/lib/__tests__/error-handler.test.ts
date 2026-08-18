@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { ErrorCode } from "../error-handler";
 import {
   AppError,
   normalizeError,
@@ -69,7 +70,6 @@ describe("normalizeError", () => {
   });
 
   it("AbortError 映射到 code=ABORTED, severity=low", () => {
-    const abortErr = new DOMException("The operation was aborted", "AbortError");
     // 模拟 Error 实例
     const err = new Error("The operation was aborted");
     err.name = "AbortError";
@@ -142,7 +142,7 @@ describe("getUserFriendlyMessage", () => {
 
   for (const [code, expected] of testCases) {
     it(`ErrorCode ${code} 返回正确消息`, () => {
-      const err = new AppError("ignored", code as any);
+      const err = new AppError("ignored", code as ErrorCode);
       expect(getUserFriendlyMessage(err)).toBe(expected);
     });
   }
