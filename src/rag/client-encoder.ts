@@ -1,89 +1,13 @@
 /**
- * Client-side query encoder using Transformers.js.
+ * Client-side query encoder using Transformers.js (主线程封装).
  * Models are downloaded via backend proxy (bypasses CORS).
+ * 真实逻辑位于 ./encode-core（可在主线程与 Worker 间复用）。
  */
 
-import { ragLog } from "@/lib/logger";
+import { encodeQueryCore } from "./encode-core";
 import { getServerUrl } from "@/lib/api-client";
-import { resolveModelKey } from "./engines";
 
-// Resolve engine ID to the model key Transformers.js expects
-function toModelPath(engine: string): string {
-  return resolveModelKey(engine);
-}
-
-const MAX_ENCODERS = 2; // 最多缓存 2 个编码器模型，避免内存泄漏
-
-/** Transformers.js feature-extraction pipeline 的最小接口 */
-type PoolingOption = "none" | "mean" | "cls";
-interface FeatureExtractor {
-  (text: string, options?: { pooling?: PoolingOption; normalize?: boolean }): Promise<{ data: unknown }>;
-  dispose?: () => Promise<void>;
-}
-const encoderCache = new Map<string, FeatureExtractor>();
-let encoderLock: Promise<void> = Promise.resolve();
-
-function touchEncoderCache(key: string) {
-  const val = encoderCache.get(key);
-  if (val) {
-    encoderCache.delete(key);
-    encoderCache.set(key, val);
-  }
-  while (encoderCache.size > MAX_ENCODERS) {
-    const oldest = encoderCache.keys().next().value;
-    if (oldest) {
-      const evicted = encoderCache.get(oldest);
-      encoderCache.delete(oldest);
-      // 释放旧模型的内存
-      if (evicted?.dispose) evicted.dispose().catch(() => {});
-    }
-  }
-}
-
-async function getEncoder(engine: string): Promise<FeatureExtractor> {
-  const cached = encoderCache.get(engine);
-  if (cached) return cached;
-
-  const prev = encoderLock;
-  let releaseLock!: () => void;
-  encoderLock = new Promise<void>((r) => { releaseLock = r; });
-  await prev;
-
-  try {
-    const cachedNow = encoderCache.get(engine);
-    if (cachedNow) return cachedNow;
-
-    const modelPath = toModelPath(engine);
-    const transformers = await import("@xenova/transformers");
-    const { env, pipeline } = transformers;
-
-    env.allowRemoteModels = true;
-    env.useBrowserCache = true;
-
-    // 通过 remoteHost 让 transformers.js 直接请求后端代理
-    const serverUrl = getServerUrl();
-    if (serverUrl) {
-      env.remoteHost = `${serverUrl}/api/rag/model-proxy`;
-    }
-
-    ragLog(`[client-encoder] 加载模型: ${modelPath}`);
-    const extractor = await pipeline("feature-extraction", modelPath);
-    encoderCache.set(engine, extractor);
-    touchEncoderCache(engine);
-    ragLog(`[client-encoder] 模型就绪: ${modelPath}`);
-    return extractor;
-  } finally {
-    releaseLock();
-  }
-}
-
+/** 在主线程执行编码（使用 localStorage 中的 serverUrl） */
 export async function encodeQuery(text: string, engine: string): Promise<Float32Array | null> {
-  try {
-    const extractor = await getEncoder(engine);
-    const output = await extractor(text, { pooling: "mean", normalize: true });
-    return new Float32Array(output.data as Float32Array | number[]);
-  } catch (e) {
-    ragLog(`[client-encoder] 编码失败: ${e instanceof Error ? e.message : e}`);
-    return null;
-  }
+  return encodeQueryCore(text, engine, getServerUrl());
 }

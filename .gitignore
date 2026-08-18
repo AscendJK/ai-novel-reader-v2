@@ -64,3 +64,6 @@ CLAUDE.md
 
 # MiMoCode memory
 .mimocode
+
+# 本地规划/方案文档（不入库，仅本机保留）
+docs/plans/

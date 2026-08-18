@@ -4,7 +4,7 @@ import { sharedDB as db } from "@/db/database";
 import { useRAGStore } from "@/stores/rag-store";
 import { useBuildStore } from "@/stores/build-store";
 import { apiFetch } from "@/lib/api-client";
-import { encodeQuery } from "./client-encoder";
+import { encodeQueryWithWorker } from "./worker-client";
 import { updateAccessTime } from "./rag-cache-utils";
 import { buildAndPollRAGIndex, downloadAndCacheIndex } from "./build-index";
 
@@ -226,10 +226,10 @@ export class EmbeddingRetriever {
       // Server offline — try client-side
     }
 
-    // Fall back to client-side encoding (offline)
+    // Fall back to client-side encoding (offline). Runs in a Worker first.
     if (!qVec) {
-      ragLog("服务器编码不可用, 尝试浏览器端编码...");
-      qVec = await encodeQuery(query, this.engine);
+      ragLog("服务器编码不可用, 尝试浏览器端编码(Worker)...");
+      qVec = await encodeQueryWithWorker(query, this.engine);
     }
 
     if (!qVec) {
