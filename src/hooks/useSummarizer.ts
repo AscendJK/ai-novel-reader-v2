@@ -540,6 +540,12 @@ ${combinedText}`;
           signal: createSignal(),
         });
 
+        // 防御：即使 API 返回 200，空内容也视为失败，避免保存空白总结
+        if (!response.content || !response.content.trim()) {
+          handleError(new APIError("API 返回了空内容", "server"));
+          return null;
+        }
+
         return {
           id: crypto.randomUUID(),
           title: `第${fromChapter}-${toChapter}章 范围总结`,
@@ -614,6 +620,12 @@ ${relevantText || "（无额外参考信息，请基于章节目录回答）"}
           temperature: 0.5,
           signal: createSignal(),
         });
+
+        // 防御：即使 API 返回 200，空内容也视为失败，避免显示空白回答
+        if (!response.content || !response.content.trim()) {
+          handleError(new APIError("API 返回了空内容", "server"));
+          return null;
+        }
 
         return { answer: response.content, tokensUsed: response.tokensUsed.total };
       } catch (err) {
