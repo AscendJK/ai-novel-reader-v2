@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { ProviderSelect } from "./ProviderSelect";
 import type { ProviderConfig, ProviderFormat } from "@/api/types";
+import { getMatchedModelInfo } from "@/api/token-manager";
 import { Key, Trash2, ArrowLeft, Plus, WifiOff, Wifi, Keyboard, Edit2 } from "lucide-react";
 import { useUIStore } from "@/stores/ui-store";
 import { syncClient } from "@/sync/sync-client";
@@ -23,6 +24,7 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
   const { providers, addProvider, removeProvider, activeProviderId, setActiveProvider } = useAPIStore();
   const { offlineMode, setOfflineMode } = useUIStore();
   const [editing, setEditing] = useState<ProviderConfig | null>(null);
+  const modelInfo = editing?.model ? getMatchedModelInfo(editing.model) : null;
 
   const handleAdd = () => {
     setEditing({
@@ -162,6 +164,17 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
               <Label htmlFor="api-model" className="text-xs">模型名称</Label>
               <Input id="api-model" name="api-model" placeholder="gpt-4o / deepseek-chat / claude-sonnet-4-6" value={editing.model}
                 onChange={(e) => setEditing((d) => d ? { ...d, model: e.target.value } : d)} />
+              {editing.model && (
+                modelInfo ? (
+                  <p className="text-[10px] text-green-600 dark:text-green-500">
+                    ✅ 匹配到 {modelInfo.matchedKey}，上下文 {modelInfo.budget.maxInputTokens.toLocaleString()} tokens
+                  </p>
+                ) : (
+                  <p className="text-[10px] text-amber-600 dark:text-amber-500">
+                    ⚠️ 未匹配到已知模型，默认使用 128,000 tokens。如果接口返回上下文超限错误，请在下方填写正确的上下文长度。
+                  </p>
+                )
+              )}
             </div>
             <div className="space-y-1">
               <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -180,27 +193,39 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
             <div className="space-y-1">
               <Label htmlFor="api-ctx" className="text-xs">上下文窗口（可选）</Label>
               <Input id="api-ctx" name="api-ctx" type="number" min={1024} step={1024}
-                placeholder="留空使用默认值" value={editing.contextWindow || ""}
+                placeholder={modelInfo ? String(modelInfo.budget.maxInputTokens) : "128000"}
+                value={editing.contextWindow || ""}
                 onChange={(e) => setEditing((d) => d ? { ...d, contextWindow: e.target.value ? parseInt(e.target.value) : undefined } : d)}
                 className="h-7 text-xs" />
               <p className="text-[10px] text-muted-foreground">
-                模型的最大输入 token 数。留空则根据模型名称自动匹配（如 gpt-4o → 128k, claude → 200k），未匹配则使用默认值 128k
+                模型的最大输入 token 数。留空则使用上方匹配到的默认值{modelInfo ? `（${modelInfo.budget.maxInputTokens.toLocaleString()}）` : "（128,000）"}，填写后优先使用。此值决定了发送给 AI 的文本最大长度，超过会被自动截断。
               </p>
               <details className="text-[10px] text-muted-foreground">
                 <summary className="cursor-pointer hover:text-foreground">查看常用模型参考值</summary>
                 <div className="mt-1 pl-2 border-l-2 border-muted space-y-0.5">
                   <p className="font-medium">OpenAI</p>
+                  <p>GPT-4.1 / 4.1-mini / 4.1-nano: 1,048,576</p>
                   <p>GPT-4o / 4o-mini: 128,000</p>
-                  <p>O1 / O3-mini: 200,000</p>
+                  <p>O1 / O3 / O3-mini / O4-mini: 200,000</p>
                   <p className="font-medium mt-1">Anthropic</p>
-                  <p>Claude 3.5 Sonnet / Haiku: 200,000</p>
+                  <p>Claude 3.5 / 4.5 Sonnet / Haiku: 200,000</p>
+                  <p className="font-medium mt-1">Google Gemini</p>
+                  <p>Gemini 2.5 Pro / Flash: 1,048,576</p>
+                  <p>Gemini 1.5 / 2.0 Flash: 1,048,576</p>
+                  <p className="font-medium mt-1">DeepSeek</p>
+                  <p>DeepSeek Chat / V3 / R1: 128,000</p>
+                  <p className="font-medium mt-1">ModelScope 开源模型</p>
+                  <p>Qwen3 全系列: 32,768</p>
+                  <p>Llama 4 Scout / Maverick: 1,048,576</p>
+                  <p>GLM-5.2 / 6B: 128,000</p>
+                  <p>Step-3 / Step-3 Flash: 131,072</p>
+                  <p>MiniMax-M3: 131,072</p>
+                  <p>MiniMax-T1: 1,048,576</p>
                   <p className="font-medium mt-1">其他</p>
-                  <p>DeepSeek Chat: 128,000</p>
-                  <p>Gemini 1.5/2.0: 1,000,000</p>
                   <p>Qwen Turbo/Plus/Max: 128,000</p>
-                  <p>GLM-4: 128,000</p>
-                  <p>ERNIE 4.0: 128,000</p>
+                  <p>GLM-4: 128,000 / ERNIE 4.0: 128,000</p>
                   <p>Moonshot 128k: 131,072</p>
+                  <p>Hunyuan: 256,000</p>
                 </div>
               </details>
             </div>

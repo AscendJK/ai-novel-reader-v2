@@ -32,6 +32,9 @@ const MODEL_LIMITS: Record<string, TokenBudget> = {
   "o1": { maxInputTokens: 200000, maxOutputTokens: 100000 },
   "o1-mini": { maxInputTokens: 128000, maxOutputTokens: 65536 },
   "o3-mini": { maxInputTokens: 200000, maxOutputTokens: 100000 },
+  "gpt-4.1": { maxInputTokens: 1048576, maxOutputTokens: 16384 },
+  "o3": { maxInputTokens: 200000, maxOutputTokens: 100000 },
+  "o4-mini": { maxInputTokens: 200000, maxOutputTokens: 100000 },
 
   // ── Anthropic (Claude) ──
   "claude-sonnet-4-6": { maxInputTokens: 200000, maxOutputTokens: 8192 },
@@ -41,6 +44,8 @@ const MODEL_LIMITS: Record<string, TokenBudget> = {
   "claude-3-opus": { maxInputTokens: 200000, maxOutputTokens: 4096 },
   "claude-3-sonnet": { maxInputTokens: 200000, maxOutputTokens: 4096 },
   "claude-3-haiku": { maxInputTokens: 200000, maxOutputTokens: 4096 },
+  "claude-4-5-sonnet": { maxInputTokens: 200000, maxOutputTokens: 8192 },
+  "claude-4-5-haiku": { maxInputTokens: 200000, maxOutputTokens: 8192 },
 
   // ── DeepSeek ──
   "deepseek-chat": { maxInputTokens: 128000, maxOutputTokens: 8192 },
@@ -48,6 +53,8 @@ const MODEL_LIMITS: Record<string, TokenBudget> = {
   "deepseek-coder": { maxInputTokens: 128000, maxOutputTokens: 8192 },
 
   // ── Google Gemini ──
+  "gemini-2.5-pro": { maxInputTokens: 1048576, maxOutputTokens: 65536 },
+  "gemini-2.5-flash": { maxInputTokens: 1048576, maxOutputTokens: 65536 },
   "gemini-1.5-pro": { maxInputTokens: 1048576, maxOutputTokens: 8192 },
   "gemini-1.5-flash": { maxInputTokens: 1048576, maxOutputTokens: 8192 },
   "gemini-2.0-flash": { maxInputTokens: 1048576, maxOutputTokens: 8192 },
@@ -63,7 +70,14 @@ const MODEL_LIMITS: Record<string, TokenBudget> = {
   // ── ModelScope 开源 Qwen3 系列（原生上下文 32768，YaRN 可扩 131072）──
   // 注意：大小写敏感前缀匹配，大写 "Qwen/" 不会误匹配上面的小写 qwen 条目
   "Qwen/Qwen3-8B": { maxInputTokens: 32768, maxOutputTokens: 8192 },
+  "Qwen/Qwen3-4B": { maxInputTokens: 32768, maxOutputTokens: 8192 },
   "Qwen/Qwen3": { maxInputTokens: 32768, maxOutputTokens: 8192 },
+
+  // ── ModelScope 其他开源模型 ──
+  "deepseek-ai/DeepSeek": { maxInputTokens: 128000, maxOutputTokens: 8192 },
+  "meta-llama/Llama-4": { maxInputTokens: 1048576, maxOutputTokens: 4096 },
+  "THUDM/glm": { maxInputTokens: 128000, maxOutputTokens: 4096 },
+  "stepfun-ai/Step": { maxInputTokens: 131072, maxOutputTokens: 4096 },
 
   // ── 智谱 GLM ──
   "glm-4": { maxInputTokens: 128000, maxOutputTokens: 4096 },
@@ -89,6 +103,8 @@ const MODEL_LIMITS: Record<string, TokenBudget> = {
   "moonshot-v1-128k": { maxInputTokens: 131072, maxOutputTokens: 4096 },
 
   // ── MiniMax ──
+  "MiniMax-M3": { maxInputTokens: 131072, maxOutputTokens: 4096 },
+  "MiniMax-T1": { maxInputTokens: 1048576, maxOutputTokens: 4096 },
   "abab6": { maxInputTokens: 200000, maxOutputTokens: 4096 },
   "abab6.5": { maxInputTokens: 200000, maxOutputTokens: 4096 },
 
@@ -132,6 +148,35 @@ export function getTokenBudget(model: string, contextWindow?: number): TokenBudg
     if (model.startsWith(key)) return budget;
   }
   return DEFAULT_BUDGET;
+}
+
+/**
+ * 获取模型在预算表中匹配到的条目信息，用于 UI 展示
+ * 返回匹配到的 key 和预算，或 null（未匹配）
+ */
+export function getMatchedModelInfo(model: string): { matchedKey: string; budget: TokenBudget } | null {
+  if (!model) return null;
+  if (MODEL_LIMITS[model]) {
+    return { matchedKey: model, budget: MODEL_LIMITS[model] };
+  }
+  for (const [key, budget] of SORTED_MODEL_ENTRIES) {
+    if (model.startsWith(key)) {
+      return { matchedKey: key, budget };
+    }
+  }
+  return null;
+}
+
+/**
+ * 获取人类可读的模型上下文长度提示文字
+ * 例如："Qwen3 系列，32,768 tokens" 或 "未匹配，默认 128,000 tokens"
+ */
+export function getModelContextHint(model: string): string {
+  const info = getMatchedModelInfo(model);
+  if (!info) {
+    return `未匹配到已知模型，默认使用 ${DEFAULT_BUDGET.maxInputTokens.toLocaleString()} tokens`;
+  }
+  return `匹配到 ${info.matchedKey}，上下文 ${info.budget.maxInputTokens.toLocaleString()} tokens`;
 }
 
 export function canFitInContext(text: string, model: string, outputTokens: number, contextWindow?: number): boolean {
