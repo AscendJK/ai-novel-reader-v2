@@ -44,6 +44,7 @@ export function AppLayout() {
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
   const [showShortcutHelp, setShowShortcutHelp] = useState(false);
   const [versionMismatch, setVersionMismatch] = useState<{ frontend: string; backend: string } | null>(null);
+  const dismissedVersionMismatchRef = useRef(false);
   const dbInitialized = useRef(false);
 
   const onSyncReady = useCallback(() => setSyncReady(true), []);
@@ -156,15 +157,28 @@ export function AppLayout() {
   }, [offlineMode]);
 
   // 登录成功后检测前后端版本号是否一致
+  // 同时每 60 秒轮询一次，捕获后端在检测之后才启动的场景
   useEffect(() => {
     if (!syncReady) return;
     const url = getServerUrl();
     if (!url) return;
-    checkVersion().then((result) => {
-      if (!result.match && result.backend) {
-        setVersionMismatch({ frontend: result.frontend, backend: result.backend });
-      }
-    });
+
+    const runCheck = () => {
+      // 用户已手动关闭弹窗，不再重复提醒
+      if (dismissedVersionMismatchRef.current) return;
+      checkVersion().then((result) => {
+        if (!result.match && result.backend) {
+          setVersionMismatch({ frontend: result.frontend, backend: result.backend });
+        }
+      });
+    };
+
+    // 立即执行一次
+    runCheck();
+
+    // 每 60 秒轮询，捕获后端延迟启动的场景
+    const interval = setInterval(runCheck, 60_000);
+    return () => clearInterval(interval);
   }, [syncReady]);
 
   const handleBackToLibrary = useCallback(() => {
@@ -238,7 +252,7 @@ export function AppLayout() {
         <VersionMismatchDialog
           frontend={versionMismatch.frontend}
           backend={versionMismatch.backend}
-          onClose={() => setVersionMismatch(null)}
+          onClose={() => { setVersionMismatch(null); dismissedVersionMismatchRef.current = true; }}
         />
       )}
     </div>
