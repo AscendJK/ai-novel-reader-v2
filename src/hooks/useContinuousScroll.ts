@@ -32,6 +32,24 @@ interface UseContinuousScrollReturn {
 const LOAD_BATCH = 10;
 
 /**
+ * 从章节 rect 列表中选出第一个与视口检测区相交的章节。
+ * rects 按 DOM 顺序（章节 index 升序）；zoneTop/zoneBottom 为检测区上下界。
+ * 用"相交"而非"顶部在区内"：用户读到章节中部时章节顶部在视口上方，
+ * 但章节内容占据检测区，仍应识别为该章节。
+ * 纯函数，便于单元测试。
+ */
+export function pickChapterInZone(
+  rects: { id: string; top: number; bottom: number }[],
+  zoneTop: number,
+  zoneBottom: number
+): string | null {
+  for (const r of rects) {
+    if (r.top < zoneBottom && r.bottom > zoneTop) return r.id;
+  }
+  return null;
+}
+
+/**
  * 连续滚动 hook：管理多章节在一个滚动容器中的懒加载、章节检测、滚动定位。
  */
 export function useContinuousScroll({
@@ -143,11 +161,19 @@ export function useContinuousScroll({
 
       const applyScroll = (el: Element) => {
         if (chapterOffset !== undefined) {
-          // 用 getBoundingClientRect 计算精确位置（不依赖 offsetParent）
-          const elRect = el.getBoundingClientRect();
-          const containerRect = container.getBoundingClientRect();
-          const relativeTop = elRect.top - containerRect.top + container.scrollTop;
-          container.scrollTop = relativeTop + chapterOffset;
+          // 先滚动到章节附近：scrollIntoView 会触发浏览器渲染目标章节，
+          // 消除 contentVisibility:auto 的估算高度（containIntrinsicSize 500px）误差
+          el.scrollIntoView({ behavior: "instant", block: "start" });
+          // 双 rAF 等待目标章节渲染、布局更新后校正位置，再加章节内偏移
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              const rect = el.getBoundingClientRect();
+              const cRect = container.getBoundingClientRect();
+              // 校正：把章节顶部精确对齐到视口顶部
+              container.scrollTop += rect.top - cRect.top;
+              container.scrollTop += chapterOffset;
+            });
+          });
         } else {
           el.scrollIntoView({ behavior: "instant", block: "start" });
         }
@@ -329,57 +355,34 @@ export function useContinuousScroll({
       const checkStart = Math.max(0, (currentIdx === -1 ? 0 : currentIdx) - 1);
       const checkEnd = Math.min(markerCount - 1, (currentIdx === -1 ? 0 : currentIdx) + 1);
 
-      // 先检查检测区内
-      for (let i = checkStart; i <= checkEnd; i++) {
-        const el = cachedMarkers[i];
-        const rect = el.getBoundingClientRect();
-        if (rect.top >= zoneTop && rect.top <= zoneBottom) {
-          const chapterId = el.getAttribute("data-chapter-id");
-          if (chapterId && chapterId !== lastDetectedChapterRef.current) {
-            lastDetectedChapterRef.current = chapterId;
-            onChapterChangeRef.current(chapterId);
-          }
-          return;
+      const toRect = (el: Element) => {
+        const r = el.getBoundingClientRect();
+        return { id: el.getAttribute("data-chapter-id") || "", top: r.top, bottom: r.top + r.height };
+      };
+
+      // 先检查相邻 3 个（正常滚动场景命中）
+      const nearRects: { id: string; top: number; bottom: number }[] = [];
+      for (let i = checkStart; i <= checkEnd; i++) nearRects.push(toRect(cachedMarkers[i]));
+      const nearId = pickChapterInZone(nearRects, zoneTop, zoneBottom);
+      if (nearId) {
+        if (nearId !== lastDetectedChapterRef.current) {
+          lastDetectedChapterRef.current = nearId;
+          onChapterChangeRef.current(nearId);
         }
+        return;
       }
 
-      // 检测区内没有，找检测区上方最近的（只检查相邻 3 个）
-      let closestId: string | null = null;
-      let closestDist = Infinity;
-      for (let i = checkStart; i <= checkEnd; i++) {
-        const el = cachedMarkers[i];
-        const rect = el.getBoundingClientRect();
-        const dist = zoneTop - rect.top;
-        if (dist >= 0 && dist < closestDist) {
-          closestDist = dist;
-          closestId = el.getAttribute("data-chapter-id");
-        }
-      }
-
-      // 相邻 3 个找不到（首次检测或大幅跳转）：全量搜索视口内/上方最近的章节。
+      // 相邻 3 个找不到（首次检测或大幅跳转）：全量搜索与检测区相交的章节。
       // ⚠️ 不能 fallback 到 markers[0]——懒加载窗口起点不是当前章节，
       // 否则位置恢复后会误选窗口起点章节（倒退约 10 章）。
-      if (!closestId) {
-        for (let i = 0; i < markerCount; i++) {
-          const el = cachedMarkers[i];
-          const rect = el.getBoundingClientRect();
-          // 视口检测区内的章节优先
-          if (rect.top >= zoneTop && rect.top <= zoneBottom) {
-            closestId = el.getAttribute("data-chapter-id");
-            break;
-          }
-          const dist = zoneTop - rect.top;
-          if (dist >= 0 && dist < closestDist) {
-            closestDist = dist;
-            closestId = el.getAttribute("data-chapter-id");
-          }
-        }
-      }
+      const allRects: { id: string; top: number; bottom: number }[] = [];
+      for (let i = 0; i < markerCount; i++) allRects.push(toRect(cachedMarkers[i]));
+      const allId = pickChapterInZone(allRects, zoneTop, zoneBottom);
 
-      // 仍找不到（视口在所有章节上方等边缘情况）：保持当前章节不变
-      if (closestId && closestId !== lastDetectedChapterRef.current) {
-        lastDetectedChapterRef.current = closestId;
-        onChapterChangeRef.current(closestId);
+      // 仍找不到（视口在空白处等边缘情况）：保持当前章节不变
+      if (allId && allId !== lastDetectedChapterRef.current) {
+        lastDetectedChapterRef.current = allId;
+        onChapterChangeRef.current(allId);
       }
     };
 

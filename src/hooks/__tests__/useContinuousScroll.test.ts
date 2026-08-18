@@ -1,11 +1,11 @@
 /**
  * useContinuousScroll 测试
- * 测试纯逻辑部分：loadedChapters、chapterIndexMap、suppressIO、loadMore 边界条件
+ * 测试纯逻辑部分：loadedChapters、chapterIndexMap、suppressIO、loadMore 边界条件、
+ * pickChapterInZone 章节检测（相交判定）
  */
-
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook } from "@testing-library/react";
-import { useContinuousScroll } from "../useContinuousScroll";
+import { useContinuousScroll, pickChapterInZone } from "../useContinuousScroll";
 
 // 模拟 loadChapters
 vi.mock("@/db/repositories", () => ({
@@ -216,6 +216,74 @@ describe("useContinuousScroll", () => {
       );
 
       expect(result.current.bottomSentinelRef.current).toBeNull();
+    });
+  });
+
+  // ── pickChapterInZone：章节检测（相交判定）──
+
+  describe("pickChapterInZone", () => {
+    // 视口检测区：容器顶部 + 5%~15% 高度（例如视口 1000px → zone 50~150）
+    const ZONE_TOP = 50;
+    const ZONE_BOTTOM = 150;
+
+    // 每章 2000px，连续排列
+    const chapterRects = (startIdx: number, count: number, topOfFirst: number) =>
+      Array.from({ length: count }, (_, i) => {
+        const top = topOfFirst + i * 2000;
+        return { id: `ch-${startIdx + i}`, top, bottom: top + 2000 };
+      });
+
+    it("章节顶部在检测区内时选中该章节", () => {
+      // ch-60 顶部在 100（检测区 50~150）
+      const rects = chapterRects(60, 5, 100);
+      expect(pickChapterInZone(rects, ZONE_TOP, ZONE_BOTTOM)).toBe("ch-60");
+    });
+
+    it("章节顶部在视口上方（读到章节中部）仍能选中该章节", () => {
+      // ch-65 顶部在 -1000（视口上方），内容占据视口 → 应选中 ch-65
+      const rects = chapterRects(64, 3, -1000);
+      expect(pickChapterInZone(rects, ZONE_TOP, ZONE_BOTTOM)).toBe("ch-64");
+    });
+
+    it("章节顶部在视口下方（未读到）时不选中", () => {
+      // ch-60 顶部在 5000（视口下方很远）
+      const rects = chapterRects(60, 3, 5000);
+      expect(pickChapterInZone(rects, ZONE_TOP, ZONE_BOTTOM)).toBeNull();
+    });
+
+    it("视口在章节交界处时选上方（先出现的）章节", () => {
+      // ch-64 底部在 100，ch-65 顶部在 100 → 检测区横跨，选先出现的 ch-64
+      const rects = [
+        { id: "ch-64", top: -1900, bottom: 100 },
+        { id: "ch-65", top: 100, bottom: 2100 },
+        { id: "ch-66", top: 2100, bottom: 4100 },
+      ];
+      expect(pickChapterInZone(rects, ZONE_TOP, ZONE_BOTTOM)).toBe("ch-64");
+    });
+
+    it("视口滚动到下一章顶部时选中下一章", () => {
+      // ch-64 已完全滚出（bottom=20 < zoneTop），ch-65 顶部在 60（检测区内）
+      const rects = [
+        { id: "ch-64", top: -1980, bottom: 20 },
+        { id: "ch-65", top: 60, bottom: 2060 },
+        { id: "ch-66", top: 2060, bottom: 4060 },
+      ];
+      expect(pickChapterInZone(rects, ZONE_TOP, ZONE_BOTTOM)).toBe("ch-65");
+    });
+
+    it("章节很短时（高度小于检测区）仍选中正在阅读的章节", () => {
+      // ch-64 高度 30（top -20 ~ 10），ch-65 高度 30（top 10~40），ch-66（top 40~70）
+      // 检测区 50~150 与 ch-66 相交（40~70 与 50~150 相交）→ 选 ch-66
+      const rects = [
+        { id: "ch-64", top: -20, bottom: 10 },
+        { id: "ch-65", top: 10, bottom: 40 },
+        { id: "ch-66", top: 40, bottom: 70 },
+      ];
+      expect(pickChapterInZone(rects, ZONE_TOP, ZONE_BOTTOM)).toBe("ch-66");
+    });
+
+    it("空列表返回 null", () => {
+      expect(pickChapterInZone([], ZONE_TOP, ZONE_BOTTOM)).toBeNull();
     });
   });
 });
