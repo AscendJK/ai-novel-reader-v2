@@ -127,6 +127,46 @@ const DEFAULT_BUDGET: TokenBudget = { contextWindow: 128000, maxOutputTokens: 40
 // e.g. "gpt-4o-mini" matches before "gpt-4o"
 const SORTED_MODEL_ENTRIES = Object.entries(MODEL_LIMITS).sort((a, b) => b[0].length - a[0].length);
 
+/**
+ * 运行时从服务端错误中发现并缓存的真实上下文长度（keyed by model name）
+ * 仅内存态，刷新页面后重置
+ */
+const discoveredContextWindows = new Map<string, number>();
+
+/**
+ * 从 API 错误信息中提取真实上下文长度
+ * 兼容 "maximum context length is 32768 tokens" / "context_length: 8192" 等模式
+ */
+export function extractContextLength(text: string): number | null {
+  if (!text) return null;
+  // 优先匹配带单位的形式：32768 tokens / 8192 tokens
+  const withUnit = text.match(/(\d{4,8})\s*(?:token|tokens)/i);
+  if (withUnit) return parseInt(withUnit[1], 10);
+  // 其次匹配 content length / context length 附近的数字（含中文"长度/限制"场景拆解后的纯数字兜底）
+  const nearLength = text.match(/(?:context|content|length|limit|window|上下文|长度|限制)[^0-9]{0,20}(\d{4,8})/i);
+  if (nearLength) return parseInt(nearLength[1], 10);
+  // 兜底：独立的 4-8 位数字（token 上限普遍在 2000~100 万之间）
+  const plain = text.match(/(?<!\d)(\d{4,8})(?!\d)/);
+  if (plain) return parseInt(plain[1], 10);
+  return null;
+}
+
+/**
+ * 记录运行时发现的服务端真实上下文长度
+ */
+export function setDiscoveredContextWindow(model: string, contextWindow: number): void {
+  if (model && contextWindow > 0) {
+    discoveredContextWindows.set(model, contextWindow);
+  }
+}
+
+/**
+ * 获取运行时发现的服务端真实上下文长度（未发现返回 undefined）
+ */
+export function getDiscoveredContextWindow(model: string): number | undefined {
+  return discoveredContextWindows.get(model);
+}
+
 export function getTokenBudget(model: string, contextWindow?: number): TokenBudget {
   // Look up model's known output token limit
   let knownOutput = DEFAULT_BUDGET.maxOutputTokens;
@@ -140,6 +180,11 @@ export function getTokenBudget(model: string, contextWindow?: number): TokenBudg
   // User-configured context window takes priority for input tokens
   if (contextWindow && contextWindow > 0) {
     return { contextWindow, maxOutputTokens: knownOutput };
+  }
+  // Runtime-discovered context window (from 400 self-healing) takes next priority
+  const discovered = discoveredContextWindows.get(model);
+  if (discovered) {
+    return { contextWindow: discovered, maxOutputTokens: knownOutput };
   }
   // Exact match first
   if (MODEL_LIMITS[model]) return MODEL_LIMITS[model];

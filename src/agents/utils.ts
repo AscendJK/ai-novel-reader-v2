@@ -9,8 +9,10 @@ import { getProvider } from "@/api/registry";
 import { useAPIStore } from "@/stores/api-store";
 import { loadNovel } from "@/db/repositories";
 import type { Novel } from "@/parsers/types";
-import { getTokenBudget, type TokenBudget } from "@/api/token-manager";
+import { getTokenBudget, extractContextLength, setDiscoveredContextWindow, type TokenBudget } from "@/api/token-manager";
 import { APIError } from "@/api/error-handler";
+import type { AgentEnvironment } from "./base-agent";
+import type { ChatCompletionResponse } from "@/api/types";
 
 /**
  * 获取当前激活的 API Provider
@@ -25,11 +27,11 @@ export function getActiveProvider(): AIProvider {
 /**
  * 获取 Provider 配置和 Token 预算
  */
-export function getProviderBudget(): { config: ProviderConfig | null; budget: TokenBudget } {
+export function getProviderBudget(): { config: ProviderConfig | null; budget: TokenBudget; model: string } {
   const config = useAPIStore.getState().getActiveProvider() as ProviderConfig | null;
   const model = config?.model || "";
   const budget = getTokenBudget(model, config?.contextWindow);
-  return { config, budget };
+  return { config, budget, model };
 }
 
 /**
@@ -59,7 +61,7 @@ export async function prepareAgentContext(
   context: AgentContext,
   options?: { loadAllContent?: boolean }
 ): Promise<
-  | { success: true; novel: Novel; provider: AIProvider; budget: TokenBudget }
+  | { success: true; novel: Novel; provider: AIProvider; budget: TokenBudget; modelName: string }
   | { success: false; error: string }
 > {
   // 加载小说
@@ -77,9 +79,9 @@ export async function prepareAgentContext(
   }
 
   // 获取 Token 预算
-  const { budget } = getProviderBudget();
+  const { budget, model } = getProviderBudget();
 
-  return { success: true, novel, provider, budget };
+  return { success: true, novel, provider, budget, modelName: model };
 }
 
 /**
@@ -153,6 +155,38 @@ export async function executeAgentTask(
     const error = formatAgentError(err);
     console.error(`[Agent:${taskName}] Error:`, error);
     return { success: false, error };
+  }
+}
+
+/**
+ * 在 context_length 错误时自愈重试（最多重试一次）
+ *
+ * 流程：attempt 抛出的 context_length 错误 → 从错误信息提取真实上下文长度
+ * → 写回发现缓存（keyed by modelName）→ 用新预算重新执行 attempt（重新裁剪、重建 prompt）
+ *
+ * @param env Agent 运行环境（含 modelName）
+ * @param attempt 接收最新预算的执行函数；内部应根据 budget 重新裁剪 + 构建并返回 chat 响应
+ * @returns 首次成功或重试成功的响应
+ */
+export async function chatWithContextRetry(
+  env: AgentEnvironment,
+  attempt: (budget: TokenBudget) => Promise<ChatCompletionResponse>
+): Promise<ChatCompletionResponse> {
+  let budget = env.budget;
+  try {
+    return await attempt(budget);
+  } catch (err) {
+    if (err instanceof APIError && err.apiCode === "context_length") {
+      const raw = err.originalBody || err.message || "";
+      const real = extractContextLength(raw);
+      if (real && real > 0) {
+        setDiscoveredContextWindow(env.modelName, real);
+        budget = getTokenBudget(env.modelName);
+        // 用新预算重试一次（重新裁剪 + 重建 prompt）
+        return await attempt(budget);
+      }
+    }
+    throw err;
   }
 }
 

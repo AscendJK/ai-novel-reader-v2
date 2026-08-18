@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { estimateTokens, getTokenBudget, canFitInContext, truncateToFit } from "../token-manager";
+import { estimateTokens, getTokenBudget, canFitInContext, truncateToFit, extractContextLength, setDiscoveredContextWindow, computeAvailableInput } from "../token-manager";
 
 describe("estimateTokens", () => {
   it("应该估算中文文本的 token 数", () => {
@@ -73,6 +73,56 @@ describe("getTokenBudget", () => {
     const budget = getTokenBudget("deepseek-chat");
     expect(budget.contextWindow).toBe(128000);
     expect(budget.maxOutputTokens).toBe(8192);
+  });
+
+  it("发现了服务端真实上下文后应优先使用", () => {
+    // 模拟 400 自愈写入发现缓存（Qwen/Qwen3-8B 真实上下文 32768）
+    setDiscoveredContextWindow("Qwen/Qwen3-8B", 16384);
+    const budget = getTokenBudget("Qwen/Qwen3-8B");
+    // 发现缓存（16384）优先于 MODEL_LIMITS（32768）
+    expect(budget.contextWindow).toBe(16384);
+  });
+
+  it("用户配置的 contextWindow 应高于发现缓存", () => {
+    setDiscoveredContextWindow("Qwen/Qwen3-8B", 16384);
+    const budget = getTokenBudget("Qwen/Qwen3-8B", 40000);
+    expect(budget.contextWindow).toBe(40000);
+  });
+});
+
+describe("extractContextLength", () => {
+  it("应该提取带单位的数字", () => {
+    expect(extractContextLength("maximum context length is 32768 tokens")).toBe(32768);
+    expect(extractContextLength("context_length exceeded: 8192 tokens")).toBe(8192);
+  });
+
+  it("应该提取 length 附近的数字", () => {
+    expect(extractContextLength("请求超过上下文长度限制 16384")).toBe(16384);
+  });
+
+  it("无数字时返回 null", () => {
+    expect(extractContextLength("请求内容超过模型上下文长度限制")).toBe(null);
+    expect(extractContextLength("")).toBe(null);
+  });
+});
+
+describe("computeAvailableInput", () => {
+  it("精确计算可用输入 = 上下文 - 输出预算 - 安全余量", () => {
+    const available = computeAvailableInput({ contextWindow: 32768, maxOutputTokens: 8192 }, 4096);
+    // 32768 - min(4096,8192)=4096 - min(1000,1638)=1000 = 27672
+    expect(available).toBe(27672);
+  });
+
+  it("agent 输出预算超过模型上限时按模型上限算", () => {
+    const available = computeAvailableInput({ contextWindow: 32768, maxOutputTokens: 4096 }, 8192);
+    // 32768 - min(8192,4096)=4096 - 1000 = 27672
+    expect(available).toBe(27672);
+  });
+
+  it("安全余量不超过 1000", () => {
+    const available = computeAvailableInput({ contextWindow: 128000, maxOutputTokens: 16384 }, 4096);
+    // 128000 - min(4096,16384)=4096 - min(1000,6400)=1000 = 122904
+    expect(available).toBe(122904);
   });
 });
 

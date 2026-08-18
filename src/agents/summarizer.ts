@@ -7,7 +7,7 @@ import { TaskType } from "./types";
 import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
 import { buildChapterSummaryPrompt } from "@/lib/prompt-templates";
-import { sampleChapterContent, prepareAgentContext } from "./utils";
+import { sampleChapterContent, prepareAgentContext, chatWithContextRetry } from "./utils";
 import { estimateTokens, computeAvailableInput } from "@/api/token-manager";
 import { APIError } from "@/api/error-handler";
 
@@ -57,12 +57,21 @@ class SummarizerAgent extends BaseAgent {
 
       try {
         context.onStatus?.("AI 正在生成分析...");
-        const response = await provider.chat({
-          model: "",
-          messages: [{ role: "user", content: prompt }],
-          max_tokens: Math.min(1024, budget.maxOutputTokens),
-          temperature: 0.5,
-          signal: context.signal,
+        const response = await chatWithContextRetry(env, async (b) => {
+          // 用最新预算重新计算章节截断阈值（400 自愈时预算缩小会触发更严格截断）
+          const maxChars = Math.floor(computeAvailableInput(b, 1024));
+          let content = chapter.content;
+          if (chapter.content.length > maxChars) {
+            content = sampleChapterContent(chapter.content, maxChars);
+          }
+          const p = buildChapterSummaryPrompt(chapter.title, content);
+          return provider.chat({
+            model: "",
+            messages: [{ role: "user", content: p }],
+            max_tokens: Math.min(1024, b.maxOutputTokens),
+            temperature: 0.5,
+            signal: context.signal,
+          });
         });
 
         // 防御：即使 API 返回 200，空内容也视为失败，避免保存空白总结
@@ -145,28 +154,35 @@ class GlobalSummarizerAgent extends BaseAgent {
     const promptLabel = context.preRetrieved ? "语义检索相关段落" : "内容样本（开头几章+中间+结尾的片段）";
 
     const metadataPrompt = this.buildMetadataPrompt(novel, chapterList, promptLabel, relevantContent);
-    const fallbackPrompt = this.buildFallbackPrompt(novel, chapterList, relevantContent, budget.contextWindow);
 
     // If the full prompt is too large, use the fallback
     context.onStatus?.("正在准备分析数据...");
     const estimatedInput = estimateTokens(metadataPrompt);
     const useFallback = estimatedInput >= computeAvailableInput(budget, 4096);
-    const usePrompt = useFallback ? fallbackPrompt : metadataPrompt;
+    let effectiveFallback = useFallback;
 
     try {
       context.onStatus?.("AI 正在生成分析...");
-      const response = await provider.chat({
-        model: "",
-        messages: [
-          {
-            role: "system",
-            content: "你是一位经验丰富的小说分析专家，擅长从有限信息中提取洞察。当信息不足时，你会诚实地标注推断的不确定性。",
-          },
-          { role: "user", content: usePrompt },
-        ],
-        max_tokens: Math.min(4096, budget.maxOutputTokens),
-        temperature: 0.5,
-        signal: context.signal,
+      const response = await chatWithContextRetry(env, async (b) => {
+        // 用最新预算重建 fallback prompt 并重新决定是否精简（400 自愈时上下文缩小）
+        const fb = this.buildFallbackPrompt(novel, chapterList, relevantContent, b.contextWindow);
+        const est = estimateTokens(metadataPrompt);
+        const useFb = est >= computeAvailableInput(b, 4096);
+        effectiveFallback = useFb;
+        const useP = useFb ? fb : metadataPrompt;
+        return provider.chat({
+          model: "",
+          messages: [
+            {
+              role: "system",
+              content: "你是一位经验丰富的小说分析专家，擅长从有限信息中提取洞察。当信息不足时，你会诚实地标注推断的不确定性。",
+            },
+            { role: "user", content: useP },
+          ],
+          max_tokens: Math.min(4096, b.maxOutputTokens),
+          temperature: 0.5,
+          signal: context.signal,
+        });
       });
 
       // 防御：即使 API 返回 200，空内容也视为失败，避免保存空白分析
@@ -178,7 +194,7 @@ class GlobalSummarizerAgent extends BaseAgent {
         success: true,
         data: {
           content: response.content,
-          usedFallback: usePrompt === fallbackPrompt,
+          usedFallback: effectiveFallback,
         },
         tokensUsed: response.tokensUsed.total,
       };

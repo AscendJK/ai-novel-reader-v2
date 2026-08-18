@@ -6,7 +6,7 @@ import type { AgentContext, AgentResult } from "./types";
 import { TaskType } from "./types";
 import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
-import { getRelevantContent } from "./utils";
+import { getRelevantContent, chatWithContextRetry } from "./utils";
 import { extractJSON } from "./json-extractor";
 import { useUIStore } from "@/stores/ui-store";
 import { estimateTokens, computeAvailableInput } from "@/api/token-manager";
@@ -54,22 +54,26 @@ ${relevantContent}
 - 确保所有source和target都在nodes中存在`;
 
     const estimatedInput = estimateTokens(prompt);
-    const useFallback = estimatedInput >= computeAvailableInput(budget, 8192);
-    const usePrompt = useFallback
-      ? `请根据小说《${novel.title}》的章节目录生成人物关系图谱JSON。\n章节目录：\n${chapterList}\n请只输出JSON。`
-      : prompt;
 
     try {
       context.onStatus?.("AI 正在生成分析...");
-      const response = await provider.chat({
-        model: "",
-        messages: [
-          { role: "system", content: "你是一个JSON数据生成器。只输出JSON，不要任何解释文字。" },
-          { role: "user", content: usePrompt },
-        ],
-        max_tokens: Math.min(8192, budget.maxOutputTokens),
-        temperature: 0.3,
-        signal: context.signal,
+      const response = await chatWithContextRetry(env, async (b) => {
+        // 400 自愈时用最新预算重新决定是否精简
+        const est = estimateTokens(prompt);
+        const useFb = est >= computeAvailableInput(b, 8192);
+        const useP = useFb
+          ? `请根据小说《${novel.title}》的章节目录生成人物关系图谱JSON。\n章节目录：\n${chapterList}\n请只输出JSON。`
+          : prompt;
+        return provider.chat({
+          model: "",
+          messages: [
+            { role: "system", content: "你是一个JSON数据生成器。只输出JSON，不要任何解释文字。" },
+            { role: "user", content: useP },
+          ],
+          max_tokens: Math.min(8192, b.maxOutputTokens),
+          temperature: 0.3,
+          signal: context.signal,
+        });
       });
 
       // 检查响应内容

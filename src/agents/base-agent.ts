@@ -15,6 +15,8 @@ export interface AgentEnvironment {
   novel: Novel;
   provider: AIProvider;
   budget: TokenBudget;
+  /** 当前激活的模型名称（用于 400 自愈时的发现缓存键） */
+  modelName: string;
 }
 
 /**

@@ -6,7 +6,7 @@ import type { AgentContext, AgentResult } from "./types";
 import { TaskType } from "./types";
 import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
-import { getRelevantContent } from "./utils";
+import { getRelevantContent, chatWithContextRetry } from "./utils";
 import { estimateTokens, computeAvailableInput } from "@/api/token-manager";
 
 /**
@@ -51,22 +51,30 @@ ${relevantContent}
 5. **人物重要性评估**：按剧情推动作用排序，说明每个角色对主线的影响`;
 
     const estimatedInput = estimateTokens(prompt);
+    const estimatedInput = estimateTokens(prompt);
     const usedFallback = estimatedInput >= computeAvailableInput(budget, 4096);
-    const usePrompt = usedFallback
-      ? `请根据小说《${novel.title}》的章节目录分析人物关系。\n\n章节目录：\n${chapterList}\n\n请分析主要人物的关系网络、性格特征与成长变化。`
-      : prompt;
+    let effectiveFallback = usedFallback;
 
     try {
       context.onStatus?.("AI 正在生成分析...");
-      const response = await provider.chat({
-        model: "",
-        messages: [
-          { role: "system", content: "你是一位资深的小说人物分析师，擅长深入剖析角色性格、关系网络和人物弧光。" },
-          { role: "user", content: usePrompt },
-        ],
-        max_tokens: Math.min(4096, budget.maxOutputTokens),
-        temperature: 0.4,
-        signal: context.signal,
+      const response = await chatWithContextRetry(env, async (b) => {
+        // 400 自愈时用最新预算重新决定是否精简
+        const est = estimateTokens(prompt);
+        const useFb = est >= computeAvailableInput(b, 4096);
+        effectiveFallback = useFb;
+        const useP = useFb
+          ? `请根据小说《${novel.title}》的章节目录分析人物关系。\n\n章节目录：\n${chapterList}\n\n请分析主要人物的关系网络、性格特征与成长变化。`
+          : prompt;
+        return provider.chat({
+          model: "",
+          messages: [
+            { role: "system", content: "你是一位资深的小说人物分析师，擅长深入剖析角色性格、关系网络和人物弧光。" },
+            { role: "user", content: useP },
+          ],
+          max_tokens: Math.min(4096, b.maxOutputTokens),
+          temperature: 0.4,
+          signal: context.signal,
+        });
       });
 
       // 防御：即使 API 返回 200，空内容也视为失败，避免保存空白分析
@@ -76,7 +84,7 @@ ${relevantContent}
 
       return {
         success: true,
-        data: { content: response.content, usedFallback },
+        data: { content: response.content, usedFallback: effectiveFallback },
         tokensUsed: response.tokensUsed.total,
       };
     } catch (err) {
@@ -143,21 +151,28 @@ ${relevantContent}
 
     const estimatedInput = estimateTokens(prompt);
     const usedFallback = estimatedInput >= computeAvailableInput(budget, 4096);
-    const usePrompt = usedFallback
-      ? `请根据《${novel.title}》的章节目录推断剧情时间线。\n章节目录：\n${chapterList}\n\n请按时间顺序逐条列出关键事件（不要用表格，不要在列表项内使用子列表），每个事件格式：\n1. **【事件名称】**（第X章 · 类型）发生了什么。→ 因果关系。\n\n标注"基于目录推断"。`
-      : prompt;
+    let effectiveFallback = usedFallback;
 
     try {
       context.onStatus?.("AI 正在生成分析...");
-      const response = await provider.chat({
-        model: "",
-        messages: [
-          { role: "system", content: "你是一位资深的小说剧情分析师，擅长提取和梳理剧情时间线。" },
-          { role: "user", content: usePrompt },
-        ],
-        max_tokens: Math.min(4096, budget.maxOutputTokens),
-        temperature: 0.4,
-        signal: context.signal,
+      const response = await chatWithContextRetry(env, async (b) => {
+        // 400 自愈时用最新预算重新决定是否精简
+        const est = estimateTokens(prompt);
+        const useFb = est >= computeAvailableInput(b, 4096);
+        effectiveFallback = useFb;
+        const useP = useFb
+          ? `请根据《${novel.title}》的章节目录推断剧情时间线。\n章节目录：\n${chapterList}\n\n请按时间顺序逐条列出关键事件（不要用表格，不要在列表项内使用子列表），每个事件格式：\n1. **【事件名称】**（第X章 · 类型）发生了什么。→ 因果关系。\n\n标注"基于目录推断"。`
+          : prompt;
+        return provider.chat({
+          model: "",
+          messages: [
+            { role: "system", content: "你是一位资深的小说剧情分析师，擅长提取和梳理剧情时间线。" },
+            { role: "user", content: useP },
+          ],
+          max_tokens: Math.min(4096, b.maxOutputTokens),
+          temperature: 0.4,
+          signal: context.signal,
+        });
       });
 
       // 防御：即使 API 返回 200，空内容也视为失败，避免保存空白分析
@@ -167,7 +182,7 @@ ${relevantContent}
 
       return {
         success: true,
-        data: { content: response.content, usedFallback },
+        data: { content: response.content, usedFallback: effectiveFallback },
         tokensUsed: response.tokensUsed.total,
       };
     } catch (err) {
