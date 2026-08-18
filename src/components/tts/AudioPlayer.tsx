@@ -116,12 +116,6 @@ export function AudioPlayer({
   const showBar = isActive || isPaused || generating || !!error;
   if (!showBar) return null;
 
-  // 估算剩余时间
-  const estimatedTotal = totalParagraphs > 0 && currentParagraph > 0
-    ? (elapsed / currentParagraph) * totalParagraphs
-    : 0;
-  const remaining = Math.max(0, estimatedTotal - elapsed);
-
   return (
     <div className="fixed bottom-0 left-0 right-0 z-40 bg-background/95 backdrop-blur border-t shadow-lg safe-area-bottom">
       {/* 生成进度 */}
@@ -206,7 +200,7 @@ export function AudioPlayer({
                   style={{ width: `${(currentParagraph / totalParagraphs) * 100}%` }} />
               </div>
               <span className="text-[10px] text-muted-foreground shrink-0">
-                {formatTime(elapsed)}{remaining > 0 ? ` / -${formatTime(remaining)}` : ""}
+                {formatTime(elapsed)}{totalParagraphs > 0 ? ` (${Math.round((currentParagraph / totalParagraphs) * 100)}%)` : ""}
               </span>
             </div>
           )}
