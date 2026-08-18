@@ -25,12 +25,6 @@ interface SummaryState {
   summaries: SummaryItem[];
   isGenerating: boolean;
   generateProgress: { current: number; total: number } | null;
-  /** 内部缓存版本号，每次修改 summaries 时递增 */
-  _cacheVersion: number;
-  /** 缓存存储（移至 store 内，避免 HMR 时重置） */
-  _novelCache: CacheEntry<SummaryItem[]> | null;
-  _chapterCache: CacheEntry<SummaryItem[]> | null;
-  _globalCache: CacheEntry<SummaryItem[]> | null;
   addSummary: (summary: SummaryItem) => void;
   setSummaries: (summaries: SummaryItem[] | ((prev: SummaryItem[]) => SummaryItem[])) => void;
   setGenerating: (generating: boolean) => void;
@@ -40,17 +34,25 @@ interface SummaryState {
   getGlobalSummaries: () => SummaryItem[];
 }
 
+/**
+ * 纯内存查询缓存（非响应式）。
+ * 这些缓存仅用于避免重复 filter，不参与 React 渲染；
+ * 必须放在 store 状态之外，否则在渲染期间调用 getter 触发 set()
+ * 会导致 React 报 "Cannot update a component while rendering"。
+ */
+let _cacheVersion = 0;
+let _novelCache: CacheEntry<SummaryItem[]> | null = null;
+let _chapterCache: CacheEntry<SummaryItem[]> | null = null;
+let _globalCache: CacheEntry<SummaryItem[]> | null = null;
+
 export const useSummaryStore = create<SummaryState>((set, get) => ({
   summaries: [],
   isGenerating: false,
   generateProgress: null,
-  _cacheVersion: 0,
-  _novelCache: null,
-  _chapterCache: null,
-  _globalCache: null,
 
   addSummary: (summary) =>
     set((s) => {
+      _cacheVersion += 1;
       const filtered = s.summaries.filter(
         (item) =>
           !(
@@ -59,13 +61,13 @@ export const useSummaryStore = create<SummaryState>((set, get) => ({
             item.type === summary.type
           )
       );
-      return { summaries: [...filtered, summary], _cacheVersion: s._cacheVersion + 1 };
+      return { summaries: [...filtered, summary] };
     }),
 
-  setSummaries: (summaries) => set((s) => ({
-    _cacheVersion: s._cacheVersion + 1,
-    summaries: typeof summaries === "function" ? summaries(s.summaries) : summaries,
-  })),
+  setSummaries: (summaries) => set((s) => {
+    _cacheVersion += 1;
+    return { summaries: typeof summaries === "function" ? summaries(s.summaries) : summaries };
+  }),
 
   setGenerating: (generating) => set({ isGenerating: generating }),
 
@@ -73,33 +75,33 @@ export const useSummaryStore = create<SummaryState>((set, get) => ({
 
   getSummariesByChapter: (chapterId) => {
     const state = get();
-    if (state._chapterCache && state._chapterCache.version === state._cacheVersion && state._chapterCache.key === chapterId) {
-      return state._chapterCache.result;
+    if (_chapterCache && _chapterCache.version === _cacheVersion && _chapterCache.key === chapterId) {
+      return _chapterCache.result;
     }
     const result = state.summaries.filter((s) => s.chapterId === chapterId);
-    set({ _chapterCache: { version: state._cacheVersion, key: chapterId, result } });
+    _chapterCache = { version: _cacheVersion, key: chapterId, result };
     return result;
   },
 
   getSummariesByNovel: (novelId) => {
     const state = get();
-    if (state._novelCache && state._novelCache.version === state._cacheVersion && state._novelCache.key === novelId) {
-      return state._novelCache.result;
+    if (_novelCache && _novelCache.version === _cacheVersion && _novelCache.key === novelId) {
+      return _novelCache.result;
     }
     const result = state.summaries.filter((s) => s.novelId === novelId);
-    set({ _novelCache: { version: state._cacheVersion, key: novelId, result } });
+    _novelCache = { version: _cacheVersion, key: novelId, result };
     return result;
   },
 
   getGlobalSummaries: () => {
     const state = get();
-    if (state._globalCache && state._globalCache.version === state._cacheVersion) {
-      return state._globalCache.result;
+    if (_globalCache && _globalCache.version === _cacheVersion) {
+      return _globalCache.result;
     }
     const result = state.summaries.filter(
       (s) => s.type === "global" || s.type === "timeline" || s.type === "characters"
     );
-    set({ _globalCache: { version: state._cacheVersion, key: "global", result } });
+    _globalCache = { version: _cacheVersion, key: "global", result };
     return result;
   },
 }));
