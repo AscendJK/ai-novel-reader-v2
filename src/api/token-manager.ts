@@ -1,4 +1,5 @@
-// Rough token estimation: ~1 token per 1.5 Chinese chars, ~1 token per 3.5 English chars
+// Rough token estimation: ~1 token per Chinese char, ~1 token per 3.5 English chars
+// 中文按 1 字 ≈ 1 token（接近 Qwen/主流中文 tokenizer 的真实值，偏保守安全）
 export function estimateTokens(text: string): number {
   let chineseChars = 0;
   let otherChars = 0;
@@ -13,7 +14,7 @@ export function estimateTokens(text: string): number {
     }
   }
 
-  return Math.ceil(chineseChars / 1.5 + otherChars / 3.5);
+  return Math.ceil(chineseChars + otherChars / 3.5);
 }
 
 export interface TokenBudget {
@@ -58,6 +59,11 @@ const MODEL_LIMITS: Record<string, TokenBudget> = {
   "qwen-max": { maxInputTokens: 128000, maxOutputTokens: 6000 },
   "qwen-long": { maxInputTokens: 10000000, maxOutputTokens: 6000 },
   "qwen2.5": { maxInputTokens: 128000, maxOutputTokens: 8192 },
+
+  // ── ModelScope 开源 Qwen3 系列（原生上下文 32768，YaRN 可扩 131072）──
+  // 注意：大小写敏感前缀匹配，大写 "Qwen/" 不会误匹配上面的小写 qwen 条目
+  "Qwen/Qwen3-8B": { maxInputTokens: 32768, maxOutputTokens: 8192 },
+  "Qwen/Qwen3": { maxInputTokens: 32768, maxOutputTokens: 8192 },
 
   // ── 智谱 GLM ──
   "glm-4": { maxInputTokens: 128000, maxOutputTokens: 4096 },

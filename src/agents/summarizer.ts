@@ -26,7 +26,8 @@ class SummarizerAgent extends BaseAgent {
 
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider, budget } = env;
-    const maxChapterChars = Math.floor(budget.maxInputTokens * 0.5 * 3); // 50% of budget, ~3 chars per token
+    // 内容占输入预算的 50%；中文约 1 字 = 1 token（与 estimateTokens 一致）
+    const maxChapterChars = Math.floor(budget.maxInputTokens * 0.5);
 
     const targetChapterIds = context.chapterIds || novel.chapters.map((c) => c.id);
     const chapters = novel.chapters.filter((c) => targetChapterIds.includes(c.id));

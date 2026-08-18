@@ -67,7 +67,7 @@ ${relevantContent}
           { role: "system", content: "你是一个JSON数据生成器。只输出JSON，不要任何解释文字。" },
           { role: "user", content: usePrompt },
         ],
-        max_tokens: 16384,
+        max_tokens: 8192, // 匹配常见模型输出上限（Qwen3-8B 为 8192；图谱 JSON 通常 2-4k tokens）
         temperature: 0.3,
         signal: context.signal,
       });
