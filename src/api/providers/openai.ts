@@ -2,6 +2,7 @@ import type { AIProvider, ChatCompletionRequest, ChatCompletionResponse, Provide
 import { APIError, handleFetchError } from "../error-handler";
 import { apiFetch } from "@/lib/api-client";
 import { useUIStore } from "@/stores/ui-store";
+import { readSSEData } from "./stream";
 
 export function createOpenAIProvider(config: ProviderConfig): AIProvider {
   const baseUrl = config.baseUrl || "https://api.openai.com/v1";
@@ -12,6 +13,7 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
       messages: req.messages,
       max_tokens: req.max_tokens ?? config.maxTokens ?? 2048,
       temperature: req.temperature ?? 0.7,
+      stream: true, // 部分 API（如 ModelScope）强制要求流式，非流式会返回空壳响应
     };
   }
 
@@ -39,8 +41,62 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
     });
   }
 
+  /** 解析 OpenAI 格式的流式 SSE 响应，聚合 delta.content */
+  async function parseStreamedResponse(response: Response): Promise<ChatCompletionResponse> {
+    const { events, raw } = await readSSEData(response);
+    let content = "";
+    let inputTokens = 0;
+    let outputTokens = 0;
+
+    for (const evt of events) {
+      const e = evt as Record<string, unknown>;
+      // 流中可能嵌入错误块
+      if (e.error) {
+        const errBody = typeof e.error === "string" ? e.error : JSON.stringify(e.error);
+        throw new APIError(`API 返回错误：${errBody}`, "server", 200, raw);
+      }
+      const choices = e.choices as
+        | Array<{ delta?: { content?: unknown }; message?: { content?: unknown } }>
+        | null
+        | undefined;
+      if (choices?.[0]) {
+        const deltaContent = choices[0].delta?.content;
+        if (typeof deltaContent === "string") content += deltaContent;
+        // 兼容某些 API 流式返回 message.content 而非 delta.content
+        const msgContent = choices[0].message?.content;
+        if (typeof msgContent === "string" && !content) content = msgContent;
+      }
+      const usage = e.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined;
+      if (usage) {
+        inputTokens = usage.prompt_tokens || 0;
+        outputTokens = usage.completion_tokens || 0;
+      }
+    }
+
+    // 流式结束后内容为空 → 抛错（避免静默返回空白结果）
+    if (!content.trim()) {
+      throw new APIError(
+        `API 返回了空结果（流式响应无内容）。可能原因：模型名称不存在或无权访问、请求参数不被支持。原始响应：${raw.slice(0, 300)}`,
+        "server",
+        200,
+        raw
+      );
+    }
+
+    return {
+      content,
+      tokensUsed: { input: inputTokens, output: outputTokens, total: inputTokens + outputTokens },
+    };
+  }
+
   async function parseResponse(response: Response): Promise<ChatCompletionResponse> {
     if (!response.ok) await handleFetchError(response);
+    // 流式响应（SSE）与普通 JSON 响应分流
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("text/event-stream")) {
+      return parseStreamedResponse(response);
+    }
+
     const raw = await response.text();
     let data: Record<string, unknown>;
     try {

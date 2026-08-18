@@ -2,6 +2,7 @@ import type { AIProvider, ChatCompletionRequest, ChatCompletionResponse, Provide
 import { APIError, handleFetchError } from "../error-handler";
 import { apiFetch } from "@/lib/api-client";
 import { useUIStore } from "@/stores/ui-store";
+import { readSSEData } from "./stream";
 
 export function createAnthropicProvider(config: ProviderConfig): AIProvider {
   const baseUrl = config.baseUrl || "https://api.anthropic.com/v1";
@@ -25,6 +26,7 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
       model: config.model || req.model || "claude-sonnet-4-6",
       max_tokens: req.max_tokens ?? config.maxTokens ?? 2048,
       messages,
+      stream: true, // 统一使用流式，避免部分 API 非流式返回空壳
     };
     if (systemPrompt) body.system = systemPrompt;
     return body;
@@ -58,8 +60,62 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
     });
   }
 
+  /** 解析 Anthropic 格式的流式 SSE 响应，聚合 content_block_delta 事件中的 text */
+  async function parseStreamedResponse(response: Response): Promise<ChatCompletionResponse> {
+    const { events, raw } = await readSSEData(response);
+    let content = "";
+    let inputTokens = 0;
+    let outputTokens = 0;
+
+    for (const evt of events) {
+      const e = evt as Record<string, unknown>;
+      // Anthropic 流式错误块
+      if (e.type === "error") {
+        const err = e.error as Record<string, unknown> | undefined;
+        const msg = typeof err?.message === "string" ? err.message : JSON.stringify(e);
+        throw new APIError(`API 返回错误：${msg}`, "server", 200, raw);
+      }
+      // 文本增量
+      if (e.type === "content_block_delta") {
+        const delta = e.delta as Record<string, unknown> | undefined;
+        if (typeof delta?.text === "string") content += delta.text;
+      }
+      // 用量统计
+      if (e.type === "message_start") {
+        const msg = e.message as Record<string, unknown> | undefined;
+        const usage = msg?.usage as Record<string, unknown> | undefined;
+        inputTokens = typeof usage?.input_tokens === "number" ? usage.input_tokens : 0;
+      }
+      if (e.type === "message_delta") {
+        const usage = e.usage as Record<string, unknown> | undefined;
+        outputTokens = typeof usage?.output_tokens === "number" ? usage.output_tokens : 0;
+      }
+    }
+
+    // 流式结束后内容为空 → 抛错（避免静默返回空白结果）
+    if (!content.trim()) {
+      throw new APIError(
+        `API 返回了空结果（流式响应无内容）。可能原因：模型名称不存在或无权访问、请求参数不被支持。原始响应：${raw.slice(0, 300)}`,
+        "server",
+        200,
+        raw
+      );
+    }
+
+    return {
+      content,
+      tokensUsed: { input: inputTokens, output: outputTokens, total: inputTokens + outputTokens },
+    };
+  }
+
   async function parseResponse(response: Response): Promise<ChatCompletionResponse> {
     if (!response.ok) await handleFetchError(response);
+    // 流式响应（SSE）与普通 JSON 响应分流
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("text/event-stream")) {
+      return parseStreamedResponse(response);
+    }
+
     const raw = await response.text();
     let data: Record<string, unknown>;
     try {
