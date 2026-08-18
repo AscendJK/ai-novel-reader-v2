@@ -46,6 +46,9 @@ export function VersionMismatchDialog({
         <p className="text-xs text-muted-foreground leading-relaxed">
           前后端版本不一致可能导致同步、AI 分析等功能异常。建议重启后端服务器以应用最新版本，或重新构建部署前端。
         </p>
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          可前往 <a href="https://github.com/AscendJK/ai-novel-reader-v2/releases" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">GitHub Releases</a> 下载最新后端包，解压覆盖原项目目录即可。
+        </p>
 
         <div className="flex justify-end gap-2">
           <Button size="sm" variant="outline" onClick={onClose}>
