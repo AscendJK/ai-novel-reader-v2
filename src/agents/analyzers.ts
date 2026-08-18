@@ -51,7 +51,6 @@ ${relevantContent}
 5. **人物重要性评估**：按剧情推动作用排序，说明每个角色对主线的影响`;
 
     const estimatedInput = estimateTokens(prompt);
-    const estimatedInput = estimateTokens(prompt);
     const usedFallback = estimatedInput >= computeAvailableInput(budget, 4096);
     let effectiveFallback = usedFallback;
 
