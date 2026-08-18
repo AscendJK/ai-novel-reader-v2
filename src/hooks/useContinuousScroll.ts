@@ -256,6 +256,9 @@ export function useContinuousScroll({
       if (hasRestoredRef.current) return;
       hasRestoredRef.current = true;
       restoreTargetRef.current = null;
+      // 恢复目标即当前章节，先同步检测基准（否则解锁后检测从 null 开始，
+      // 会误选懒加载窗口起点的章节导致倒退 ~10 章）
+      lastDetectedChapterRef.current = targetChapterId;
       scrollToChapterRef.current(targetChapterId, targetOffset);
       // 恢复完成后解锁检测，并主动触发一次（延迟足够让 scrollTop 生效）
       setTimeout(() => {
@@ -352,9 +355,28 @@ export function useContinuousScroll({
           closestId = el.getAttribute("data-chapter-id");
         }
       }
-      if (!closestId && markerCount > 0) {
-        closestId = cachedMarkers[0].getAttribute("data-chapter-id");
+
+      // 相邻 3 个找不到（首次检测或大幅跳转）：全量搜索视口内/上方最近的章节。
+      // ⚠️ 不能 fallback 到 markers[0]——懒加载窗口起点不是当前章节，
+      // 否则位置恢复后会误选窗口起点章节（倒退约 10 章）。
+      if (!closestId) {
+        for (let i = 0; i < markerCount; i++) {
+          const el = cachedMarkers[i];
+          const rect = el.getBoundingClientRect();
+          // 视口检测区内的章节优先
+          if (rect.top >= zoneTop && rect.top <= zoneBottom) {
+            closestId = el.getAttribute("data-chapter-id");
+            break;
+          }
+          const dist = zoneTop - rect.top;
+          if (dist >= 0 && dist < closestDist) {
+            closestDist = dist;
+            closestId = el.getAttribute("data-chapter-id");
+          }
+        }
       }
+
+      // 仍找不到（视口在所有章节上方等边缘情况）：保持当前章节不变
       if (closestId && closestId !== lastDetectedChapterRef.current) {
         lastDetectedChapterRef.current = closestId;
         onChapterChangeRef.current(closestId);
