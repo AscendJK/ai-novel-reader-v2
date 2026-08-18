@@ -160,10 +160,9 @@ export class EmbeddingRetriever {
       ragLog("检查服务器索引状态...");
       const statusCheck = await apiFetch(`/api/rag/${novelId}/status?engine=${encodeURIComponent(this.engine)}`);
       if (!statusCheck.ok) {
-        ragLog(`服务器状态查询失败: HTTP ${statusCheck.status}`);
-        onProgress?.({ phase: "done" });
-        return;
-      }
+      	        ragLog(`服务器状态查询失败: HTTP ${statusCheck.status}`);
+      	        return;
+      	      }
       const statusData = (await statusCheck.json()) as { status?: string };
 
       // 如果服务器已有索引，直接下载
@@ -198,11 +197,11 @@ export class EmbeddingRetriever {
       }
       onProgress?.({ phase: "done" });
     } catch (serverErr) {
-      // 本地没有缓存且服务器不可达，无法获取嵌入索引
-      // init() 返回后，buildIndex 中的 TF-IDF 检索作为替代方案
-      ragLog(`无法连接服务器获取嵌入索引: ${serverErr}`);
-      onProgress?.({ phase: "done" });
-    }
+    	      // 本地没有缓存且服务器不可达，无法获取嵌入索引
+    	      // init() 返回后，buildIndex 中的 TF-IDF 检索作为替代方案
+    	      ragLog(`无法连接服务器获取嵌入索引: ${serverErr}`);
+    	      // 不触发 onProgress，调用方应通过 vectors.length === 0 判断
+    	    }
   }
 
   async search(query: string, topK: number = 15): Promise<{ chunk: Chunk; score: number }[]> {

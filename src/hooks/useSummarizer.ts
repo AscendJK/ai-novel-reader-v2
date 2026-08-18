@@ -189,39 +189,41 @@ export function useSummarizer() {
 
   const saveChapterSummary = useCallback(
     async (chapterId: string, result: { success: boolean; data?: unknown; error?: string; tokensUsed?: number }) => {
-      if (!currentNovel || !result.success || !result.data) return;
+      const novel = useNovelStore.getState().currentNovel;
+      if (!novel || !result.success || !result.data) return;
       const data = result.data as { summaries: { chapterTitle: string; content: string; tokens: number }[] };
       for (const s of data.summaries) {
         // Reuse existing ID for same (novelId, chapterId, type) — server upserts by ID, can't signal deletes
-        const existing = await getUserDB().summaries.where({ novelId: currentNovel.id, chapterId, type: "chapter" }).first();
+        const existing = await getUserDB().summaries.where({ novelId: novel.id, chapterId, type: "chapter" }).first();
         const summary: SummaryItem = {
-          id: existing?.id || uuid(), novelId: currentNovel.id, chapterId,
+          id: existing?.id || uuid(), novelId: novel.id, chapterId,
           chapterTitle: s.chapterTitle, content: s.content,
           tokensUsed: s.tokens, createdAt: existing?.createdAt || Date.now(), updatedAt: Date.now(), type: "chapter",
         };
-        addSummary(summary);
         await saveSummary(summary);
+        addSummary(summary);
       }
     },
-    [currentNovel, addSummary]
+    [addSummary]
   );
 
   const saveGlobalSummary = useCallback(
     async (result: { success: boolean; data?: unknown; error?: string; tokensUsed?: number }, type: SummaryItem["type"], title: string, chapterId: string) => {
-      if (!currentNovel || !result.success || !result.data) return;
+      const novel = useNovelStore.getState().currentNovel;
+      if (!novel || !result.success || !result.data) return;
       const data = result.data as { content: string; usedFallback?: boolean };
       // Reuse existing ID for same (novelId, chapterId, type) — server upserts by ID, can't signal deletes
-      const existing = await getUserDB().summaries.where({ novelId: currentNovel.id, chapterId, type }).first();
+      const existing = await getUserDB().summaries.where({ novelId: novel.id, chapterId, type }).first();
       const summary: SummaryItem = {
-        id: existing?.id || uuid(), novelId: currentNovel.id, chapterId,
+        id: existing?.id || uuid(), novelId: novel.id, chapterId,
         chapterTitle: title + (data.usedFallback ? "（精简版）" : ""),
         content: data.content, tokensUsed: result.tokensUsed || 0, createdAt: existing?.createdAt || Date.now(), updatedAt: Date.now(), type,
         usedFallback: data.usedFallback,
       };
-      addSummary(summary);
       await saveSummary(summary);
+      addSummary(summary);
     },
-    [currentNovel, addSummary]
+    [addSummary]
   );
 
   // --- 通用 Agent 任务执行器（薄封装：注入 React 状态回调 + 复用纯逻辑层）---

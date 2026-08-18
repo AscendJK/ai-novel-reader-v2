@@ -250,7 +250,7 @@ export function BookSelect() {
     }
   }, [buildStatuses, cachedKeys, engine, savedNovels]);
 
-  const handleBuild = async (novelId: string) => {
+  const handleBuild = useCallback(async (novelId: string) => {
     // Capture the engine at build start so polling stays consistent even if user switches engines
     const buildEngine = engine;
 
@@ -293,10 +293,10 @@ export function BookSelect() {
       const message = err instanceof Error ? err.message : "构建失败";
       useBuildStore.getState().failBuild(novelId, buildEngine, message);
     }
-  };
+  }, [engine, setBuildStatuses]);
 
   // Scan server novel library on demand
-  const scanServer = async () => {
+  const scanServer = useCallback(async () => {
     setScanning(true);
     try {
       const username = localStorage.getItem("sync-username");
@@ -313,10 +313,10 @@ export function BookSelect() {
       setServerScanned(true);
     } catch { /* server unreachable */ }
     finally { setScanning(false); }
-  };
+  }, []);
 
   // Join a server novel (download chapters + register on server)
-  const handleJoinNovel = async (novel: ServerNovel) => {
+  const handleJoinNovel = useCallback(async (novel: ServerNovel) => {
     setJoiningId(novel.id);
     try {
       const chResp = await apiFetch(`/api/novels/${novel.id}/chapters`);
@@ -346,7 +346,7 @@ export function BookSelect() {
       setServerNovels((prev) => prev.map((n) => n.id === novel.id ? { ...n, joined: true } : n));
     } catch (e) { console.error("join failed:", e); }
     finally { setJoiningId(null); }
-  };
+  }, [addNovel]);
 
   const processFiles = useCallback(
     async (files: File[]) => {
@@ -473,7 +473,7 @@ export function BookSelect() {
     [processFiles]
   );
 
-  const handleDelete = async (e: React.MouseEvent, novelId: string, title: string) => {
+  const handleDelete = useCallback(async (e: React.MouseEvent, novelId: string, title: string) => {
     e.stopPropagation();
     if (!window.confirm(`从书架移除《${title}》？\n\n将删除你关于此书的所有数据：\n- AI 总结和分析\n- 人物关系图谱\n- 笔记\n- 阅读进度\n\n小说本身仍保留在服务器书库中。`)) return;
     apiFetch(`/api/novels/${novelId}/leave`, {
@@ -483,7 +483,7 @@ export function BookSelect() {
     useNovelStore.getState().removeNovel(novelId);
     setSavedNovels((prev) => prev.filter((n) => n.id !== novelId));
     setServerNovels((prev) => prev.map((n) => n.id === novelId ? { ...n, joined: false } : n));
-  };
+  }, []);
 
   const loading = isParsing || batchParsing;
 
