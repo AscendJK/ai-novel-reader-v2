@@ -24,6 +24,7 @@ interface NovelState {
   novels: Novel[];
   selectedChapterId: string | null;
   readingPositions: Record<string, ReadPosition>;
+  lastOpenedVersion: number; // 每次打开小说时递增，用于书架排序响应
   setCurrentNovel: (novel: Novel | null) => void;
   setSelectedChapter: (chapterId: string | null, scrollTop?: number) => void;
   addNovel: (novel: Novel) => void;
@@ -58,6 +59,7 @@ export const useNovelStore = create<NovelState>((set, get) => ({
   novels: [],
   selectedChapterId: null,
   readingPositions: loadPositions(),
+  lastOpenedVersion: 0,
 
   setCurrentNovel: (novel) => {
     if (novel) {
@@ -89,6 +91,7 @@ export const useNovelStore = create<NovelState>((set, get) => ({
         currentNovel: novel,
         selectedChapterId: selectedId,
         readingPositions: positions,
+        lastOpenedVersion: get().lastOpenedVersion + 1,
       });
     } else {
       set({ currentNovel: null, selectedChapterId: null });

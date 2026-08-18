@@ -53,6 +53,7 @@ export function BookSelect() {
   const setCurrentNovel = useNovelStore((s) => s.setCurrentNovel);
   const readingPositions = useNovelStore((s) => s.readingPositions);
   const addNovel = useNovelStore((s) => s.addNovel);
+  const lastOpenedVersion = useNovelStore((s) => s.lastOpenedVersion);
   const [savedNovels, setSavedNovels] = useState<NovelMeta[]>([]);
   const [serverNovels, setServerNovels] = useState<ServerNovel[]>([]);
   const [joiningId, setJoiningId] = useState<string | null>(null);
@@ -74,18 +75,20 @@ export function BookSelect() {
   }, []);
 
   useEffect(() => {
-    // 只有在用户登录后才加载数据
-    const username = localStorage.getItem("sync-username");
-    if (!username) return;
-
-    loadAllNovelMeta().then((novels) => {
-      const lastOpened = getLastOpenedTimes();
-      novels.sort((a, b) => (lastOpened[b.id] || 0) - (lastOpened[a.id] || 0));
-      setSavedNovels(novels);
-    }).catch((err) => {
-      console.error("loadAllNovelMeta failed:", err);
-    });
-  }, []);
+  	    // 只有在用户登录后才加载数据
+  	    const username = localStorage.getItem("sync-username");
+  	    if (!username) return;
+  	    let active = true;
+  	    loadAllNovelMeta().then((novels) => {
+  	      if (!active) return;
+  	      const lastOpened = getLastOpenedTimes();
+  	      novels.sort((a, b) => (lastOpened[b.id] || 0) - (lastOpened[a.id] || 0));
+  	      setSavedNovels(novels);
+  	    }).catch((err) => {
+  	      console.error("loadAllNovelMeta failed:", err);
+  	    });
+  	    return () => { active = false; };
+  	  }, [lastOpenedVersion]);
 
   const filteredNovels = useMemo(() => {
     if (!searchQuery.trim()) return savedNovels;
