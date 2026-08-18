@@ -3,6 +3,7 @@ import { APIError, handleFetchError } from "../error-handler";
 import { apiFetch } from "@/lib/api-client";
 import { useUIStore } from "@/stores/ui-store";
 import { readSSEData } from "./stream";
+import { estimateTokens } from "../token-manager";
 
 export function createOpenAIProvider(config: ProviderConfig): AIProvider {
   const baseUrl = config.baseUrl || "https://api.openai.com/v1";
@@ -86,7 +87,7 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
 
     return {
       content,
-      tokensUsed: { input: inputTokens, output: outputTokens, total: inputTokens + outputTokens },
+      tokensUsed: { input: inputTokens, output: outputTokens, total: inputTokens + outputTokens || estimateTokens(content) },
     };
   }
 
@@ -133,7 +134,7 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
       tokensUsed: {
         input: (data.usage as { prompt_tokens?: number } | undefined)?.prompt_tokens || 0,
         output: (data.usage as { completion_tokens?: number } | undefined)?.completion_tokens || 0,
-        total: (data.usage as { total_tokens?: number } | undefined)?.total_tokens || 0,
+        total: (data.usage as { total_tokens?: number } | undefined)?.total_tokens || estimateTokens(content),
       },
     };
   }
