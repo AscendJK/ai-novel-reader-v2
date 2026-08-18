@@ -7,6 +7,7 @@ import { useState, useCallback } from "react";
 import { loadNotes, saveNote, deleteNote } from "@/db/repositories";
 import type { NoteItem } from "@/db/repositories";
 import { syncClient } from "@/sync/sync-client";
+import { uuid } from "@/parsers/utils";
 
 interface UseNotesOptions {
   /** 小说 ID */
@@ -97,7 +98,7 @@ export function useNotes({
         : "全书笔记";
 
       const note: NoteItem = {
-        id: crypto.randomUUID(),
+        id: uuid(),
         novelId,
         chapterId,
         chapterTitle,

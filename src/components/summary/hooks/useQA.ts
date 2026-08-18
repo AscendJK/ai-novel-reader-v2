@@ -7,6 +7,8 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { create } from "zustand";
 
+import { uuid } from "@/parsers/utils";
+
 interface QAMessage {
   id: string;
   role: "user" | "assistant";
@@ -134,7 +136,7 @@ export function useQA({ novelId, askCustomQuestion, generateRangeSummary, clearQ
   }, [novelId, store]);
 
   const addMessage = useCallback((role: "user" | "assistant", content: string, tokensUsed?: number) => {
-    const message: QAMessage = { id: crypto.randomUUID(), role, content, tokensUsed };
+    const message: QAMessage = { id: uuid(), role, content, tokensUsed };
     setQaMessages((prev) => [message, ...prev]);
   }, [setQaMessages]);
 

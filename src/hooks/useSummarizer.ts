@@ -20,6 +20,7 @@ import { syncClient } from "@/sync/sync-client";
 import { addDebugEntry } from "@/lib/debug-store";
 import { ragLog } from "@/lib/logger";
 import { setAiRunning } from "@/lib/ai-state";
+import { uuid } from "@/parsers/utils";
 
 export interface GraphData {
   nodes: { id: string; group: string; description: string }[];
@@ -194,7 +195,7 @@ export function useSummarizer() {
         // Reuse existing ID for same (novelId, chapterId, type) — server upserts by ID, can't signal deletes
         const existing = await getUserDB().summaries.where({ novelId: currentNovel.id, chapterId, type: "chapter" }).first();
         const summary: SummaryItem = {
-          id: existing?.id || crypto.randomUUID(), novelId: currentNovel.id, chapterId,
+          id: existing?.id || uuid(), novelId: currentNovel.id, chapterId,
           chapterTitle: s.chapterTitle, content: s.content,
           tokensUsed: s.tokens, createdAt: existing?.createdAt || Date.now(), updatedAt: Date.now(), type: "chapter",
         };
@@ -212,7 +213,7 @@ export function useSummarizer() {
       // Reuse existing ID for same (novelId, chapterId, type) — server upserts by ID, can't signal deletes
       const existing = await getUserDB().summaries.where({ novelId: currentNovel.id, chapterId, type }).first();
       const summary: SummaryItem = {
-        id: existing?.id || crypto.randomUUID(), novelId: currentNovel.id, chapterId,
+        id: existing?.id || uuid(), novelId: currentNovel.id, chapterId,
         chapterTitle: title + (data.usedFallback ? "（精简版）" : ""),
         content: data.content, tokensUsed: result.tokensUsed || 0, createdAt: existing?.createdAt || Date.now(), updatedAt: Date.now(), type,
         usedFallback: data.usedFallback,
@@ -523,7 +524,7 @@ ${combinedText}`;
         }
 
         return {
-          id: crypto.randomUUID(),
+          id: uuid(),
           title: `第${fromChapter}-${toChapter}章 范围总结`,
           content: response.content,
           tokensUsed: response.content.length,

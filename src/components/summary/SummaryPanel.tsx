@@ -8,6 +8,7 @@ import { getEngineDisplayName, isEmbeddingEngine } from "@/rag/engines";
 import { apiFetch } from "@/lib/api-client";
 import { useSummaryStore } from "@/stores/summary-store";
 import { useSummarizer } from "@/hooks/useSummarizer";
+import { uuid } from "@/parsers/utils";
 import type { GraphData } from "@/hooks/useSummarizer";
 import type { MapData } from "@/agents/types";
 import { TaskType } from "@/agents/types";
@@ -198,7 +199,7 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
       const finalChapterId = isBook ? "__book__" : (chapterId || "__book__");
       const chTitle = isBook ? "全书笔记" : currentNovel.chapters.find((c) => c.id === chapterId)?.title || title;
       const note: NoteItem = {
-        id: crypto.randomUUID(),
+        id: uuid(),
         novelId: currentNovel.id,
         chapterId: finalChapterId,
         chapterTitle: chTitle,
