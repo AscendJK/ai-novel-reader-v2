@@ -162,7 +162,7 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
       const { AutoModel, AutoTokenizer, env } = transformers;
 
       env.allowRemoteModels = true;
-      env.useBrowserCache = true;
+      env.useBrowserCache = typeof caches !== 'undefined' && typeof caches.open === 'function';
 
       // 通过 remoteHost 让 transformers.js 所有请求发到后端代理
       const serverUrl = getServerUrl();
@@ -297,7 +297,7 @@ export async function setupModelLoader(): Promise<void> {
     const transformers = await import("@xenova/transformers");
     const { env } = transformers;
     env.allowRemoteModels = true;
-    env.useBrowserCache = true;
+    env.useBrowserCache = typeof caches !== 'undefined' && typeof caches.open === 'function';
     env.allowLocalModels = false; // public/models 为空，不检查本地路径
     // 有 serverUrl 时设置 remoteHost，让 transformers.js 请求后端代理
     const serverUrl = getServerUrl();
