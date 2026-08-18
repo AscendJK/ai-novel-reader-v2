@@ -4,9 +4,10 @@
  */
 
 import { useState, useEffect } from "react";
-import { Clock, Users, BookOpen } from "lucide-react";
+import { Clock, Users, BookOpen, Network } from "lucide-react";
 import { SubItem } from "../shared/SubItem";
 import { NovelMapSection } from "../shared/NovelMapSection";
+import { CharacterGraphSection } from "../shared/CharacterGraphSection";
 import type { SummaryItem } from "@/stores/summary-store";
 import type { GraphData } from "@/hooks/useSummarizer";
 import type { MapData } from "@/agents/types";
@@ -35,6 +36,8 @@ interface BookTabProps {
   globalLoading?: boolean;
   /** 地图是否正在加载 */
   mapLoading?: boolean;
+  /** 图谱是否正在加载 */
+  graphLoading?: boolean;
   /** 图谱数据 */
   characterGraphData: GraphData | null;
   /** 生成时间线 */
@@ -73,6 +76,7 @@ export function BookTab({
   characterLoading = false,
   globalLoading = false,
   mapLoading = false,
+  graphLoading = false,
   characterGraphData,
   onGenerateTimeline,
   onRegenerateTimeline,
@@ -135,7 +139,7 @@ export function BookTab({
         emptyLabel="生成剧情时间线"
       />
 
-      {/* 全书人物关系 */}
+      {/* 全书人物关系（文字分析） */}
       <SubItem
         label="全书人物关系"
         icon={<Users className="h-3 w-3" />}
@@ -147,9 +151,17 @@ export function BookTab({
         loading={loading}
         selfLoading={characterLoading}
         emptyLabel="生成人物关系分析"
+      />
+
+      {/* 人物关系分析图（独立入口，永远可见） */}
+      <CharacterGraphSection
+        isOpen={bookSub === "graph"}
+        onClick={() => setBookSub(bookSub === "graph" ? null : "graph")}
+        loading={loading}
+        selfLoading={graphLoading}
         graphData={characterGraphData}
-        onGenerateGraph={onGenerateGraph}
-        onRegenerateGraph={onRegenerateGraph}
+        onGenerate={onGenerateGraph}
+        onRegenerate={onRegenerateGraph}
       />
 
       {/* 全书总览 */}

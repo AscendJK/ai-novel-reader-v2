@@ -99,7 +99,8 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
 
   // 判断各个功能是否正在执行（使用 TaskType 常量匹配，不依赖中文字符串）
   const isTimelineRunning = isRunning && currentTaskType === TaskType.TIMELINE;
-  const isCharacterRunning = isRunning && (currentTaskType === TaskType.CHARACTER || currentTaskType === TaskType.GRAPH);
+  const isCharacterRunning = isRunning && currentTaskType === TaskType.CHARACTER;
+  const isGraphRunning = isRunning && currentTaskType === TaskType.GRAPH;
   const isGlobalRunning = isRunning && currentTaskType === TaskType.GLOBAL;
   const isMapRunning = isRunning && currentTaskType === TaskType.MAP;
 
@@ -362,6 +363,7 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
               characterLoading={isCharacterRunning}
               globalLoading={isGlobalRunning}
               mapLoading={isMapRunning}
+              graphLoading={isGraphRunning}
               characterGraphData={characterGraphData}
               onGenerateTimeline={generateTimeline}
               onRegenerateTimeline={regenerateTimeline}

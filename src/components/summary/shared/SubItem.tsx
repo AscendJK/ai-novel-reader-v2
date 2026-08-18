@@ -6,9 +6,7 @@
 import type { ReactNode } from "react";
 import { ChevronDown, ChevronRight, RefreshCw, FileText, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { CharacterGraph } from "../CharacterGraph";
 import { MiniCard } from "./MiniCard";
-import type { GraphData } from "@/hooks/useSummarizer";
 
 interface SubItemProps {
   /** 标签文本 */
@@ -39,12 +37,6 @@ interface SubItemProps {
   selfLoading?: boolean;
   /** 空状态提示 */
   emptyLabel: string;
-  /** 图谱数据 */
-  graphData?: GraphData | null;
-  /** 生成图谱 */
-  onGenerateGraph?: () => void;
-  /** 重新生成图谱 */
-  onRegenerateGraph?: () => void;
 }
 
 export function SubItem({
@@ -58,14 +50,10 @@ export function SubItem({
   loading,
   selfLoading,
   emptyLabel,
-  graphData,
-  onGenerateGraph,
-  onRegenerateGraph,
 }: SubItemProps) {
   const showSpinner = selfLoading ?? loading;
   // 空状态：显示生成按钮
-  const isEmptyGraph = !graphData || (graphData.nodes.length === 0 && graphData.edges.length === 0);
-  if (summaries.length === 0 && isEmptyGraph) {
+  if (summaries.length === 0) {
     return (
       <div className="flex items-center gap-1.5">
         <button
@@ -76,15 +64,6 @@ export function SubItem({
           {showSpinner ? <Loader2 className="h-3 w-3 animate-spin" /> : icon}
           {emptyLabel}
         </button>
-        {onGenerateGraph && (
-          <button
-            onClick={onGenerateGraph}
-            disabled={loading}
-            className="text-xs text-muted-foreground hover:text-primary"
-          >
-            | 图谱
-          </button>
-        )}
       </div>
     );
   }
@@ -115,11 +94,6 @@ export function SubItem({
 
       {isOpen && (
         <div className="mt-1 space-y-1.5 pl-4">
-          {/* 图谱 */}
-          {graphData && onRegenerateGraph && (
-            <CharacterGraph graphData={graphData} onRegenerate={onRegenerateGraph} />
-          )}
-
           {/* 总结列表 */}
           {summaries.length > 0 ? (
             summaries.map((s) => (
