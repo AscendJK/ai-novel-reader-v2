@@ -99,7 +99,7 @@ export const ChapterNav = memo(function ChapterNav({ scrollControlRef }: Chapter
   }
 
   return (
-    <div className="md:w-56 w-full shrink-0 flex">
+    <div className="md:w-56 w-full shrink-0 flex h-full">
       <div className="flex-1 flex flex-col min-w-0 h-full">
         <div className="p-4 border-b shrink-0 flex items-center min-h-[85px]">
           <div className="min-w-0">
