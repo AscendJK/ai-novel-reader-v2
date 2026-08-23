@@ -3,8 +3,9 @@ import { useNovelStore } from "@/stores/novel-store";
 import { useSummaryStore } from "@/stores/summary-store";
 import { useUIStore } from "@/stores/ui-store";
 import { useRAGStore } from "@/stores/rag-store";
-import { loadAllNovels, loadSummaries, deleteNovel, cleanupDeletedRecords, deleteUserData } from "@/db/repositories";
+import { loadAllNovels, loadSummaries, cleanupDeletedRecords, deleteUserData } from "@/db/repositories";
 import { getUserDB, setCurrentUser, deleteUserDB } from "@/db/database";
+import { shouldDownloadNovel, shouldDeleteLocalNovel } from "@/sync/novel-reconciliation";
 import { syncClient } from "@/sync/sync-client";
 import { gatherChanges, applyServerData } from "@/sync/sync-bridge";
 import type { SyncData } from "@/sync/types";
@@ -132,17 +133,20 @@ export function useSyncOrchestration({ onSyncReady, setLocalUsers }: SyncOrchest
         if (sn.id === currentNovelId) continue;
         const existsLocally = localNovels.find((l) => l.id === sn.id);
         if (!existsLocally) continue;
-        // 防御：本地已有副本的小说，先尝试恢复 join（join 是幂等的）。
-        // 之前 join 请求是 fire-and-forget（.catch(() => {})），后端重启或网络闪断
-        // 会导致服务器上 joined=false 而本地有完整数据——若直接删除，小说连同
-        // 章节目录/摘要/笔记/地图/图谱会全部丢失且不会重新下载。
-        try {
-          const joinResp = await apiFetch(`/api/novels/${sn.id}/join`, { method: "POST" });
-          if (joinResp.ok) continue; // 恢复成功，保留本地副本
-        } catch { /* 服务器不可达，跳过删除以保护本地数据 */ }
-        // 仅当服务器明确拒绝（如小说已不存在，返回 404）时才删除本地副本
-        await deleteNovel(sn.id).catch(() => {});
-        useNovelStore.getState().removeNovel(sn.id);
+        // 安全策略：本地已有完整数据的小说绝不自动删除。
+        // 历史教训：join 请求是 fire-and-forget，后端重启/网络闪断/join 接口异常
+        // 都会导致服务器 joined=false 而本地数据完整。此前此处会 deleteNovel 软删
+        // 本地副本，导致小说连同章节目录/摘要/笔记/地图/图谱全部丢失且不会重新
+        // 下载。现在只尝试幂等恢复 join，无论成败都保留本地数据，下次同步再试。
+        if (!shouldDeleteLocalNovel()) {
+          try {
+            const joinResp = await apiFetch(`/api/novels/${sn.id}/join`, { method: "POST" });
+            if (joinResp.ok) continue; // 恢复成功，保留本地副本
+            // join 失败（如服务器 404/500）：保留本地副本，不删除，下次再试
+          } catch {
+            // 服务器不可达：保留本地副本，不删除，下次再试
+          }
+        }
       }
 
       for (const sn of list) {
@@ -150,7 +154,15 @@ export function useSyncOrchestration({ onSyncReady, setLocalUsers }: SyncOrchest
         udb = safeGetDB();
         if (!udb) break;
         const existing = await udb.novels.get(sn.id).catch(() => null);
-        if (existing) continue;
+        if (existing) {
+          // 本地已有记录：检查章节完整性。若章节全部缺失或被软删（历史误删
+          // 或导入异常），视为数据损坏，从服务器重新下载恢复（覆盖写入会
+          // 物理清除 deleted 标记）。目录因此可以自愈，无需用户重新导入。
+          const localChapters = await udb.chapters
+            .where("novelId").equals(sn.id).toArray().catch(() => []);
+          if (!shouldDownloadNovel(existing, localChapters)) continue; // 正常，跳过
+          console.warn(`[sync] novel ${sn.id} 本地章节缺失或已软删，从服务器重新下载恢复`);
+        }
         const chResp = await apiFetch(`/api/novels/${sn.id}/chapters`);
         if (!chResp.ok) continue;
         const chapters = await chResp.json();
@@ -163,6 +175,8 @@ export function useSyncOrchestration({ onSyncReady, setLocalUsers }: SyncOrchest
             totalChars: sn.totalChars,
             createdAt: sn.createdAt, updatedAt: sn.updatedAt || Date.now(),
           });
+          // 覆盖写入：物理清除可能存在的 deleted 软删标记
+          await udb!.chapters.where("novelId").equals(sn.id).delete();
           for (const ch of chapters) {
             await udb!.chapters.put({
               id: ch.id, novelId: sn.id, index: ch.index,
@@ -336,7 +350,7 @@ const applySyncData = useCallback(async (data: SyncData) => {
           `服务器上已有用户 "${username}" 的数据（${serverNovelCount} 本小说），本地也有数据（${localNovelCount} 本小说）。\n\n` +
           `请选择处理方式（输入数字）：\n` +
           `1 - 合并：两边数据合并（推荐）\n` +
-          `2 - 覆盖：用服务器数据覆盖本地\n` +
+          `2 - 覆盖：用服务器数据覆盖本地（警告：将永久删除本地全部数据，不可恢复！）\n` +
           `3 - 改名：本地数据改名存为新用户`,
           "1"
         );
