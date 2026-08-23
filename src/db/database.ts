@@ -172,6 +172,12 @@ let _userDB: UserDB | null = null;
 
 /** Switch to a user's database */
 export function setCurrentUser(username: string) {
+  const dbName = `ai-novel-reader-${username}`;
+  // 幂等：已是指定用户的数据库实例时直接复用，不重建、不关闭。
+  // 修复：重新登录同一用户/重复初始化时，旧实例上正在进行的异步操作
+  // （如 loadAllNovelMeta 书架加载）会被 close() 打断并抛 DatabaseClosedError，
+  // 导致书架加载失败返回空列表（"刷新后书架消失"的根因之一）。
+  if (_userDB && _userDB.name === dbName) return;
   const oldDB = _userDB;
   // 创建新数据库实例
   _userDB = new UserDB(username);

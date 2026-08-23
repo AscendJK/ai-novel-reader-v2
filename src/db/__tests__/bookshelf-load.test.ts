@@ -73,4 +73,33 @@ describe("书架加载链路（刷新场景）", () => {
     const meta = await loadAllNovelMeta();
     expect(meta.map((m) => m.id)).toContain("n1");
   });
+
+  it("竞态：loadAllNovelMeta 读取期间 setCurrentUser 重复初始化不应抛 DatabaseClosedError", async () => {
+    await saveNovel(makeNovel("n1", "小说1", 3));
+
+    // 书架加载已启动（拿到当前实例引用，异步读取中）
+    const metaPromise = loadAllNovelMeta();
+    // 读取进行中，另一流程再次 setCurrentUser 同一用户
+    // （模拟重新登录/重复初始化）—— 修复前会 close 正在使用的旧实例
+    setCurrentUser(USER);
+    const meta = await metaPromise;
+    // 书架必须仍然读到数据，而不是 DatabaseClosedError 后返回 []
+    expect(meta.map((m) => m.id)).toContain("n1");
+  });
+
+  it("竞态：切换用户时旧库读取不被新库关闭打断（不抛 DatabaseClosedError）", async () => {
+    await saveNovel(makeNovel("n1", "小说1", 3));
+
+    // 旧用户书架加载启动
+    const metaPromise = loadAllNovelMeta();
+    // 用户切换到新账号（会关闭旧库实例）
+    setCurrentUser("another-user");
+    // 不抛 DatabaseClosedError：重试后返回当前用户（新用户）的书架数据
+    const meta = await metaPromise;
+    expect(Array.isArray(meta)).toBe(true);
+    // 当前用户已切换，书架读的是新用户库（空）
+    const newMeta = await loadAllNovelMeta();
+    expect(newMeta).toEqual([]);
+    await deleteUserDB("another-user");
+  });
 });

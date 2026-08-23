@@ -125,6 +125,11 @@ export async function loadChapters(novelId: string, startIndex: number, count: n
   }
 }
 
+/** 判断错误是否为 Dexie 数据库已关闭错误 */
+function isDatabaseClosedError(e: unknown): boolean {
+  return !!(e && typeof e === "object" && (e as { name?: string }).name === "DatabaseClosedError");
+}
+
 export async function loadAllNovelMeta(): Promise<NovelMeta[]> {
   const db = getUserDB();
   try {
@@ -144,6 +149,12 @@ export async function loadAllNovelMeta(): Promise<NovelMeta[]> {
       createdAt: r.createdAt, updatedAt: r.updatedAt,
     }));
   } catch (e) {
+    // 数据库被并发关闭（如切换用户/重新登录导致 setCurrentUser 关闭旧实例）：
+    // 获取当前实例重试一次，避免书架加载失败返回空列表
+    if (isDatabaseClosedError(e)) {
+      const db2 = getUserDB();
+      if (db2 !== db) return await loadAllNovelMeta();
+    }
     console.error("loadAllNovelMeta failed:", e);
     return [];
   }
@@ -172,6 +183,11 @@ export async function loadAllNovels(): Promise<Novel[]> {
       };
     }));
   } catch (e) {
+    // 数据库被并发关闭时重试一次（与 loadAllNovelMeta 相同的兜底）
+    if (isDatabaseClosedError(e)) {
+      const db2 = getUserDB();
+      if (db2 !== db) return await loadAllNovels();
+    }
     console.error("loadAllNovels failed:", e);
     return [];
   }
@@ -255,10 +271,16 @@ export async function saveSummary(summary: SummaryItem & { novelId: string }): P
 
 export async function loadSummaries(novelId: string): Promise<(SummaryItem & { novelId: string })[]> {
   try {
-    const all = await getUserDB().summaries.where("novelId").equals(novelId).sortBy("createdAt");
+    const db = getUserDB();
+    const all = await db.summaries.where("novelId").equals(novelId).sortBy("createdAt");
     // SummaryRecord.type 是 string，运行时实际存储的是字面量联合类型值，安全断言
     return all.filter((s) => !s.deleted) as (SummaryItem & { novelId: string })[];
   } catch (e) {
+    // 数据库被并发关闭时重试一次（与 loadAllNovelMeta 相同的兜底）
+    if (isDatabaseClosedError(e)) {
+      const db2 = getUserDB();
+      if (db2) return await loadSummaries(novelId);
+    }
     console.error("loadSummaries failed:", e);
     return [];
   }
