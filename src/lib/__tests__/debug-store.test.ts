@@ -1,7 +1,7 @@
 /**
  * debug-store 模块测试
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   addDebugEntry,
   clearDebugEntries,

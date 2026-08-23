@@ -2,7 +2,7 @@
  * parsers/utils 测试
  * uuid() 和 createNovel()
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { uuid, createNovel } from "../utils";
 
 describe("uuid", () => {

@@ -2,7 +2,7 @@
  * rag-cache-utils 测试
  * LRU 淘汰策略、空间管理、访问记录更新
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   onCacheEviction,
   updateAccessTime,
@@ -117,7 +117,7 @@ describe("ensureCacheSpace", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockStore.cacheSizeMB = 50;
-    mockDb.ragCache.each.mockImplementation((callback: (entry: unknown) => void) => {
+    mockDb.ragCache.each.mockImplementation(() => {
       // 空缓存
       return Promise.resolve();
     });

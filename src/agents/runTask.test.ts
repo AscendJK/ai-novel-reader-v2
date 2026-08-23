@@ -5,7 +5,7 @@
 import { describe, it, expect, vi } from "vitest";
 import type { Agent, AgentContext, AgentResult } from "./types";
 import { runAgentTask, formatAPIError } from "./runTask";
-import { APIError } from "@/api/error-handler";
+import { APIError, type APIErrorCode } from "@/api/error-handler";
 
 function makeHooks() {
   return {
@@ -77,9 +77,9 @@ describe("runAgentTask", () => {
 
   it("agent.run 被调用时传入正确的 context", async () => {
     const agent = makeAgent({ success: true });
-    await call({ agent: agent as never, context: makeContext({ chapterId: "ch-42" }) });
+    await call({ agent: agent as never, context: makeContext({ chapterIds: ["ch-42"] }) });
     expect(agent.run).toHaveBeenCalledWith(
-      expect.objectContaining({ chapterId: "ch-42" })
+      expect.objectContaining({ chapterIds: ["ch-42"] })
     );
   });
 
@@ -151,7 +151,7 @@ describe("formatAPIError", () => {
   });
 
   it("未知 APIError code 返回 [code] message", () => {
-    expect(formatAPIError(new APIError("自定义错误", "unknown_code"))).toBe("[unknown_code] 自定义错误");
+    expect(formatAPIError(new APIError("自定义错误", "unknown_code" as APIErrorCode))).toBe("[unknown_code] 自定义错误");
   });
 
   it("普通 Error 返回 message", () => {

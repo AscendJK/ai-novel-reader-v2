@@ -2,7 +2,7 @@
  * encode-core 测试
  * 核心编码逻辑：getEncoder 缓存、encoderCache 淘汰、encodeQueryCore 错误处理
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock transformers.js
 const mockExtractor = vi.fn();

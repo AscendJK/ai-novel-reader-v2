@@ -53,7 +53,6 @@ describe("Retriever", () => {
       const r = await Retriever.buildAsync(docs);
       const results = r.search("天气散步");
       // 包含"天气"的文档应该排在前面
-      const weatherDocs = ["0", "4"];
       const topIds = results.slice(0, 2).map(r => r.id);
       expect(topIds).toContain("0");
       expect(topIds).toContain("4");
@@ -62,7 +61,6 @@ describe("Retriever", () => {
     it("AI 相关查询应该优先返回 AI 相关文档", async () => {
       const r = await Retriever.buildAsync(docs);
       const results = r.search("人工智能深度学习");
-      const aiDocs = ["2", "3"];
       const topIds = results.slice(0, 2).map(r => r.id);
       expect(topIds).toContain("2");
       expect(topIds).toContain("3");
