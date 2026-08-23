@@ -91,8 +91,10 @@ router.post("/heartbeat", (req, res) => {
   // Check if this is a known device and session is still valid
   const activeCount = heartbeat(username, clientId, token);
   if (activeCount === -1) {
-    // Session expired (kicked by another device)
-    return res.status(401).json({ error: "kicked", kicked: true });
+    // Session expired（服务器重启或会话被清理，内存中的 token 已丢失）
+    // 与"被另一设备踢出"区分开：前端收到非 kicked 的 401 会尝试自动
+    // 重注册（已知设备，无感恢复），而不是强制登出导致书架消失。
+    return res.status(401).json({ error: "session_expired" });
   }
   if (activeCount > 0) {
     return res.json({ activeCount });

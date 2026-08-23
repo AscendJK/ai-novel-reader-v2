@@ -336,9 +336,9 @@ export class SyncClient {
             console.error("[sync] retry error:", retryErr);
           }
         } else {
-          // Re-register failed — this is a real kick (another device logged in)
-          console.warn("[sync] re-register failed, kicked");
-          this.handleKicked();
+          // Re-register failed — 不强制登出：服务器可能只是短暂不可达，
+          // 保留本地会话，下次心跳/同步会再次尝试重注册
+          console.warn("[sync] re-register failed, keeping session (will retry)");
         }
         return false;
       }
@@ -455,7 +455,11 @@ export class SyncClient {
         body: JSON.stringify({ username: this.username, clientId: this.clientId, token: this.token }),
       });
       if (resp.status === 401 || resp.status === 403) {
-        // Check if kicked by another device
+        // 区分"被另一设备踢出"和"会话过期/服务器重启"：
+        // - 服务器明确返回 kicked:true（另一设备登录抢占）→ 登出
+        // - 其他 401/403（token 失效、服务器重启导致内存会话丢失）→ 自动重注册
+        //   恢复会话，不登出。本地 username/clientId 是已知设备，register 会
+        //   重建会话并签发新 token，用户无感。
         const data = await resp.json().catch(() => ({}));
         if (data.kicked) {
           console.warn("[sync] kicked by another device");
@@ -463,11 +467,12 @@ export class SyncClient {
           return;
         }
         // Session expired (not kicked) — try re-register
-        console.warn(`[sync] heartbeat ${resp.status}, attempting re-register...`);
+        console.warn(`[sync] heartbeat ${resp.status} (session expired), attempting re-register...`);
         const ok = await this.tryReRegister();
         if (!ok) {
-          console.warn("[sync] re-register failed, kicking");
-          this.handleKicked();
+          console.warn("[sync] re-register failed, keeping session (will retry)");
+          // 不再强制登出：服务器可能只是短暂不可达。保留本地会话，
+          // 下次心跳会再次尝试重注册。
         } else {
           console.log("[sync] re-registered from heartbeat, syncing now...");
           this.syncOnce().catch((e) => console.warn("[sync] syncOnce failed:", e));
@@ -490,8 +495,7 @@ export class SyncClient {
           console.warn("[sync] heartbeat 0, attempting re-register...");
           const ok = await this.tryReRegister();
           if (!ok) {
-            console.warn("[sync] re-register failed, kicking");
-            this.handleKicked();
+            console.warn("[sync] re-register failed, keeping session (will retry)");
           } else {
             console.log("[sync] re-registered from heartbeat, syncing now...");
             this.syncOnce().catch((e) => console.warn("[sync] syncOnce failed:", e));
