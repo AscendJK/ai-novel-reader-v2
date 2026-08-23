@@ -63,6 +63,11 @@ export function AppLayout() {
       try {
         setCurrentUser(storedUser);
       } catch { /* ignore */ }
+      // 刷新后直接进入书架的场景：重新从 localStorage 加载阅读进度，
+      // 防止模块加载时读到空 key（离线重登后 sync-username 刚写入的场景）
+      try {
+        useNovelStore.getState().reloadReadingPositions();
+      } catch { /* ignore */ }
     }
     setCurrentNovelIdGetter(() => useNovelStore.getState().currentNovel?.id);
   }, []);

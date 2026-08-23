@@ -33,6 +33,16 @@ interface NovelState {
   saveReadingPosition: (novelId: string, chapterId: string, chapterIndex: number, scrollTop?: number, chapterOffset?: number) => void;
   saveScrollTop: (scrollTop: number, chapterOffset?: number) => void;
   addChapters: (chapters: Novel["chapters"]) => void;
+  /**
+   * 从 localStorage 重新加载阅读进度（登录/切换用户后调用）。
+   *
+   * 背景：readingPositions 只在模块加载时从 localStorage 读一次，而 localStorage
+   * 的 key 带用户名后缀（userKey）。应用启动时（未登录）读到的是无后缀 key →
+   * 空对象；登录完成后没有代码重新加载 → 打开小说时查不到进度 → 回到第一章。
+   * 离线重登时 syncOnce 失败、没有服务器数据合并，问题必然复现。
+   * 此方法在登录/切换用户后重新读取当前用户的进度，覆盖在线/离线两种场景。
+   */
+  reloadReadingPositions: () => void;
 }
 
 function loadPositions(): Record<string, ReadPosition> {
@@ -204,5 +214,11 @@ export const useNovelStore = create<NovelState>((set, get) => ({
         chapters: mergedChapters,
       },
     });
+  },
+
+  reloadReadingPositions: () => {
+    const loaded = loadPositions();
+    // 合并而不是直接覆盖：保留内存中当前会话已产生、但可能尚未落盘的位置
+    set({ readingPositions: { ...loaded, ...get().readingPositions } });
   },
 }));

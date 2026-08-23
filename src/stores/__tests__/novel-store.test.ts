@@ -337,6 +337,84 @@ describe("saveScrollTop", () => {
   });
 });
 
+// ── reloadReadingPositions ──
+
+describe("reloadReadingPositions", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useNovelStore.setState({
+      currentNovel: null,
+      novels: [],
+      selectedChapterId: null,
+      readingPositions: {},
+    });
+  });
+
+  it("从 localStorage 重新加载当前用户的阅读进度", () => {
+    // 模拟：应用启动时未登录（key 无后缀），登录后 sync-username 才写入
+    localStorage.setItem("sync-username", "alice");
+    localStorage.setItem(
+      "novel-reader-positions:alice",
+      JSON.stringify({ "novel-1": { chapterId: "novel-1-ch-1", chapterIndex: 1 } })
+    );
+
+    useNovelStore.getState().reloadReadingPositions();
+
+    const pos = useNovelStore.getState().readingPositions["novel-1"];
+    expect(pos).toEqual({ chapterId: "novel-1-ch-1", chapterIndex: 1 });
+  });
+
+  it("不同用户的进度相互隔离", () => {
+    localStorage.setItem("sync-username", "bob");
+    localStorage.setItem(
+      "novel-reader-positions:bob",
+      JSON.stringify({ "novel-2": { chapterId: "novel-2-ch-0", chapterIndex: 0 } })
+    );
+    // alice 的进度存在但不应被 bob 读到
+    localStorage.setItem(
+      "novel-reader-positions:alice",
+      JSON.stringify({ "novel-1": { chapterId: "novel-1-ch-1", chapterIndex: 1 } })
+    );
+
+    useNovelStore.getState().reloadReadingPositions();
+
+    expect(useNovelStore.getState().readingPositions["novel-2"]).toBeDefined();
+    expect(useNovelStore.getState().readingPositions["novel-1"]).toBeUndefined();
+  });
+
+  it("无已登录用户时读取无后缀 key", () => {
+    localStorage.setItem(
+      "novel-reader-positions",
+      JSON.stringify({ "novel-1": { chapterId: "novel-1-ch-0", chapterIndex: 0 } })
+    );
+    useNovelStore.getState().reloadReadingPositions();
+    // userKey 在无用户名时返回原始 key，因此能读到无后缀数据
+    expect(useNovelStore.getState().readingPositions["novel-1"]).toEqual({
+      chapterId: "novel-1-ch-0",
+      chapterIndex: 0,
+    });
+  });
+
+  it("合并内存中未落盘的位置（不丢失当前会话进度）", () => {
+    localStorage.setItem("sync-username", "alice");
+    localStorage.setItem(
+      "novel-reader-positions:alice",
+      JSON.stringify({ "novel-1": { chapterId: "novel-1-ch-1", chapterIndex: 1 } })
+    );
+    useNovelStore.setState({
+      readingPositions: {
+        "novel-2": { chapterId: "novel-2-ch-0", chapterIndex: 0 },
+      },
+    });
+
+    useNovelStore.getState().reloadReadingPositions();
+
+    const positions = useNovelStore.getState().readingPositions;
+    expect(positions["novel-1"]).toBeDefined(); // 从 localStorage 恢复
+    expect(positions["novel-2"]).toBeDefined(); // 内存中的保留
+  });
+});
+
 // ── addChapters ──
 
 describe("addChapters", () => {

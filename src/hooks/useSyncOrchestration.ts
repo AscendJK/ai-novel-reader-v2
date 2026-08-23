@@ -319,6 +319,12 @@ const applySyncData = useCallback(async (data: SyncData) => {
 
     useNovelStore.setState({ novels: [], currentNovel: null });
 
+    // 重新从 localStorage 加载当前用户的阅读进度。
+    // 阅读进度存于 localStorage（key 带用户名后缀），但 store 只在模块加载时
+    // 读一次——应用启动时未登录读到的是空 key。登录后必须重新加载，
+    // 否则离线重登（syncOnce 失败、无服务器合并）时打开小说会回到第一章。
+    useNovelStore.getState().reloadReadingPositions();
+
     startSync();
 
     let serverSynced = false;
