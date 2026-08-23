@@ -45,11 +45,13 @@ export class SyncClient {
     this.clientId = localStorage.getItem("sync-clientId");
     this.token = localStorage.getItem("sync-token");
     this.lastSyncTime = parseInt(localStorage.getItem(this.syncTimeKey) || "0", 10) || 0;
-    // If we have username but no token, clear username (but keep clientId)
-    if (this.username && !this.token) {
-      this.username = null;
-      localStorage.removeItem("sync-username");
-    }
+    // If we have username but no token, keep username: this is a legitimate
+    // offline-login state (server was unreachable when the session started, so
+    // no token was ever issued). Clearing it would force a re-login and make
+    // local IndexedDB data look lost. isLoggedIn() already returns false
+    // without a token, and the heartbeat will re-register once the server
+    // comes back.
+    // (was: clear username when token missing)
     // 恢复自动离线状态（刷新前如果是自动离线的，刷新后继续检测服务器）
     if (localStorage.getItem("sync-auto-offline") === "true") {
       this.autoOffline = true;
@@ -110,9 +112,11 @@ export class SyncClient {
         return { success: false, isNew: false, activeCount: 0, error: err.error || "用户名已存在" };
       }
       if (!resp.ok) {
-        // 网络错误或服务器错误 — 清除之前可能保存的登录状态
-        this.username = null;
-        localStorage.removeItem("sync-username");
+        // 服务器返回错误（非网络错误）— 保留本地用户名：它是本地 IndexedDB
+        // 数据的标识，删除会导致离线场景书架空白、数据看似丢失。
+        // 仅清除 token 并标记失败；心跳会在服务器恢复后重新注册。
+        this.token = null;
+        localStorage.removeItem("sync-token");
         const err: ApiErrorResponse = await resp.json().catch(() => ({}));
         return { success: false, isNew: false, activeCount: 0, error: err.error || `服务器错误 (${resp.status})` };
       }

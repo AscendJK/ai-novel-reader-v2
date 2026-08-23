@@ -132,6 +132,15 @@ export function useSyncOrchestration({ onSyncReady, setLocalUsers }: SyncOrchest
         if (sn.id === currentNovelId) continue;
         const existsLocally = localNovels.find((l) => l.id === sn.id);
         if (!existsLocally) continue;
+        // 防御：本地已有副本的小说，先尝试恢复 join（join 是幂等的）。
+        // 之前 join 请求是 fire-and-forget（.catch(() => {})），后端重启或网络闪断
+        // 会导致服务器上 joined=false 而本地有完整数据——若直接删除，小说连同
+        // 章节目录/摘要/笔记/地图/图谱会全部丢失且不会重新下载。
+        try {
+          const joinResp = await apiFetch(`/api/novels/${sn.id}/join`, { method: "POST" });
+          if (joinResp.ok) continue; // 恢复成功，保留本地副本
+        } catch { /* 服务器不可达，跳过删除以保护本地数据 */ }
+        // 仅当服务器明确拒绝（如小说已不存在，返回 404）时才删除本地副本
         await deleteNovel(sn.id).catch(() => {});
         useNovelStore.getState().removeNovel(sn.id);
       }
