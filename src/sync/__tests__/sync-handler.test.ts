@@ -8,7 +8,6 @@
 import { describe, it, expect } from "vitest";
 
 // 直接 import 模块级单例（sessions 是模块内存 Map）
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-expect-error - 后端 JS 模块无类型声明，测试仅验证运行时语义
 import * as handler from "../../../server/sync-handler.js";
 
@@ -57,5 +56,20 @@ describe("sync-handler 会话语义", () => {
     const username = `z-${Date.now()}`;
     const result = handler.heartbeat(username, "unknown-device", "any-token");
     expect(result).toBe(0);
+  });
+
+  it("已知设备数量有上限，超出时淘汰最旧设备", () => {
+    const username = `d-${Date.now()}`;
+    // 注册超过上限的设备（上限 10，注册 12 个）
+    for (let i = 0; i < 12; i++) {
+      const t = handler.createSession(username);
+      handler.register(username, `dev-${i}`, t);
+    }
+    const devices = handler.getUserDevices(username);
+    expect(devices.length).toBeLessThanOrEqual(10);
+    // 最旧的设备（dev-0）应被淘汰
+    expect(devices).not.toContain("dev-0");
+    // 最新的设备应保留
+    expect(devices).toContain("dev-11");
   });
 });

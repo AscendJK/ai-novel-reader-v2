@@ -14,6 +14,7 @@ const sessions = new Map();
 const SESSION_MAX_AGE = 24 * 60 * 60 * 1000; // 24 hours
 const CONNECTION_MAX_IDLE = 3 * 60 * 1000; // 3 minutes without heartbeat
 const KNOWN_DEVICES_MAX_AGE = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_KNOWN_DEVICES_PER_USER = 10; // 每个用户最多保留的已知设备数（防止 clientId 无限膨胀）
 
 // Periodic cleanup of stale sessions, connections, and known devices
 setInterval(() => {
@@ -62,6 +63,12 @@ export function register(username, clientId, token) {
 
   // 无论是否已知设备，都踢掉其他 session（单设备在线策略）
   devices.add(clientId);
+  // 限制已知设备数量：超出上限时淘汰最旧的设备（按注册顺序，Set 迭代序）
+  // 防止异常/恶意客户端用随机 clientId 无限注册导致内存膨胀
+  if (devices.size > MAX_KNOWN_DEVICES_PER_USER) {
+    const oldest = devices.values().next().value;
+    if (oldest) devices.delete(oldest);
+  }
   for (const [t, s] of sessions) {
     if (s.username === username && t !== token) {
       sessions.delete(t);

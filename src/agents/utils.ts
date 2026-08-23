@@ -230,7 +230,8 @@ export function sampleChapterContent(content: string, maxChars: number): string 
   if (remainingSlots > 0) {
     const step = Math.max(1, Math.floor(paragraphs.length / remainingSlots));
     for (let i = step; i < paragraphs.length - 1; i += step) {
-      if (selectedIndices.size >= remainingSlots + selectedIndices.size) break;
+      // 最多保留 20 段（与关键段落上限一致），防止选中过多导致结果超长
+      if (selectedIndices.size >= 20) break;
       selectedIndices.add(i);
     }
   }

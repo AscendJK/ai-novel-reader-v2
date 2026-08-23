@@ -590,9 +590,24 @@ export function restoreBackup(filename) {
   // Set restoring flag to reject incoming requests
   isRestoring = true;
   // Close current connection, replace DB
-  db.close();
-  fs.copyFileSync(backupPath, DB_PATH);
-  console.log(`[backup] restored: ${filename}`);
+  try {
+    db.close();
+    fs.copyFileSync(backupPath, DB_PATH);
+    console.log(`[backup] restored: ${filename}`);
+  } catch (e) {
+    // 恢复失败：重置标志并尝试重新打开数据库连接，避免服务器永久锁死
+    console.error("[backup] restore failed:", e);
+    isRestoring = false;
+    try {
+      // 重新打开数据库连接（原连接已关闭），让服务继续可用
+      db.open();
+    } catch (openErr) {
+      console.error("[backup] failed to reopen db:", openErr);
+      // 数据库无法重开时安排退出，由启动脚本拉起
+      setTimeout(() => process.exit(1), 500);
+    }
+    throw new Error(`备份恢复失败: ${e.message}`);
+  }
   // Schedule graceful shutdown so the response can be sent first
   setTimeout(() => {
     console.log("[backup] shutting down for restore...");

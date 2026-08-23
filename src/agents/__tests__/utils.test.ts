@@ -33,6 +33,15 @@ describe("sampleChapterContent", () => {
     const result = sampleChapterContent(content, 100);
     expect(result).toContain("突然");
   });
+
+  it("选中的段落数有上限（防止超长节选）", () => {
+    // 大量关键段落 + 足够的预算：修复前循环条件恒 false 会导致选中段落过多
+    const paragraphs = Array.from({ length: 50 }, (_, i) => `第${i}段 这是一个突然的转折点。`);
+    const content = paragraphs.join("\n\n");
+    const result = sampleChapterContent(content, 5000);
+    // 结果长度不应超过预算太多（有截断兜底，但选段应被限制）
+    expect(result.length).toBeLessThanOrEqual(5100);
+  });
 });
 
 describe("splitTextIntoSegments", () => {
