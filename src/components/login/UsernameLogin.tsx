@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2 } from "lucide-react";
 import { getServerUrl, setServerUrl, checkServerReachable } from "@/lib/api-client";
+import { APP_VERSION } from "@/config/version";
 
 const RECENT_URLS_KEY = "novel-reader-recent-urls";
 const MAX_RECENT = 5;
@@ -305,6 +306,9 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
             </>
           )}
         </CardContent>
+        <p className="text-[10px] text-muted-foreground text-center pb-3 -mt-1">
+          前端版本 v{APP_VERSION}
+        </p>
       </Card>
     </div>
   );

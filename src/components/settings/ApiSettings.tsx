@@ -9,9 +9,10 @@ import { Separator } from "@/components/ui/separator";
 import { ProviderSelect } from "./ProviderSelect";
 import type { ProviderConfig, ProviderFormat } from "@/api/types";
 import { getMatchedModelInfo } from "@/api/token-manager";
-import { Key, Trash2, ArrowLeft, Plus, WifiOff, Wifi, Keyboard, Edit2 } from "lucide-react";
+import { Key, Trash2, ArrowLeft, Plus, WifiOff, Wifi, Keyboard, Edit2, BookOpen } from "lucide-react";
 import { useUIStore } from "@/stores/ui-store";
 import { syncClient } from "@/sync/sync-client";
+import { APP_VERSION } from "@/config/version";
 import { RAGSettings } from "./RAGSettings";
 import { TTSSettings } from "./TTSSettings";
 import { ExportPanel } from "./ExportPanel";
@@ -338,6 +339,24 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
       <Separator />
 
       <ExportPanel />
+
+      {/* About / version */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <BookOpen className="h-4 w-4" /> 关于
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">前端版本</span>
+            <span className="font-mono text-sm">v{APP_VERSION}</span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            AI 小说精读助手 · 数据保存在浏览器本地，服务器在线时自动同步
+          </p>
+        </CardContent>
+      </Card>
     </div>
   );
 }
