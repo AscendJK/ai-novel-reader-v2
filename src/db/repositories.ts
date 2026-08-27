@@ -389,11 +389,15 @@ function sanitizeGraphData(data: unknown): GraphData | null {
   if (!data || typeof data !== "object") return null;
   const d = data as Record<string, unknown>;
   if (!Array.isArray(d.nodes) || (d.nodes as unknown[]).length === 0) return null;
+  // 过滤出含 id 的对象，并断言为 GraphData 的节点类型
+  const nodes = (d.nodes as unknown[]).filter(
+    (n): n is GraphData["nodes"][number] =>
+      !!n && typeof n === "object" && typeof (n as { id?: unknown }).id === "string"
+  );
+  if (nodes.length === 0) return null;
   return {
-    nodes: (d.nodes as unknown[]).filter(
-      (n) => n && typeof n === "object" && typeof (n as { id?: unknown }).id === "string"
-    ),
-    edges: Array.isArray(d.edges) ? (d.edges as unknown[]) : [],
+    nodes,
+    edges: Array.isArray(d.edges) ? (d.edges as GraphData["edges"]) : [],
   };
 }
 
