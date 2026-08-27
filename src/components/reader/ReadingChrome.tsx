@@ -85,7 +85,9 @@ const TopBar = React.memo(function TopBar(props: TopBarProps) {
   useEffect(() => {
     if (!showFontPanel) return;
     const onMouseDown = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
+      const target = e.target;
+      // target 可能是文本节点或 document，此时无 closest 方法，需先判定为 Element
+      if (!(target instanceof Element)) return;
       if (!target.closest("[data-font-panel]") && !target.closest("[data-font-toggle]")) {
         setShowFontPanel(false);
       }
