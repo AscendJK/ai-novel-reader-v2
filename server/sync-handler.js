@@ -74,6 +74,11 @@ export function register(username, clientId, token) {
       sessions.delete(t);
     }
   }
+  // 方案A：持久化“活跃设备”。无论是否已知设备都无条件覆盖（后注册者优先，选项①）。
+  // 重启后 active_device 仍在 SQLite 中，旧设备（clientId 不匹配）会在下一次
+  // heartbeat/push 时因判定为“被顶替”而收到 kicked，从而收敛到单设备。
+  db.setSetting(username, "active_device", clientId);
+  db.setSetting(username, "active_device_at", Date.now());
   connections.set(username, clientId);
   connectionLastSeen.set(username, Date.now());
 
@@ -98,6 +103,14 @@ export function disconnect(username, clientId) {
 export function heartbeat(username, clientId, token) {
   const devices = knownDevices.get(username);
   if (!devices || !devices.has(clientId)) return 0;
+
+  // 方案A：持久化的活跃设备判定。若本设备不是当前 active_device，说明被另一台设备顶替
+  // （后注册覆盖后，先注册方在此被识别为被迫下线）。返回 -2（被顶替），区别于 -1（会话过期）。
+  const activeDevice = db.getSetting(username, "active_device");
+  if (activeDevice && activeDevice !== clientId) {
+    console.log(`[sync] heartbeat rejected: displaced by another device for ${username} (${clientId.slice(0, 8)})`);
+    return -2; // Displaced by another device (kicked)
+  }
 
   // Verify token belongs to this user
   if (token) {
@@ -132,6 +145,12 @@ export function getUsersOnlineStatus() {
 }
 
 export function isActive(username, clientId) {
+  // 方案A：默认以持久化的 active_device 为准（单设备在线）。
+  // 若无持久化记录（历史数据/迁移前），回退到内存 knownDevices 判定，保证兼容。
+  const activeDevice = db.getSetting(username, "active_device");
+  if (activeDevice) {
+    return activeDevice === clientId;
+  }
   const devices = knownDevices.get(username);
   if (!devices) return false;
   return devices.has(clientId);

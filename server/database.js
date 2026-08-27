@@ -5,7 +5,9 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const DB_PATH = path.join(__dirname, "data", "novels.db");
+// 支持通过环境变量覆盖 DB 路径（测试时可用 ":memory:" 避免污染生产库）
+const DB_PATH = process.env.NOVEL_READER_DB_PATH
+  || path.join(__dirname, "data", "novels.db");
 
 // Ensure data directory exists
 const dataDir = path.dirname(DB_PATH);
@@ -455,9 +457,12 @@ export function gatherSyncData(username, since = 0) {
 
   // Never return API key settings to clients (prefix match for user-specific keys)
   const SENSITIVE_PREFIXES = ["api-providers", "api-active-provider"];
+  // 内部键：不随同步下发给客户端（active_device 仅服务端用于单设备在线判定）
+  const INTERNAL_SYNC_KEYS = new Set(["active_device", "active_device_at"]);
   const settingRows = db.prepare("SELECT key, value FROM user_settings WHERE username = ?").all(username);
   const settings = {};
   for (const s of settingRows) {
+    if (INTERNAL_SYNC_KEYS.has(s.key)) continue;
     if (SENSITIVE_PREFIXES.some((p) => s.key === p || s.key.startsWith(p + ":"))) continue;
     try { settings[s.key] = JSON.parse(s.value); } catch { settings[s.key] = s.value; }
   }
