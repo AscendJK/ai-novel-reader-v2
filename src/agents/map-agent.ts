@@ -49,7 +49,7 @@ class MapAgent extends BaseAgent {
                 { role: "system", content: "你是一个 JSON 数据生成器。只输出 JSON，不要任何解释文字。" },
                 { role: "user", content: this.buildPrompt(novel, chapterList, lastError) },
               ],
-              max_tokens: b.maxOutputTokens,
+              max_tokens: Math.max(b.maxOutputTokens, 16384),
               temperature: 0.3,
               signal: context.signal,
             });

@@ -11,6 +11,8 @@ export interface ProviderConfig {
   maxTokens?: number;
   /** 是否使用流式响应（默认 true）。ModelScope 等服务商强制要求流式；不支持流式的 API 请设为 false */
   stream?: boolean;
+  /** 是否启用思考模式（DeepSeek 等推理模型的 thinking 参数）。false 时发送 thinking:{type:disabled} 关闭思考 */
+  thinking?: boolean;
 }
 
 export interface ChatMessage {

@@ -192,6 +192,20 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
               </p>
             </div>
             <div className="space-y-1">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={editing.thinking === false}
+                  onChange={(e) => setEditing((d) => d ? { ...d, thinking: e.target.checked ? false : undefined } : d)}
+                  className="rounded border-input"
+                />
+                <span className="text-xs">关闭思考（Thinking）</span>
+              </label>
+              <p className="text-[10px] text-muted-foreground pl-5">
+                DeepSeek 等推理模型默认会先思考，思考会占用输出预算且把 content 置空，导致地图/图谱等大 JSON 输出失败。勾选后发送 thinking type:disabled，让模型直接生成正文；对不支持该参数的非推理模型不产生影响。
+              </p>
+            </div>
+            <div className="space-y-1">
               <Label htmlFor="api-ctx" className="text-xs">上下文窗口（可选）</Label>
               <Input id="api-ctx" name="api-ctx" type="number" min={1024} step={1024}
                 placeholder={modelInfo ? String(modelInfo.budget.contextWindow) : "128000"}

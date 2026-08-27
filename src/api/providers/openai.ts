@@ -8,7 +8,7 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
   const baseUrl = config.baseUrl || "https://api.openai.com/v1";
 
   function buildBody(req: ChatCompletionRequest) {
-    return {
+    const body: Record<string, unknown> = {
       model: config.model || req.model || "gpt-4o",
       messages: req.messages,
       max_tokens: req.max_tokens ?? config.maxTokens ?? 2048,
@@ -16,6 +16,11 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
       // 默认开启流式（ModelScope 强制要求）；可在 API 设置中关闭，支持请求级覆盖
       stream: req.stream ?? config.stream !== false,
     };
+    // 思考模式开关：仅当显式关闭（thinking=false）时发送 disabled，避免影响不支持该参数的模型
+    if (config.thinking === false) {
+      body.thinking = { type: "disabled" };
+    }
+    return body;
   }
 
   async function doDirect(req: ChatCompletionRequest): Promise<Response> {

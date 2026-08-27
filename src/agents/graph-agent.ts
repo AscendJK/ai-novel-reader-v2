@@ -63,7 +63,7 @@ class CharacterGraphAgent extends BaseAgent {
               { role: "system", content: "你是一个JSON数据生成器。只输出JSON，不要任何解释文字。" },
               { role: "user", content: useP },
             ],
-            max_tokens: b.maxOutputTokens,
+            max_tokens: Math.max(b.maxOutputTokens, 16384),
             temperature: 0.3,
             signal: context.signal,
           });

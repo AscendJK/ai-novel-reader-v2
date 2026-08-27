@@ -51,6 +51,8 @@ const MODEL_LIMITS: Record<string, TokenBudget> = {
   "deepseek-chat": { contextWindow: 128000, maxOutputTokens: 8192 },
   "deepseek-reasoner": { contextWindow: 128000, maxOutputTokens: 8192 },
   "deepseek-coder": { contextWindow: 128000, maxOutputTokens: 8192 },
+  "deepseek-v4-pro": { contextWindow: 128000, maxOutputTokens: 16384 },
+  "deepseek-v4-flash": { contextWindow: 128000, maxOutputTokens: 16384 },
 
   // ── Google Gemini ──
   "gemini-2.5-pro": { contextWindow: 1048576, maxOutputTokens: 65536 },
