@@ -145,6 +145,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   useEffect(() => { scrollToChapterRef.current = scrollToChapter; }, [scrollToChapter]);
   const suppressIORef = useRef(suppressIO);
   useEffect(() => { suppressIORef.current = suppressIO; }, [suppressIO]);
+  const visibilityTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
 
   // 缓存当前章节元素，避免每次滚动都遍历所有章节
   const cachedChapterElRef = useRef<HTMLElement | null>(null);
@@ -264,14 +265,15 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
       if (document.visibilityState === "hidden") {
         savePositionNow();
       } else if (document.visibilityState === "visible") {
-        // 切屏回来后，用保存的章节+偏移量重锚定，消除 contentVisibility 估算高度导致的布局漂移
+        // 清除之前的定时器，防止快速切屏导致竞态（前一次 release 在本次 suppress 窗口期内触发）
+        if (visibilityTimeoutRef.current) clearTimeout(visibilityTimeoutRef.current);
         const novel = useNovelStore.getState().currentNovel;
         if (!novel) return;
         const pos = useNovelStore.getState().readingPositions[novel.id];
         if (pos?.chapterId) {
           const release = suppressIORef.current(pos.chapterId);
           scrollToChapterRef.current(pos.chapterId, pos.chapterOffset);
-          setTimeout(release, 500);
+          visibilityTimeoutRef.current = setTimeout(release, 500);
         }
       }
     };
@@ -281,6 +283,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
+      if (visibilityTimeoutRef.current) clearTimeout(visibilityTimeoutRef.current);
       window.removeEventListener("beforeunload", savePositionNow);
       window.removeEventListener("pagehide", savePositionNow);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
