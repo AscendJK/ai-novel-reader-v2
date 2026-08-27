@@ -141,6 +141,10 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   // ── 滚动位置保存（节流 + 页面退出时立即保存）──────────────────
   const saveScrollTopRef = useRef(saveScrollTop);
   useEffect(() => { saveScrollTopRef.current = saveScrollTop; }, [saveScrollTop]);
+  const scrollToChapterRef = useRef(scrollToChapter);
+  useEffect(() => { scrollToChapterRef.current = scrollToChapter; }, [scrollToChapter]);
+  const suppressIORef = useRef(suppressIO);
+  useEffect(() => { suppressIORef.current = suppressIO; }, [suppressIO]);
 
   // 缓存当前章节元素，避免每次滚动都遍历所有章节
   const cachedChapterElRef = useRef<HTMLElement | null>(null);
@@ -257,7 +261,19 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     if (isPaginated || !currentNovel) return;
 
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "hidden") savePositionNow();
+      if (document.visibilityState === "hidden") {
+        savePositionNow();
+      } else if (document.visibilityState === "visible") {
+        // 切屏回来后，用保存的章节+偏移量重锚定，消除 contentVisibility 估算高度导致的布局漂移
+        const novel = useNovelStore.getState().currentNovel;
+        if (!novel) return;
+        const pos = useNovelStore.getState().readingPositions[novel.id];
+        if (pos?.chapterId) {
+          const release = suppressIORef.current(pos.chapterId);
+          scrollToChapterRef.current(pos.chapterId, pos.chapterOffset);
+          setTimeout(release, 500);
+        }
+      }
     };
 
     window.addEventListener("beforeunload", savePositionNow);
