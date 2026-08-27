@@ -45,7 +45,7 @@ export function ReadingPanel() {
   return (
     <div className="flex h-full relative">
       <div className="hidden md:flex shrink-0" data-sidebar="chapter-nav">
-        <ChapterNav scrollControlRef={scrollControlRef} />
+        <ChapterNav scrollControlRef={scrollControlRef} immersive={immersive} />
       </div>
 
       <div className="flex-1 flex flex-col min-w-0">
@@ -108,7 +108,19 @@ export function ReadingPanel() {
         {/* SummaryPanel — 打开时才挂载，避免章节切换时不必要的重渲染 */}
         {summaryOpen && (
           <LocalErrorBoundary name="SummaryPanel">
-            <Suspense fallback={null}>
+            <Suspense fallback={
+              <div className="md:w-80 w-full border-l md:border-l border-t md:border-t-0 bg-card h-full shrink-0 flex flex-col overflow-hidden">
+                <div className="p-2.5 border-b shrink-0">
+                  <div className="h-4 w-20 bg-muted rounded animate-pulse" />
+                </div>
+                <div className="flex-1 p-3 space-y-3">
+                  <div className="h-3 w-3/4 bg-muted rounded animate-pulse" />
+                  <div className="h-3 w-1/2 bg-muted rounded animate-pulse" />
+                  <div className="h-3 w-5/6 bg-muted rounded animate-pulse" />
+                  <div className="h-3 w-2/3 bg-muted rounded animate-pulse" />
+                </div>
+              </div>
+            }>
               <SummaryPanel />
             </Suspense>
           </LocalErrorBoundary>

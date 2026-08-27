@@ -87,9 +87,13 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   const effectiveMode = useMemo<ReadingMode>(() => {
     if (readingMode === "scroll") return "scroll";
     if (windowWidth < 768) return "single";
-    if (autoSwitchPageMode) return windowWidth >= 1024 ? "double" : "single";
+    if (autoSwitchPageMode) {
+      // 右栏 AI 分析面板展开时会压缩阅读区，双页模式需要更宽的可用区域
+      // 目录 224px(或收起 32px) + 右栏 320px + 折叠按钮 32px + 留白；估算预留 ~360px
+      return windowWidth >= (summaryOpen ? 1400 : 1024) ? "double" : "single";
+    }
     return readingMode;
-  }, [readingMode, autoSwitchPageMode, windowWidth]);
+  }, [readingMode, autoSwitchPageMode, windowWidth, summaryOpen]);
 
   const isDouble = effectiveMode === "double";
   const isPaginated = effectiveMode !== "scroll";
@@ -435,6 +439,14 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
           const el = scrollContainerRefForKeys.current;
           if (el) el.scrollBy({ top: el.clientHeight * 0.8, behavior: "smooth" });
         }, description: "向下翻页" },
+        { key: "PageUp", action: () => {
+          const el = scrollContainerRefForKeys.current;
+          if (el) el.scrollBy({ top: -el.clientHeight * 0.8, behavior: "smooth" });
+        }, description: "向上翻页" },
+        { key: "PageDown", action: () => {
+          const el = scrollContainerRefForKeys.current;
+          if (el) el.scrollBy({ top: el.clientHeight * 0.8, behavior: "smooth" });
+        }, description: "向下翻页" },
         { key: "+", action: () => setFontSize(Math.min(24, fontSize + 1)), description: "增大字号" },
         { key: "-", action: () => setFontSize(Math.max(12, fontSize - 1)), description: "减小字号" },
         { key: "i", action: onToggleImmersive, description: "切换沉浸模式" },
@@ -443,6 +455,8 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     return [
       { key: "ArrowLeft", action: () => goPrevPageRef.current(), description: "上一页" },
       { key: "ArrowRight", action: () => goNextPageRef.current(), description: "下一页" },
+      { key: "PageUp", action: () => goPrevPageRef.current(), description: "上一页" },
+      { key: "PageDown", action: () => goNextPageRef.current(), description: "下一页" },
       { key: " ", action: () => goNextPageRef.current(), description: "下一页", when: () => !showFontPanel && (document.activeElement?.tagName ?? "") !== "BUTTON" },
       { key: "+", action: () => setFontSize(Math.min(24, fontSize + 1)), description: "增大字号" },
       { key: "-", action: () => setFontSize(Math.max(12, fontSize - 1)), description: "减小字号" },

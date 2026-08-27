@@ -6,13 +6,13 @@ import { ChevronRight, PanelLeftOpen, PanelLeftClose, Loader2 } from "lucide-rea
 import { loadChapters } from "@/db/repositories";
 
 const TOGGLE_W = "w-8";
-const TOGGLE_H = "h-[85px]"; // matches ChapterContent top bar height
 
 interface ChapterNavProps {
   scrollControlRef?: React.RefObject<{ scrollToChapter: (chapterId: string, chapterOffset?: number) => void; suppressIO: (targetChapterId?: string) => () => void } | null>;
+  immersive?: boolean;
 }
 
-export const ChapterNav = memo(function ChapterNav({ scrollControlRef }: ChapterNavProps) {
+export const ChapterNav = memo(function ChapterNav({ scrollControlRef, immersive }: ChapterNavProps) {
   const currentNovel = useNovelStore((s) => s.currentNovel);
   const selectedChapterId = useNovelStore((s) => s.selectedChapterId);
   const setSelectedChapter = useNovelStore((s) => s.setSelectedChapter);
@@ -20,6 +20,8 @@ export const ChapterNav = memo(function ChapterNav({ scrollControlRef }: Chapter
   const [collapsed, setCollapsed] = useState(false);
   const [loadingChapter, setLoadingChapter] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // 对齐 ChapterContent 顶栏高度（沉浸模式顶栏更矮）
+  const TOGGLE_H = immersive ? "h-[44px]" : "h-[85px]";
 
   // 当 selectedChapterId 变化或目录展开时，自动滚动到当前章节
   useEffect(() => {
@@ -101,10 +103,10 @@ export const ChapterNav = memo(function ChapterNav({ scrollControlRef }: Chapter
   return (
     <div className="md:w-56 w-full shrink-0 flex h-full">
       <div className="flex-1 flex flex-col min-w-0 h-full">
-        <div className="p-4 border-b shrink-0 flex items-center min-h-[85px]">
+        <div className={`${immersive ? "min-h-[44px] p-2" : "min-h-[85px] p-4"} border-b shrink-0 flex items-center`}>
           <div className="min-w-0">
             <p className="font-medium text-sm truncate">《{currentNovel.title}》</p>
-            <p className="text-xs text-muted-foreground mt-0.5">共 {currentNovel.chapters.length} 章</p>
+            {!immersive && <p className="text-xs text-muted-foreground mt-0.5">共 {currentNovel.chapters.length} 章</p>}
           </div>
         </div>
         <ScrollArea className="flex-1" style={{ minHeight: 0 }}>

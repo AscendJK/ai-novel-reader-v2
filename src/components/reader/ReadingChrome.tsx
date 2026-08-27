@@ -6,7 +6,7 @@
  * 只通过 props + Zustand store 取数，因此可独立成文件以缩小主文件体积。
  */
 
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { useTTSStore } from "@/stores/tts-store";
 import {
@@ -81,6 +81,25 @@ const TopBar = React.memo(function TopBar(props: TopBarProps) {
 
   const isImmersive = immersive || false;
 
+  // 字体面板打开时，点击面板/开关按钮之外任意处关闭（避免全屏遮罩拦截 TopBar 按钮）
+  useEffect(() => {
+    if (!showFontPanel) return;
+    const onMouseDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest("[data-font-panel]") && !target.closest("[data-font-toggle]")) {
+        setShowFontPanel(false);
+      }
+    };
+    // 延迟一帧注册，避免打开时立即被自身 mousedown 关闭
+    const raf = requestAnimationFrame(() => {
+      document.addEventListener("mousedown", onMouseDown);
+    });
+    return () => {
+      cancelAnimationFrame(raf);
+      document.removeEventListener("mousedown", onMouseDown);
+    };
+  }, [showFontPanel, setShowFontPanel]);
+
   return (
     <div className={`p-3 md:p-4 border-b flex items-center justify-between shrink-0 ${isImmersive ? "py-2" : ""}`}>
       <div className="min-w-0">
@@ -122,11 +141,12 @@ const TopBar = React.memo(function TopBar(props: TopBarProps) {
         {!isImmersive && (
           <>
             <div className="relative">
-              <Button variant="ghost" size="icon" className="h-7 w-7"
+              <Button variant="ghost" size="icon" className="h-7 w-7" data-font-toggle
                 onClick={() => setShowFontPanel(!showFontPanel)} title="字体设置">
                 <Type className="h-4 w-4" />
               </Button>
             {showFontPanel && (
+              <div data-font-panel>
               <ReadingToolbar
                 fontSize={fontSize} setFontSize={setFontSize}
                 fontWeight={fontWeight} cycleFontWeight={cycleFontWeight} currentWeightLabel={currentWeightLabel}
@@ -137,9 +157,9 @@ const TopBar = React.memo(function TopBar(props: TopBarProps) {
                 autoSwitchPageMode={autoSwitchPageMode} setAutoSwitchPageMode={setAutoSwitchPageMode}
                 windowWidth={windowWidth ?? 1024}
               />
+              </div>
             )}
             </div>
-            {showFontPanel && <div className="fixed inset-0 z-10" onClick={() => setShowFontPanel(false)} />}
           </>
         )}
       </div>

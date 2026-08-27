@@ -74,15 +74,8 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
     chapters: currentNovel?.chapters || [],
   });
 
-  // 保持最后有效的 novelId，避免 currentNovel 为 null 时 useQA 收到空字符串
-  const [lastValidNovelId, setLastValidNovelId] = useState(currentNovel?.id || "");
-  useEffect(() => {
-    if (!currentNovel?.id) return;
-    const raf = requestAnimationFrame(() => setLastValidNovelId(currentNovel.id));
-    return () => cancelAnimationFrame(raf);
-  }, [currentNovel?.id]);
   const qaHook = useQA({
-    novelId: lastValidNovelId,
+    novelId: currentNovel?.id || "",
     askCustomQuestion,
     generateRangeSummary,
     clearQaCache,
