@@ -4,6 +4,7 @@ import type { SummaryItem } from "@/stores/summary-store";
 import type { ChapterRecord, MapRecord, GraphRecord } from "./database";
 import { useRAGStore } from "@/stores/rag-store";
 import { clearCache } from "@/rag/index";
+import type { GraphData } from "@/hooks/useSummarizer";
 
 export type { MapRecord, GraphRecord };
 
@@ -383,12 +384,38 @@ export async function saveMap(novelId: string, data: MapData): Promise<void> {
   }
 }
 
+/** 清洗旧的/不规范的图谱数据，避免渲染时访问 undefined.length 崩溃 */
+function sanitizeGraphData(data: unknown): GraphData | null {
+  if (!data || typeof data !== "object") return null;
+  const d = data as Record<string, unknown>;
+  if (!Array.isArray(d.nodes) || (d.nodes as unknown[]).length === 0) return null;
+  return {
+    nodes: (d.nodes as unknown[]).filter(
+      (n) => n && typeof n === "object" && typeof (n as { id?: unknown }).id === "string"
+    ),
+    edges: Array.isArray(d.edges) ? (d.edges as unknown[]) : [],
+  };
+}
+
+/** 清洗旧的/不规范的地图数据，避免渲染时访问 undefined.length 崩溃 */
+function sanitizeMapData(data: unknown): MapData | null {
+  if (!data || typeof data !== "object") return null;
+  const d = data as Record<string, unknown>;
+  return {
+    layers: Array.isArray(d.layers) ? (d.layers as MapData["layers"]) : [],
+    places: Array.isArray(d.places) ? (d.places as MapData["places"]) : [],
+    regions: Array.isArray(d.regions) ? (d.regions as MapData["regions"]) : [],
+    forces: Array.isArray(d.forces) ? (d.forces as MapData["forces"]) : [],
+  };
+}
+
 export async function loadMap(novelId: string): Promise<{ data: MapData | null; updatedAt?: number }> {
   try {
     const db = getUserDB();
     const record = await db.maps.get(novelId);
     if (record && !record.deleted) {
-      return { data: record.data as MapData, updatedAt: record.updatedAt };
+      const data = sanitizeMapData(record.data);
+      return { data, updatedAt: record.updatedAt };
     }
     return { data: null };
   } catch (e) {
@@ -410,8 +437,6 @@ export async function deleteMap(novelId: string): Promise<void> {
 }
 
 // ── Graphs (character graph, per-user) ──
-
-import type { GraphData } from "@/hooks/useSummarizer";
 
 export async function saveGraph(novelId: string, data: GraphData): Promise<void> {
   try {
@@ -435,7 +460,8 @@ export async function loadGraph(novelId: string): Promise<{ data: GraphData | nu
     const db = getUserDB();
     const record = await db.graphs.get(novelId);
     if (record && !record.deleted) {
-      return { data: record.data as GraphData, updatedAt: record.updatedAt };
+      const data = sanitizeGraphData(record.data);
+      return { data, updatedAt: record.updatedAt };
     }
     return { data: null };
   } catch (e) {

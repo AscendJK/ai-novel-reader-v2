@@ -298,7 +298,7 @@ export function NovelMapSection({
 
               <div className="absolute bottom-2 left-2 right-2 flex justify-between items-end">
                 <div className="text-xs text-white">
-                  {mapData && <p>{mapData.layers.length} 个层级 · {mapData.places.length} 个地点 · {mapData.forces.length} 个势力</p>}
+                  {mapData && <p>{mapData.layers?.length ?? 0} 个层级 · {mapData.places?.length ?? 0} 个地点 · {mapData.forces?.length ?? 0} 个势力</p>}
                 </div>
                 <div className="flex gap-1">
                   <Button

@@ -36,7 +36,9 @@ export function CharacterGraphSection({
   onRegenerate,
 }: CharacterGraphSectionProps) {
   const showSpinner = selfLoading ?? loading;
-  const isEmptyGraph = !graphData || (graphData.nodes.length === 0 && graphData.edges.length === 0);
+  const isEmptyGraph = !graphData
+    || ((!Array.isArray(graphData.nodes) || graphData.nodes.length === 0)
+        && (!Array.isArray(graphData.edges) || graphData.edges.length === 0));
 
   // 空状态：显示生成按钮（与 NovelMapSection 一致）
   if (isEmptyGraph && !showSpinner) {
