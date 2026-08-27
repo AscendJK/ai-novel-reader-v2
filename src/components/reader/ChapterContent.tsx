@@ -145,7 +145,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   useEffect(() => { scrollToChapterRef.current = scrollToChapter; }, [scrollToChapter]);
   const suppressIORef = useRef(suppressIO);
   useEffect(() => { suppressIORef.current = suppressIO; }, [suppressIO]);
-  const visibilityTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const visibilityTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // 缓存当前章节元素，避免每次滚动都遍历所有章节
   const cachedChapterElRef = useRef<HTMLElement | null>(null);
