@@ -483,7 +483,16 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     const ratio = (e.clientX - rect.left) / rect.width;
     if (ratio < 1 / 3) goPrevPage();
     else if (ratio > 2 / 3) goNextPage();
-    else onToggleImmersive();
+    else {
+      // 中间区域双击切换沉浸模式（与滚动模式保持一致）
+      const now = Date.now();
+      if (now - lastTapRef.current < 300) {
+        onToggleImmersive();
+        lastTapRef.current = 0; // 防止三次点击再次触发
+      } else {
+        lastTapRef.current = now;
+      }
+    }
   };
 
   const cycleFontWeight = () => {
