@@ -84,16 +84,16 @@ class CharacterGraphAgent extends BaseAgent {
           return { success: false, error: "未能从 AI 回复中提取到 JSON 图谱数据，请重试。" };
         }
 
-        // Validate structure
+        // Validate structure（只校验 nodes；边由下方兜底逻辑处理）
         const validationError = this.validateGraphData(graphData);
         if (validationError) {
-          // 节点存在但边为空/无效时，自动生成兜底边（比直接失败更好）
-          if (graphData.nodes.length > 0 && this.allEdgesInvalid(graphData)) {
-            graphData.edges = autoGenerateEdges(graphData.nodes);
-            return { success: true, data: { graphData }, tokensUsed: response.tokensUsed?.output || response.content.length };
-          }
           if (attempt === 1) { lastError = validationError; continue; }
           return { success: false, error: validationError };
+        }
+
+        // 到这里 nodes 已确认为有效非空数组；若边为空或全部引用无效节点，自动生成兜底边
+        if (this.allEdgesInvalid(graphData)) {
+          graphData.edges = autoGenerateEdges(graphData.nodes);
         }
 
         return { success: true, data: { graphData }, tokensUsed: response.tokensUsed?.output || response.content.length };
@@ -145,13 +145,9 @@ class CharacterGraphAgent extends BaseAgent {
     // 有边时检查引用有效性
     if (Array.isArray(graphData.edges) && graphData.edges.length > 0) {
       const nodeIds = new Set(graphData.nodes.map((n) => n.id));
-      const validEdges = graphData.edges.filter(
+      graphData.edges = graphData.edges.filter(
         (edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target)
       );
-      if (validEdges.length === 0) {
-        return "图谱数据有误：所有边都引用了不存在的节点，请重试。";
-      }
-      graphData.edges = validEdges;
     }
     // 边为空时由外层兜底逻辑处理，此处不报错
 
