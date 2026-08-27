@@ -132,7 +132,7 @@ export function ReadingPanel() {
       )}
 
       {/* Mobile: AI panel (fullscreen) — kept mounted for running tasks */}
-      <div className="md:hidden fixed inset-0 z-50 bg-card flex flex-col" style={{ display: mobileAiOpen ? undefined : "none" }}>
+      <div className="md:hidden fixed top-0 left-0 right-0 h-dvh z-50 bg-card flex flex-col" style={{ display: mobileAiOpen ? undefined : "none" }}>
           <div className="flex items-center justify-between p-3 border-b shrink-0">
             <span className="font-semibold text-sm">AI 分析</span>
             <button onClick={() => setMobileAiOpen(false)} aria-label="关闭 AI 分析" className="p-1 rounded hover:bg-accent"><X className="h-4 w-4" /></button>

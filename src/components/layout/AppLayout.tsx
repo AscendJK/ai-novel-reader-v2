@@ -196,7 +196,7 @@ export function AppLayout() {
   }, [setCurrentNovel]);
 
   return (
-    <div className="h-screen flex flex-col bg-background text-foreground">
+    <div className="h-dvh flex flex-col bg-background text-foreground">
       {/* Login / syncing overlay — blocks UI until first sync completes */}
       {!syncReady && (
         <UsernameLogin
