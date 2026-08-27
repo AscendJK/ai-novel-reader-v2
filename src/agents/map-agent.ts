@@ -241,12 +241,13 @@ ${chapterList}
       return "places 为空或不是数组";
     }
 
+    // regions / forces 为可选字段：缺失或非数组时归一为空数组（与 graph 的 edges 兜底同理），不报错
     if (!Array.isArray(mapData.regions)) {
-      return "regions 不是数组";
+      mapData.regions = [];
     }
 
     if (!Array.isArray(mapData.forces)) {
-      return "forces 不是数组";
+      mapData.forces = [];
     }
 
     // 验证层级结构
