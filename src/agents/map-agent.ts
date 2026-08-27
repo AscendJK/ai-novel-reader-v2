@@ -32,57 +32,78 @@ class MapAgent extends BaseAgent {
       .map((c, i) => `${i + 1}. ${c.title}`)
       .join("\n");
 
-    // 2. 调用 AI（带 context_length 自愈重试，与其他 agent 一致）
-    context.onStatus?.("AI 正在生成分析...");
-    let response;
-    try {
-      response = await chatWithContextRetry(env, async (b) => {
-        return provider.chat({
-          model: "",
-          messages: [
-            { role: "system", content: "你是一个 JSON 数据生成器。只输出 JSON，不要任何解释文字。" },
-            { role: "user", content: this.buildPrompt(novel, chapterList) },
-          ],
-          max_tokens: b.maxOutputTokens,
-          temperature: 0.3,
-          signal: context.signal,
-        });
-      });
-    } catch (err) {
-      if (err instanceof Error) {
-        if (err.message.includes("CORS") || err.message.includes("blocked")) {
-          return { success: false, error: "API 请求被 CORS 策略阻止，请检查 API 地址是否正确，或尝试使用支持代理的 API。" };
+    // 尝试两次：第一次正常生成，第二次带上错误反馈
+    let lastError: string | undefined;
+
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        context.onStatus?.(attempt === 1 ? "AI 正在生成分析..." : "AI 正在重新分析...");
+
+        // 2. 调用 AI（带 context_length 自愈重试，与其他 agent 一致）
+        let response;
+        try {
+          response = await chatWithContextRetry(env, async (b) => {
+            return provider.chat({
+              model: "",
+              messages: [
+                { role: "system", content: "你是一个 JSON 数据生成器。只输出 JSON，不要任何解释文字。" },
+                { role: "user", content: this.buildPrompt(novel, chapterList, lastError) },
+              ],
+              max_tokens: b.maxOutputTokens,
+              temperature: 0.3,
+              signal: context.signal,
+            });
+          });
+        } catch (err) {
+          if (attempt === 1) {
+            if (err instanceof Error) {
+              if (err.message.includes("CORS") || err.message.includes("blocked")) {
+                return { success: false, error: "API 请求被 CORS 策略阻止，请检查 API 地址是否正确，或尝试使用支持代理的 API。" };
+              }
+              if (err.message.includes("524") || err.message.includes("timeout") || err.message.includes("超时")) {
+                lastError = "API 请求超时";
+                continue;
+              }
+            }
+            lastError = err instanceof Error ? err.message : "未知错误";
+            continue;
+          }
+          throw err;
         }
-        if (err.message.includes("524") || err.message.includes("timeout") || err.message.includes("超时")) {
-          return { success: false, error: "API 请求超时（524），可能是网络问题或 API 服务器响应过慢，请稍后重试。" };
+
+        // 检查响应内容
+        if (!response.content || response.content.trim().length === 0) {
+          if (attempt === 1) { lastError = "API 返回了空响应"; continue; }
+          return { success: false, error: "API 返回了空响应，请检查 API 配置或稍后重试。" };
         }
+
+        // 5. 解析和验证
+        context.onStatus?.("正在解析分析结果...");
+        const mapData = this.parseMapData(response.content);
+        if (!mapData) {
+          if (attempt === 1) { lastError = "未能解析到 JSON 数据"; continue; }
+          return { success: false, error: "未能从 AI 响应中解析有效的地图数据。请检查 API 是否正常工作，或尝试使用其他模型。" };
+        }
+
+        // 6. 验证数据结构
+        const validationError = this.validateMapData(mapData);
+        if (validationError) {
+          if (attempt === 1) { lastError = validationError; continue; }
+          return { success: false, error: validationError };
+        }
+
+        return {
+          success: true,
+          data: { mapData },
+          tokensUsed: response.tokensUsed?.output || response.content.length,
+        };
+      } catch (err) {
+        if (attempt === 1) { lastError = err instanceof Error ? err.message : "未知错误"; continue; }
+        return { success: false, error: err instanceof Error ? err.message : "未知错误" };
       }
-      throw err;
     }
 
-    // 检查响应内容
-    if (!response.content || response.content.trim().length === 0) {
-      return { success: false, error: "API 返回了空响应，请检查 API 配置或稍后重试。" };
-    }
-
-    // 5. 解析和验证
-    context.onStatus?.("正在解析分析结果...");
-    const mapData = this.parseMapData(response.content);
-    if (!mapData) {
-      return { success: false, error: "未能从 AI 响应中解析有效的地图数据。请检查 API 是否正常工作，或尝试使用其他模型。" };
-    }
-
-    // 6. 验证数据结构
-    const validationError = this.validateMapData(mapData);
-    if (validationError) {
-      return { success: false, error: validationError };
-    }
-
-    return {
-      success: true,
-      data: { mapData },
-      tokensUsed: response.tokensUsed?.output || response.content.length,
-    };
+    return { success: false, error: lastError || "生成失败，请重试。" };
   }
 
   /**
@@ -90,8 +111,13 @@ class MapAgent extends BaseAgent {
    */
   private buildPrompt(
     novel: { title: string; author?: string },
-    chapterList: string
+    chapterList: string,
+    lastError?: string
   ): string {
+    const errorHint = lastError
+      ? `\n\n【上次生成的输出有误】\n${lastError}\n请修正上述问题，严格按照 JSON 格式输出。\n`
+      : "";
+
     return `你是专业小说地理地图解析Agent，专为小说生成可渲染的结构化地图JSON。
 请根据小说《${novel.title}》${novel.author ? `（作者：${novel.author}）` : ""}的书名、作者与章节目录，结合小说题材、公开世界观设定及章节信息，自主推演、构建一套完整且逻辑自洽的地理与势力体系，生成标准地图数据。
 若该小说无公开设定，则结合题材风格原创贴合剧情的世界观。
@@ -192,7 +218,7 @@ ${chapterList}
       "places": []
     }
   ]
-}`;
+}${errorHint}`;
   }
 
   /**
