@@ -57,7 +57,7 @@ export function NovelMapSection({
     const centerY = window.innerHeight / 2;
 
     setFullscreenScale(s => {
-      const newScale = Math.max(0.3, Math.min(3, s * scaleFactor));
+      const newScale = Math.max(0.3, Math.min(5, s * scaleFactor));
       const ratio = newScale / s;
 
       // 调整位置，让缩放以屏幕中心为基准
@@ -143,7 +143,7 @@ export function NovelMapSection({
         // 增强缩放灵敏度
         const ratio = dist / pinchStartRef.current.dist;
         const enhancedRatio = 1 + (ratio - 1) * 2; // 2 倍灵敏度
-        const newScale = Math.max(0.3, Math.min(3, pinchStartRef.current.scale * enhancedRatio));
+        const newScale = Math.max(0.3, Math.min(5, pinchStartRef.current.scale * enhancedRatio));
         setFullscreenScale(newScale);
       }
     };
@@ -225,6 +225,41 @@ export function NovelMapSection({
     }
   }, []);
 
+  // ---- 统一的指针点击检测（桌面鼠标 + 移动触摸）----
+  // 移动端因 touch-action:none + touchmove preventDefault 常不合成 click，
+  // 导致 onClick 不触发、无法弹出地点描述。改用 Pointer Events：在按下与
+  // 抬起间位移小即视为 tap，直接选中节点，跨平台可靠。
+  const pointerStartRef = useRef<{ x: number; y: number; placeId: string | null } | null>(null);
+
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    // 只处理左键/触摸主触点（右键排除）
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    const target = e.target as Element;
+    const placeGroup = target?.closest?.(".place-group") as Element | null;
+    pointerStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      placeId: placeGroup?.getAttribute?.("data-id") ?? null,
+    };
+  }, []);
+
+  const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    const start = pointerStartRef.current;
+    pointerStartRef.current = null;
+    if (!start) return;
+    const dx = Math.abs(e.clientX - start.x);
+    const dy = Math.abs(e.clientY - start.y);
+    if (dx >= 10 || dy >= 10) return; // 拖拽，非点击
+    // 命中节点则弹出描述（优先用按下时解析的 placeId，兜底用坐标精准定位）
+    let placeId = start.placeId;
+    if (!placeId) {
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const group = el?.closest?.(".place-group") as Element | null;
+      placeId = group?.getAttribute?.("data-id") ?? null;
+    }
+    if (placeId) setSelectedPlace(placeId);
+  }, []);
+
   // 获取选中的地点
   const selectedPlaceData = mapData && selectedPlace
     ? mapData.places.find((p) => p.id === selectedPlace)
@@ -288,13 +323,15 @@ export function NovelMapSection({
             <div
               className="relative w-full h-48 overflow-hidden rounded border cursor-pointer"
               onClick={handlePlaceClick}
+              onPointerDown={handlePointerDown}
+              onPointerUp={handlePointerUp}
             >
               <div
                 className="absolute inset-0"
                 dangerouslySetInnerHTML={{ __html: sanitizeSvg(mapSvg) }}
                 style={{ transform: "scale(0.35)", transformOrigin: "top left", width: "286%", height: "286%" }}
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent" />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent" style={{ pointerEvents: "none" }} />
 
               <div className="absolute bottom-2 left-2 right-2 flex justify-between items-end">
                 <div className="text-xs text-white">
@@ -394,14 +431,16 @@ export function NovelMapSection({
           {/* 工具栏 */}
           <div className="flex items-center justify-between p-2 border-b bg-background z-10">
             <div className="flex items-center gap-2">
-              {/* 视图缩放 */}
-              <Button size="sm" variant="outline" onClick={() => handleZoom(1.2)}>
-                <ZoomIn className="h-4 w-4" />
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => handleZoom(0.8)}>
-                <ZoomOut className="h-4 w-4" />
-              </Button>
-              <span className="text-xs text-muted-foreground">{Math.round(fullscreenScale * 100)}%</span>
+              {/* 缩放控件（对齐人物关系图样式：缩小 | 百分比% | 放大） */}
+              <div className="flex items-center gap-1.5 bg-background px-1 rounded-md">
+                <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => handleZoom(0.8)} title="缩小" aria-label="缩小">
+                  <ZoomOut className="h-3.5 w-3.5" />
+                </Button>
+                <span className="text-xs text-muted-foreground w-10 text-center">{Math.round(fullscreenScale * 100)}%</span>
+                <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => handleZoom(1.2)} title="放大" aria-label="放大">
+                  <ZoomIn className="h-3.5 w-3.5" />
+                </Button>
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <Button size="sm" variant="outline" onClick={() => setShowFullscreen(false)}>
@@ -429,6 +468,8 @@ export function NovelMapSection({
             }}
             onMouseUp={() => setIsDragging(false)}
             onMouseLeave={() => setIsDragging(false)}
+            onPointerDown={handlePointerDown}
+            onPointerUp={handlePointerUp}
             onClick={handlePlaceClick}
           >
             <div
