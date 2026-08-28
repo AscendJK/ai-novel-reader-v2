@@ -67,7 +67,7 @@ export function CharacterGraph({ graphData, onRegenerate }: Props) {
   }, [expanded]);
 
   const handleZoom = useCallback((delta: number) => {
-    setZoom((z) => Math.max(0.3, Math.min(5, z + delta)));
+    setZoom((z) => Math.max(0.3, Math.min(10, z + delta)));
   }, []);
 
   // 导出图片
@@ -219,7 +219,7 @@ export function CharacterGraph({ graphData, onRegenerate }: Props) {
     const handler = (e: WheelEvent) => {
       e.preventDefault();
       const delta = e.deltaY > 0 ? -0.15 : 0.15;
-      setZoom((z) => Math.max(0.3, Math.min(5, z + delta)));
+      setZoom((z) => Math.max(0.3, Math.min(10, z + delta)));
     };
     el.addEventListener("wheel", handler, { passive: false });
     return () => el.removeEventListener("wheel", handler);
@@ -247,7 +247,7 @@ export function CharacterGraph({ graphData, onRegenerate }: Props) {
       const dy = e.touches[0].clientY - e.touches[1].clientY;
       const dist = Math.hypot(dx, dy);
       const scale = dist / pinchStartDist.current;
-      setZoom(Math.max(0.3, Math.min(5, pinchStartZoom.current * scale)));
+      setZoom(Math.max(0.3, Math.min(10, pinchStartZoom.current * scale)));
     } else if (e.touches.length === 1 && dragging) {
       setPan({
         x: e.touches[0].clientX - dragStart.current.x,

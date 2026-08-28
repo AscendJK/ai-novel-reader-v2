@@ -36,7 +36,7 @@ export function NovelMap({ mapData, onRegenerate, loading }: NovelMapProps) {
 
   // 处理缩放
   const handleZoom = useCallback((delta: number) => {
-    setScale((prev) => Math.max(0.5, Math.min(3, prev + delta)));
+    setScale((prev) => Math.max(0.5, Math.min(5, prev + delta)));
   }, []);
 
   // 处理拖拽开始
@@ -63,6 +63,8 @@ export function NovelMap({ mapData, onRegenerate, loading }: NovelMapProps) {
   // 触摸状态 ref
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const pinchStartRef = useRef<{ dist: number; scale: number } | null>(null);
+  // 手指按下时的屏幕坐标，用于在 touchend 时区分 tap 与拖拽（移动端可能不合成 click）
+  const touchOriginRef = useRef<{ x: number; y: number } | null>(null);
 
   // 处理触摸开始
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
@@ -71,10 +73,12 @@ export function NovelMap({ mapData, onRegenerate, loading }: NovelMapProps) {
         x: e.touches[0].clientX - position.x,
         y: e.touches[0].clientY - position.y,
       };
+      touchOriginRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
     } else if (e.touches.length === 2) {
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
       pinchStartRef.current = { dist: Math.hypot(dx, dy), scale };
+      touchOriginRef.current = null; // 双指不视为 tap
     }
   }, [position, scale]);
 
@@ -90,13 +94,29 @@ export function NovelMap({ mapData, onRegenerate, loading }: NovelMapProps) {
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
       const dist = Math.hypot(dx, dy);
-      const newScale = Math.max(0.5, Math.min(3, pinchStartRef.current.scale * (dist / pinchStartRef.current.dist)));
+      const newScale = Math.max(0.5, Math.min(5, pinchStartRef.current.scale * (dist / pinchStartRef.current.dist)));
       setScale(newScale);
     }
   }, []);
 
   // 处理触摸结束
-  const handleTouchEnd = useCallback(() => {
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    // tap 检测：单指且位移极小视为点击。移动端因 touchmove + touchAction:none
+    // 可能不合成 click，导致点击节点无法弹出描述；这里用手动命中检测兜底。
+    if (e.changedTouches.length === 1 && touchOriginRef.current && touchStartRef.current) {
+      const t = e.changedTouches[0];
+      const dx = t.clientX - touchOriginRef.current.x;
+      const dy = t.clientY - touchOriginRef.current.y;
+      if (Math.hypot(dx, dy) < 8) {
+        const el = document.elementFromPoint(t.clientX, t.clientY);
+        const group = (el?.closest?.(".place-group") as HTMLElement | null) ?? null;
+        if (group) {
+          const placeId = group.getAttribute("data-id");
+          if (placeId) setSelectedPlace(placeId);
+        }
+      }
+    }
+    touchOriginRef.current = null;
     touchStartRef.current = null;
     pinchStartRef.current = null;
   }, []);
@@ -230,30 +250,30 @@ export function NovelMap({ mapData, onRegenerate, loading }: NovelMapProps) {
       ref={wrapperRef}
       className="w-full h-full relative"
     >
-      {/* 控制按钮 */}
-      <div className="absolute top-2 right-2 z-10 flex gap-1">
-        <Button size="sm" variant="outline" className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 sm:h-8 sm:w-auto sm:p-2" onClick={() => handleZoom(0.1)} title="放大">
-          <ZoomIn className="h-4 w-4" />
-        </Button>
-        <Button size="sm" variant="outline" className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 sm:h-8 sm:w-auto sm:p-2" onClick={() => handleZoom(-0.1)} title="缩小">
-          <ZoomOut className="h-4 w-4" />
-        </Button>
-        <Button size="sm" variant="outline" className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 sm:h-8 sm:w-auto sm:p-2" onClick={handleExportImage} title="导出图片">
-          <Download className="h-4 w-4" />
-        </Button>
-        <Button size="sm" variant="outline" className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 sm:h-8 sm:w-auto sm:p-2" onClick={handleExportJson} title="导出 JSON">
-          <FileJson className="h-4 w-4" />
-        </Button>
-        {onRegenerate && (
-          <Button size="sm" variant="outline" className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 sm:h-8 sm:w-auto sm:p-2" onClick={onRegenerate} disabled={loading} title="重新生成">
-            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+      {/* 缩放控件（对齐人物关系图样式：缩小 | 百分比 | 放大） */}
+      <div className="absolute top-2 right-2 z-10 flex flex-col items-end gap-1">
+        <div className="flex gap-1.5 items-center bg-background/80 backdrop-blur px-2 py-1.5 rounded-md">
+          <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => handleZoom(-0.2)} title="缩小" aria-label="缩小">
+            <ZoomOut className="h-3.5 w-3.5" />
           </Button>
-        )}
-      </div>
-
-      {/* 缩放比例显示 */}
-      <div className="absolute bottom-2 right-2 z-10 text-xs text-muted-foreground bg-background/80 px-2 py-1 rounded">
-        {Math.round(scale * 100)}%
+          <span className="text-xs text-muted-foreground w-10 text-center">{Math.round(scale * 100)}%</span>
+          <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => handleZoom(0.2)} title="放大" aria-label="放大">
+            <ZoomIn className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+        <div className="flex gap-1">
+          <Button size="sm" variant="outline" className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 sm:h-8 sm:w-auto sm:p-2" onClick={handleExportImage} title="导出图片">
+            <Download className="h-4 w-4" />
+          </Button>
+          <Button size="sm" variant="outline" className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 sm:h-8 sm:w-auto sm:p-2" onClick={handleExportJson} title="导出 JSON">
+            <FileJson className="h-4 w-4" />
+          </Button>
+          {onRegenerate && (
+            <Button size="sm" variant="outline" className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 sm:h-8 sm:w-auto sm:p-2" onClick={onRegenerate} disabled={loading} title="重新生成">
+              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* 地图容器 */}
