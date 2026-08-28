@@ -133,6 +133,16 @@ export class SyncClient {
       if (result.token) localStorage.setItem("sync-token", result.token);
       localStorage.setItem(this.syncTimeKey, "0");
 
+      // 修复根因3：将 register 返回的服务器数据立即落地到本地（此前被丢弃，导致首屏空白）
+      if (result.data && this.applyData) {
+        try {
+          await this.applyData(result.data);
+          console.log("[sync] applied server data from register");
+        } catch (e) {
+          console.warn("[sync] applyData from register failed:", e);
+        }
+      }
+
       return { success: true, isNew: result.isNew, activeCount: result.activeCount };
     } catch (e) {
       console.error("[sync] login error:", e);
@@ -415,6 +425,17 @@ export class SyncClient {
         this.activeCount = result.activeCount;
         localStorage.setItem("sync-clientId", result.clientId);
         if (result.token) localStorage.setItem("sync-token", result.token);
+
+        // 修复根因3：tryReRegister 时也将服务器数据落地（此前被丢弃）
+        if (result.data && this.applyData) {
+          try {
+            await this.applyData(result.data);
+            console.log("[sync] applied server data from re-register");
+          } catch (e) {
+            console.warn("[sync] applyData from re-register failed:", e);
+          }
+        }
+
         console.log("[sync] re-registered successfully");
         return true;
       }

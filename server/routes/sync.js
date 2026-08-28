@@ -128,8 +128,12 @@ router.post("/push", (req, res) => {
       return res.json({ merged: false, data });
     }
 
-    const merged = mergeAndSave(username, changes, lastSyncTime || 0);
-    res.json({ merged: !!merged, data: merged });
+    const { data, orphanedNovelIds } = mergeAndSave(username, changes, lastSyncTime || 0);
+    const result = { merged: !!(data || orphanedNovelIds?.length), data };
+    if (orphanedNovelIds?.length) {
+      result.orphanedNovelIds = orphanedNovelIds;
+    }
+    res.json(result);
   } catch (e) {
     console.error("[sync] push error:", e);
     res.status(500).json({ error: "同步失败" });

@@ -193,33 +193,50 @@ function isSensitiveKey(key) {
 }
 
 // Merge changes into SQLite (last write wins by updatedAt)
+// Returns { data, orphanedNovelIds } — orphanedNovelIds is the set of novelIds
+// whose data was skipped because the novel doesn't exist on the server yet.
+// The frontend should retry after uploading the missing novels.
 export function mergeAndSave(username, changes, lastSyncTime = 0) {
+  const orphanedNovelIds = new Set();
+
   db.db.transaction(() => {
     if (changes.summaries?.length) {
       for (const s of changes.summaries) {
         if (!s.id || !s.novelId) continue;
-        if (!db.getNovel(s.novelId)) continue; // skip orphaned records
+        if (!db.getNovel(s.novelId)) {
+          orphanedNovelIds.add(s.novelId);
+          continue; // skip orphaned records, track for retry
+        }
         db.upsertSummary({ ...s, username });
       }
     }
     if (changes.notes?.length) {
       for (const n of changes.notes) {
         if (!n.id || !n.novelId) continue;
-        if (!db.getNovel(n.novelId)) continue; // skip orphaned records
+        if (!db.getNovel(n.novelId)) {
+          orphanedNovelIds.add(n.novelId);
+          continue;
+        }
         db.upsertNote({ ...n, username });
       }
     }
     if (changes.maps?.length) {
       for (const m of changes.maps) {
         if (!m.id || !m.novelId) continue;
-        if (!db.getNovel(m.novelId)) continue; // skip orphaned records
+        if (!db.getNovel(m.novelId)) {
+          orphanedNovelIds.add(m.novelId);
+          continue;
+        }
         db.upsertMap({ ...m, username, data: JSON.stringify(m.data) });
       }
     }
     if (changes.graphs?.length) {
       for (const g of changes.graphs) {
         if (!g.id || !g.novelId) continue;
-        if (!db.getNovel(g.novelId)) continue; // skip orphaned records
+        if (!db.getNovel(g.novelId)) {
+          orphanedNovelIds.add(g.novelId);
+          continue;
+        }
         db.upsertGraph({ ...g, username, data: JSON.stringify(g.data) });
       }
     }
@@ -237,11 +254,22 @@ export function mergeAndSave(username, changes, lastSyncTime = 0) {
         }
       }
     }
+    // 修复根因4：同步 lastOpened（最后打开时间），仅更新该字段，不覆盖已有 chapterId/chapterIndex
+    if (changes.progress?.lastOpened && Object.keys(changes.progress.lastOpened).length > 0) {
+      for (const [novelId, openedAt] of Object.entries(changes.progress.lastOpened)) {
+        if (openedAt) {
+          db.db.prepare(
+            `UPDATE reading_progress SET last_opened = ? WHERE username = ? AND novel_id = ?`
+          ).run(openedAt, username, novelId);
+        }
+      }
+    }
   })();
 
   // Capture AFTER transaction — upserts use Date.now() so updated_at <= lastSyncAt
   const lastSyncAt = Date.now();
   const data = db.gatherSyncData(username, lastSyncTime);
   data.lastSyncAt = lastSyncAt;
-  return data;
+
+  return { data, orphanedNovelIds: Array.from(orphanedNovelIds) };
 }

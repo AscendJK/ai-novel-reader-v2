@@ -5,6 +5,7 @@ import { createNovel } from "@/parsers/utils";
 import { saveNovel } from "@/db/repositories";
 import { useNovelStore } from "@/stores/novel-store";
 import { apiFetch } from "@/lib/api-client";
+import { showToast } from "@/lib/toast-store";
 import { clearCache } from "@/rag/index";
 import type { Novel } from "@/parsers/types";
 
@@ -74,39 +75,58 @@ export function useFileParser() {
         clearCache(novel.id);
       } catch (e) { console.warn("[useFileParser] 清除 RAG 缓存失败:", e); }
 
-      // Upload to server + auto-join
-      apiFetch(`/api/novels`, {
-        method: "POST",
-        body: JSON.stringify({
-          novel: {
-            id: novel.id, title: novel.title, author: novel.author,
-            fileName: novel.fileName, fileFormat: novel.fileFormat,
-            totalChars: novel.totalChars, chapterCount: novel.chapterCount,
-            createdAt: novel.createdAt,
-          },
-          chapters: novel.chapters.map((c) => ({
-            id: c.id, novelId: c.novelId, index: c.index,
-            title: c.title, content: c.content,
-            startOffset: c.startOffset, endOffset: c.endOffset,
-          })),
-        }),
-      }).then(async (r) => {
-        if (!r?.ok) {
-          console.error(`[upload] ${novel.title} failed: HTTP ${r?.status}`);
-          return;
+      // Upload to server + auto-join (await + retry, 修复根因2：fir-and-forget 导致小说未达服务器)
+      const uploadToServer = async (retries = 2): Promise<boolean> => {
+        for (let attempt = 1; attempt <= retries; attempt++) {
+          try {
+            const r = await apiFetch(`/api/novels`, {
+              method: "POST",
+              body: JSON.stringify({
+                novel: {
+                  id: novel.id, title: novel.title, author: novel.author,
+                  fileName: novel.fileName, fileFormat: novel.fileFormat,
+                  totalChars: novel.totalChars, chapterCount: novel.chapterCount,
+                  createdAt: novel.createdAt,
+                },
+                chapters: novel.chapters.map((c) => ({
+                  id: c.id, novelId: c.novelId, index: c.index,
+                  title: c.title, content: c.content,
+                  startOffset: c.startOffset, endOffset: c.endOffset,
+                })),
+              }),
+            });
+            if (!r?.ok) {
+              console.error(`[upload] ${novel.title} attempt ${attempt}/${retries} failed: HTTP ${r?.status}`);
+              if (attempt < retries) await new Promise(r => setTimeout(r, 2000));
+              continue;
+            }
+            const data = await r.json();
+            const nid = data.novelId;
+            if (!nid) {
+              console.error(`[upload] ${novel.title}: no novelId in response`);
+              if (attempt < retries) await new Promise(r => setTimeout(r, 2000));
+              continue;
+            }
+            // Auto-join
+            try {
+              const jr = await apiFetch(`/api/novels/${nid}/join`, { method: "POST" });
+              if (!jr?.ok) console.error(`[upload] ${novel.title} join failed: HTTP ${jr?.status}`);
+            } catch (e) {
+              console.error(`[upload] ${novel.title} join error:`, e);
+            }
+            return true;
+          } catch (e) {
+            console.error(`[upload] ${novel.title} attempt ${attempt}/${retries} error:`, e);
+            if (attempt < retries) await new Promise(r => setTimeout(r, 2000));
+          }
         }
-        const data = await r.json();
-        const nid = data.novelId;
-        if (!nid) { console.error(`[upload] ${novel.title}: no novelId in response`); return; }
-
-        // Auto-join
-        apiFetch(`/api/novels/${nid}/join`, {
-          method: "POST",
-        }).then((jr) => {
-          if (!jr?.ok) console.error(`[upload] ${novel.title} join failed: HTTP ${jr?.status}`);
-        }).catch((e) => console.error(`[upload] ${novel.title} join error:`, e));
-
-      }).catch((e) => console.error(`[upload] ${novel.title} error:`, e));
+        return false;
+      };
+      const uploaded = await uploadToServer();
+      if (!uploaded) {
+        console.warn(`[upload] ${novel.title} all retries exhausted, data will sync when server becomes available`);
+        showToast("小说已保存到本地，上传到服务器失败，将在有网络时自动同步", "warn");
+      }
 
       setProgress(100);
       addNovel(novel);
