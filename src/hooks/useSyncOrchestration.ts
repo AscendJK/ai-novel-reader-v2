@@ -3,7 +3,7 @@ import { useNovelStore } from "@/stores/novel-store";
 import { useSummaryStore } from "@/stores/summary-store";
 import { useUIStore } from "@/stores/ui-store";
 import { useRAGStore } from "@/stores/rag-store";
-import { loadAllNovels, loadSummaries, cleanupDeletedRecords, deleteUserData } from "@/db/repositories";
+import { loadAllNovels, loadSummaries, cleanupDeletedRecords, deleteUserData, loadNovel } from "@/db/repositories";
 import { getUserDB, setCurrentUser, deleteUserDB } from "@/db/database";
 import { shouldDownloadNovel, shouldDeleteLocalNovel } from "@/sync/novel-reconciliation";
 import { syncClient } from "@/sync/sync-client";
@@ -274,6 +274,48 @@ const applySyncData = useCallback(async (data: SyncData) => {
     return "rename";
   }, [migrateUserData]);
 
+  // 孤儿数据补传：push 时服务器因小说尚未上传而跳过入库的数据。
+  // 收到 orphanedNovelIds 后，若本地存在对应小说则补传到服务器，
+  // 成功后立即 pushNow 重试，把之前被跳过的孤儿数据同步上去。
+  const handleOrphaned = useCallback(async (novelIds: string[]) => {
+    let uploadedAny = false;
+    for (const novelId of novelIds) {
+      try {
+        const novel = await loadNovel(novelId, undefined, true);
+        if (!novel) continue; // 本地无此小说，等待用户上传或跳过
+        const r = await apiFetch(`/api/novels`, {
+          method: "POST",
+          body: JSON.stringify({
+            novel: {
+              id: novel.id, title: novel.title, author: novel.author,
+              fileName: novel.fileName, fileFormat: novel.fileFormat,
+              totalChars: novel.totalChars, chapterCount: novel.chapterCount,
+              createdAt: novel.createdAt,
+            },
+            chapters: novel.chapters.map((c) => ({
+              id: c.id, novelId: c.novelId, index: c.index,
+              title: c.title, content: c.content,
+              startOffset: c.startOffset, endOffset: c.endOffset,
+            })),
+          }),
+        });
+        if (!r?.ok) { console.warn(`[sync-orphan] 上传小说 ${novel.title} 失败: HTTP ${r?.status}`); continue; }
+        const data = await r.json().catch(() => ({}));
+        if (data?.novelId) {
+          try { await apiFetch(`/api/novels/${data.novelId}/join`, { method: "POST" }); } catch { /* ignore */ }
+          uploadedAny = true;
+          console.log(`[sync-orphan] 已补传小说 ${novel.title}`);
+        }
+      } catch (e) {
+        console.warn(`[sync-orphan] 补传小说 ${novelId} 出错:`, e);
+      }
+    }
+    if (uploadedAny) {
+      // 补传成功，立即重推孤儿数据
+      syncClient.pushNow().catch(() => {});
+    }
+  }, []);
+
   const startSync = useCallback(() => {
     if (syncStarted.current) return;
     syncStarted.current = true;
@@ -283,6 +325,7 @@ const applySyncData = useCallback(async (data: SyncData) => {
       isAiRunning: getAiRunning,
       onKicked: handleKicked,
       onConflict: handleSyncConflict,
+      onOrphaned: handleOrphaned,
     });
     setTimeout(() => {
       syncClient.syncOnce().then(() => syncJoinedNovels()).catch(() => {
@@ -290,7 +333,7 @@ const applySyncData = useCallback(async (data: SyncData) => {
       });
       cleanupDeletedRecords().catch(() => {});
     }, 0);
-  }, [applySyncData, handleKicked, handleSyncConflict, syncJoinedNovels]);
+  }, [applySyncData, handleKicked, handleSyncConflict, syncJoinedNovels, handleOrphaned]);
 
   const handleLogin = useCallback(async (username: string) => {
     const onlineStatus = await syncClient.checkUserOnline(username);

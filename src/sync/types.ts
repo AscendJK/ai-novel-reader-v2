@@ -8,7 +8,7 @@ export interface SyncData {
   graphs: GraphRecord[];
   settings: Record<string, unknown>;
   progress: {
-    readingPositions: Record<string, { chapterId: string; chapterIndex: number; scrollTop?: number }>;
+    readingPositions: Record<string, { chapterId: string; chapterIndex: number; scrollTop?: number; updatedAt?: number }>;
     lastOpened: Record<string, number>;
   };
   joinedNovelIds?: string[];
@@ -36,4 +36,6 @@ export interface HeartbeatResult {
 export interface PushResult {
   merged: boolean;
   data: SyncData & { username: string; lastSyncAt: number };
+  /** 服务器跳过入库的孤儿数据所属的 novelId（小说尚未上传到服务器），前端应补传后重试 */
+  orphanedNovelIds?: string[];
 }

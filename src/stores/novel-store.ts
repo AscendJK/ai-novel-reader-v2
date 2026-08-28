@@ -81,6 +81,10 @@ export const useNovelStore = create<NovelState>((set, get) => ({
       const selectedIdx = chapter
         ? novel.chapters.findIndex((c) => c.id === chapter.id)
         : 0;
+      // 仅在“纯定位”场景保留已有时间戳：有进度且能匹配到章节（打开同一进度）
+      // 时，不刷新 updatedAt，避免把“打开动作”当作比实际阅读更晚的进度推送。
+      // 其余情况（无进度、或进度章节已失效）视为章节变化，刷新时间戳。
+      const pureReposition = !!(pos && chapter);
       const positions = {
         ...get().readingPositions,
         [novel.id]: {
@@ -89,7 +93,7 @@ export const useNovelStore = create<NovelState>((set, get) => ({
           // 保留已有的滚动位置
           scrollTop: pos?.scrollTop,
           chapterOffset: pos?.chapterOffset,
-          updatedAt: Date.now(),
+          updatedAt: pureReposition ? pos?.updatedAt ?? Date.now() : Date.now(),
         },
       };
       savePositions(positions);
@@ -221,7 +225,18 @@ export const useNovelStore = create<NovelState>((set, get) => ({
 
   reloadReadingPositions: () => {
     const loaded = loadPositions();
-    // 合并而不是直接覆盖：保留内存中当前会话已产生、但可能尚未落盘的位置
-    set({ readingPositions: { ...loaded, ...get().readingPositions } });
+    const current = get().readingPositions;
+    // 按 updatedAt 合并，而不是让 store 无条件覆盖 loaded：
+    // 修复技术债——若 store 中残留旧进度（早于服务器拉取的新数据），
+    // 直接展开会用旧值覆盖刚同步的服务器进度。改为保留 updatedAt 更新的
+    // 一方，并保留各自独有字段（scrollTop, chapterOffset）。
+    const merged = { ...loaded };
+    for (const [novelId, pos] of Object.entries(current)) {
+      const loadedPos = loaded[novelId];
+      if (!loadedPos || (pos.updatedAt || 0) >= (loadedPos.updatedAt || 0)) {
+        merged[novelId] = { ...loadedPos, ...pos };
+      }
+    }
+    set({ readingPositions: merged });
   },
 }));

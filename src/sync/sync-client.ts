@@ -28,6 +28,7 @@ export class SyncClient {
   private isAiRunning: () => boolean = () => false;
   private onKicked: ((username: string) => void) | null = null;
   private onConflict: ((username: string) => Promise<"overwrite" | "rename">) | null = null;
+  private onOrphaned: ((novelIds: string[]) => void) | null = null;
   private reRegistering = false;
   private syncing = false;
   private heartbeatFailCount = 0;
@@ -156,6 +157,7 @@ export class SyncClient {
     isAiRunning: () => boolean;
     onKicked: (username: string) => void;
     onConflict?: (username: string) => Promise<"overwrite" | "rename">;
+    onOrphaned?: (novelIds: string[]) => void;
   }) {
     // 防止重复创建定时器
     this.stop();
@@ -164,6 +166,7 @@ export class SyncClient {
     this.isAiRunning = opts.isAiRunning;
     this.onKicked = opts.onKicked;
     this.onConflict = opts.onConflict || null;
+    this.onOrphaned = opts.onOrphaned || null;
 
     this.heartbeatTimer = setInterval(() => this.doHeartbeat(), HEARTBEAT_INTERVAL);
     this.syncTimer = setInterval(() => this.doSync(), SYNC_INTERVAL);
@@ -283,6 +286,9 @@ export class SyncClient {
                     localStorage.setItem(this.syncTimeKey, String(this.lastSyncTime));
                   }
                 }
+                if (r.orphanedNovelIds?.length && this.onOrphaned) {
+                  this.onOrphaned(r.orphanedNovelIds);
+                }
                 return true;
               } else {
                 console.warn("[sync] overwrite: retry push failed, cooldown 5 min");
@@ -337,6 +343,9 @@ export class SyncClient {
                   localStorage.setItem(this.syncTimeKey, String(this.lastSyncTime));
                 }
               }
+              if (r.orphanedNovelIds?.length && this.onOrphaned) {
+                this.onOrphaned(r.orphanedNovelIds);
+              }
               return true;
             } else {
               const errText = await retryResp.text().catch(() => "unknown");
@@ -362,6 +371,11 @@ export class SyncClient {
         if (r.data) {
           await this.applyData(r.data);
           checkTimeout();
+        }
+
+        // 孤儿数据：对应小说尚未上传到服务器，通知上层补传后重试
+        if (r.orphanedNovelIds?.length && this.onOrphaned) {
+          this.onOrphaned(r.orphanedNovelIds);
         }
 
         // 通知其他标签页同步完成
