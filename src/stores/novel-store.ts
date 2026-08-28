@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { Novel } from "@/parsers/types";
 import { userKey } from "@/lib/user-utils";
 
-interface ReadPosition { chapterId: string; chapterIndex: number; scrollTop?: number; /** 章节内偏移量（像素），相对于章节元素顶部 */ chapterOffset?: number }
+interface ReadPosition { chapterId: string; chapterIndex: number; scrollTop?: number; /** 章节内偏移量（像素），相对于章节元素顶部 */ chapterOffset?: number; /** 同步冲突解决时间戳 */ updatedAt?: number }
 
 // Shallow equality helper for Zustand selectors
 export function shallow<T>(a: T, b: T): boolean {
@@ -89,6 +89,7 @@ export const useNovelStore = create<NovelState>((set, get) => ({
           // 保留已有的滚动位置
           scrollTop: pos?.scrollTop,
           chapterOffset: pos?.chapterOffset,
+          updatedAt: Date.now(),
         },
       };
       savePositions(positions);
@@ -120,6 +121,7 @@ export const useNovelStore = create<NovelState>((set, get) => ({
           chapterIndex: idx >= 0 ? idx : 0,
           scrollTop: scrollTop !== undefined ? scrollTop : existingPos?.scrollTop,
           chapterOffset: existingPos?.chapterOffset,
+          updatedAt: Date.now(),
         },
       };
       savePositions(positions);
@@ -163,6 +165,7 @@ export const useNovelStore = create<NovelState>((set, get) => ({
         chapterIndex,
         scrollTop: newScrollTop,
         chapterOffset: newChapterOffset,
+        updatedAt: Date.now(),
       },
     };
     savePositions(positions);

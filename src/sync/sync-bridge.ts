@@ -208,8 +208,15 @@ export async function applyServerData(data: SyncData): Promise<void> {
     try {
       if (data.progress.readingPositions) {
         const existing = JSON.parse(localStorage.getItem(userKey("novel-reader-positions")) || "{}");
-        localStorage.setItem(userKey("novel-reader-positions"),
-          JSON.stringify({ ...existing, ...data.progress.readingPositions }));
+        const merged = { ...existing };
+        for (const [novelId, serverPos] of Object.entries(data.progress.readingPositions)) {
+          const existingPos = existing[novelId];
+          if (!existingPos || (serverPos.updatedAt || 0) >= (existingPos.updatedAt || 0)) {
+            // 服务器数据更新，但保留本地独有字段（scrollTop, chapterOffset）
+            merged[novelId] = { ...existingPos, ...serverPos };
+          }
+        }
+        localStorage.setItem(userKey("novel-reader-positions"), JSON.stringify(merged));
         // 修复：服务器进度写入 localStorage 后，立即同步到 store，避免后续
         // setCurrentNovel/saveReadingPosition 因 store 无进度而回落第一章 0
         try {

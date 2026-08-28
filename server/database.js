@@ -65,6 +65,7 @@ db.exec(`
     chapter_id TEXT,
     chapter_index INTEGER DEFAULT 0,
     last_opened INTEGER DEFAULT 0,
+    updated_at INTEGER DEFAULT 0,
     PRIMARY KEY (username, novel_id)
   );
 
@@ -128,6 +129,9 @@ try { db.exec("ALTER TABLE notes ADD COLUMN deleted INTEGER DEFAULT 0"); } catch
 // ── Migration: add deleted/used_fallback to summaries ─────
 try { db.exec("ALTER TABLE summaries ADD COLUMN deleted INTEGER DEFAULT 0"); } catch {}
 try { db.exec("ALTER TABLE summaries ADD COLUMN used_fallback INTEGER DEFAULT 0"); } catch {}
+
+// ── Migration: add updated_at to reading_progress ────
+try { db.exec("ALTER TABLE reading_progress ADD COLUMN updated_at INTEGER DEFAULT 0"); } catch {}
 
 // ── Migration: add maps table ────────────────────────────
 db.exec(`
@@ -290,23 +294,30 @@ export function createUser(username) {
 
 export function getProgress(username) {
   const rows = db.prepare(`
-    SELECT novel_id AS \"novelId\", chapter_id AS \"chapterId\", chapter_index AS \"chapterIndex\", last_opened AS \"lastOpened\"
+    SELECT novel_id AS \"novelId\", chapter_id AS \"chapterId\", chapter_index AS \"chapterIndex\", last_opened AS \"lastOpened\", updated_at AS \"updatedAt\"
     FROM reading_progress WHERE username = ?
   `).all(username);
   const readingPositions = {};
   const lastOpened = {};
   for (const r of rows) {
-    readingPositions[r.novelId] = { chapterId: r.chapterId, chapterIndex: r.chapterIndex };
+    readingPositions[r.novelId] = { chapterId: r.chapterId, chapterIndex: r.chapterIndex, updatedAt: r.updatedAt || 0 };
     lastOpened[r.novelId] = r.lastOpened;
   }
   return { readingPositions, lastOpened };
 }
 
-export function saveProgress(username, novelId, chapterId, chapterIndex) {
+export function saveProgress(username, novelId, chapterId, chapterIndex, updatedAt) {
+  const now = updatedAt || Date.now();
   db.prepare(`
-    INSERT OR REPLACE INTO reading_progress (username, novel_id, chapter_id, chapter_index, last_opened)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(username, novelId, chapterId, chapterIndex, Date.now());
+    INSERT INTO reading_progress (username, novel_id, chapter_id, chapter_index, last_opened, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(username, novel_id) DO UPDATE SET
+      chapter_id = excluded.chapter_id,
+      chapter_index = excluded.chapter_index,
+      last_opened = excluded.last_opened,
+      updated_at = excluded.updated_at
+    WHERE excluded.updated_at >= updated_at
+  `).run(username, novelId, chapterId, chapterIndex, now, now);
 }
 
 // ── Summaries ──

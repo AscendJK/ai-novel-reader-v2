@@ -250,7 +250,7 @@ export function mergeAndSave(username, changes, lastSyncTime = 0) {
     if (changes.progress?.readingPositions && Object.keys(changes.progress.readingPositions).length > 0) {
       for (const [novelId, pos] of Object.entries(changes.progress.readingPositions)) {
         if (pos && pos.chapterId) {
-          db.saveProgress(username, novelId, pos.chapterId, pos.chapterIndex ?? 0);
+          db.saveProgress(username, novelId, pos.chapterId, pos.chapterIndex ?? 0, pos.updatedAt || Date.now());
         }
       }
     }

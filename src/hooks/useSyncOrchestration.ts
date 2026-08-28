@@ -194,9 +194,17 @@ export function useSyncOrchestration({ onSyncReady, setLocalUsers }: SyncOrchest
 const applySyncData = useCallback(async (data: SyncData) => {
     await applyServerData(data);
     if (data.progress?.readingPositions) {
-      useNovelStore.setState((s) => ({
-        readingPositions: { ...s.readingPositions, ...data.progress!.readingPositions },
-      }));
+      useNovelStore.setState((s) => {
+        const merged = { ...s.readingPositions };
+        for (const [novelId, serverPos] of Object.entries(data.progress!.readingPositions)) {
+          const existingPos = s.readingPositions[novelId];
+          if (!existingPos || (serverPos.updatedAt || 0) >= (existingPos.updatedAt || 0)) {
+            // 保留本地独有字段（scrollTop, chapterOffset），服务器数据更新时覆盖
+            merged[novelId] = { ...existingPos, ...serverPos };
+          }
+        }
+        return { readingPositions: merged };
+      });
     }
     const { currentNovel: cn } = useNovelStore.getState();
     if (cn) {
