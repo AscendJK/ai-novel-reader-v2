@@ -2,6 +2,7 @@ import type { SyncData } from "./types";
 import type { SummaryItem } from "@/stores/summary-store";
 import { sharedDB, getUserDB } from "@/db/database";
 import { useAPIStore } from "@/stores/api-store";
+import { useNovelStore } from "@/stores/novel-store";
 import { userKey } from "@/lib/user-utils";
 
 // 每批同步的最大记录数
@@ -209,6 +210,13 @@ export async function applyServerData(data: SyncData): Promise<void> {
         const existing = JSON.parse(localStorage.getItem(userKey("novel-reader-positions")) || "{}");
         localStorage.setItem(userKey("novel-reader-positions"),
           JSON.stringify({ ...existing, ...data.progress.readingPositions }));
+        // 修复：服务器进度写入 localStorage 后，立即同步到 store，避免后续
+        // setCurrentNovel/saveReadingPosition 因 store 无进度而回落第一章 0
+        try {
+          useNovelStore.getState().reloadReadingPositions();
+        } catch (e) {
+          console.warn("[sync] reloadReadingPositions failed:", e);
+        }
       }
       if (data.progress.lastOpened) {
         const existing = JSON.parse(localStorage.getItem(userKey("novel-reader-last-opened")) || "{}");
