@@ -70,6 +70,49 @@ export function NovelMapSection({
     });
   }, []);
 
+  // 节点 HTML 热区：用 React 原生元素覆盖到节点位置，点击不依赖 SVG 触摸命中测试，
+  // 彻底绕开“移动端点不到节点”的问题。坐标为 renderMap 相同的 SVG 内坐标。
+  const renderNodeHitAreas = useCallback(() => {
+    if (!mapData?.places?.length || !mapData?.layers?.length) return null;
+    const topLevel = Math.min(...mapData.layers.map(l => l.level));
+    // 与 renderMap.renderPlaces 一致：跳过最大层级的父级节点（SVG 中不渲染成圆点）
+    const x0 = (v: number) => 60 + (v / 1000) * (1000 - 120);
+    const y0 = (v: number) => 60 + (v / 1000) * (1000 - 120);
+
+    return mapData.places
+      .filter(p => p.level > topLevel)
+      .map((p) => {
+        const cx = x0(p.x);
+        const cy = y0(p.y);
+        return (
+          <div
+            key={p.id}
+            data-place-id={p.id}
+            style={{
+              position: "absolute",
+              left: cx - 18,
+              top: cy - 18,
+              width: 36,
+              height: 36,
+              pointerEvents: "auto",
+              cursor: "pointer",
+              borderRadius: "50%",
+              background: "transparent",
+              WebkitTapHighlightColor: "transparent",
+            }}
+            onPointerDown={(e) => {
+              // 阻止冒泡到地图拖拽/点击检测，确保只触发“选中节点”
+              e.stopPropagation();
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setSelectedPlace(p.id);
+            }}
+          />
+        );
+      });
+  }, [mapData]);
+
   // 使用原生事件监听器处理滚轮（支持 preventDefault）
   useEffect(() => {
     const element = fullscreenContainerRef.current;
@@ -455,6 +498,25 @@ export function NovelMapSection({
                   <ZoomIn className="h-3.5 w-3.5" />
                 </Button>
               </div>
+              {/* 地点快捷选择：零命中测试的兜底入口，移动端点节点热区失效时也能看描述 */}
+              {mapData?.places?.length ? (
+                <select
+                  value={selectedPlace ?? ""}
+                  onChange={(e) => e.target.value && setSelectedPlace(e.target.value)}
+                  className="h-8 rounded-md border border-input bg-background px-2 text-xs max-w-[40vw] sm:max-w-[220px] cursor-pointer"
+                  aria-label="选择地点"
+                >
+                  <option value="">📍 选择地点…</option>
+                  {mapData.places
+                    .slice()
+                    .sort((a, b) => (a.affiliation || "").localeCompare(b.affiliation || ""))
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.affiliation ? `${p.affiliation} · ` : ""}{p.name}
+                      </option>
+                    ))}
+                </select>
+              ) : null}
             </div>
             <div className="flex items-center gap-2">
               <Button size="sm" variant="outline" onClick={() => setShowFullscreen(false)}>
@@ -478,9 +540,30 @@ export function NovelMapSection({
                 transform: `translate(${fullscreenPos.x}px, ${fullscreenPos.y}px) scale(${fullscreenScale})`,
                 transformOrigin: "0 0",
                 transition: isDragging ? "none" : "transform 0.1s ease",
+                position: "relative",
+                width: 1170,
+                height: 1050,
               }}
-              dangerouslySetInnerHTML={{ __html: sanitizeSvg(mapSvg) }}
-            />
+            >
+              <div dangerouslySetInnerHTML={{ __html: sanitizeSvg(mapSvg) }} />
+              {/* HTML 节点热区覆盖层：不依赖 SVG 触摸命中测试，移动端点击可靠
+                  尺寸需与 SVG 一致（width=1000+150+20, height=1000+50），否则缩放/窄屏下错位 */}
+              {mapData && (
+                <div
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    top: 0,
+                    width: 1170,
+                    height: 1050,
+                    zIndex: 2,
+                    pointerEvents: "none",
+                  }}
+                >
+                  {renderNodeHitAreas()}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
