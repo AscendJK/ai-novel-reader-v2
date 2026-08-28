@@ -258,15 +258,17 @@ ${place.affiliation ? `势力: ${place.affiliation}` : ""}
 ${place.description}`;
 
     return `
-      <g class="place-group" data-id="${place.id}" style="cursor: pointer;">
+      <g class="place-group" data-id="${place.id}" style="cursor: pointer; pointer-events: auto;">
         <title>${tooltipContent}</title>
+        <!-- 透明热区：略微放大命中区域，方便移动端点选 -->
+        <circle cx="${x}" cy="${y}" r="${size + 10}" fill="transparent" pointer-events="all" />
         <!-- 地点圆圈 -->
         <circle cx="${x}" cy="${y}" r="${size}"
                 fill="${color}" stroke="${borderColor}" stroke-width="2" opacity="0.9" />
         <!-- 地点名称（紧随圆圈下方） -->
         <text x="${x}" y="${y + size + 12}"
               text-anchor="middle" fill="#3a2a0a"
-              font-size="${fontSize}" font-weight="500">
+              font-size="${fontSize}" font-weight="500" pointer-events="none">
           ${place.name}
         </text>
       </g>

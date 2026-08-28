@@ -85,41 +85,16 @@ export function NovelMapSection({
     return () => element.removeEventListener("wheel", handleWheel);
   }, [showFullscreen, handleZoom]);
 
-  // 触摸状态 ref
-  interface TouchStartState {
-    x: number;
-    y: number;
-    posX?: number;
-    posY?: number;
-    placeId?: string | null;
-  }
-  const touchStartRef = useRef<TouchStartState | null>(null);
+  // 触摸状态 ref（原生 touch 仅保留双指 pinch 缩放；单指点击/拖拽统一走 Pointer Events）
   const pinchStartRef = useRef<{ dist: number; scale: number } | null>(null);
 
-  // 使用原生事件监听器处理触摸（支持 preventDefault）
+  // 使用原生事件监听器处理双指 pinch（Pointer Events 不便于多指缩放，保留原生 touch）
   useEffect(() => {
     const element = fullscreenContainerRef.current;
     if (!element || !showFullscreen) return;
 
     const handleTouchStart = (e: TouchEvent) => {
-      if (e.touches.length === 1) {
-        // 检查目标是否是地点元素
-        const target = e.target as Element;
-        const placeGroup = target?.closest?.(".place-group");
-        const placeId = placeGroup?.getAttribute?.("data-id");
-
-        touchStartRef.current = {
-          x: e.touches[0].clientX,
-          y: e.touches[0].clientY,
-          posX: fullscreenPos.x,
-          posY: fullscreenPos.y,
-          placeId: placeId || null,
-        };
-
-        if (!placeId) {
-          setIsDragging(true);
-        }
-      } else if (e.touches.length === 2) {
+      if (e.touches.length === 2) {
         const dx = e.touches[0].clientX - e.touches[1].clientX;
         const dy = e.touches[0].clientY - e.touches[1].clientY;
         pinchStartRef.current = { dist: Math.hypot(dx, dy), scale: fullscreenScale };
@@ -127,16 +102,9 @@ export function NovelMapSection({
     };
 
     const handleTouchMove = (e: TouchEvent) => {
-      e.preventDefault(); // 阻止浏览器默认行为
-      if (e.touches.length === 1 && touchStartRef.current && !touchStartRef.current.placeId) {
-        // 计算手指移动距离，乘以 3 倍系数提高灵敏度
-        const dx = (e.touches[0].clientX - touchStartRef.current.x) * 3;
-        const dy = (e.touches[0].clientY - touchStartRef.current.y) * 3;
-        setFullscreenPos({
-          x: (touchStartRef.current.posX ?? fullscreenPos.x) + dx,
-          y: (touchStartRef.current.posY ?? fullscreenPos.y) + dy,
-        });
-      } else if (e.touches.length === 2 && pinchStartRef.current) {
+      // 仅在双指 pinch 时 preventDefault，避免破坏单指 tap 的 Pointer/click 事件合成
+      if (e.touches.length === 2 && pinchStartRef.current) {
+        e.preventDefault();
         const dx = e.touches[0].clientX - e.touches[1].clientX;
         const dy = e.touches[0].clientY - e.touches[1].clientY;
         const dist = Math.hypot(dx, dy);
@@ -149,21 +117,9 @@ export function NovelMapSection({
     };
 
     const handleTouchEnd = (e: TouchEvent) => {
-      // 检测是否是点击（移动距离小于 10px）
-      if (touchStartRef.current && e.changedTouches.length === 1) {
-        const dx = Math.abs(e.changedTouches[0].clientX - touchStartRef.current.x);
-        const dy = Math.abs(e.changedTouches[0].clientY - touchStartRef.current.y);
-        if (dx < 10 && dy < 10) {
-          // 是点击，检查是否有地点 ID
-          const placeId = touchStartRef.current.placeId;
-          if (placeId) {
-            setSelectedPlace(placeId);
-          }
-        }
+      if (e.touches.length < 2) {
+        pinchStartRef.current = null;
       }
-      setIsDragging(false);
-      touchStartRef.current = null;
-      pinchStartRef.current = null;
     };
 
     element.addEventListener("touchstart", handleTouchStart, { passive: true });
@@ -175,7 +131,7 @@ export function NovelMapSection({
       element.removeEventListener("touchmove", handleTouchMove);
       element.removeEventListener("touchend", handleTouchEnd);
     };
-  }, [showFullscreen, fullscreenPos, fullscreenScale]);
+  }, [showFullscreen, fullscreenScale]);
 
   // 缓存 SVG 渲染结果
   const mapSvg = useMemo(() => {
@@ -225,39 +181,97 @@ export function NovelMapSection({
     }
   }, []);
 
-  // ---- 统一的指针点击检测（桌面鼠标 + 移动触摸）----
-  // 移动端因 touch-action:none + touchmove preventDefault 常不合成 click，
-  // 导致 onClick 不触发、无法弹出地点描述。改用 Pointer Events：在按下与
-  // 抬起间位移小即视为 tap，直接选中节点，跨平台可靠。
-  const pointerStartRef = useRef<{ x: number; y: number; placeId: string | null } | null>(null);
+  // ---- 统一的指针交互（桌面鼠标 + 移动触摸，替代 onClick/mouse/touch 三套）----
+  // 之前难点：① 移动端 touchmove 无条件 preventDefault 会让浏览器判定非 tap，
+  // 取消 click 合成、把 pointerup 换成 pointercancel，导致 onClick/onPointerUp 不触发；
+  // ② 依赖 e.target.closest 命中 SVG 内节点，真机命中不稳定。
+  // 方案：单指点击/拖拽统一走 Pointer Events，用 elementFromPoint 兜底命中节点，
+  // 仅在双指 pinch 时才 preventDefault（见原生 touch effect）。
+  const pointerStateRef = useRef<{
+    id: number;
+    x: number;
+    y: number;
+    placeId: string | null;
+    posX: number;
+    posY: number;
+    isDrag: boolean;
+  } | null>(null);
 
-  const handlePointerDown = useCallback((e: React.PointerEvent) => {
-    // 只处理左键/触摸主触点（右键排除）
-    if (e.pointerType === "mouse" && e.button !== 0) return;
-    const target = e.target as Element;
-    const placeGroup = target?.closest?.(".place-group") as Element | null;
-    pointerStartRef.current = {
-      x: e.clientX,
-      y: e.clientY,
-      placeId: placeGroup?.getAttribute?.("data-id") ?? null,
-    };
+  // 根据屏幕坐标定位 place-group（不依赖事件 target 的命中测试，更可靠）
+  const placeIdFromPoint = useCallback((clientX: number, clientY: number): string | null => {
+    const el = document.elementFromPoint(clientX, clientY);
+    const group = el?.closest?.(".place-group") as Element | null;
+    return group?.getAttribute?.("data-id") ?? null;
   }, []);
 
-  const handlePointerUp = useCallback((e: React.PointerEvent) => {
-    const start = pointerStartRef.current;
-    pointerStartRef.current = null;
-    if (!start) return;
-    const dx = Math.abs(e.clientX - start.x);
-    const dy = Math.abs(e.clientY - start.y);
-    if (dx >= 10 || dy >= 10) return; // 拖拽，非点击
-    // 命中节点则弹出描述（优先用按下时解析的 placeId，兜底用坐标精准定位）
-    let placeId = start.placeId;
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    // 只处理主触点（鼠标左键 / 触摸主触点；右键/附加键排除）
+    if (e.button !== 0) return;
+    const target = e.target as Element;
+    const placeGroup = target?.closest?.(".place-group") as Element | null;
+    const placeId = placeGroup?.getAttribute?.("data-id") ?? null;
+    pointerStateRef.current = {
+      id: e.pointerId,
+      x: e.clientX,
+      y: e.clientY,
+      placeId,
+      posX: fullscreenPos.x,
+      posY: fullscreenPos.y,
+      isDrag: false,
+    };
+    // 只在非节点处准备拖拽
     if (!placeId) {
-      const el = document.elementFromPoint(e.clientX, e.clientY);
-      const group = el?.closest?.(".place-group") as Element | null;
-      placeId = group?.getAttribute?.("data-id") ?? null;
+      setDragStart({ x: e.clientX - fullscreenPos.x, y: e.clientY - fullscreenPos.y });
     }
-    if (placeId) setSelectedPlace(placeId);
+  }, [fullscreenPos]);
+
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    const s = pointerStateRef.current;
+    if (!s || s.id !== e.pointerId) return;
+    // 非节点处，位移超过阈值才进入拖拽（避免 tap 被误判为拖拽）
+    if (!s.isDrag && !s.placeId) {
+      const dx = Math.abs(e.clientX - s.x);
+      const dy = Math.abs(e.clientY - s.y);
+      if (dx > 6 || dy > 6) {
+        s.isDrag = true;
+        setIsDragging(true);
+        setDragStart({ x: e.clientX - fullscreenPos.x, y: e.clientY - fullscreenPos.y });
+      }
+    } else if (s.isDrag) {
+      setFullscreenPos({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
+    }
+  }, [fullscreenPos, dragStart]);
+
+  const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    const s = pointerStateRef.current;
+    // 只处理对应的 pointer
+    if (!s || s.id !== e.pointerId) return;
+    pointerStateRef.current = null;
+    // 若刚进行过双指 pinch（第二指抬起时第一指会收到 pointerup），忽略以免误触节点
+    if (pinchStartRef.current) {
+      setIsDragging(false);
+      return;
+    }
+    if (s.isDrag) {
+      setIsDragging(false);
+      return;
+    }
+    const dx = Math.abs(e.clientX - s.x);
+    const dy = Math.abs(e.clientY - s.y);
+    if (dx > 12 || dy > 12) {
+      setIsDragging(false);
+      return; // 位移大，非点击
+    }
+    // 点击：命中节点则弹出描述（优先用按下时解析，兜底用坐标定位）
+    const placeId = s.placeId || placeIdFromPoint(e.clientX, e.clientY);
+    if (placeId) {
+      setSelectedPlace(placeId);
+    }
+  }, [placeIdFromPoint]);
+
+  const handlePointerCancel = useCallback(() => {
+    pointerStateRef.current = null;
+    setIsDragging(false);
   }, []);
 
   // 获取选中的地点
@@ -452,25 +466,12 @@ export function NovelMapSection({
           {/* 地图内容 */}
           <div
             className="flex-1 overflow-hidden cursor-grab active:cursor-grabbing"
-            onMouseDown={(e) => {
-              if (e.button === 0) {
-                setIsDragging(true);
-                setDragStart({ x: e.clientX - fullscreenPos.x, y: e.clientY - fullscreenPos.y });
-              }
-            }}
-            onMouseMove={(e) => {
-              if (isDragging) {
-                setFullscreenPos({
-                  x: e.clientX - dragStart.x,
-                  y: e.clientY - dragStart.y,
-                });
-              }
-            }}
-            onMouseUp={() => setIsDragging(false)}
-            onMouseLeave={() => setIsDragging(false)}
+            style={{ touchAction: "none" }}
             onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
-            onClick={handlePlaceClick}
+            onPointerCancel={handlePointerCancel}
+            onPointerLeave={handlePointerCancel}
           >
             <div
               style={{
