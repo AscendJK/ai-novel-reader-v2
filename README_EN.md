@@ -457,7 +457,11 @@ MIT License.
 
 ## Text-to-Speech (TTS)
 
-Uses the browser's built-in **Web Speech API** for Chinese TTS. Click the ▶ Read Aloud button in the top bar to start reading the current chapter aloud.
+Two reading-aloud engines are available: the browser's built-in **Web Speech API** (no downloads, ready to use) and the project's **ZipVoice offline engine** (sherpa-onnx WASM, bilingual Chinese/English, selectable voices, fully offline).
+
+### Web Speech (browser built-in)
+
+Click the ▶ Read Aloud button in the top bar to start reading the current chapter aloud.
 
 **Features:**
 
@@ -470,7 +474,24 @@ Uses the browser's built-in **Web Speech API** for Chinese TTS. Click the ▶ Re
 - **Progress bar seeking**: Click the progress bar to jump to a specific paragraph
 - **Mobile-friendly**: Playback bar and popup panels are optimized for mobile
 
-> **ZipVoice offline engine** (sherpa-onnx WASM): The initialization pipeline is fully implemented, but the browser WASM build has a pthread heap corruption bug (C++ abort, unfixable from JavaScript). Currently hidden. See [DEVELOPER_MANUAL.md](DEVELOPER_MANUAL.md) for details.
+> **Known limitation**: Android Edge's Web Speech API has a browser-level defect — `speak()` works, but `getVoices()` always returns an empty list, so **voice selection is unavailable** and only the system default voice can be used. In that case, switch to the ZipVoice offline engine below.
+
+### ZipVoice offline engine (sherpa-onnx WASM)
+
+An offline inference engine based on sherpa-onnx WASM with a bilingual Chinese/English model. It does not depend on the browser speech API and works fully on **Android Edge** (selectable voices, offline capable), filling the gap left by Web Speech.
+
+**Three-layer download pipeline:**
+
+1. **Model source (Gitee / GitHub)**: The server downloads ~400MB of model resources (WASM runtime + ZipVoice model + vocoder) from Gitee release `tts-zipvoice-v1.0`, with the official GitHub source as fallback
+2. **Server cache** (`server/data/tts-cache/`): **Automatically checked and downloaded after server startup** (triggered after a 5s delay; failures do not block startup and retry with backoff; can also be triggered manually via `/api/rag/tts/prepare`)
+3. **Browser cache (IndexedDB)**: **Automatically checked after login**; if not cached locally, ~380MB is fetched file-by-file through the authenticated backend API into the browser's IndexedDB — only once, then fully offline
+
+**Fix history**: Early versions crashed during generation (C++ 11903128) due to a vocoder sample-rate mismatch (22kHz vocoder with a 24kHz decoder). Fixed by switching to the official `vocos_24khz.onnx` (24kHz); a Node reproduction script (`scripts/repro-zipvoice.cjs`) is included for regression verification.
+
+**Deployment requirements:**
+
+- The backend must be able to reach Gitee (domestic source) or GitHub; `vocos_24khz.onnx` (51.6MB) has been uploaded to Gitee release `tts-zipvoice-v1.0`
+- On first use, the model is downloaded twice — once to the server (~400MB) and once to the browser (~380MB) — please wait for the progress bar
 
 ---
 
