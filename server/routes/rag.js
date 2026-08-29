@@ -699,7 +699,7 @@ async function downloadAndExtract(giteeParts, githubUrl, archiveName, targetDir,
 let wasmReady = false;
 let wasmReadyPromise = null;
 let wasmLastFailure = 0;
-async function ensureWasmReady(onProgress, { signal, force = false } = {}) {
+export async function ensureWasmReady(onProgress, { signal, force = false } = {}) {
   if (force) { wasmReady = false; wasmReadyPromise = null; }
   if (wasmReady) return;
   if (wasmReadyPromise) return wasmReadyPromise;
@@ -714,7 +714,7 @@ async function ensureWasmReady(onProgress, { signal, force = false } = {}) {
 /** 确保 vocoder 文件已缓存 */
 let vocoderReady = false;
 let vocoderReadyPromise = null;
-async function ensureVocoderReady(onProgress, { signal } = {}) {
+export async function ensureVocoderReady(onProgress, { signal } = {}) {
   if (vocoderReady) return;
   if (vocoderReadyPromise) return vocoderReadyPromise;
   const vocoderPath = path.join(TTS_MODEL_CACHE, VOCODER_FILENAME);
@@ -740,7 +740,7 @@ async function ensureVocoderReady(onProgress, { signal } = {}) {
 let modelReady = false;
 let modelReadyPromise = null;
 let modelLastFailure = 0;
-async function ensureModelReady(onProgress, { signal, force = false } = {}) {
+export async function ensureModelReady(onProgress, { signal, force = false } = {}) {
   if (force) { modelReady = false; modelReadyPromise = null; }
   if (modelReady) return;
   if (modelReadyPromise) return modelReadyPromise;
@@ -750,6 +750,17 @@ async function ensureModelReady(onProgress, { signal, force = false } = {}) {
   ).then(() => { modelReady = true; })
    .catch((e) => { modelLastFailure = Date.now(); modelReadyPromise = null; throw e; });
   await modelReadyPromise;
+}
+
+/**
+ * 依次确保 TTS 资源（WASM + 模型 + vocoder）全部就绪
+ * 供服务器启动时预加载和 /tts/prepare 复用；任一步失败会抛出该步错误，
+ * 但内部各步自带缓存校验与 30 秒失败冷却，可安全重试
+ */
+export async function ensureTTSResources(onProgress, options = {}) {
+  await ensureWasmReady(onProgress, options);
+  await ensureModelReady(onProgress, options);
+  await ensureVocoderReady(onProgress, options);
 }
 
 /**

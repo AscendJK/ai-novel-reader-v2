@@ -13,6 +13,7 @@ import https from "node:https";
 import { fileURLToPath } from "node:url";
 import { checkpointWAL, createBackup, cleanupDeletedRecords, getBackupConfig, isRestoringBackup } from "./database.js";
 import { novelsRouter, ragRouter, syncRouter, proxyRouter, versionRouter } from "./routes/index.js";
+import { ensureTTSResources } from "./routes/rag.js";
 
 import { mountAdminRoutes } from "./admin.js";
 
@@ -188,6 +189,30 @@ async function startServers() {
 }
 
 startServers();
+
+// ── TTS 资源预加载 ───────────────────────────────────────────
+// 启动后延迟 5 秒（避开启动高峰：备份/证书/WAL），后台自动检查并下载
+// ZipVoice 所需资源（WASM + 模型 + vocoder，约 400MB）。
+// 失败不阻塞启动、不崩溃：日志记录后，由 /api/rag/tts/prepare 触发重试
+//（ensure* 内部有 30 秒失败冷却，可安全重复调用）。
+setTimeout(() => {
+  // 进度回调节流：只打印阶段变化和整 10% 进度，避免 400MB 下载刷屏日志
+  let lastPct = -1;
+  const progressLogger = (step, detail) => {
+    const pctMatch = /(\d+)%/.exec(detail || "");
+    if (pctMatch) {
+      const pct = parseInt(pctMatch[1], 10);
+      if (pct === lastPct || (pct % 10 !== 0 && pct !== 100)) return;
+      lastPct = pct;
+    }
+    console.log(`[tts-preload] ${step}: ${detail}`);
+  };
+  ensureTTSResources(progressLogger).then(() => {
+    console.log("[tts-preload] ZipVoice 资源就绪（WASM + 模型 + vocoder）");
+  }).catch((e) => {
+    console.warn(`[tts-preload] ZipVoice 资源预加载失败（可稍后通过 /tts/prepare 重试）: ${e.message}`);
+  });
+}, 5000);
 
 // ── Maintenance tasks ───────────────────────────────────────
 

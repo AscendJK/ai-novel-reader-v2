@@ -27,6 +27,7 @@ import { useSummaryStore } from "@/stores/summary-store";
 import { useAPIStore } from "@/stores/api-store";
 import { setCurrentUser, sharedDB } from "@/db/database";
 import { syncClient } from "@/sync/sync-client";
+import { preloadZipVoice } from "@/tts/tts-preload";
 
 export function AppLayout() {
   const theme = useUIStore((s) => s.theme);
@@ -188,6 +189,20 @@ export function AppLayout() {
       runCheck();
     }, 60_000);
     return () => clearInterval(interval);
+  }, [syncReady]);
+
+  // 登录就绪后（新登录或已有登录态启动）静默预加载 ZipVoice 离线语音资源。
+  // preloadZipVoice 内部自处理：未登录/已缓存/服务器离线/未就绪等边界，
+  // 任何失败都不影响主流程（WebSpeech 朗读不受影响）。
+  useEffect(() => {
+    if (!syncReady) return;
+    let cancelled = false;
+    // 延迟执行：不与登录后的首次同步/版本检测抢带宽
+    const timer = setTimeout(() => {
+      if (cancelled) return;
+      preloadZipVoice().catch(() => { /* 内部已兜底，此处防未处理拒绝 */ });
+    }, 8000);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [syncReady]);
 
   const handleBackToLibrary = useCallback(() => {
