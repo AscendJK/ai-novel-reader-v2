@@ -196,16 +196,27 @@ startServers();
 // 失败不阻塞启动、不崩溃：日志记录后，由 /api/rag/tts/prepare 触发重试
 //（ensure* 内部有 30 秒失败冷却，可安全重复调用）。
 setTimeout(() => {
-  // 进度回调节流：只打印阶段变化和整 10% 进度，避免 400MB 下载刷屏日志
+  // 进度回调节流：只打印阶段变化和整 10% 进度，避免 400MB 下载刷屏日志。
+  // 兼容两种回调形态：
+  //   1. (step, detail) 双参：step 含百分比（如 "下载分卷 1/3 45%"），detail 为文件名
+  //   2. 单数字参（downloadFile 直接透传）：step 为纯数字（如 45），detail 为 undefined
   let lastPct = -1;
   const progressLogger = (step, detail) => {
-    const pctMatch = /(\d+)%/.exec(detail || "");
+    // 纯数字进度先转成 "45%"，与字符串形态统一处理
+    const stepStr = typeof step === "number" ? `${step}%` : String(step);
+    // 从 step + detail 拼接串中提取百分比（两种形态都能覆盖）
+    const pctMatch = /(\d+)%/.exec(`${stepStr} ${detail || ""}`);
     if (pctMatch) {
       const pct = parseInt(pctMatch[1], 10);
       if (pct === lastPct || (pct % 10 !== 0 && pct !== 100)) return;
       lastPct = pct;
     }
-    console.log(`[tts-preload] ${step}: ${detail}`);
+    // 纯数字进度（如 45）格式化为 "下载中 45%"，避免打印 "45: undefined"
+    if (typeof step === "number" && !detail) {
+      console.log(`[tts-preload] 下载中 ${step}%`);
+      return;
+    }
+    console.log(`[tts-preload] ${step}${detail ? `: ${detail}` : ""}`);
   };
   ensureTTSResources(progressLogger).then(() => {
     console.log("[tts-preload] ZipVoice 资源就绪（WASM + 模型 + vocoder）");

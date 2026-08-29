@@ -724,12 +724,15 @@ export async function ensureVocoderReady(onProgress, { signal } = {}) {
   }
   // Gitee 优先，GitHub 备用
   vocoderReadyPromise = (async () => {
-    onProgress?.(0);
+    onProgress?.("开始下载", "尝试 Gitee（国内源）");
+    // downloadFile 的回调是纯数字进度，包装成 (step, detail) 双参，
+    // 与 Gitee 分卷下载的回调形态保持一致（SSE/日志都能正确显示）
+    const wrapProgress = (pct) => onProgress?.(`下载中 ${pct}%`, "vocos_24khz.onnx");
     try {
-      await downloadFile(GITEE_VOCODER_URL, vocoderPath, 100000, onProgress, { signal });
+      await downloadFile(GITEE_VOCODER_URL, vocoderPath, 100000, wrapProgress, { signal });
     } catch (e) {
       console.warn(`[tts-proxy] Gitee vocoder 失败: ${e.message}，尝试 GitHub`);
-      await downloadFile(GITHUB_VOCODER_URL, vocoderPath, 100000, onProgress, { signal });
+      await downloadFile(GITHUB_VOCODER_URL, vocoderPath, 100000, wrapProgress, { signal });
     }
     vocoderReady = true;
   })().catch((e) => { vocoderReadyPromise = null; throw e; });
