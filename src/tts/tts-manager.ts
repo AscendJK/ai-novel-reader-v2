@@ -226,7 +226,12 @@ class WebSpeechTTSEngine {
         if (e.error !== "canceled" && e.error !== "interrupted") callbacks.onError?.(e.error);
       };
     }
-    speechSynthesis.speak(this.utterance);
+    // Chrome/Edge: cancel() 后立即 speak() 会被忽略（异步取消竞态）。
+    // 延迟到下一宏任务再 speak，避免“停止后立即播放无反应”。
+    const u = this.utterance;
+    setTimeout(() => {
+      if (this.utterance === u) speechSynthesis.speak(u);
+    }, 60);
   }
 
   /** 顺序播放下一段（不使用预队列，移动端兼容性更好） */
@@ -266,7 +271,11 @@ class WebSpeechTTSEngine {
         if (e.error !== "canceled" && e.error !== "interrupted") onError(e.error);
       };
     }
-    speechSynthesis.speak(utterance);
+    // 与 speak() 一致：延迟 speak 避免 cancel 竞态
+    this.utterance = utterance;
+    setTimeout(() => {
+      if (this.utterance === utterance) speechSynthesis.speak(utterance);
+    }, 60);
   }
 
   stop(): void {
@@ -305,7 +314,9 @@ class ZipVoiceTTSEngine {
 
   async ensureResumed(): Promise<void> {
     const ctx = this.getAudioContext();
-    if (ctx.state === "suspended") await ctx.resume();
+    if (ctx.state === "suspended") {
+      try { await ctx.resume(); } catch { /* 自动播放策略拒绝：继续尝试播放 */ }
+    }
   }
 
   private playOneBuffer(buffer: AudioBuffer): Promise<void> {
@@ -325,11 +336,13 @@ class ZipVoiceTTSEngine {
           this.currentSource = null;
           if (!this.paused) { this.currentBuffer = null; this.pendingPlayResolve = null; resolve(); }
         };
-        source.start();
+        try { source.start(); } catch { resolve(); } // context 已关闭等异常时不要卡死
         this.pendingPlayResolve = resolve;
       };
-      if (ctx.state === "suspended") ctx.resume().then(startPlayback);
-      else startPlayback();
+      if (ctx.state === "suspended") {
+        // resume 被拒（无用户手势）时也继续 startPlayback，避免 promise 永不 resolve 卡死
+        ctx.resume().then(startPlayback).catch(() => startPlayback());
+      } else startPlayback();
     });
   }
 
@@ -337,7 +350,9 @@ class ZipVoiceTTSEngine {
     this.stop();
     this.stopped = false;
     const ctx = this.getAudioContext();
-    if (ctx.state === "suspended") await ctx.resume();
+    if (ctx.state === "suspended") {
+      try { await ctx.resume(); } catch { /* 自动播放策略拒绝，继续尝试 */ }
+    }
     let firstChunk = true;
     try {
       await generateAudio(text, { voice: this.voice, speed }, async (audioData) => {
@@ -370,7 +385,9 @@ class ZipVoiceTTSEngine {
     if (this.paused && this.currentBuffer) {
       try {
         const ctx = this.getAudioContext();
-        if (ctx.state === "suspended") await ctx.resume();
+        if (ctx.state === "suspended") {
+          try { await ctx.resume(); } catch { /* 忽略，继续尝试播放 */ }
+        }
         const source = ctx.createBufferSource();
         source.buffer = this.currentBuffer;
         source.playbackRate.value = this.playbackRate; // 恢复时保持倍速
@@ -380,7 +397,7 @@ class ZipVoiceTTSEngine {
         this.currentSource = source;
         this.startedAt = ctx.currentTime - this.pausedAt;
         this.paused = false;
-        source.start(0, this.pausedAt);
+        try { source.start(0, this.pausedAt); } catch { resolve?.(); }
       } catch { /* context closed, buffer detached */ }
     }
   }
@@ -464,6 +481,7 @@ export class TTSManager {
       this.generationId++;
       this.webSpeech.stop();
       this.speakFromParagraph(para);
+    } else {
     }
   }
   setVolume(volume: number) { this.volume = Math.max(0, Math.min(1, volume)); }
@@ -494,11 +512,20 @@ export class TTSManager {
   }
 
   async speak(chunks: TTSChunk[], callbacks: TTSPlaybackCallbacks): Promise<void> {
-    this.stop();
+    // 先更新 callbacks：内部重置时不再触发旧 onStop（否则会把刚设置的
+    // generating/playing 状态重置掉，导致停止后无法重新打开/自动翻章失败）
+    this.callbacks = callbacks;
+    this.stopped = true;
+    this.userPaused = false;
+    this.generationId++;
+    this.seekId++;
+    this.currentParagraphIndex = 0;
+    if (this.zipvoice) this.zipvoice.stop();
+    this.webSpeech.stop();
+
     this.chunks = chunks;
     this.currentChunkIndex = 0;
     this.currentParagraphIndex = 0;
-    this.callbacks = callbacks;
     this.stopped = false;
     this.generationId++;
 
@@ -533,8 +560,6 @@ export class TTSManager {
   }
 
   private async speakNextChunk(): Promise<void> {
-    if (this.stopped) return;
-    if (this.userPaused) return; // R13: 暂停状态下不推进 chunk
     if (this.currentChunkIndex >= this.chunks.length) { this.callbacks.onEnd?.(); return; }
 
     const chunk = this.chunks[this.currentChunkIndex];

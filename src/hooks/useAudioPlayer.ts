@@ -37,6 +37,8 @@ export function useAudioPlayer({
   const managerRef = useRef<TTSManager | null>(null);
   // H11 fix: 追踪自动翻章定时器，stop 时清除
   const autoNextTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // U13: 自动翻章超时兜底（翻章后 8 秒未开始新章则复位）
+  const pendingAutoNextTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // B5: 自动翻章后等新章节加载完成再自动播放
   const pendingAutoPlayRef = useRef(false);
 
@@ -52,6 +54,7 @@ export function useAudioPlayer({
   useEffect(() => {
     return () => {
       if (autoNextTimerRef.current) clearTimeout(autoNextTimerRef.current);
+      if (pendingAutoNextTimeoutRef.current) clearTimeout(pendingAutoNextTimeoutRef.current);
       managerRef.current?.destroy();
       managerRef.current = null;
     };
@@ -193,14 +196,27 @@ export function useAudioPlayer({
       onChunkEnd: (_i, _total, paraIdx) => setParagraphProgress(paraIdx, totalParaCount),
       onParagraphChange: (paraIdx) => setParagraphProgress(paraIdx, totalParaCount),
       onEnd: () => {
-        setPlaying(false);
+        setPaused(false);
         if (autoNextChapter && onNextChapter) {
           // B5: 标记自动翻章进行中，等新章节加载完自动播放
           pendingAutoPlayRef.current = true;
+          // U12: 翻章间隙保持播放栏可见（generating=true 表示“准备下一章”），
+          // 避免播放栏消失被用户感知为“退出朗读”；新章 onPlay 后恢复正常
+          setGenerating(true);
           autoNextTimerRef.current = setTimeout(() => {
             autoNextTimerRef.current = null;
             onNextChapter();
           }, 500);
+          // U13: 若翻章后 8 秒内未成功开始新章播放，恢复未播放状态（防止卡在“生成中”）
+          pendingAutoNextTimeoutRef.current = setTimeout(() => {
+            if (pendingAutoPlayRef.current) {
+              pendingAutoPlayRef.current = false;
+              setGenerating(false);
+              setPlaying(false);
+            }
+          }, 8000);
+        } else {
+          setPlaying(false);
         }
       },
       onError: (err) => {
@@ -296,6 +312,10 @@ export function useAudioPlayer({
       clearTimeout(autoNextTimerRef.current);
       autoNextTimerRef.current = null;
     }
+    if (pendingAutoNextTimeoutRef.current) {
+      clearTimeout(pendingAutoNextTimeoutRef.current);
+      pendingAutoNextTimeoutRef.current = null;
+    }
     managerRef.current?.stop();
     reset();
   }, [reset, savePosition]);
@@ -308,7 +328,14 @@ export function useAudioPlayer({
   useEffect(() => {
     if (pendingAutoPlayRef.current && chapterContent) {
       pendingAutoPlayRef.current = false;
-      setTimeout(() => playRef.current(), 300);
+      if (pendingAutoNextTimeoutRef.current) {
+        clearTimeout(pendingAutoNextTimeoutRef.current);
+        pendingAutoNextTimeoutRef.current = null;
+      }
+      // U12: 延迟到 play 引用稳定后再播（play 依赖 chapterContent，
+      // 若立即调用可能捕获到旧的闭包导致直接 return）
+      const t = setTimeout(() => playRef.current(), 350);
+      return () => clearTimeout(t);
     }
   }, [chapterContent, chapterIndex]);
   useEffect(() => { stopRef.current = stop; }, [stop]);
