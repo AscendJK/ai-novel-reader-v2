@@ -80,8 +80,12 @@ async function dbHas(key: string): Promise<boolean> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readonly");
     const store = tx.objectStore(STORE_NAME);
-    const req = store.count(key);
-    req.onsuccess = () => resolve(req.result > 0);
+    // 用 get 而非 count：校验数据非空（0 字节的损坏缓存不应算作已就绪）
+    const req = store.get(key);
+    req.onsuccess = () => {
+      const data = req.result as ArrayBuffer | undefined;
+      resolve(!!data && data.byteLength > 0);
+    };
     req.onerror = () => reject(req.error);
   });
 }

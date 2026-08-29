@@ -6,7 +6,7 @@
 import { useRef, useCallback, useEffect, useState } from "react";
 import { useTTSStore } from "@/stores/tts-store";
 import { TTSManager, type TTSChunk } from "@/tts/tts-manager";
-import { prepareTextForTTS } from "@/tts/text-preprocess";
+import { prepareTextForTTS, buildOrderedParaIndices } from "@/tts/text-preprocess";
 import { showToast } from "@/lib/toast-store";
 
 const TTS_POS_KEY = "novel-reader-tts-position";
@@ -79,6 +79,8 @@ export function useAudioPlayer({
 
   const playRef = useRef<typeof play>(null!); // B4+B5: 在 play 定义前声明，定义后赋值
   const chunksRef = useRef<TTSChunk[]>([]); // 存储当前 chunk 列表，供 seekToParagraph 查找
+  // 过滤后保留的原始段落索引有序数组（用于进度条/段数显示/seek 的统一坐标）
+  const [orderedParaIndices, setOrderedParaIndices] = useState<number[]>([]);
 
   // 错误状态和重试计数（在 play 前声明，供 play 回调引用）
   const [error, setError] = useState<string | null>(null);
@@ -157,6 +159,10 @@ export function useAudioPlayer({
       paragraphBreaks: c.paragraphBreaks,
     }));
     chunksRef.current = chunks;
+    // 展开所有 chunk 的段落索引 → 过滤后保留的原始段落索引有序数组
+    // 进度条/段数显示/seek 统一用“过滤后序号”（在此数组中的位置），
+    // 高亮仍用原始段落索引（store.currentParagraph），两者解耦不再错位
+    setOrderedParaIndices(buildOrderedParaIndices(prepared));
 
     // F10: 恢复上次朗读位置（保存的是原始段落索引）
     const savedPara = loadPosition();
@@ -360,5 +366,7 @@ export function useAudioPlayer({
     error,
     retryCount,
     seekToParagraph,
+    // 过滤后保留的原始段落索引有序数组，供进度条/段数显示/seek 统一坐标
+    orderedParaIndices,
   };
 }

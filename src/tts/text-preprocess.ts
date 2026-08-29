@@ -12,6 +12,15 @@ export interface TTSChunk {
 }
 
 /**
+ * 由 chunks 构建“过滤后保留的原始段落索引”有序数组。
+ * 进度条/段数显示/seek 统一用该数组中的位置（过滤后序号，0-based）作为坐标，
+ * 与正文高亮使用的原始段落索引解耦，避免过滤短段落后出现 90/80 段、进度 >100% 的错位。
+ */
+export function buildOrderedParaIndices(chunks: TTSChunk[]): number[] {
+  return chunks.flatMap(c => c.paragraphIndices);
+}
+
+/**
  * 将章节文本分割为适合 TTS 的段落
  * - 按自然段落分割
  * - 过滤过短段落（< 5 字）

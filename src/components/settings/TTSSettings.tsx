@@ -18,17 +18,28 @@ export function TTSSettings() {
   const [loading, setLoading] = useState(false);
   const [loadAttempted, setLoadAttempted] = useState(false);
 
+  // 语音列表去重：getVoices() 每次可能返回新数组引用，
+  // 内容未变化时不 setState，避免每 2 秒触发重渲染
+  const lastVoicesKeyRef = useRef<string>("");
+  const applyVoices = useCallback((voices: SpeechSynthesisVoice[]) => {
+    if (!voices || voices.length === 0) return;
+    const key = voices.map(v => `${v.voiceURI}|${v.lang}|${v.name}`).join("\n");
+    if (key === lastVoicesKeyRef.current) return;
+    lastVoicesKeyRef.current = key;
+    setBrowserVoices(voices);
+  }, [setBrowserVoices]);
+
   // 持续轮询语音列表（不依赖 voiceschanged，每 2 秒检查一次）
   useEffect(() => {
     if (typeof speechSynthesis === "undefined") return;
     const tryRead = () => {
       const all = speechSynthesis.getVoices();
-      if (all.length > 0) setBrowserVoices(all);
+      applyVoices(all);
     };
     tryRead();
     const poll = setInterval(tryRead, 2000);
     return () => clearInterval(poll);
-  }, [setBrowserVoices]);
+  }, [applyVoices]);
 
   const voicesLoaded = browserVoices.length > 0;
 
@@ -53,7 +64,7 @@ export function TTSSettings() {
         attempts++;
         const all = speechSynthesis.getVoices();
         if (all.length > 0) {
-          setBrowserVoices(all);
+          applyVoices(all);
           clearInterval(poll);
           loadVoicesRef.current.poll = null;
           setLoading(false);
@@ -69,7 +80,7 @@ export function TTSSettings() {
     speechSynthesis.speak(dummy);
     const fb = setTimeout(() => setLoading(false), 12000);
     loadVoicesRef.current.fallback = fb;
-  }, [voicesLoaded, setBrowserVoices]);
+  }, [voicesLoaded, applyVoices]);
 
   // 语音试听
   const [previewing, setPreviewing] = useState(false);

@@ -54,7 +54,7 @@ export function AudioPlayer({
   const speed = useTTSStore(s => s.speed);
   const setSpeed = useTTSStore(s => s.setSpeed);
 
-  const { play, togglePause, stop, isActive, isPaused, isPlaying, error, retryCount, seekToParagraph } = useAudioPlayer({
+  const { play, togglePause, stop, isActive, isPaused, isPlaying, error, retryCount, seekToParagraph, orderedParaIndices } = useAudioPlayer({
     chapterContent,
     chapterIndex,
     novelId,
@@ -64,6 +64,15 @@ export function AudioPlayer({
   });
 
   const canPlay = chapterContent && chapterContent.length > 0 && !generating;
+
+  // 进度坐标：store.currentParagraph 是“原始段落索引”（供正文高亮），
+  // 进度条/段数显示需用“过滤后序号”（在 orderedParaIndices 中的位置），
+  // 避免过滤短段落后索引与总数错位（如 90/80 段、进度 >100%）。
+  const progressIdx = orderedParaIndices.indexOf(currentParagraph);
+  const safeProgressIdx = progressIdx >= 0 ? progressIdx : 0;
+  const progressPct = totalParagraphs > 0
+    ? Math.min(100, ((safeProgressIdx + 1) / totalParagraphs) * 100)
+    : 0;
 
   // 顶栏"朗读"按钮触发
   const startRequested = useTTSStore(s => s.startRequested);
@@ -180,7 +189,7 @@ export function AudioPlayer({
                 </span>
                 {isActive && totalParagraphs > 0 && (
                   <span className="text-[11px] sm:text-xs text-muted-foreground shrink-0 hidden sm:inline">
-                    {currentParagraph}/{totalParagraphs} 段
+                    {Math.min(progressIdx + 1, totalParagraphs)}/{totalParagraphs} 段
                   </span>
                 )}
               </>
@@ -190,18 +199,22 @@ export function AudioPlayer({
             <div className="flex items-center gap-2">
               <div className="flex-1 h-1.5 sm:h-1 bg-muted rounded-full overflow-hidden cursor-pointer"
                 onClick={(e) => {
-                  if (!seekToParagraph || totalParagraphs === 0) return;
+                  if (!seekToParagraph || totalParagraphs === 0 || orderedParaIndices.length === 0) return;
                   const rect = e.currentTarget.getBoundingClientRect();
                   const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-                  const targetPara = Math.floor(ratio * (totalParagraphs - 1));
-                  seekToParagraph(targetPara);
+                  // 点击位置 → 过滤后序号 → 映射回原始段落索引（与高亮/位置恢复同坐标）
+                  const targetFilteredIdx = Math.min(
+                    orderedParaIndices.length - 1,
+                    Math.round(ratio * (orderedParaIndices.length - 1))
+                  );
+                  seekToParagraph(orderedParaIndices[targetFilteredIdx]);
                 }}
                 title="点击跳转到指定段落">
                 <div className="h-full bg-primary transition-all duration-300"
-                  style={{ width: `${(currentParagraph / totalParagraphs) * 100}%` }} />
+                  style={{ width: `${progressPct}%` }} />
               </div>
               <span className="text-[10px] text-muted-foreground shrink-0">
-                {formatTime(elapsed)}{totalParagraphs > 0 ? ` (${Math.round((currentParagraph / totalParagraphs) * 100)}%)` : ""}
+                {formatTime(elapsed)}{totalParagraphs > 0 ? ` (${Math.round(progressPct)}%)` : ""}
               </span>
             </div>
           )}

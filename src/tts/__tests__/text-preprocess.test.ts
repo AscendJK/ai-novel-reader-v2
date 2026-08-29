@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { prepareTextForTTS } from "../text-preprocess";
+import { prepareTextForTTS, buildOrderedParaIndices } from "../text-preprocess";
 
 describe("prepareTextForTTS", () => {
   it("空内容返回空数组", () => {
@@ -89,5 +89,52 @@ describe("prepareTextForTTS", () => {
         expect(chunk.paragraphIndices[j]).toBeGreaterThan(chunk.paragraphIndices[j - 1]);
       }
     }
+  });
+
+  describe("buildOrderedParaIndices（进度坐标映射）", () => {
+    it("过滤短段落后，展开索引就是保留段落的原始索引", () => {
+      // 原文 4 段，第 0 段（“嗯。”）和第 3 段（“好。”）< 5 字被过滤
+      const content = "嗯。\n这是第一段正常内容，长度足够参与朗读。\n这是第二段正常内容，长度也足够参与朗读。\n好。";
+      const chunks = prepareTextForTTS(content);
+      const ordered = buildOrderedParaIndices(chunks);
+      expect(ordered).toEqual([1, 2]);
+      // 过滤后总数 = 展开数组长度，与原文段落数解耦（修复前会用 4 做分母）
+      expect(ordered.length).toBe(2);
+    });
+
+    it("进度坐标不溢出：过滤后序号始终 < 总数", () => {
+      const content = Array.from({ length: 30 }, (_, i) =>
+        i % 5 === 0 ? `短${i}` : `第 ${i} 段内容，长度足够，用来验证进度坐标的一致性。`
+      ).join("\n");
+      const chunks = prepareTextForTTS(content);
+      const ordered = buildOrderedParaIndices(chunks);
+      // 过滤后总数
+      const total = ordered.length;
+      // 任意保留段落的过滤后序号 + 1 不超过总数（进度条不会 >100%）
+      for (let idx = 0; idx < ordered.length; idx++) {
+        const rawIdx = ordered[idx];
+        const filteredIdx = ordered.indexOf(rawIdx);
+        expect(filteredIdx).toBe(idx); // 有序且一一对应
+        expect(filteredIdx + 1).toBeLessThanOrEqual(total);
+      }
+      expect(total).toBeLessThan(30); // 确认确实发生了过滤（有短段被剔除）
+    });
+
+    it("seek 映射：点击进度条位置能映射回正确的原始段落索引", () => {
+      const content = Array.from({ length: 20 }, (_, i) =>
+        i % 4 === 0 ? `短${i}` : `第 ${i} 段内容，长度足够用来验证 seek 映射的准确性。`
+      ).join("\n");
+      const chunks = prepareTextForTTS(content);
+      const ordered = buildOrderedParaIndices(chunks);
+      const total = ordered.length;
+      // 模拟点击进度条中部（50% 位置）
+      const targetFilteredIdx = Math.min(total - 1, Math.round(0.5 * (total - 1)));
+      const targetPara = ordered[targetFilteredIdx];
+      // 映射回的原始索引必须存在于 ordered 中（能正确恢复位置/高亮）
+      expect(ordered.includes(targetPara)).toBe(true);
+      expect(ordered.indexOf(targetPara)).toBe(targetFilteredIdx);
+      // 且原始索引一定是一个真实段落的索引（>=0）
+      expect(targetPara).toBeGreaterThanOrEqual(0);
+    });
   });
 });
