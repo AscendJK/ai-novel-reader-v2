@@ -178,9 +178,12 @@ export async function prepareTTS(onStep: (step: string, detail: string) => void)
 
 /**
  * 检查 TTS 资源是否就绪
+ * 必须用 apiFetch（带服务器地址 + 鉴权头），裸 fetch 相对路径
+ * 在 GitHub Pages 上会解析到静态站点域名下导致 404。
  */
 export async function checkTTSCache(): Promise<{ wasmReady: boolean; modelReady: boolean; vocoderReady: boolean }> {
-  const res = await fetch("/api/rag/tts/status");
+  const res = await apiFetch("/api/rag/tts/status");
+  if (!res.ok) throw new Error(`检查 TTS 状态失败: HTTP ${res.status}`);
   const data = await res.json();
   // 兼容旧后端（无 vocoderReady 字段时按就绪处理，避免误拦）
   return { wasmReady: !!data.wasmReady, modelReady: !!data.modelReady, vocoderReady: data.vocoderReady !== false };
