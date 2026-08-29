@@ -78,6 +78,31 @@ describe("prepareTextForTTS", () => {
     expect(result[0].text).not.toContain('"');
   });
 
+  it("过滤整段方括号包裹的装饰内容（朗读杂音来源）", () => {
+    const result = prepareTextForTTS("[大家新年好]\n这是正文内容，长度足够参与朗读。");
+    expect(result.length).toBe(1);
+    expect(result[0].text).not.toContain("新年好");
+    expect(result[0].paragraphIndices).toEqual([1]);
+  });
+
+  it("过滤常见网站残留标记（[本章完]等）", () => {
+    const result = prepareTextForTTS("这是正文第一段，内容长度足够。\n[本章完]\n这是正文第二段，内容长度足够。");
+    expect(result.length).toBeGreaterThan(0);
+    const allText = result.map(c => c.text).join("");
+    expect(allText).not.toContain("本章完");
+    expect(allText).not.toContain("[");
+    expect(allText).toContain("第一段");
+    expect(allText).toContain("第二段");
+  });
+
+  it("删除行内方括号字符（避免 OOV 与“左括号”读音）", () => {
+    const result = prepareTextForTTS("他收到[系统]提示，然后继续前行。");
+    expect(result.length).toBe(1);
+    expect(result[0].text).not.toContain("[");
+    expect(result[0].text).not.toContain("]");
+    expect(result[0].text).toContain("系统");
+  });
+
   it("多个 chunk 的 paragraphIndices 递增", () => {
     const p1 = "第一段内容大约有一百个字符左右，用来测试长段落的处理逻辑是否正确运行。这是一段比较长的内容。";
     const p2 = "第二段内容大约有一百个字符左右，用来验证分段功能的正确性运行。这是另一段比较长的内容。";

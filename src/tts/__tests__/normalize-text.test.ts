@@ -17,6 +17,11 @@ describe("normalizeText（OOV 字符清洗）", () => {
     expect(normalizeText("「甲」和『乙』")).toBe("甲和乙");
   });
 
+  it("删除英文方括号（matcha 词表 OOV 字符，消除 Ignore OOV 警告）", () => {
+    expect(normalizeText("[大家新年好]")).toBe("大家新年好");
+    expect(normalizeText("收到[系统]提示")).toBe("收到系统提示");
+  });
+
   it("省略号/破折号/间隔号转为空格", () => {
     expect(normalizeText("他……走了")).toBe("他 走了");
     expect(normalizeText("一二三——四")).toBe("一二三 四");

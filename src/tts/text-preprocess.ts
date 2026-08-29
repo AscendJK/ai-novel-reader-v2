@@ -57,17 +57,26 @@ export function prepareTextForTTS(content: string, maxChunkLength: number = 300)
   const cleaned = content
     .replace(/<[^>]*>/g, "") // 去除 HTML 标签
     .split(/\n+/) // 按换行分割
-    .map((p, i) => ({
-      text: p
+    .map((p, i): { text: string; index: number } | null => {
+      const text = p
         .replace(/\s+/g, " ") // 合并连续空白
         .replace(/["""]/g, "，") // 引号替换为逗号停顿
         .replace(/[''']/g, "，")
         .replace(/\s*[—–]\s*/g, "，") // 破折号替换为逗号停顿
         .replace(/[《》〈〉]/g, "，") // 书名号替换为逗号停顿
-        .trim(),
-      index: i,
-    }))
-    .filter(p => p.text.length >= 5); // 过滤过短段落
+        .trim();
+      // 过滤整段由方括号包裹的装饰性内容（作者的话/网站标记/占位符，
+      // 如 "[大家新年好]"、"[本章完]"、"[]"）。这类内容不属于正文，
+      // 朗读出来就是正文里的“杂音”。
+      if (/^\[[^\[\]]{1,40}\]$/.test(text)) return null;
+      return {
+        // 删除行内方括号：matcha-tts 词表无此字符（OOV 警告），
+        // 且浏览器 TTS 会把 "[" 读成“左方括号”。
+        text: text.replace(/[\[\]]/g, ""),
+        index: i,
+      };
+    })
+    .filter((p): p is { text: string; index: number } => p !== null && p.text.length >= 5); // 过滤过短段落
 
   if (cleaned.length === 0) return [];
 
