@@ -41,11 +41,13 @@ export interface TTSState {
   // ── 设置 ──
   /** 当前引擎的语音 ID（根据 engine 自动切换） */
   voiceId: string;
-  /** 语速 0.5-3.0 */
+  /** TTS 生成语速 0.5-3.0（设置页；ZipVoice 生成 & WebSpeech rate） */
   speed: number;
+  /** 播放倍速 0.5-3.0（正文朗读栏，独立于生成语速，两者相乘为实际语速） */
+  playbackRate: number;
   /** F7: 音量 0-1 */
   volume: number;
-  /** F8: 音调 0.5-2.0 */
+  /** F8: 音调 0.5-2.0（仅 Web Speech 生效） */
   pitch: number;
   /** 自动翻章 */
   autoNextChapter: boolean;
@@ -64,6 +66,7 @@ export interface TTSState {
   setModelDownloading: (downloading: boolean, progress?: number) => void;
   setVoiceId: (voiceId: string) => void;
   setSpeed: (speed: number) => void;
+  setPlaybackRate: (rate: number) => void;
   setVolume: (volume: number) => void;
   setPitch: (pitch: number) => void;
   setAutoNextChapter: (auto: boolean) => void;
@@ -83,6 +86,7 @@ interface PersistedSettings {
   zipvoiceVoiceId: string;
   webspeechVoiceId: string;
   speed: number;
+  playbackRate: number;
   volume: number;
   pitch: number;
   autoNextChapter: boolean;
@@ -99,6 +103,7 @@ function loadSettings(): PersistedSettings {
         zipvoiceVoiceId: s.zipvoiceVoiceId || s.voiceId || "0",
         webspeechVoiceId: s.webspeechVoiceId || "",
         speed: s.speed ?? 1.0,
+        playbackRate: s.playbackRate ?? 1.0,
         volume: s.volume ?? 1.0,
         pitch: s.pitch ?? 1.0,
         autoNextChapter: s.autoNextChapter ?? true,
@@ -107,7 +112,7 @@ function loadSettings(): PersistedSettings {
       };
     }
   } catch { /* ignore */ }
-  return { zipvoiceVoiceId: "0", webspeechVoiceId: "", speed: 1.0, volume: 1.0, pitch: 1.0, autoNextChapter: true, engine: "webspeech", modelDownloaded: false };
+  return { zipvoiceVoiceId: "0", webspeechVoiceId: "", speed: 1.0, playbackRate: 1.0, volume: 1.0, pitch: 1.0, autoNextChapter: true, engine: "webspeech", modelDownloaded: false };
 }
 
 // Cached settings to avoid repeated localStorage reads
@@ -153,6 +158,7 @@ export const useTTSStore = create<TTSState>((set, get) => ({
   // 设置 — M14 fix: 每个引擎独立的 voiceId
   voiceId: getVoiceIdForEngine(defaults.engine, defaults.zipvoiceVoiceId, defaults.webspeechVoiceId),
   speed: defaults.speed,
+  playbackRate: defaults.playbackRate,
   volume: defaults.volume,
   pitch: defaults.pitch,
   autoNextChapter: defaults.autoNextChapter,
@@ -207,6 +213,14 @@ export const useTTSStore = create<TTSState>((set, get) => ({
     const s = get(); set({ speed: clamped });
     const settings = getCachedSettings();
     settings.speed = clamped;
+    settings.modelDownloaded = s.modelDownloaded;
+    saveSettings(settings);
+  },
+  setPlaybackRate: (playbackRate) => {
+    const clamped = Math.max(0.5, Math.min(3.0, playbackRate));
+    const s = get(); set({ playbackRate: clamped });
+    const settings = getCachedSettings();
+    settings.playbackRate = clamped;
     settings.modelDownloaded = s.modelDownloaded;
     saveSettings(settings);
   },

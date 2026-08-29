@@ -290,9 +290,13 @@ class ZipVoiceTTSEngine {
   private startedAt = 0;
   private currentBuffer: AudioBuffer | null = null;
   private voice = "0";
+  private playbackRate = 1.0;
   private pendingPlayResolve: (() => void) | null = null;
 
   setVoice(voiceId: string) { this.voice = voiceId; }
+
+  /** 播放倍速（与生成语速独立：生成时用设置页语速，播放时用此倍速） */
+  setPlaybackRate(rate: number) { this.playbackRate = Math.max(0.5, Math.min(3.0, rate)); }
 
   private getAudioContext(): AudioContext {
     if (!this.audioContext) this.audioContext = new AudioContext();
@@ -310,6 +314,7 @@ class ZipVoiceTTSEngine {
       const startPlayback = () => {
         const source = ctx.createBufferSource();
         source.buffer = buffer;
+        source.playbackRate.value = this.playbackRate; // 播放倍速（独立于生成语速）
         source.connect(ctx.destination);
         this.currentSource = source;
         this.currentBuffer = buffer;
@@ -368,6 +373,7 @@ class ZipVoiceTTSEngine {
         if (ctx.state === "suspended") await ctx.resume();
         const source = ctx.createBufferSource();
         source.buffer = this.currentBuffer;
+        source.playbackRate.value = this.playbackRate; // 恢复时保持倍速
         source.connect(ctx.destination);
         const resolve = this.pendingPlayResolve;
         source.onended = () => { this.currentSource = null; if (!this.paused) { this.currentBuffer = null; this.pendingPlayResolve = null; resolve?.(); } };
@@ -408,6 +414,7 @@ export class TTSManager {
   private currentParagraphIndex = 0;
   private callbacks: TTSPlaybackCallbacks = {};
   private speed = 1.0;
+  private playbackRate = 1.0; // 播放倍速（独立于生成语速 speed）
   private volume = 1.0;
   private pitch = 1.0;
   private voiceId = "0";
@@ -436,6 +443,23 @@ export class TTSManager {
     this.speed = Math.max(0.5, Math.min(3.0, speed));
     // 速度变更时从当前段落位置恢复，不从 chunk 头部重读
     if (this.engine === "webspeech" && this.webSpeech.isSpeaking()) {
+      const para = this.currentParagraphIndex;
+      this.generationId++;
+      this.webSpeech.stop();
+      this.speakFromParagraph(para);
+    }
+  }
+
+  /**
+   * 播放倍速（正文朗读栏，独立于设置页生成语速）。
+   * - ZipVoice：生成用设置页语速，播放时 AudioBufferSourceNode.playbackRate 生效，即时调整
+   * - WebSpeech：最终 rate = 生成语速 × 倍速，需重新 speak
+   */
+  setPlaybackRate(playbackRate: number) {
+    this.playbackRate = Math.max(0.5, Math.min(3.0, playbackRate));
+    if (this.engine === "zipvoice" && this.zipvoice) {
+      this.zipvoice.setPlaybackRate(this.playbackRate);
+    } else if (this.engine === "webspeech" && this.webSpeech.isSpeaking()) {
       const para = this.currentParagraphIndex;
       this.generationId++;
       this.webSpeech.stop();
@@ -542,8 +566,10 @@ export class TTSManager {
       });
     } else {
       // 顺序播放：chunk 完成后立即播放下一个（不使用预队列）
+      // 最终语速 = 设置页生成语速 × 正文朗读栏播放倍速
+      const effectiveSpeed = this.speed * this.playbackRate;
       this.callbacks.onChunkStart?.(this.currentChunkIndex, this.chunks.length, chunk.paragraphIndex);
-      this.webSpeech.speak(chunk.text, this.speed, this.volume, this.pitch, {
+      this.webSpeech.speak(chunk.text, effectiveSpeed, this.volume, this.pitch, {
         onPlay: () => {
           if (this.stopped || this.generationId !== genId) return;
           this.callbacks.onPlay?.();

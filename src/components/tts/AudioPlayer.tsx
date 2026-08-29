@@ -51,8 +51,8 @@ export function AudioPlayer({
   const generateProgress = useTTSStore(s => s.generateProgress);
   const currentParagraph = useTTSStore(s => s.currentParagraph);
   const totalParagraphs = useTTSStore(s => s.totalParagraphs);
-  const speed = useTTSStore(s => s.speed);
-  const setSpeed = useTTSStore(s => s.setSpeed);
+  const playbackRate = useTTSStore(s => s.playbackRate);
+  const setPlaybackRate = useTTSStore(s => s.setPlaybackRate);
 
   const { play, togglePause, stop, isActive, isPaused, isPlaying, error, retryCount, seekToParagraph, orderedParaIndices } = useAudioPlayer({
     chapterContent,
@@ -220,12 +220,12 @@ export function AudioPlayer({
           )}
         </div>
 
-        {/* U2: 语速按钮 */}
+        {/* U2: 播放倍速按钮（独立于设置页 TTS 语速） */}
         <div className="shrink-0">
           <Button variant="ghost" size="sm" className="h-6 px-1 text-[11px] sm:text-xs tabular-nums"
             onClick={() => setShowSpeedPopup(v => !v)}
-            title={`语速 ${speed}x`}>
-            {speed}x
+            title={`播放倍速 ${playbackRate}x`}>
+            {playbackRate}x
           </Button>
         </div>
 
@@ -314,16 +314,17 @@ export function AudioPlayer({
           >
             <div className="flex flex-col gap-3 min-w-[200px]">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">播放语速</span>
+                <span className="text-sm font-medium">播放倍速</span>
+                <span className="text-[10px] text-muted-foreground">仅影响本次播放，不动设置页语速</span>
                 <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => setShowSpeedPopup(false)}>
                   <X className="h-4 w-4" />
                 </Button>
               </div>
               <div className="grid grid-cols-4 gap-1.5">
                 {SPEEDS.map(s => (
-                  <Button key={s} variant={Math.abs(s - speed) < 0.01 ? "default" : "outline"}
+                  <Button key={s} variant={Math.abs(s - playbackRate) < 0.01 ? "default" : "outline"}
                     size="sm" className="h-9 text-xs tabular-nums"
-                    onClick={() => { setSpeed(s); setShowSpeedPopup(false); }}>
+                    onClick={() => { setPlaybackRate(s); setShowSpeedPopup(false); }}>
                     {s}x
                   </Button>
                 ))}

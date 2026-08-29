@@ -309,10 +309,10 @@ export function TTSSettings() {
         </div>
       )}
 
-      {/* 语速 */}
+      {/* 语速（TTS 生成参数，与正文朗读栏的播放倍速独立） */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <p className="text-xs font-medium text-muted-foreground">语速</p>
+          <p className="text-xs font-medium text-muted-foreground">语速（生成参数）</p>
           <span className="text-xs text-muted-foreground">{speed.toFixed(1)}x</span>
         </div>
         <input type="range" min={0.5} max={3.0} step={0.25} value={speed}
@@ -321,9 +321,12 @@ export function TTSSettings() {
         <div className="flex justify-between text-[10px] text-muted-foreground">
           <span>0.5x</span><span>1.0x</span><span>2.0x</span><span>3.0x</span>
         </div>
+        <p className="text-[10px] text-muted-foreground">
+          控制语音本身的生成快慢；朗读栏的「播放倍速」独立于此，两者相乘为实际听感语速
+        </p>
       </div>
 
-      {/* F8: 音调 */}
+      {/* F8: 音调（仅 Web Speech 生效） */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <p className="text-xs font-medium text-muted-foreground">音调</p>
@@ -335,6 +338,9 @@ export function TTSSettings() {
         <div className="flex justify-between text-[10px] text-muted-foreground">
           <span>低</span><span>正常</span><span>高</span>
         </div>
+        {engine === "zipvoice" && (
+          <p className="text-[10px] text-amber-500">ZipVoice 离线引擎暂不支持音调调节，此设置仅对 Web Speech 生效</p>
+        )}
       </div>
 
       {/* 自动翻章 */}

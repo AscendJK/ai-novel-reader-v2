@@ -41,7 +41,7 @@ export function useAudioPlayer({
   const pendingAutoPlayRef = useRef(false);
 
   const {
-    playing, paused, speed, pitch, voiceId, engine, autoNextChapter,
+    playing, paused, speed, playbackRate, pitch, voiceId, engine, autoNextChapter,
     currentNovelId, currentChapterIndex,
     setPlaying, setPaused, setCurrentChapter,
     setParagraphProgress, setGenerating, setEngine,
@@ -94,6 +94,13 @@ export function useAudioPlayer({
     }
   }, [speed]);
 
+  // 播放倍速独立同步（ZipVoice 即时生效，WebSpeech 重新 speak）
+  useEffect(() => {
+    if (managerRef.current) {
+      managerRef.current.setPlaybackRate(playbackRate);
+    }
+  }, [playbackRate]);
+
   useEffect(() => {
     if (managerRef.current) {
       managerRef.current.setVoice(voiceId);
@@ -136,6 +143,7 @@ export function useAudioPlayer({
     manager.setEngine(engine);
     manager.setVoice(voiceId);
     manager.setSpeed(speed);
+    manager.setPlaybackRate(playbackRate);
     manager.setPitch(pitch);
 
     setCurrentChapter(novelId, chapterIndex);
@@ -244,7 +252,7 @@ export function useAudioPlayer({
       setGenerating(false);
       setPlaying(false);
     });
-  }, [chapterContent, chapterIndex, novelId, engine, voiceId, speed, pitch, autoNextChapter, getManager, setCurrentChapter, setGenerating, setParagraphProgress, setPlaying, onNextChapter, loadPosition, setBrowserVoices, setEngine, setModelDownloaded, setModelDownloading]);
+  }, [chapterContent, chapterIndex, novelId, engine, voiceId, speed, playbackRate, pitch, autoNextChapter, getManager, setCurrentChapter, setGenerating, setParagraphProgress, setPlaying, onNextChapter, loadPosition, setBrowserVoices, setEngine, setModelDownloaded, setModelDownloading]);
 
   // R13: 暂停/恢复（WebSpeech 使用 cancel+re-speak 模式，绕过移动端 resume bug）
   const togglePause = useCallback(async () => {
