@@ -117,6 +117,7 @@ export function AudioPlayer({
   if (!showBar) return null;
 
   return (
+    <>
     <div className="fixed bottom-0 left-0 right-0 z-40 bg-background/95 backdrop-blur border-t shadow-lg safe-area-bottom">
       {/* 生成进度 */}
       {generating && (
@@ -319,5 +320,8 @@ export function AudioPlayer({
         </>
       )}
     </div>
+    {/* 文档流占位：与固定播放栏同高，把正文/导航内容顶起，避免朗读时底部内容被悬浮栏遮挡 */}
+    <div aria-hidden className="h-[76px] sm:h-[56px] safe-area-bottom" />
+    </>
   );
 }
