@@ -28,6 +28,9 @@ MODEL_REQUIRED = {
     "tokens.txt": 100,
     "lexicon-us-en.txt": 1024 * 1024,
     "lexicon-zh.txt": 1024 * 1024,
+    "date-zh.fst": 1024,
+    "number-zh.fst": 1024,
+    "phone-zh.fst": 1024,
     "dict/jieba.dict.utf8": 1024 * 1024,
 }
 

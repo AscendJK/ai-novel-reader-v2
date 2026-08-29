@@ -402,6 +402,9 @@ const MODEL_REQUIRED_FILES = {
   "tokens.txt": 100,                 // 至少 100 字节
   "lexicon-us-en.txt": 1024 * 1024,  // 至少 1MB
   "lexicon-zh.txt": 1024 * 1024,     // 至少 1MB
+  "date-zh.fst": 1024,              // 中文日期规则 FST
+  "number-zh.fst": 1024,            // 中文数字规则 FST
+  "phone-zh.fst": 1024,             // 中文音素规则 FST
   "dict/jieba.dict.utf8": 1024 * 1024, // jieba 分词词典
 };
 
