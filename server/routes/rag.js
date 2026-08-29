@@ -405,7 +405,16 @@ const MODEL_REQUIRED_FILES = {
   "date-zh.fst": 1024,              // 中文日期规则 FST
   "number-zh.fst": 1024,            // 中文数字规则 FST
   "phone-zh.fst": 1024,             // 中文音素规则 FST
-  "dict/jieba.dict.utf8": 1024 * 1024, // jieba 分词词典
+  // jieba 分词 dict（Kokoro dictDir 需要全部文件，含 pos_dict 子目录）
+  "dict/jieba.dict.utf8": 1024 * 1024,
+  "dict/hmm_model.utf8": 1024 * 256,
+  "dict/idf.utf8": 1024 * 512,
+  "dict/user.dict.utf8": 1024 * 128,
+  "dict/stop_words.utf8": 1024,
+  "dict/pos_dict/char_state_tab.utf8": 1024 * 128,
+  "dict/pos_dict/prob_emit.utf8": 1024 * 512,
+  "dict/pos_dict/prob_start.utf8": 1024,
+  "dict/pos_dict/prob_trans.utf8": 1024 * 32,
 };
 
 /**
@@ -523,34 +532,30 @@ async function downloadFromGitee(partNames, archiveName, targetDir, requiredFile
       throw new Error("拼接后的文件不是有效的 7z 格式（文件头校验失败）");
     }
 
-    // 4. 解压
+    // 4. 解压到独立子目录（避免归档根目录模式与 TTS_TEMP_DIR 其他残留混淆）
     onProgress?.("解压中", "7z 解压...");
+    const extractRoot = path.join(TTS_TEMP_DIR, archiveName + "-extract");
+    try { fs.rmSync(extractRoot, { recursive: true }); } catch {}
+    fs.mkdirSync(extractRoot, { recursive: true });
     try {
-      await execFileAsync("7z", ["x", archivePath, `-o${TTS_TEMP_DIR}`, "-y"], { timeout: 120000 });
+      await execFileAsync("7z", ["x", archivePath, `-o${extractRoot}`, "-y"], { timeout: 120000 });
     } catch (e) {
       if (e.code === "ENOENT") throw new Error("7z 未安装。请安装 7-Zip (Windows) 或 p7zip-full (Linux/macOS) 后重试。");
       throw new Error(`7z 解压失败: ${e.message}`);
     }
 
-    // 5. 复制到目标目录
+    // 5. 复制到目标目录（整体复制，dict/ 等子目录全部保留）
     onProgress?.("复制文件", "写入缓存目录");
     // 兼容两种归档结构：
-    //   a) 归档内有顶层目录（archiveName/...）→ 从 extractedDir 复制
-    //   b) 文件直接在归档根目录 → 从 TTS_TEMP_DIR 根复制（按必需清单过滤，避免误复制其他残留）
-    if (fs.existsSync(extractedDir)) {
-      fs.cpSync(extractedDir, targetDir, { recursive: true });
-    } else {
-      // 根目录模式：只复制必需清单中的文件（含 dict/ 子目录）
-      for (const [filename] of Object.entries(requiredFiles)) {
-        const src = path.join(TTS_TEMP_DIR, filename);
-        const dest = path.join(targetDir, filename);
-        if (!fs.existsSync(src)) {
-          throw new Error(`解压后缺少文件: ${filename}`);
-        }
-        fs.mkdirSync(path.dirname(dest), { recursive: true });
-        fs.copyFileSync(src, dest);
-      }
+    //   a) 归档内有单个顶层目录（archiveName/...）→ 复制该目录内容
+    //   b) 文件直接在归档根目录 → 复制 extractRoot 全部内容
+    let copySrc = extractRoot;
+    const entries = fs.readdirSync(extractRoot);
+    if (entries.length === 1) {
+      const only = path.join(extractRoot, entries[0]);
+      try { if (fs.statSync(only).isDirectory()) copySrc = only; } catch {}
     }
+    fs.cpSync(copySrc, targetDir, { recursive: true });
 
     // 6. 校验解压后的文件
     onProgress?.("校验文件", "检查完整性");
@@ -562,6 +567,7 @@ async function downloadFromGitee(partNames, archiveName, targetDir, requiredFile
     for (const p of partPaths) { try { fs.unlinkSync(p); } catch {} }
     try { fs.unlinkSync(archivePath); } catch {}
     try { fs.rmSync(extractedDir, { recursive: true }); } catch {}
+    try { fs.rmSync(extractRoot, { recursive: true }); } catch {}
   }
 }
 

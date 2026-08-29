@@ -32,6 +32,14 @@ MODEL_REQUIRED = {
     "number-zh.fst": 1024,
     "phone-zh.fst": 1024,
     "dict/jieba.dict.utf8": 1024 * 1024,
+    "dict/hmm_model.utf8": 1024 * 256,
+    "dict/idf.utf8": 1024 * 512,
+    "dict/user.dict.utf8": 1024 * 128,
+    "dict/stop_words.utf8": 1024,
+    "dict/pos_dict/char_state_tab.utf8": 1024 * 128,
+    "dict/pos_dict/prob_emit.utf8": 1024 * 512,
+    "dict/pos_dict/prob_start.utf8": 1024,
+    "dict/pos_dict/prob_trans.utf8": 1024 * 32,
 }
 
 def validate(d, required):
@@ -50,7 +58,10 @@ def validate(d, required):
 def simulate(parts, archive_name, target_dir, required):
     print(f"\n=== 模拟: {archive_name} ({', '.join(parts)}) ===")
     archive_path = os.path.join(temp, archive_name + ".7z")
-    extracted_dir = os.path.join(temp, archive_name)
+    extract_root = os.path.join(temp, archive_name + "-extract")
+    if os.path.exists(extract_root):
+        shutil.rmtree(extract_root)
+    os.makedirs(extract_root, exist_ok=True)
     # 1. 拼接
     with open(archive_path, "wb") as out:
         for p in parts:
@@ -63,26 +74,31 @@ def simulate(parts, archive_name, target_dir, required):
     print(f"  拼接大小: {size} 头校验: {'OK' if ok else 'FAIL'}")
     if not ok:
         raise RuntimeError("7z 头校验失败")
-    # 2. 解压
-    r = subprocess.run(["7z", "x", archive_path, f"-o{temp}", "-y"], capture_output=True, text=True)
+    # 2. 解压到独立子目录（与服务器新逻辑一致）
+    r = subprocess.run(["7z", "x", archive_path, f"-o{extract_root}", "-y"], capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError("7z 解压失败: " + (r.stdout[-300:] + r.stderr[-200:]))
-    # 3. 复制（兼容两种结构）
-    if os.path.exists(extracted_dir):
-        shutil.copytree(extracted_dir, target_dir, dirs_exist_ok=True)
+    # 3. 检测结构后整体复制（dict/ 等子目录全部保留）
+    entries = os.listdir(extract_root)
+    copy_src = extract_root
+    if len(entries) == 1 and os.path.isdir(os.path.join(extract_root, entries[0])):
+        copy_src = os.path.join(extract_root, entries[0])
         print("  顶层目录模式复制 OK")
     else:
-        for f in required:
-            src = os.path.join(temp, f)
-            if not os.path.exists(src):
-                raise RuntimeError(f"解压后缺少: {f}")
-            dest = os.path.join(target_dir, f)
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
-            shutil.copyfile(src, dest)
         print("  根目录模式复制 OK")
+    shutil.copytree(copy_src, target_dir, dirs_exist_ok=True)
     # 4. 校验
     validate(target_dir, required)
     print("  必需文件校验 OK")
+    # 5. 额外：dict 全目录检查（模型包应有完整 jieba dict + pos_dict）
+    if "model.int8.onnx" in required:
+        dict_files = []
+        for dp, dn, fn in os.walk(os.path.join(target_dir, "dict")):
+            for f in fn:
+                dict_files.append(os.path.relpath(os.path.join(dp, f), os.path.join(target_dir, "dict")))
+        print(f"  dict/ 文件数: {len(dict_files)} -> {', '.join(sorted(dict_files)[:5])}...")
+        if len(dict_files) < 11:
+            raise RuntimeError(f"dict/ 不完整: 只有 {len(dict_files)} 个文件")
 
 try:
     simulate(["sherpa-onnx-wasm-simd-1.13.6-kokoro-slim.7z"],
