@@ -8,7 +8,7 @@
     "server": "node server/index.js",
     "start": "npm run build && node server/index.js --full",
     "dev:5175": "vite --host 0.0.0.0 --port 5175",
-    "build": "vite build",
+    "build": "vite build && node scripts/inject-coi.cjs",
     "pack:backend": "powershell -NoProfile -ExecutionPolicy Bypass -File pack-backend.ps1",
     "lint": "eslint .",
     "preview": "vite preview",

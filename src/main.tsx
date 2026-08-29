@@ -16,6 +16,17 @@ const updateSW = registerSW({
   onOfflineReady() {
     window.dispatchEvent(new CustomEvent("sw-offline-ready"));
   },
+  onRegisteredSW(_swUrl, registration) {
+    // COI：首次注册后 reload 一次，让 crossOriginIsolated（COOP/COEP 头）生效。
+    // sw.js 首次安装时尚未控制页面，导航未被拦截，SAB 不可用；
+    // reload 后 SW 控制页面 → COI 头生效 → SharedArrayBuffer 可用（ZipVoice）。
+    try {
+      if (!sessionStorage.getItem("coi-reloaded") && registration && !navigator.serviceWorker.controller) {
+        sessionStorage.setItem("coi-reloaded", "1");
+        window.location.reload();
+      }
+    } catch { /* ignore */ }
+  },
 });
 
 // 每 30 分钟检查一次 Service Worker 更新（阅读过程中也能检测到新版本）
