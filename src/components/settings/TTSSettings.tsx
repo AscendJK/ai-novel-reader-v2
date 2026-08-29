@@ -3,11 +3,12 @@
  * 使用浏览器内置 Web Speech API
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Loader2, Play } from "lucide-react";
 import { useTTSStore } from "@/stores/tts-store";
+import { classifyVoices } from "@/tts/voice-classify";
 
 export function TTSSettings() {
   const {
@@ -40,6 +41,25 @@ export function TTSSettings() {
     const poll = setInterval(tryRead, 2000);
     return () => clearInterval(poll);
   }, [applyVoices]);
+
+  // 兼容性：监听 voiceschanged 事件（Chrome/Edge 语音异步加载完成后触发），
+  // 语音就绪后即时刷新列表，无需等下一轮轮询
+  useEffect(() => {
+    if (typeof speechSynthesis === "undefined") return;
+    const onVoicesChanged = () => applyVoices(speechSynthesis.getVoices());
+    speechSynthesis.addEventListener?.("voiceschanged", onVoicesChanged);
+    return () => speechSynthesis.removeEventListener?.("voiceschanged", onVoicesChanged);
+  }, [applyVoices]);
+
+  // 分类：按语言分组（中文优先）→ 按网络细分（本地/在线/未知）。纯计算，缓存避免重复执行。
+  const voiceGroups = useMemo(() => classifyVoices(browserVoices), [browserVoices]);
+
+  // 已选语音（voiceId）从列表中消失时，自动回落：中文第一个 → 列表第一个，避免空白选择
+  const effectiveVoiceId = useMemo(() => {
+    if (browserVoices.some(v => v.voiceURI === voiceId)) return voiceId;
+    const zhFirst = voiceGroups.find(g => g.lang === "zh")?.groups[0]?.voices[0];
+    return zhFirst?.voiceURI || browserVoices[0]?.voiceURI || "";
+  }, [browserVoices, voiceId, voiceGroups]);
 
   const voicesLoaded = browserVoices.length > 0;
 
@@ -125,15 +145,25 @@ export function TTSSettings() {
             <select
               aria-label="语音选择"
               className="flex-1 text-xs border rounded px-2 py-1.5 bg-background"
-              value={voiceId}
+              value={effectiveVoiceId}
               onChange={(e) => setVoiceId(e.target.value)}
             >
-              {browserVoices.map((v) => (
-                <option key={v.voiceURI} value={v.voiceURI}>{v.name} ({v.lang})</option>
-              ))}
+              {/* 无中文语音时的提示项（不可选） */}
+              {!voiceGroups.some(g => g.lang === "zh") && (
+                <option value="" disabled>此浏览器无中文语音，将使用系统默认</option>
+              )}
+              {voiceGroups.map((lg) =>
+                lg.groups.map((ng) => (
+                  <optgroup key={`${lg.lang}-${ng.tag}`} label={`${lg.label} · ${ng.label}`}>
+                    {ng.voices.map((v) => (
+                      <option key={v.voiceURI} value={v.voiceURI}>{v.name} ({v.lang})</option>
+                    ))}
+                  </optgroup>
+                ))
+              )}
             </select>
             <Button variant="outline" size="sm" className="h-7 text-[10px] px-2"
-              onClick={() => previewVoice(voiceId)} disabled={previewing}>
+              onClick={() => previewVoice(effectiveVoiceId)} disabled={previewing}>
               {previewing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
               <span className="ml-1">试听</span>
             </Button>
