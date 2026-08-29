@@ -330,10 +330,11 @@ const GITEE_WASM_PARTS = [`${WASM_ARCHIVE_NAME}.7z.001`, `${WASM_ARCHIVE_NAME}.7
 const GITEE_MODEL_PARTS = [`${MODEL_ARCHIVE_NAME}.7z.001`, `${MODEL_ARCHIVE_NAME}.7z.002`];
 
 // Vocoder 模型（独立下载，Gitee 优先，GitHub 备用）
-// 官方仅有 22kHz 通用版，ZipVoice 兼容
-const VOCODER_FILENAME = "vocos-22khz-univ.onnx";
+// ⚠️ 必须用 24kHz 版：ZipVoice decoder 输出 24000Hz，配 22kHz vocoder
+// 会导致 ONNX Runtime 运行时异常（浏览器报 C++ 11903128，Node 报 11903176）
+const VOCODER_FILENAME = "vocos_24khz.onnx";
 const GITEE_VOCODER_URL = `${GITEE_BASE}/${VOCODER_FILENAME}`;
-const GITHUB_VOCODER_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos-22khz-univ.onnx";
+const GITHUB_VOCODER_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos_24khz.onnx";
 
 /** 校验文件名安全（防路径穿越） */
 function sanitizeFilename(filename) {

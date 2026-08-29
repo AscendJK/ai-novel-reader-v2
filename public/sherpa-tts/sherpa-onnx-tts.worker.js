@@ -121,7 +121,7 @@ async function init(files, origin) {
       try { Module.FS_createPath("/", dir.slice(1), true, true); } catch {}
     }
     // 写入 vocoder 模型
-    const vocoderFile = "vocos-22khz-univ.onnx";
+    const vocoderFile = "vocos_24khz.onnx";
     if (files[vocoderFile]) {
       Module.FS_createDataFile(modelDir, vocoderFile, new Uint8Array(files[vocoderFile]), true, true, true);
       log("  " + vocoderFile + ": " + files[vocoderFile].byteLength + " 字节");
@@ -160,7 +160,7 @@ async function init(files, origin) {
           tokens: MODEL_BASE + "/tokens.txt",
           encoder: MODEL_BASE + "/encoder.int8.onnx",
           decoder: MODEL_BASE + "/decoder.int8.onnx",
-          vocoder: MODEL_BASE + "/vocos-22khz-univ.onnx",
+          vocoder: MODEL_BASE + "/vocos_24khz.onnx",
           dataDir: "/espeak-ng-data",
           lexicon: MODEL_BASE + "/lexicon.txt",
         },

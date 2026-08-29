@@ -21,8 +21,8 @@ const CACHE_FILES = [
   "encoder.int8.onnx",
   "tokens.txt",
   "lexicon.txt",
-  // Vocoder 模型
-  "vocos-22khz-univ.onnx",
+  // Vocoder 模型（24kHz：与 ZipVoice decoder 采样率匹配，22kHz 会导致生成崩溃）
+  "vocos_24khz.onnx",
   // 参考音频（ZipVoice 声音克隆需要）
   "test_wavs/news-female.wav",
   "test_wavs/news-female-2.wav",
@@ -136,7 +136,7 @@ export async function downloadAndCache(
     let apiPath: string;
     if (file.startsWith("sherpa-onnx-wasm-main-tts.") || file === "sherpa-onnx-tts.js") {
       apiPath = `/api/rag/tts/wasm/${file}`;
-    } else if (file.startsWith("vocos-")) {
+    } else if (file.startsWith("vocos-") || file.startsWith("vocos_")) {
       apiPath = `/api/rag/tts/model/vocoder/${file}`;
     } else if (file.startsWith("test_wavs/")) {
       apiPath = `/api/rag/tts/model/${file}`;
