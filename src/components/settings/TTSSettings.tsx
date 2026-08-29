@@ -9,7 +9,8 @@ import { Separator } from "@/components/ui/separator";
 import { Loader2, Play } from "lucide-react";
 import { useTTSStore } from "@/stores/tts-store";
 import { classifyVoices } from "@/tts/voice-classify";
-import { ZH_VOICES } from "@/tts/zipvoice-engine";
+import { ZH_VOICES, generateAudioFull } from "@/tts/zipvoice-engine";
+import { getActiveTTSManager } from "@/tts/tts-manager";
 import { getTTSPreloadStatus } from "@/tts/tts-preload";
 
 export function TTSSettings() {
@@ -177,6 +178,72 @@ export function TTSSettings() {
     previewTimerRef.current = setTimeout(() => { speechSynthesis.cancel(); previewTimerRef.current = null; setPreviewing(false); }, 30000);
   }, [browserVoices, previewing]);
 
+  // ── ZipVoice 离线音色试听 ──
+  const effectiveZipVoiceId = ZH_VOICES[voiceId] ? voiceId : "45";
+  const [zipPreviewing, setZipPreviewing] = useState(false);
+  const [zipPreviewError, setZipPreviewError] = useState<string | null>(null);
+  const zipPreviewCtxRef = useRef<AudioContext | null>(null);
+  const zipPreviewSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const zipPreviewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (zipPreviewTimerRef.current) clearTimeout(zipPreviewTimerRef.current);
+    try { zipPreviewSourceRef.current?.stop(); } catch { /* 忽略 */ }
+    zipPreviewSourceRef.current = null;
+    try { zipPreviewCtxRef.current?.close(); } catch { /* 忽略 */ }
+    zipPreviewCtxRef.current = null;
+  }, []);
+
+  const previewZipVoice = useCallback(async (previewVoiceId: string) => {
+    if (zipPreviewing) return;
+    const state = useTTSStore.getState();
+    // 停止正在进行的朗读（Web Speech 或 ZipVoice），避免混音
+    if (state.playing) {
+      const manager = getActiveTTSManager();
+      if (manager) manager.stop();
+      else state.reset();
+    }
+    setZipPreviewError(null);
+    setZipPreviewing(true);
+    try {
+      // 用户手势窗口内创建/恢复 AudioContext（否则 resume 被拒 → 播放无声）
+      if (!zipPreviewCtxRef.current) zipPreviewCtxRef.current = new AudioContext();
+      const ctx = zipPreviewCtxRef.current;
+      if (ctx.state === "suspended") {
+        try { await ctx.resume(); } catch { /* 下面统一检查 */ }
+      }
+      const result = await generateAudioFull(
+        "各位村民，大家新年好。近期，湖北省武汉市等多个地区。",
+        { voice: previewVoiceId, speed: useTTSStore.getState().speed },
+      );
+      if (ctx.state !== "running") {
+        setZipPreviewError("浏览器阻止了自动播放，请点击页面任意位置后重试");
+        setZipPreviewing(false);
+        return;
+      }
+      const buffer = ctx.createBuffer(1, result.audio.length, result.sampleRate);
+      buffer.copyToChannel(result.audio, 0);
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      zipPreviewSourceRef.current = source;
+      source.onended = () => {
+        zipPreviewSourceRef.current = null;
+        setZipPreviewing(false);
+      };
+      source.start();
+      // 兜底：试听超时（60s）自动停止
+      zipPreviewTimerRef.current = setTimeout(() => {
+        try { source.stop(); } catch { /* 已结束 */ }
+        zipPreviewSourceRef.current = null;
+        setZipPreviewing(false);
+      }, 60000);
+    } catch (err) {
+      setZipPreviewError(err instanceof Error ? err.message : String(err));
+      setZipPreviewing(false);
+    }
+  }, [zipPreviewing]);
+
   return (
     <div className="space-y-4">
       <div>
@@ -283,16 +350,29 @@ export function TTSSettings() {
         /* ZipVoice：离线音色选择 */
         <div className="space-y-2">
           <p className="text-xs font-medium text-muted-foreground">离线音色</p>
-          <select
-            aria-label="离线音色选择"
-            className="w-full text-xs border rounded px-2 py-1.5 bg-background"
-            value={ZH_VOICES[voiceId] ? voiceId : "45"}
-            onChange={(e) => setVoiceId(e.target.value)}
-          >
-            {Object.entries(ZH_VOICES).map(([id, v]) => (
-              <option key={id} value={id}>{v.name}</option>
-            ))}
-          </select>
+          <div className="flex gap-2">
+            <select
+              aria-label="离线音色选择"
+              className="flex-1 text-xs border rounded px-2 py-1.5 bg-background"
+              value={ZH_VOICES[voiceId] ? voiceId : "45"}
+              onChange={(e) => setVoiceId(e.target.value)}
+            >
+              {Object.entries(ZH_VOICES).map(([id, v]) => (
+                <option key={id} value={id}>{v.name}</option>
+              ))}
+            </select>
+            <Button variant="outline" size="sm" className="h-7 text-[10px] px-2 shrink-0"
+              onClick={() => previewZipVoice(effectiveZipVoiceId)} disabled={zipPreviewing}>
+              {zipPreviewing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
+              <span className="ml-1">试听</span>
+            </Button>
+          </div>
+          {zipPreviewError && (
+            <p className="text-[10px] text-red-500">试听失败：{zipPreviewError}</p>
+          )}
+          {zipPreviewing && (
+            <p className="text-[10px] text-amber-500">正在本地生成试听音频（首次需加载模型，可能较慢）...</p>
+          )}
           <p className="text-[10px] text-muted-foreground">
             Kokoro 离线引擎，生成在本地完成（无网络请求）
           </p>

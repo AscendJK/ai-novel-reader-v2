@@ -170,6 +170,9 @@ export function useAudioPlayer({
     manager.setSpeed(speed);
     manager.setPlaybackRate(playbackRate);
     manager.setPitch(pitch);
+    // 手势窗口内提前创建 AudioContext：首次朗读模型加载需数秒，
+    // 若等 speak 内才创建，手势过期 → resume 被拒 → 生成成功但无声
+    manager.prewarmZipVoiceAudio();
 
     setCurrentChapter(novelId, chapterIndex);
     setGenerating(true);

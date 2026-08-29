@@ -8,6 +8,10 @@ import { loadModel, isModelLoaded, generateAudio, resetWorker } from "./zipvoice
 
 export type TTSEngine = "zipvoice" | "webspeech";
 
+// 当前活跃的 TTSManager 实例（供设置页试听等场景停止正在进行的朗读）
+let activeManager: TTSManager | null = null;
+export function getActiveTTSManager(): TTSManager | null { return activeManager; }
+
 export interface TTSChunk {
   text: string;
   index: number;
@@ -315,6 +319,19 @@ class ZipVoiceTTSEngine {
     }
   }
 
+  /**
+   * 在用户手势窗口内同步创建 AudioContext 并发起 resume（不等待结果）。
+   * 首次朗读时模型加载需数秒，若等 speak 内才创建 AudioContext，
+   * 手势激活窗口已过期 → Chrome 自动播放策略置为 suspended → 播放无声。
+   * 调用方需在用户点击事件（如“朗读”按钮）的同步阶段调用本方法。
+   */
+  prewarm(): void {
+    const ctx = this.getAudioContext();
+    if (ctx.state === "suspended") {
+      ctx.resume().catch(() => { /* 后续 speak 内还会再尝试 */ });
+    }
+  }
+
   private playOneBuffer(buffer: AudioBuffer): Promise<void> {
     return new Promise((resolve) => {
       const ctx = this.getAudioContext();
@@ -458,9 +475,24 @@ export class TTSManager {
   private seekId = 0;
   private userPaused = false;
 
-  constructor() { this.webSpeech = new WebSpeechTTSEngine(); }
+  constructor() {
+    this.webSpeech = new WebSpeechTTSEngine();
+    activeManager = this;
+  }
 
   setEngine(engine: TTSEngine) { this.engine = engine; }
+
+  /**
+   * 在用户手势窗口内提前创建/恢复 AudioContext（配合 ZipVoice 引擎）。
+   * 首次朗读时模型加载需数秒，手势过期后 resume 被拒 → AudioContext 保持
+   * suspended → source.start() 静默失败 → 生成成功但无声。
+   * 调用方（朗读按钮点击）必须在 await 之前的同步阶段调用。
+   */
+  prewarmZipVoiceAudio(): void {
+    if (this.engine !== "zipvoice") return;
+    if (!this.zipvoice) this.zipvoice = new ZipVoiceTTSEngine();
+    this.zipvoice.prewarm();
+  }
 
   setVoice(voiceId: string) {
     this.voiceId = voiceId;
@@ -739,6 +771,7 @@ export class TTSManager {
     this.webSpeech.destroy();
     // 组件卸载：中断 worker 推理，避免页面切走后 CPU 仍在跑
     resetWorker();
+    if (activeManager === this) activeManager = null;
     this.callbacks.onStop?.();
   }
 }

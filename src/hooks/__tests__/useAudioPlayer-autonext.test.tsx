@@ -18,6 +18,7 @@ const h = vi.hoisted(() => {
     setSpeed() {}
     setPlaybackRate() {}
     setPitch() {}
+    prewarmZipVoiceAudio() {}
     async speak(_chunks: unknown, callbacks: Record<string, unknown>) {
       mockSpeak(callbacks);
       callbacks.onPlay?.();
