@@ -362,11 +362,12 @@ class ZipVoiceTTSEngine {
     const ctx = this.getAudioContext();
     if (ctx.state === "suspended") {
       try { await ctx.resume(); } catch { /* 自动播放策略拒绝，继续尝试 */ }
-      if (ctx.state !== "running") {
-        // 无法出声：直接报错而非静默跳过所有 chunk（避免朗读瞬间“播完”触发自动翻章）
-        callbacks.onError?.("浏览器阻止了自动播放，请点击页面任意位置后重试");
-        return;
-      }
+    }
+    // 移到块外重新检查：避免 TS 对块内 ctx.state 的窄化（resume 可能成功也可能被拒）
+    if (ctx.state !== "running") {
+      // 无法出声：直接报错而非静默跳过所有 chunk（避免朗读瞬间“播完”触发自动翻章）
+      callbacks.onError?.("浏览器阻止了自动播放，请点击页面任意位置后重试");
+      return;
     }
     let firstChunk = true;
     try {
