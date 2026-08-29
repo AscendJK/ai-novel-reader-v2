@@ -53,7 +53,10 @@ export function TTSSettings() {
     setBrowserVoices(voices);
   }, [setBrowserVoices]);
 
-  // 持续轮询语音列表（不依赖 voiceschanged，每 2 秒检查一次）
+  // 持续轮询语音列表（每 2 秒检查一次）
+  // 注意：不监听 voiceschanged 事件——Android Chromium 上每次 getVoices()
+  // 都可能触发该事件，监听器会引发 getVoices()/voiceschanged 事件风暴，
+  // 干扰 TTS 引擎初始化导致 getVoices() 恒空（60510448 可用版本的机制）
   useEffect(() => {
     if (typeof speechSynthesis === "undefined") return;
     const tryRead = () => {
@@ -61,17 +64,8 @@ export function TTSSettings() {
       applyVoices(all);
     };
     tryRead();
-    const poll = setInterval(tryRead, 500);
+    const poll = setInterval(tryRead, 2000);
     return () => clearInterval(poll);
-  }, [applyVoices]);
-
-  // 兼容性：监听 voiceschanged 事件（Chrome/Edge 语音异步加载完成后触发），
-  // 语音就绪后即时刷新列表，无需等下一轮轮询
-  useEffect(() => {
-    if (typeof speechSynthesis === "undefined") return;
-    const onVoicesChanged = () => applyVoices(speechSynthesis.getVoices());
-    speechSynthesis.addEventListener?.("voiceschanged", onVoicesChanged);
-    return () => speechSynthesis.removeEventListener?.("voiceschanged", onVoicesChanged);
   }, [applyVoices]);
 
   // 分类：按语言分组（中文优先）→ 按网络细分（本地/在线/未知）。纯计算，缓存避免重复执行。
