@@ -51,8 +51,10 @@ export interface TTSState {
   pitch: number;
   /** 自动翻章 */
   autoNextChapter: boolean;
-  /** 单次生成字数上限（离线引擎分块大小，30-500，默认 150） */
-  chunkSize: number;
+  /** 单次生成字数上限（ZipVoice 离线引擎分块，30-500，默认 150） */
+  zipvoiceChunkSize: number;
+  /** 一次朗读字数上限（Web Speech 分块，30-500，默认 300） */
+  webspeechChunkSize: number;
   /** TTS 引擎类型 */
   engine: "zipvoice" | "webspeech";
 
@@ -72,7 +74,8 @@ export interface TTSState {
   setVolume: (volume: number) => void;
   setPitch: (pitch: number) => void;
   setAutoNextChapter: (auto: boolean) => void;
-  setChunkSize: (chunkSize: number) => void;
+  setZipvoiceChunkSize: (zipvoiceChunkSize: number) => void;
+  setWebspeechChunkSize: (webspeechChunkSize: number) => void;
   setEngine: (engine: "zipvoice" | "webspeech") => void;
   /** 顶栏朗读按钮触发计数器（外部递增，AudioPlayer 监听） */
   startRequested: number;
@@ -100,8 +103,10 @@ interface PersistedSettings {
   autoNextChapter: boolean;
   engine: "zipvoice" | "webspeech";
   modelDownloaded: boolean;
-  /** 单次生成字数上限（离线引擎分块大小，30-500，默认 150） */
-  chunkSize: number;
+  /** ZipVoice 单次生成字数上限（30-500，默认 150；旧字段 chunkSize 迁移至此） */
+  zipvoiceChunkSize: number;
+  /** Web Speech 一次朗读字数上限（30-500，默认 300） */
+  webspeechChunkSize: number;
 }
 
 function loadSettings(): PersistedSettings {
@@ -130,11 +135,12 @@ function loadSettings(): PersistedSettings {
         autoNextChapter: s.autoNextChapter ?? true,
         engine: (s.engine === "zipvoice" || s.engine === "webspeech") ? s.engine : "webspeech",
         modelDownloaded: s.modelDownloaded ?? false,
-        chunkSize: clampChunkSize(s.chunkSize ?? 150),
+        zipvoiceChunkSize: clampChunkSize(s.zipvoiceChunkSize ?? s.chunkSize ?? 150),
+        webspeechChunkSize: clampChunkSize(s.webspeechChunkSize ?? 300),
       };
     }
   } catch { /* ignore */ }
-  return { zipvoiceVoiceId: "45", webspeechVoiceId: "", zipvoiceSpeed: 1.0, webspeechSpeed: 1.0, zipvoiceVolume: 1.0, webspeechVolume: 1.0, zipvoicePitch: 1.0, webspeechPitch: 1.0, playbackRate: 1.0, autoNextChapter: true, engine: "webspeech", modelDownloaded: false, chunkSize: 150 };
+  return { zipvoiceVoiceId: "45", webspeechVoiceId: "", zipvoiceSpeed: 1.0, webspeechSpeed: 1.0, zipvoiceVolume: 1.0, webspeechVolume: 1.0, zipvoicePitch: 1.0, webspeechPitch: 1.0, playbackRate: 1.0, autoNextChapter: true, engine: "webspeech", modelDownloaded: false, zipvoiceChunkSize: 150, webspeechChunkSize: 300 };
 }
 
 /** chunkSize 合法范围：30-500 字 */
@@ -190,7 +196,8 @@ export const useTTSStore = create<TTSState>((set, get) => ({
   volume: defaults.engine === "zipvoice" ? defaults.zipvoiceVolume : defaults.webspeechVolume,
   pitch: defaults.engine === "zipvoice" ? defaults.zipvoicePitch : defaults.webspeechPitch,
   autoNextChapter: defaults.autoNextChapter,
-  chunkSize: defaults.chunkSize,
+  zipvoiceChunkSize: defaults.zipvoiceChunkSize,
+  webspeechChunkSize: defaults.webspeechChunkSize,
   engine: defaults.engine,
 
   // 朗读触发（顶栏按钮 → AudioPlayer 监听）
@@ -293,11 +300,19 @@ export const useTTSStore = create<TTSState>((set, get) => ({
     settings.modelDownloaded = s.modelDownloaded;
     saveSettings(settings);
   },
-  setChunkSize: (chunkSize) => {
-    const clamped = clampChunkSize(chunkSize);
-    const s = get(); set({ chunkSize: clamped });
+  setZipvoiceChunkSize: (zipvoiceChunkSize) => {
+    const clamped = clampChunkSize(zipvoiceChunkSize);
+    const s = get(); set({ zipvoiceChunkSize: clamped });
     const settings = getCachedSettings();
-    settings.chunkSize = clamped;
+    settings.zipvoiceChunkSize = clamped;
+    settings.modelDownloaded = s.modelDownloaded;
+    saveSettings(settings);
+  },
+  setWebspeechChunkSize: (webspeechChunkSize) => {
+    const clamped = clampChunkSize(webspeechChunkSize);
+    const s = get(); set({ webspeechChunkSize: clamped });
+    const settings = getCachedSettings();
+    settings.webspeechChunkSize = clamped;
     settings.modelDownloaded = s.modelDownloaded;
     saveSettings(settings);
   },

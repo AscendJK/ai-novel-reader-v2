@@ -156,13 +156,15 @@ export function prepareTextForTTS(content: string, maxChunkLength: number = 300)
 
 /**
  * 按句子边界拆分长段落
- * 优先按句号拆分，无标点时按逗号拆分，最后按固定长度截断
+ * 优先按句号拆分，无标点时按逗号分割；
+ * 保证句子完整：单个句子超过 maxLength 时整句独立成一个 chunk（宁超不拆），
+ * 不会把一句话硬切成两段朗读。
  */
 function splitBySentence(text: string, maxLength: number): string[] {
   // 按中文句号、问号、叹号、分号分割
   let sentences = text.split(/(?<=[。！？；\n])/);
 
-  // 如果只有一段（无标点），按逗号分割
+  // 如果只有一段（无句号等），按逗号分割
   if (sentences.length <= 1) {
     sentences = text.split(/(?<=[，,])/);
   }
@@ -170,7 +172,16 @@ function splitBySentence(text: string, maxLength: number): string[] {
   const parts: string[] = [];
   let current = "";
 
-  for (const sentence of sentences) {
+  for (const raw of sentences) {
+    const sentence = raw.trim();
+    if (!sentence) continue;
+    // 单句超过上限：不硬切，整句独立成一个 chunk（保证句子完整）
+    if (sentence.length > maxLength) {
+      if (current.trim().length > 0) parts.push(current.trim());
+      parts.push(sentence);
+      current = "";
+      continue;
+    }
     if ((current + sentence).length > maxLength && current.length > 0) {
       parts.push(current.trim());
       current = sentence;
@@ -180,15 +191,7 @@ function splitBySentence(text: string, maxLength: number): string[] {
   }
 
   if (current.trim().length >= 5) {
-    // 最终兜底：如果单个 chunk 仍然超长，按固定长度截断
-    let remaining = current.trim();
-    while (remaining.length > maxLength) {
-      parts.push(remaining.slice(0, maxLength));
-      remaining = remaining.slice(maxLength);
-    }
-    if (remaining.length >= 5) {
-      parts.push(remaining);
-    }
+    parts.push(current.trim());
   }
 
   return parts;

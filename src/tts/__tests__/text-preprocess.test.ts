@@ -49,6 +49,39 @@ describe("prepareTextForTTS", () => {
     }
   });
 
+  it("句子完整性：不会把一句话拆开朗读（小 chunk 上限）", () => {
+    // 每句约 22 字，chunk 上限 30 → 相邻句子聚合到 ≤30 字，单句不拆
+    const text = "他推开门走进来，屋里的灯光很暗。夜已经很深了，窗外的雨还在下个不停。月光洒在地板上，像一层薄薄的银纱。";
+    const result = prepareTextForTTS(text, 30);
+    expect(result.length).toBeGreaterThan(1);
+    for (const chunk of result) {
+      // 每个 chunk 都以句号结尾（整句结束），不包含半句
+      expect(chunk.text.trim().endsWith("。")).toBe(true);
+    }
+    // 拼接后与原文一致（无内容丢失/无硬切）
+    expect(result.map(c => c.text).join("")).toBe(text);
+  });
+
+  it("句子完整性：单句超过上限时整句保留，不硬切", () => {
+    // 一句 50 字 > 上限 30：整句作为一个 chunk（宁超不拆）
+    const longSentence = "这是一个非常长的句子用来验证单个句子超过字数上限时不会被硬切开的处理逻辑是否正确运行。";
+    const result = prepareTextForTTS(longSentence, 30);
+    expect(result.length).toBe(1);
+    expect(result[0].text).toBe(longSentence);
+  });
+
+  it("句子完整性：无句号的长段落按逗号切分，逗号片段不拆", () => {
+    // 无句号段落（逗号分隔），chunk 上限 25 → 逗号片段聚合，不拆半句
+    const text = "他站在那里，静静地看着熟睡中的女儿，心里涌起一阵说不清的温柔与愧疚，眼泪悄悄滑落";
+    const result = prepareTextForTTS(text, 25);
+    expect(result.length).toBeGreaterThan(1);
+    // 聚合后的片段要么 ≤25 字，要么是单片段超过上限（整段保留）
+    for (const chunk of result) {
+      expect(chunk.text.length).toBeLessThanOrEqual(30);
+    }
+    expect(result.map(c => c.text).join("")).toBe(text);
+  });
+
   it("合并段落的 paragraphBreaks 记录分割点", () => {
     // 使用足够长的段落以确保合并后 breaks 有多个值
     const p1 = "这是第一段内容用来测试段落合并后的分割点记录功能。";

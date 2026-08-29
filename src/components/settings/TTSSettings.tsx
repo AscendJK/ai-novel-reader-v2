@@ -15,8 +15,8 @@ import { getTTSPreloadStatus } from "@/tts/tts-preload";
 
 export function TTSSettings() {
   const {
-    voiceId, speed, pitch, autoNextChapter, browserVoices, engine, chunkSize,
-    setVoiceId, setSpeed, setPitch, setAutoNextChapter, setBrowserVoices, setEngine, setChunkSize,
+    voiceId, speed, pitch, autoNextChapter, browserVoices, engine, zipvoiceChunkSize, webspeechChunkSize,
+    setVoiceId, setSpeed, setPitch, setAutoNextChapter, setBrowserVoices, setEngine, setZipvoiceChunkSize, setWebspeechChunkSize,
   } = useTTSStore();
 
   const [loading, setLoading] = useState(false);
@@ -393,17 +393,27 @@ export function TTSSettings() {
       {engine === "zipvoice" && (
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-muted-foreground">单次生成字数</p>
-            <span className="text-xs text-muted-foreground">{chunkSize} 字</span>
+            <p className="text-xs font-medium text-muted-foreground">
+              {engine === "zipvoice" ? "单次生成字数（ZipVoice）" : "一次朗读字数（Web Speech）"}
+            </p>
+            <span className="text-xs text-muted-foreground">{engine === "zipvoice" ? zipvoiceChunkSize : webspeechChunkSize} 字</span>
           </div>
-          <input type="range" min={30} max={500} step={10} value={chunkSize}
-            aria-label="单次生成字数"
-            onChange={(e) => setChunkSize(parseInt(e.target.value, 10))} className="w-full h-1.5" />
+          <input type="range" min={30} max={500} step={10}
+            value={engine === "zipvoice" ? zipvoiceChunkSize : webspeechChunkSize}
+            aria-label={engine === "zipvoice" ? "单次生成字数" : "一次朗读字数"}
+            onChange={(e) => {
+              const v = parseInt(e.target.value, 10);
+              if (engine === "zipvoice") setZipvoiceChunkSize(v);
+              else setWebspeechChunkSize(v);
+            }}
+            className="w-full h-1.5" />
           <div className="flex justify-between text-[10px] text-muted-foreground">
             <span>30</span><span>150</span><span>300</span><span>500</span>
           </div>
           <p className="text-[10px] text-muted-foreground">
-            每次生成一段音频的字数上限：调小更不容易超时（低配设备），调大减少生成次数（高配设备）
+            {engine === "zipvoice"
+              ? "每次生成一段音频的字数上限：调小更不容易超时（低配设备），调大减少生成次数（高配设备）。 按句子边界切分，不会拆开一句话"
+              : "每次朗读一段文本的字数上限：调大可减少段落切换频率，调小更精细。 按句子边界切分，不会拆开一句话"}
           </p>
         </div>
       )}
