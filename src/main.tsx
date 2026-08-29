@@ -38,14 +38,14 @@ const updateSW = registerSW({
   onOfflineReady() {
     window.dispatchEvent(new CustomEvent("sw-offline-ready"));
   },
-  onRegisteredSW() {
-    ensureCrossOriginIsolated();
-  },
 });
 
 // 每 30 分钟检查一次 Service Worker 更新（阅读过程中也能检测到新版本）
+// SW ready 后同时执行 COI 检查（原 onRegisteredSW 回调：该回调不在 registerSW
+// 类型定义中，改为在 SW 激活接管后手动调用 ensureCrossOriginIsolated）
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.ready.then((registration) => {
+    ensureCrossOriginIsolated();
     setInterval(() => registration.update(), 30 * 60 * 1000);
   });
 }

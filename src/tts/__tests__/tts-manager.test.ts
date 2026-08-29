@@ -9,12 +9,13 @@ vi.mock("../zipvoice-engine", () => ({
 
 // ── Mock 浏览器 Web Speech API ──
 class MockUtterance {
+  text: string;
   rate = 1; volume = 1; pitch = 1; lang = ""; voice = null;
   onstart: (() => void) | null = null;
   onend: (() => void) | null = null;
   onerror: ((e: { error?: string }) => void) | null = null;
   onboundary: ((e: { charIndex?: number }) => void) | null = null;
-  constructor(public text: string) {}
+  constructor(text: string) { this.text = text; }
 }
 
 const globalAny = globalThis as Record<string, unknown>;
