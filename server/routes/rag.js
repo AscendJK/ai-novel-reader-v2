@@ -72,6 +72,22 @@ router.get("/test", rateLimit(5), async (req, res) => {
 
 // ── RAG Index API ──────────────────────────────────────────
 
+// GET /api/rag/tts/status — 检查 TTS 资源是否就绪
+// ⚠️ 必须声明在 /:novelId/status 通配路由之前：
+// 否则 /api/rag/tts/status 会被 /:novelId/status（novelId="tts"）匹配，
+// 触发 authNovel 校验返回 401，导致前端预加载永远拿不到状态。
+router.get("/tts/status", (req, res) => {
+  const wasmExists = fs.existsSync(path.join(TTS_WASM_CACHE, "sherpa-onnx-wasm-main-tts.wasm"));
+  const modelExists = fs.existsSync(path.join(TTS_MODEL_CACHE, "decoder.int8.onnx"));
+  const vocoderPath = path.join(TTS_MODEL_CACHE, VOCODER_FILENAME);
+  // vocoder 用精确大小校验，残缺/损坏文件不算就绪
+  let vocoderExists = false;
+  try {
+    vocoderExists = fs.existsSync(vocoderPath) && fs.statSync(vocoderPath).size === VOCODER_EXPECTED_SIZE;
+  } catch {}
+  res.json({ wasmReady: wasmExists, modelReady: modelExists, vocoderReady: vocoderExists });
+});
+
 // POST /api/rag/encode — encode query text (single small batch, max 20 texts)
 router.post("/encode", rateLimit(30), async (req, res) => {
   if (!authNovel(req, res)) return;
@@ -461,6 +477,8 @@ async function downloadFile(url, destPath, minSize = 1024, onProgress, { signal 
     await new Promise((resolve, reject) => { ws.on("finish", resolve); ws.on("error", reject); });
   } catch (e) {
     ws.destroy();
+    // 下载中断/失败时删除残缺文件，避免后续 size 校验误判为有效缓存
+    try { fs.unlinkSync(destPath); } catch {}
     throw e;
   }
 
@@ -714,28 +732,54 @@ export async function ensureWasmReady(onProgress, { signal, force = false } = {}
 /** 确保 vocoder 文件已缓存 */
 let vocoderReady = false;
 let vocoderReadyPromise = null;
-export async function ensureVocoderReady(onProgress, { signal } = {}) {
+let vocoderLastFailure = 0;
+// vocos_24khz.onnx 的精确大小（来自官方 release，用于严格校验，
+// 防止残缺/损坏文件被误判为有效缓存）
+const VOCODER_EXPECTED_SIZE = 54157409;
+
+export async function ensureVocoderReady(onProgress, { signal, force = false } = {}) {
+  if (force) { vocoderReady = false; vocoderReadyPromise = null; }
   if (vocoderReady) return;
   if (vocoderReadyPromise) return vocoderReadyPromise;
+  if (Date.now() - vocoderLastFailure < 30000) throw new Error("上次下载失败，请 30 秒后重试");
+
   const vocoderPath = path.join(TTS_MODEL_CACHE, VOCODER_FILENAME);
-  if (fs.existsSync(vocoderPath) && fs.statSync(vocoderPath).size > 100000) {
-    vocoderReady = true;
-    return;
+  // 严格校验：存在且大小精确匹配（54157409 字节），残缺文件不通过
+  if (fs.existsSync(vocoderPath)) {
+    try {
+      const size = fs.statSync(vocoderPath).size;
+      if (size === VOCODER_EXPECTED_SIZE) {
+        vocoderReady = true;
+        return;
+      }
+      // 大小不匹配：可能是残缺/旧版本文件，删除后重新下载
+      console.warn(`[tts-proxy] vocoder 缓存大小异常 (${size} != ${VOCODER_EXPECTED_SIZE})，重新下载`);
+      try { fs.unlinkSync(vocoderPath); } catch {}
+    } catch (e) {
+      console.warn(`[tts-proxy] vocoder 缓存校验失败: ${e.message}，重新下载`);
+      try { fs.unlinkSync(vocoderPath); } catch {}
+    }
   }
+
   // Gitee 优先，GitHub 备用
   vocoderReadyPromise = (async () => {
     onProgress?.("开始下载", "尝试 Gitee（国内源）");
     // downloadFile 的回调是纯数字进度，包装成 (step, detail) 双参，
     // 与 Gitee 分卷下载的回调形态保持一致（SSE/日志都能正确显示）
-    const wrapProgress = (pct) => onProgress?.(`下载中 ${pct}%`, "vocos_24khz.onnx");
+    const wrapProgress = (pct) => onProgress?.(`下载中 ${pct}%`, VOCODER_FILENAME);
     try {
-      await downloadFile(GITEE_VOCODER_URL, vocoderPath, 100000, wrapProgress, { signal });
+      await downloadFile(GITEE_VOCODER_URL, vocoderPath, VOCODER_EXPECTED_SIZE, wrapProgress, { signal });
     } catch (e) {
       console.warn(`[tts-proxy] Gitee vocoder 失败: ${e.message}，尝试 GitHub`);
-      await downloadFile(GITHUB_VOCODER_URL, vocoderPath, 100000, wrapProgress, { signal });
+      await downloadFile(GITHUB_VOCODER_URL, vocoderPath, VOCODER_EXPECTED_SIZE, wrapProgress, { signal });
+    }
+    // 下载完成后二次校验（downloadFile 的 minSize 已校验，这里防御性复查）
+    const size = fs.statSync(vocoderPath).size;
+    if (size !== VOCODER_EXPECTED_SIZE) {
+      throw new Error(`vocoder 下载后大小异常 (${size} != ${VOCODER_EXPECTED_SIZE})`);
     }
     vocoderReady = true;
-  })().catch((e) => { vocoderReadyPromise = null; throw e; });
+  })().catch((e) => { vocoderLastFailure = Date.now(); vocoderReadyPromise = null; throw e; });
   await vocoderReadyPromise;
 }
 
@@ -924,13 +968,6 @@ router.get("/tts/prepare", requireAuth, async (req, res) => {
   }
 
   res.end();
-});
-
-// GET /api/rag/tts/status — 检查 TTS 资源是否就绪
-router.get("/tts/status", (req, res) => {
-  const wasmExists = fs.existsSync(path.join(TTS_WASM_CACHE, "sherpa-onnx-wasm-main-tts.wasm"));
-  const modelExists = fs.existsSync(path.join(TTS_MODEL_CACHE, "decoder.int8.onnx"));
-  res.json({ wasmReady: wasmExists, modelReady: modelExists });
 });
 
 export default router;

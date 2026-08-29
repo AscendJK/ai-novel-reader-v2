@@ -72,8 +72,8 @@ export function preloadZipVoice(): Promise<TTSPreloadStatus> {
       // 服务器未就绪（还在下载或从未准备）：不主动触发重型 prepare，
       // 避免每个用户登录都触发服务器下载；返回跳过，稍后手动使用 ZipVoice
       // 时会走 loadModel 的完整流程
-      if (!status.wasmReady || !status.modelReady) {
-        console.warn(`[tts-preload] 服务器 TTS 资源未就绪 (wasm=${status.wasmReady}, model=${status.modelReady})，跳过预加载`);
+      if (!status.wasmReady || !status.modelReady || !status.vocoderReady) {
+        console.warn(`[tts-preload] 服务器 TTS 资源未就绪 (wasm=${status.wasmReady}, model=${status.modelReady}, vocoder=${status.vocoderReady})，跳过预加载`);
         setStatus("skipped");
         return "skipped";
       }

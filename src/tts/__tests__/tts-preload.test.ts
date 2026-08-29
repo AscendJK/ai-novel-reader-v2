@@ -40,7 +40,7 @@ describe("preloadZipVoice", () => {
     mockIsCacheReady.mockResolvedValue(false);
     mockDownloadAndCache.mockResolvedValue(new Map());
     mockPrepareTTS.mockResolvedValue(undefined);
-    mockCheckTTSCache.mockResolvedValue({ wasmReady: true, modelReady: true });
+    mockCheckTTSCache.mockResolvedValue({ wasmReady: true, modelReady: true, vocoderReady: true });
   });
 
   // 每个测试结束等待单例 Promise 完全结算，避免泄漏到下一个测试
@@ -74,7 +74,15 @@ describe("preloadZipVoice", () => {
   });
 
   it("服务器资源未就绪时跳过（不触发重型下载）", async () => {
-    mockCheckTTSCache.mockResolvedValue({ wasmReady: false, modelReady: false });
+    mockCheckTTSCache.mockResolvedValue({ wasmReady: false, modelReady: false, vocoderReady: false });
+    const status = await preloadZipVoice();
+    expect(status).toBe("skipped");
+    expect(mockPrepareTTS).not.toHaveBeenCalled();
+    expect(mockDownloadAndCache).not.toHaveBeenCalled();
+  });
+
+  it("服务器 vocoder 未就绪时跳过（不触发重型下载）", async () => {
+    mockCheckTTSCache.mockResolvedValue({ wasmReady: true, modelReady: true, vocoderReady: false });
     const status = await preloadZipVoice();
     expect(status).toBe("skipped");
     expect(mockPrepareTTS).not.toHaveBeenCalled();

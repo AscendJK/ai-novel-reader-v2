@@ -179,9 +179,11 @@ export async function prepareTTS(onStep: (step: string, detail: string) => void)
 /**
  * 检查 TTS 资源是否就绪
  */
-export async function checkTTSCache(): Promise<{ wasmReady: boolean; modelReady: boolean }> {
+export async function checkTTSCache(): Promise<{ wasmReady: boolean; modelReady: boolean; vocoderReady: boolean }> {
   const res = await fetch("/api/rag/tts/status");
-  return res.json();
+  const data = await res.json();
+  // 兼容旧后端（无 vocoderReady 字段时按就绪处理，避免误拦）
+  return { wasmReady: !!data.wasmReady, modelReady: !!data.modelReady, vocoderReady: data.vocoderReady !== false };
 }
 
 // ── 模型加载 ───────────────────────────────────────────────

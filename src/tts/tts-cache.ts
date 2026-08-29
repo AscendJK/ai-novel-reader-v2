@@ -114,17 +114,27 @@ export async function getCachedFiles(): Promise<Map<string, ArrayBuffer>> {
 }
 
 /**
+ * 下载并发锁：loadModel（手动使用）与 preloadZipVoice（登录后预加载）
+ * 可能同时触发下载，共享同一 Promise 避免重复拉取 380MB / IndexedDB 并发写。
+ */
+let downloadPromise: Promise<Map<string, ArrayBuffer>> | null = null;
+
+/**
  * 从服务器代理下载文件并存入 IndexedDB
  * @param onProgress - 进度回调 (文件名, 已下载字节, 总字节)
  */
-export async function downloadAndCache(
+export function downloadAndCache(
   onProgress?: (filename: string, loaded: number, total: number) => void
 ): Promise<Map<string, ArrayBuffer>> {
-  const result = new Map<string, ArrayBuffer>();
+  // 并发保护：同一时刻只执行一次真实下载，后续调用共享同一 Promise
+  if (downloadPromise) return downloadPromise;
 
-  for (const file of CACHE_FILES) {
-    // 检查是否已缓存
-    const cached = await dbGet(file);
+  downloadPromise = (async (): Promise<Map<string, ArrayBuffer>> => {
+    const result = new Map<string, ArrayBuffer>();
+
+    for (const file of CACHE_FILES) {
+      // 检查是否已缓存
+      const cached = await dbGet(file);
     if (cached) {
       result.set(file, cached);
       onProgress?.(file, cached.byteLength, cached.byteLength);
@@ -185,6 +195,12 @@ export async function downloadAndCache(
   }
 
   return result;
+  })().finally(() => {
+    // 下载完成（成功或失败）后释放锁，允许下次重新触发
+    downloadPromise = null;
+  });
+
+  return downloadPromise;
 }
 
 /**
