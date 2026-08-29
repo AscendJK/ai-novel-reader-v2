@@ -388,7 +388,10 @@ export async function generateAudio(
   const id = nextRequestId++;
   const worker = await getWorker();
   const t0 = performance.now();
-  console.log(`[TTS] 请求生成 #${id}: ${cleanText.length} 字, voice=${voiceId}(sid=${sid}), speed=${speed}, 超时 ${GENERATE_TIMEOUT_MS / 1000}s`);
+  // 动态超时：Kokoro wasm 单线程推理本地实测 RTF≈2.8（每字约 1s），
+  // 慢设备（无 SIMD/低配 CPU）可达 3-4 倍。每字预留 4s，下限 120s。
+  const timeoutMs = Math.max(GENERATE_TIMEOUT_MS, cleanText.length * 4000);
+  console.log(`[TTS] 请求生成 #${id}: ${cleanText.length} 字, voice=${voiceId}(sid=${sid}), speed=${speed}, 超时 ${(timeoutMs / 1000).toFixed(0)}s`);
   // zipvoice 无逐步进度回调，用时间推进展示生成进度（每 10s 一条）
   const progressTimer = setInterval(() => {
     console.log(`[TTS] ⏳ 生成中 #${id}: 已等待 ${((performance.now() - t0) / 1000).toFixed(0)}s`);
@@ -396,12 +399,12 @@ export async function generateAudio(
   let audio: Float32Array;
   try {
     audio = await new Promise<Float32Array>((resolve, reject) => {
-      // H5 fix: 生成超时
+      // H5 fix: 生成超时（动态：短文本下限 120s，长文本按每字 4s 预留）
       const timer = setTimeout(() => {
         pendingRequests.delete(id);
         console.warn(`[TTS] 生成超时 #${id}: ${((performance.now() - t0) / 1000).toFixed(1)}s 未返回，已放弃该 chunk`);
         reject(new Error("音频生成超时"));
-      }, GENERATE_TIMEOUT_MS);
+      }, timeoutMs);
       pendingRequests.set(id, { resolve, reject, timer });
       worker.postMessage({ type: "generate", id, text: cleanText, sid, speed });
     });
