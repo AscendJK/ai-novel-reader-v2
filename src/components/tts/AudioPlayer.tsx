@@ -53,6 +53,8 @@ export function AudioPlayer({
   const totalParagraphs = useTTSStore(s => s.totalParagraphs);
   const playbackRate = useTTSStore(s => s.playbackRate);
   const setPlaybackRate = useTTSStore(s => s.setPlaybackRate);
+  // 设置页生成语速（仅用于展示实际听感 = 生成语速 × 播放倍速）
+  const genSpeed = useTTSStore(s => s.speed);
 
   const { play, togglePause, stop, isActive, isPaused, isPlaying, error, retryCount, seekToParagraph, orderedParaIndices } = useAudioPlayer({
     chapterContent,
@@ -220,11 +222,11 @@ export function AudioPlayer({
           )}
         </div>
 
-        {/* U2: 播放倍速按钮（独立于设置页 TTS 语速） */}
+        {/* U2: 播放倍速按钮（在设置页语速基础上乘倍，独立调节） */}
         <div className="shrink-0">
           <Button variant="ghost" size="sm" className="h-6 px-1 text-[11px] sm:text-xs tabular-nums"
             onClick={() => setShowSpeedPopup(v => !v)}
-            title={`播放倍速 ${playbackRate}x`}>
+            title={`播放倍速 ${playbackRate}x（设置页语速 ${genSpeed.toFixed(2)}x × ${playbackRate.toFixed(2)}x = 实际听感 ${(genSpeed * playbackRate).toFixed(2)}x）`}>
             {playbackRate}x
           </Button>
         </div>
