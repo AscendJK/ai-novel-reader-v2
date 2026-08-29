@@ -1,6 +1,6 @@
 /**
  * TTS 语音朗读设置
- * 支持双引擎：Web Speech（浏览器内置）+ ZipVoice（离线，sherpa-onnx WASM）
+ * 支持双引擎：Web Speech（浏览器内置）+ Kokoro（离线，sherpa-onnx 1.13.6 WASM）
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
@@ -14,8 +14,8 @@ import { getTTSPreloadStatus } from "@/tts/tts-preload";
 
 export function TTSSettings() {
   const {
-    voiceId, speed, pitch, autoNextChapter, browserVoices, engine,
-    setVoiceId, setSpeed, setPitch, setAutoNextChapter, setBrowserVoices, setEngine,
+    voiceId, speed, pitch, autoNextChapter, browserVoices, engine, chunkSize,
+    setVoiceId, setSpeed, setPitch, setAutoNextChapter, setBrowserVoices, setEngine, setChunkSize,
   } = useTTSStore();
 
   const [loading, setLoading] = useState(false);
@@ -286,7 +286,7 @@ export function TTSSettings() {
           <select
             aria-label="离线音色选择"
             className="w-full text-xs border rounded px-2 py-1.5 bg-background"
-            value={ZH_VOICES[voiceId] ? voiceId : "0"}
+            value={ZH_VOICES[voiceId] ? voiceId : "45"}
             onChange={(e) => setVoiceId(e.target.value)}
           >
             {Object.entries(ZH_VOICES).map(([id, v]) => (
@@ -294,11 +294,11 @@ export function TTSSettings() {
             ))}
           </select>
           <p className="text-[10px] text-muted-foreground">
-            ZipVoice 离线引擎，生成在本地完成（无网络请求）
+            Kokoro 离线引擎，生成在本地完成（无网络请求）
           </p>
           {/* 资源预加载状态（登录后自动触发） */}
           {engine === "zipvoice" && preloadStatus === "downloading" && (
-            <p className="text-[10px] text-amber-500">正在后台下载语音资源（约 380MB），完成后即可离线使用</p>
+            <p className="text-[10px] text-amber-500">正在后台下载语音资源（约 190MB），完成后即可离线使用</p>
           )}
           {engine === "zipvoice" && preloadStatus === "ready" && (
             <p className="text-[10px] text-green-600">✓ 语音资源已就绪，可离线使用</p>
@@ -306,6 +306,25 @@ export function TTSSettings() {
           {engine === "zipvoice" && (preloadStatus === "skipped" || preloadStatus === "failed" || preloadStatus === "idle") && (
             <p className="text-[10px] text-muted-foreground">首次朗读时会自动下载模型，请耐心等待</p>
           )}
+        </div>
+      )}
+
+      {/* 单次生成字数（离线引擎分块大小；Web Speech 无此概念，隐藏） */}
+      {engine === "zipvoice" && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium text-muted-foreground">单次生成字数</p>
+            <span className="text-xs text-muted-foreground">{chunkSize} 字</span>
+          </div>
+          <input type="range" min={30} max={500} step={10} value={chunkSize}
+            aria-label="单次生成字数"
+            onChange={(e) => setChunkSize(parseInt(e.target.value, 10))} className="w-full h-1.5" />
+          <div className="flex justify-between text-[10px] text-muted-foreground">
+            <span>30</span><span>150</span><span>300</span><span>500</span>
+          </div>
+          <p className="text-[10px] text-muted-foreground">
+            每次生成一段音频的字数上限：调小更不容易超时（低配设备），调大减少生成次数（高配设备）
+          </p>
         </div>
       )}
 

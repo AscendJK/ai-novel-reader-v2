@@ -288,7 +288,7 @@ class WebSpeechTTSEngine {
 }
 
 /**
- * ZipVoice TTS 引擎（通过 Web Audio API 播放）
+ * 离线 TTS 引擎（Kokoro，通过 Web Audio API 播放）
  */
 class ZipVoiceTTSEngine {
   private audioContext: AudioContext | null = null;
@@ -298,7 +298,7 @@ class ZipVoiceTTSEngine {
   private pausedAt = 0;
   private startedAt = 0;
   private currentBuffer: AudioBuffer | null = null;
-  private voice = "0";
+  private voice = "45";
   private pendingPlayResolve: (() => void) | null = null;
 
   setVoice(voiceId: string) { this.voice = voiceId; }
@@ -431,7 +431,7 @@ export class TTSManager {
   private playbackRate = 1.0; // 播放倍速（独立于生成语速 speed）
   private volume = 1.0;
   private pitch = 1.0;
-  private voiceId = "0";
+  private voiceId = "45";
   private stopped = false;
   private generationId = 0;
   private seekId = 0;

@@ -1,22 +1,27 @@
 /**
- * ZipVoice TTS 引擎
- * 基于 sherpa-onnx WASM，浏览器端离线推理
+ * Kokoro TTS 引擎（替换 ZipVoice）
+ * 基于 sherpa-onnx 1.13.6 WASM，浏览器端离线推理
  * 推理在 Worker 线程，不阻塞 UI
+ * 模型：Kokoro multi-lang v1.0 int8（53 音色，中文 sid 45-52）
  */
 
 import { isCacheReady, getCachedFiles, downloadAndCache } from "./tts-cache";
 import { apiFetch } from "@/lib/api-client";
 
 // ── 模型配置 ───────────────────────────────────────────────
-// ZipVoice 离线音色（zero-shot 克隆：音色由参考音频决定，sid 仅作索引）
-// 参考音频来自模型包 test_wavs/，参考文本必须与音频内容逐字匹配（prompt.txt）
+// Kokoro 中文音色（sid 45-52，来自官方 voices.bin；另含 45 个英文/多语音色）
 export const ZH_VOICES: Record<string, { name: string; gender: string }> = {
-  "0": { name: "女声 1（新闻）", gender: "female" },
-  "1": { name: "女声 2（新闻）", gender: "female" },
-  "2": { name: "男声（雷军）", gender: "male" },
+  "45": { name: "女声 晓北", gender: "female" },
+  "46": { name: "女声 晓妮", gender: "female" },
+  "47": { name: "女声 晓晓", gender: "female" },
+  "48": { name: "女声 晓伊", gender: "female" },
+  "50": { name: "男声 云健", gender: "male" },
+  "51": { name: "男声 云希", gender: "male" },
+  "52": { name: "男声 云夏", gender: "male" },
+  "53": { name: "男声 云扬", gender: "male" },
 };
 
-const DEFAULT_VOICE = "0";
+const DEFAULT_VOICE = "45";
 const SAMPLE_RATE = 24000;
 const GENERATE_TIMEOUT_MS = 120000;
 
@@ -180,7 +185,7 @@ function handleWorkerMessage(e: MessageEvent): void {
   if (msg.type === "sherpa-onnx-tts-ready") {
     modelLoaded = true;
     disposed = false;
-    console.log("[TTS] ZipVoice ready, modelType:", msg.modelType, "numSpeakers:", msg.numSpeakers);
+    console.log("[TTS] Kokoro ready, modelType:", msg.modelType, "numSpeakers:", msg.numSpeakers);
   } else if (msg.type === "sherpa-onnx-tts-result") {
     // C4 fix: 用 requestId 精确匹配，而非取第一个
     const id = msg.id;
@@ -371,7 +376,7 @@ export async function generateAudio(
 ): Promise<void> {
   if (disposed) throw new Error("TTS 已释放");
   if (!modelLoaded) {
-    throw new Error("ZipVoice 模型未加载，请先调用 loadModel()");
+    throw new Error("Kokoro 模型未加载，请先调用 loadModel()");
   }
 
   const cleanText = normalizeText(text);
@@ -383,16 +388,25 @@ export async function generateAudio(
   const worker = await getWorker();
   const t0 = performance.now();
   console.log(`[TTS] 请求生成 #${id}: ${cleanText.length} 字, voice=${voiceId}(sid=${sid}), speed=${speed}, 超时 ${GENERATE_TIMEOUT_MS / 1000}s`);
-  const audio = await new Promise<Float32Array>((resolve, reject) => {
-    // H5 fix: 生成超时
-    const timer = setTimeout(() => {
-      pendingRequests.delete(id);
-      console.warn(`[TTS] 生成超时 #${id}: ${((performance.now() - t0) / 1000).toFixed(1)}s 未返回，已放弃该 chunk`);
-      reject(new Error("音频生成超时"));
-    }, GENERATE_TIMEOUT_MS);
-    pendingRequests.set(id, { resolve, reject, timer });
-    worker.postMessage({ type: "generate", id, text: cleanText, sid, speed });
-  });
+  // zipvoice 无逐步进度回调，用时间推进展示生成进度（每 10s 一条）
+  const progressTimer = setInterval(() => {
+    console.log(`[TTS] ⏳ 生成中 #${id}: 已等待 ${((performance.now() - t0) / 1000).toFixed(0)}s`);
+  }, 10000);
+  let audio: Float32Array;
+  try {
+    audio = await new Promise<Float32Array>((resolve, reject) => {
+      // H5 fix: 生成超时
+      const timer = setTimeout(() => {
+        pendingRequests.delete(id);
+        console.warn(`[TTS] 生成超时 #${id}: ${((performance.now() - t0) / 1000).toFixed(1)}s 未返回，已放弃该 chunk`);
+        reject(new Error("音频生成超时"));
+      }, GENERATE_TIMEOUT_MS);
+      pendingRequests.set(id, { resolve, reject, timer });
+      worker.postMessage({ type: "generate", id, text: cleanText, sid, speed });
+    });
+  } finally {
+    clearInterval(progressTimer);
+  }
   console.log(`[TTS] 生成完成 #${id}: ${audio.length} samples ≈ ${(audio.length / SAMPLE_RATE).toFixed(1)}s 音频, 耗时 ${((performance.now() - t0) / 1000).toFixed(1)}s`);
 
   await onChunk?.(audio);
@@ -407,7 +421,7 @@ export async function generateAudioFull(
 ): Promise<ZipVoiceAudioResult> {
   if (disposed) throw new Error("TTS 已释放");
   if (!modelLoaded) {
-    throw new Error("ZipVoice 模型未加载，请先调用 loadModel()");
+    throw new Error("Kokoro 模型未加载，请先调用 loadModel()");
   }
 
   const cleanText = normalizeText(text);
@@ -419,15 +433,24 @@ export async function generateAudioFull(
   const worker = await getWorker();
   const t0 = performance.now();
   console.log(`[TTS] 请求生成(完整预览) #${id}: ${cleanText.length} 字, voice=${voiceId}(sid=${sid}), speed=${speed}, 超时 ${GENERATE_TIMEOUT_MS / 1000}s`);
-  const audio = await new Promise<Float32Array>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      pendingRequests.delete(id);
-      console.warn(`[TTS] 生成超时(完整预览) #${id}: ${((performance.now() - t0) / 1000).toFixed(1)}s 未返回`);
-      reject(new Error("音频生成超时"));
-    }, GENERATE_TIMEOUT_MS);
-    pendingRequests.set(id, { resolve, reject, timer });
-    worker.postMessage({ type: "generate", id, text: cleanText, sid, speed });
-  });
+  // zipvoice 无逐步进度回调，用时间推进展示生成进度（每 10s 一条）
+  const progressTimer = setInterval(() => {
+    console.log(`[TTS] ⏳ 生成中(完整预览) #${id}: 已等待 ${((performance.now() - t0) / 1000).toFixed(0)}s`);
+  }, 10000);
+  let audio: Float32Array;
+  try {
+    audio = await new Promise<Float32Array>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pendingRequests.delete(id);
+        console.warn(`[TTS] 生成超时(完整预览) #${id}: ${((performance.now() - t0) / 1000).toFixed(1)}s 未返回`);
+        reject(new Error("音频生成超时"));
+      }, GENERATE_TIMEOUT_MS);
+      pendingRequests.set(id, { resolve, reject, timer });
+      worker.postMessage({ type: "generate", id, text: cleanText, sid, speed });
+    });
+  } finally {
+    clearInterval(progressTimer);
+  }
   console.log(`[TTS] 生成完成(完整预览) #${id}: ${audio.length} samples ≈ ${(audio.length / SAMPLE_RATE).toFixed(1)}s 音频, 耗时 ${((performance.now() - t0) / 1000).toFixed(1)}s`);
 
   return { audio, sampleRate: SAMPLE_RATE };

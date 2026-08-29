@@ -1,206 +1,105 @@
-// Sherpa-onnx TTS Worker
+// Sherpa-onnx TTS Worker（Kokoro 引擎）
 // 接收主线程传来的文件数据，不从网络加载
+// 引擎：sherpa-onnx 1.13.6 classic 构建（importScripts 加载）
+// 模型：Kokoro multi-lang v1.0 int8（53 音色，中文 sid 45-52）
+// 无参考音频：sid 直接选音色，无 ZipVoice 的克隆/杂音问题
 
 const MODEL_BASE = "/api/rag/tts/model";
 let pageOrigin = "";
 let tts = null;
 
-// 音色 → 参考音频映射（ZipVoice 是 zero-shot 克隆模型，音色由参考音频决定）
-// 参考文本必须与参考音频内容逐字匹配（官方 prompt.txt 转录）
-const REF_AUDIOS = [
-  {
-    file: "test_wavs/news-female.wav",
-    text: "各位村民, 大家新年好! 近期, 湖北省武汉市等多个地区",
-  },
-  {
-    file: "test_wavs/news-female-2.wav",
-    text: "本台消息, 中共中央国务院, 近日印发关于构建数据基础制度, 更好发挥数据要素作用的意见.",
-  },
-  {
-    file: "test_wavs/leijun-1.wav",
-    text: "那还是36年前, 1987年. 我呢考上了武汉大学的计算机系.",
-  },
-];
-// 解码后的参考音频缓存：{ audio: Float32Array, sampleRate: number }
-let refAudios = [];
-
 function log(msg) { console.log("[Worker] " + msg); }
 
-/** 从 ArrayBuffer 解码 WAV 为 Float32Array */
-function decodeWav(arrayBuf) {
-  const data = new Uint8Array(arrayBuf);
-  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-  if (view.getUint16(20, true) !== 1) throw new Error("非 PCM WAV");
-  const numChannels = view.getUint16(22, true);
-  const sampleRate = view.getUint32(24, true);
-  const bitsPerSample = view.getUint16(34, true);
-  if (bitsPerSample !== 16) throw new Error("非 16-bit WAV");
-  let dataOffset = 12;
-  while (view.getUint32(dataOffset, true) !== 0x61746164) dataOffset += 8 + view.getUint32(dataOffset + 4, true);
-  const dataSize = view.getUint32(dataOffset + 4, true);
-  const samples = new Float32Array(dataSize / 2);
-  const rawData = new Int16Array(data.buffer, data.byteOffset + dataOffset + 8, dataSize / 2);
-  for (let i = 0; i < samples.length; i++) samples[i] = rawData[i] / 32768.0;
-  if (numChannels === 2) {
-    const mono = new Float32Array(samples.length / 2);
-    for (let i = 0; i < mono.length; i++) mono[i] = (samples[i * 2] + samples[i * 2 + 1]) / 2;
-    return { audio: mono, sampleRate };
-  }
-  return { audio: samples, sampleRate };
-}
-
-// 拦截 URL 构造函数：blob URL 不能作为 new URL() 的 base
-// Emscripten 内部用 new URL(".", import.meta.url) 解析路径，import.meta.url 是 blob:... 会失败
-// 必须在 import() 之前设置，因为 import 进来的模块会立即执行 URL 构造
-const OrigURL = self.URL;
-function WrappedURL(...args) {
-  if (args.length >= 2 && typeof args[1] === "string" && args[1].startsWith("blob:")) {
-    args[1] = (pageOrigin || "http://localhost:5173") + "/";
-  }
-  return new OrigURL(...args);
-}
-WrappedURL.prototype = OrigURL.prototype;
-Object.assign(WrappedURL, OrigURL);
-self.URL = WrappedURL;
+// ── 1.13.6 classic 加载：Emscripten 需要 self.Module 先定义，再 importScripts 胶水 ──
+self.Module = {
+  setStatus: function (status) { log("Emscripten: " + status); },
+  print: (x) => log("EM: " + x),
+  printErr: (x) => log("EM-ERR: " + x),
+};
 
 async function init(files, origin) {
   pageOrigin = origin || "";
   try {
-    const hasSAB = typeof SharedArrayBuffer !== "undefined";
-    log("crossOriginIsolated=" + self.crossOriginIsolated + " SharedArrayBuffer=" + hasSAB);
-    // 当前 WASM 为单线程构建（numThreads=1，无 pthread 符号），不需要 SharedArrayBuffer。
-    // GitHub Pages 无法设置 COOP/COEP 响应头，SAB 不可用是常态，直接以单线程运行。
-    // 若未来换用 pthread 构建，Emscripten 会在缺少 SAB 时自行抛出明确错误。
+    log("初始化 (Kokoro + 1.13.6 classic)...");
 
-    // 1. 为 JS 文件创建 Blob URL
-    log("创建 Blob URL...");
-    const wasmMainJsBlob = new Blob([files["sherpa-onnx-wasm-main-tts.js"]], { type: "application/javascript" });
-    const wasmMainJsUrl = URL.createObjectURL(wasmMainJsBlob);
-    const ttsApiBlob = new Blob([files["sherpa-onnx-tts.js"]], { type: "application/javascript" });
-    const ttsApiUrl = URL.createObjectURL(ttsApiBlob);
+    // 1. 为 JS/WASM/data 文件创建 Blob URL
+    const wasmMainJsUrl = URL.createObjectURL(new Blob([files["sherpa-onnx-wasm-main-tts.js"]], { type: "application/javascript" }));
+    const ttsApiUrl = URL.createObjectURL(new Blob([files["sherpa-onnx-tts.js"]], { type: "application/javascript" }));
+    const wasmUrl = URL.createObjectURL(new Blob([files["sherpa-onnx-wasm-main-tts.wasm"]], { type: "application/wasm" }));
+    const dataUrl = URL.createObjectURL(new Blob([files["sherpa-onnx-wasm-main-tts.data"]], { type: "application/octet-stream" }));
 
-    // 2. 加载 WASM 胶水代码（import 让 Emscripten 的 import.meta.url 变成 blob URL，但 WrappedURL 会处理）
-    log("加载 WASM 胶水代码...");
-    const mod1 = await import(wasmMainJsUrl);
-    const createModule = mod1.default;
-    if (!createModule) throw new Error("createModule 为空");
+    // 2. 补全 Module 配置后加载 classic 胶水
+    self.Module.wasmBinary = files["sherpa-onnx-wasm-main-tts.wasm"];
+    self.Module.getPreloadedPackage = () => files["sherpa-onnx-wasm-main-tts.data"];
+    self.Module.locateFile = (filePath) => {
+      if (filePath.endsWith(".wasm")) return wasmUrl;
+      if (filePath.endsWith(".data")) return dataUrl;
+      return wasmMainJsUrl;
+    };
+
+    importScripts(wasmMainJsUrl); // 执行 classic 胶水，self.Module 被实例化
     log("WASM 胶水代码就绪");
-
-    // 3. 加载 TTS API
-    log("加载 TTS API...");
-    const mod2 = await import(ttsApiUrl);
-    const createOfflineTts = mod2.createOfflineTts;
-    if (!createOfflineTts) throw new Error("createOfflineTts 为空");
+    importScripts(ttsApiUrl);     // 暴露 createOfflineTts
     log("TTS API 就绪");
+    const Module = self.Module;
 
-    // 4. 为 WASM 和 data 文件创建 Blob URL
-    const wasmBlob = new Blob([files["sherpa-onnx-wasm-main-tts.wasm"]], { type: "application/wasm" });
-    const wasmUrl = URL.createObjectURL(wasmBlob);
-    const dataBlob = new Blob([files["sherpa-onnx-wasm-main-tts.data"]], { type: "application/octet-stream" });
-    const dataUrl = URL.createObjectURL(dataBlob);
-
-    // 5. 初始化 WASM 模块
-    log("初始化 WASM 模块...");
-    const heartbeat = setInterval(() => log("心跳: WASM 初始化中..."), 10000);
-    let Module;
-    try {
-      Module = await createModule({
-        wasmBinary: files["sherpa-onnx-wasm-main-tts.wasm"],
-        // espeak-ng-data 文件包（Emscripten FS 需要）
-        getPreloadedPackage: () => files["sherpa-onnx-wasm-main-tts.data"],
-        // pthread Workers 用这个 blob URL 来加载
-        mainScriptUrlOrBlob: wasmMainJsUrl,
-        locateFile: (filePath) => {
-          log("locateFile: " + filePath);
-          if (filePath.endsWith(".wasm")) return wasmUrl;
-          if (filePath.endsWith(".data")) return dataUrl;
-          return pageOrigin + (filePath.startsWith("/") ? "" : "/") + filePath;
-        },
-        setStatus: (status) => {
-          log("Emscripten: " + status);
-        },
-      });
-      log("WASM 模块初始化成功");
-      emModule = Module;
-      // 检查 FS API 名称
-      log("FS可用: FS_createDataFile=" + (typeof Module.FS_createDataFile) +
-          " FS.createDataFile=" + (typeof Module.FS?.createDataFile) +
-          " FS_readFile=" + (typeof Module.FS_readFile) +
-          " FS.readFile=" + (typeof Module.FS?.readFile));
-    } finally {
-      clearInterval(heartbeat);
-    }
-
-    // 6. 将模型文件写入 Emscripten 虚拟文件系统
-    // TTS 库通过文件路径读取 tokens.txt、encoder.onnx 等
+    // 3. 将模型文件写入 Emscripten 虚拟文件系统（/api/rag/tts/model/）
     log("写入模型文件到虚拟文件系统...");
     const modelDir = "/api/rag/tts/model";
-    const modelFiles = ["tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx", "lexicon.txt"];
-    // 创建目录层级
-    for (const dir of ["/api", "/api/rag", "/api/rag/tts", "/api/rag/tts/model"]) {
+    for (const dir of ["/api", "/api/rag", "/api/rag/tts", modelDir]) {
       try { Module.FS_createPath("/", dir.slice(1), true, true); } catch {}
     }
-    // 写入 vocoder 模型
-    const vocoderFile = "vocos_24khz.onnx";
-    if (files[vocoderFile]) {
-      Module.FS_createDataFile(modelDir, vocoderFile, new Uint8Array(files[vocoderFile]), true, true, true);
-      log("  " + vocoderFile + ": " + files[vocoderFile].byteLength + " 字节");
-    }
-    for (const name of modelFiles) {
+    const kokoroFiles = [
+      "model.int8.onnx", "voices.bin", "tokens.txt",
+      "lexicon-us-en.txt", "lexicon-zh.txt",
+      "date-zh.fst", "number-zh.fst", "phone-zh.fst",
+    ];
+    for (const name of kokoroFiles) {
       if (files[name]) {
         Module.FS_createDataFile(modelDir, name, new Uint8Array(files[name]), true, true, true);
         log("  " + name + ": " + files[name].byteLength + " 字节");
+      } else {
+        log("  ⚠️ 缺失 " + name);
       }
     }
-    // 写入参考音频到模型目录（模型在 ONNX 文件所在目录查找 test_wavs/）
-    try { Module.FS_createPath(modelDir, "test_wavs", true, true); } catch {}
-    const wavFiles = ["test_wavs/news-female.wav", "test_wavs/news-female-2.wav", "test_wavs/leijun-1.wav"];
-    for (const wavPath of wavFiles) {
-      if (files[wavPath]) {
-        const name = wavPath.split("/").pop();
-        const data = new Uint8Array(files[wavPath]);
-        Module.FS_createDataFile(modelDir + "/test_wavs", name, data, true, true, true);
-        log("  " + name + ": " + data.length + " B");
+    // dict/（jieba 中文分词，Kokoro dictDir 需要）
+    try { Module.FS_createPath(modelDir, "dict", true, true); } catch {}
+    const dictFiles = Object.keys(files).filter((k) => k.startsWith("dict/"));
+    for (const k of dictFiles) {
+      const rel = k.slice("dict/".length);
+      const name = rel.split("/").pop();
+      if (rel.includes("/")) {
+        try { Module.FS_createPath(modelDir + "/dict", "pos_dict", true, true); } catch {}
+        Module.FS_createDataFile(modelDir + "/dict/pos_dict", name, new Uint8Array(files[k]), true, true, true);
+      } else {
+        Module.FS_createDataFile(modelDir + "/dict", name, new Uint8Array(files[k]), true, true, true);
       }
     }
-    // 解码全部参考音频为 Float32Array，供生成时使用（音色选择）
-    refAudios = [];
-    for (const ref of REF_AUDIOS) {
-      if (files[ref.file]) {
-        const decoded = decodeWav(files[ref.file]);
-        refAudios.push({ audio: decoded.audio, sampleRate: decoded.sampleRate });
-        log("参考音频已解码: " + ref.file + " → " + decoded.audio.length + " samples, " + decoded.sampleRate + " Hz");
-      }
-    }
-    if (refAudios.length === 0) {
-      throw new Error("参考音频缺失（test_wavs 未随模型缓存）");
-    }
+    log("dict 写入 " + dictFiles.length + " 个文件");
 
-    // 7. 创建 TTS 实例
+    // 4. 创建 TTS 实例（Kokoro 配置）
     log("创建 TTS 实例...");
     const config = {
       offlineTtsModelConfig: {
         debug: false,
-        offlineTtsZipVoiceModelConfig: {
-          tokens: MODEL_BASE + "/tokens.txt",
-          encoder: MODEL_BASE + "/encoder.int8.onnx",
-          decoder: MODEL_BASE + "/decoder.int8.onnx",
-          vocoder: MODEL_BASE + "/vocos_24khz.onnx",
+        offlineTtsKokoroModelConfig: {
+          model: modelDir + "/model.int8.onnx",
+          voices: modelDir + "/voices.bin",
+          tokens: modelDir + "/tokens.txt",
           dataDir: "/espeak-ng-data",
-          lexicon: MODEL_BASE + "/lexicon.txt",
+          lexicon: modelDir + "/lexicon-us-en.txt," + modelDir + "/lexicon-zh.txt",
+          dictDir: modelDir + "/dict",
         },
         numThreads: 1,
       },
       ruleFsts: "",
       ruleFars: "",
-      // 顶层字段（sherpa-onnx JS 胶水在 OfflineTtsConfig 层读取）：
-      // 控制句子切分粒度，配合 generate 的 extra.min_char_in_sentence 使用
       maxNumSentences: 1,
     };
     tts = createOfflineTts(Module, config);
     log("TTS 就绪! numSpeakers=" + tts.numSpeakers);
 
-    self.postMessage({ type: "sherpa-onnx-tts-ready", modelType: "zipvoice", numSpeakers: tts.numSpeakers });
+    self.postMessage({ type: "sherpa-onnx-tts-ready", modelType: "kokoro", numSpeakers: tts.numSpeakers });
   } catch (e) {
     self.postMessage({ type: "error", message: "TTS 初始化失败: " + (e.message || String(e)) });
   }
@@ -213,23 +112,14 @@ self.onmessage = async (e) => {
   } else if (msg.type === "generate") {
     if (!tts) { self.postMessage({ type: "error", id: msg.id, message: "TTS 未初始化" }); return; }
     try {
-      // 按音色选择参考音频（sid → 参考音频索引，越界回退到 0）
-      const refIdx = Math.min(Math.max(parseInt(msg.sid, 10) || 0, 0), refAudios.length - 1);
-      const ref = refAudios[refIdx] || refAudios[0];
-      const refTxt = REF_AUDIOS[refIdx]?.text || REF_AUDIOS[0].text;
-      // ZipVoice 官方参数：
-      // - referenceAudio 必须用完整参考音频 + 匹配的完整转录（截断会导致克隆特征错位 → 杂音）
-      // - silenceScale 用默认 0.2（不传），0 会抹掉句间停顿导致语速急促
-      // - numSteps: 4（官方 zipvoice 推荐），extra.min_char_in_sentence: 10（官方示例）
+      // Kokoro：sid 直接选音色（0-52），speed 控制语速，无需参考音频
+      const sid = Math.min(Math.max(parseInt(msg.sid, 10) || 0, 0), (tts.numSpeakers || 53) - 1);
       const genStart = performance.now();
-      log(`[generate] id=${msg.id} 开始: ${msg.text.length} 字, sid=${msg.sid ?? 0}, speed=${msg.speed ?? 1.0}, ref=${REF_AUDIOS[refIdx]?.file || "?"}`);
-      let audio = tts.generateWithConfig(msg.text, {
-        speed: msg.speed ?? 1.0, // 语速（设置页生成参数），之前漏传导致永远用默认语速
-        referenceAudio: ref.audio,
-        referenceSampleRate: ref.sampleRate,
-        referenceText: refTxt,
-        numSteps: 4,
-        extra: { min_char_in_sentence: 10 },
+      log(`[generate] id=${msg.id} 开始: ${msg.text.length} 字, sid=${sid}, speed=${msg.speed ?? 1.0}`);
+      const audio = tts.generate({
+        text: msg.text,
+        sid: sid,
+        speed: msg.speed ?? 1.0,
       });
       const genMs = performance.now() - genStart;
       const audioSecs = audio.samples.length / audio.sampleRate;

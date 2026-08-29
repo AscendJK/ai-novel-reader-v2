@@ -10,23 +10,33 @@ const DB_VERSION = 1;
 const STORE_NAME = "files";
 
 // 缓存文件列表（key: 文件名, value: ArrayBuffer）
+// Kokoro multi-lang v1.0 int8：WASM 引擎（精简 data 含 espeak-ng-data）+ 模型 + jieba 分词 dict
 const CACHE_FILES = [
-  // WASM 引擎 + espeak-ng-data（TTS 需要的语音数据）
+  // WASM 引擎 + espeak-ng-data（TTS 需要的语音数据，精简 data 17MB）
   "sherpa-onnx-wasm-main-tts.js",
   "sherpa-onnx-wasm-main-tts.wasm",
   "sherpa-onnx-wasm-main-tts.data",
   "sherpa-onnx-tts.js",
-  // 模型文件
-  "decoder.int8.onnx",
-  "encoder.int8.onnx",
+  // Kokoro 模型文件
+  "model.int8.onnx",
+  "voices.bin",
   "tokens.txt",
-  "lexicon.txt",
-  // Vocoder 模型（24kHz：与 ZipVoice decoder 采样率匹配，22kHz 会导致生成崩溃）
-  "vocos_24khz.onnx",
-  // 参考音频（ZipVoice 声音克隆需要）
-  "test_wavs/news-female.wav",
-  "test_wavs/news-female-2.wav",
-  "test_wavs/leijun-1.wav",
+  "lexicon-us-en.txt",
+  "lexicon-zh.txt",
+  // 中文规则 FST（数字/日期/音素）
+  "date-zh.fst",
+  "number-zh.fst",
+  "phone-zh.fst",
+  // jieba 中文分词 dict（Kokoro dictDir 需要）
+  "dict/jieba.dict.utf8",
+  "dict/hmm_model.utf8",
+  "dict/idf.utf8",
+  "dict/user.dict.utf8",
+  "dict/stop_words.utf8",
+  "dict/pos_dict/char_state_tab.utf8",
+  "dict/pos_dict/prob_emit.utf8",
+  "dict/pos_dict/prob_start.utf8",
+  "dict/pos_dict/prob_trans.utf8",
 ];
 
 
@@ -146,9 +156,8 @@ export function downloadAndCache(
     let apiPath: string;
     if (file.startsWith("sherpa-onnx-wasm-main-tts.") || file === "sherpa-onnx-tts.js") {
       apiPath = `/api/rag/tts/wasm/${file}`;
-    } else if (file.startsWith("vocos-") || file.startsWith("vocos_")) {
-      apiPath = `/api/rag/tts/model/vocoder/${file}`;
-    } else if (file.startsWith("test_wavs/")) {
+    } else if (file.startsWith("dict/")) {
+      // dict 子目录：走专用路由（/tts/model/dict/...）
       apiPath = `/api/rag/tts/model/${file}`;
     } else {
       apiPath = `/api/rag/tts/model/${file}`;

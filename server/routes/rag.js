@@ -78,14 +78,9 @@ router.get("/test", rateLimit(5), async (req, res) => {
 // 触发 authNovel 校验返回 401，导致前端预加载永远拿不到状态。
 router.get("/tts/status", (req, res) => {
   const wasmExists = fs.existsSync(path.join(TTS_WASM_CACHE, "sherpa-onnx-wasm-main-tts.wasm"));
-  const modelExists = fs.existsSync(path.join(TTS_MODEL_CACHE, "decoder.int8.onnx"));
-  const vocoderPath = path.join(TTS_MODEL_CACHE, VOCODER_FILENAME);
-  // vocoder 用精确大小校验，残缺/损坏文件不算就绪
-  let vocoderExists = false;
-  try {
-    vocoderExists = fs.existsSync(vocoderPath) && fs.statSync(vocoderPath).size === VOCODER_EXPECTED_SIZE;
-  } catch {}
-  res.json({ wasmReady: wasmExists, modelReady: modelExists, vocoderReady: vocoderExists });
+  const modelExists = fs.existsSync(path.join(TTS_MODEL_CACHE, "model.int8.onnx"));
+  // Kokoro 无需 vocoder；dict 随模型包一起下载
+  res.json({ wasmReady: wasmExists, modelReady: modelExists, vocoderReady: true });
 });
 
 // POST /api/rag/encode — encode query text (single small batch, max 20 texts)
@@ -332,25 +327,18 @@ const TTS_TEMP_DIR = path.resolve(__dirname, "../data/tts-temp");
 
 // ── 下载源配置 ──
 // 方案4: 分离式标准部署 — 通用 WASM 运行时 + 独立模型文件
-const TTS_RELEASE_TAG = "tts-zipvoice-v1.0";
-const SHERPA_VER = "v1.13.3";
-// 分离式标准部署：WASM 运行时（去 data）+ 独立模型文件
+const TTS_RELEASE_TAG = "tts-kokoro-v1.0";
+const SHERPA_VER = "v1.13.6";
+// 分离式标准部署：WASM 运行时（精简 data 含 espeak-ng-data）+ 独立模型文件
 // WASM 运行时文件名（用户上传到 Gitee 的实际名称）
-const WASM_ARCHIVE_NAME = "sherpa-onnx-wasm-simd-1.13.3-sherpa-onnx-zipvoice-distill-int8-zh-en-emilia";
-// 模型文件（encoder/decoder/tokens/lexicon）
-const MODEL_ARCHIVE_NAME = "sherpa-onnx-zipvoice-distill-int8-zh-en-emilia";
+const WASM_ARCHIVE_NAME = "sherpa-onnx-wasm-simd-1.13.6-kokoro-slim";
+// 模型文件（model.int8.onnx/voices.bin/tokens/lexicon/fst/dict）
+const MODEL_ARCHIVE_NAME = "kokoro-multi-lang-v1_0";
 
 // Gitee（唯一下载源）
 const GITEE_BASE = `https://gitee.com/kunji777/ai-novel-reader-v2/releases/download/${TTS_RELEASE_TAG}`;
-const GITEE_WASM_PARTS = [`${WASM_ARCHIVE_NAME}.7z.001`, `${WASM_ARCHIVE_NAME}.7z.002`, `${WASM_ARCHIVE_NAME}.7z.003`];
+const GITEE_WASM_PARTS = [`${WASM_ARCHIVE_NAME}.7z`];
 const GITEE_MODEL_PARTS = [`${MODEL_ARCHIVE_NAME}.7z.001`, `${MODEL_ARCHIVE_NAME}.7z.002`];
-
-// Vocoder 模型（独立下载，Gitee 优先，GitHub 备用）
-// ⚠️ 必须用 24kHz 版：ZipVoice decoder 输出 24000Hz，配 22kHz vocoder
-// 会导致 ONNX Runtime 运行时异常（浏览器报 C++ 11903128，Node 报 11903176）
-const VOCODER_FILENAME = "vocos_24khz.onnx";
-const GITEE_VOCODER_URL = `${GITEE_BASE}/${VOCODER_FILENAME}`;
-const GITHUB_VOCODER_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos_24khz.onnx";
 
 /** 校验文件名安全（防路径穿越） */
 function sanitizeFilename(filename) {
@@ -398,18 +386,23 @@ function isValidZip(buffer) {
 
 // ── 解压后文件校验 ────────────────────────────────────────
 
-// WASM 引擎必须包含的文件及最小大小
+// ── 文件清单 ──
+// WASM 引擎必须包含的文件及最小大小（精简包：无内嵌模型，data 只含 espeak-ng-data）
 const WASM_REQUIRED_FILES = {
   "sherpa-onnx-wasm-main-tts.wasm": 1024 * 1024,  // 至少 1MB
   "sherpa-onnx-wasm-main-tts.js": 1024,            // 至少 1KB
   "sherpa-onnx-tts.js": 1024,
+  "sherpa-onnx-wasm-main-tts.data": 1024 * 1024,   // espeak-ng-data 精简包（至少 1MB）
 };
 
-// 模型必须包含的文件及最小大小
+// 模型必须包含的文件及最小大小（Kokoro multi-lang v1.0 int8）
 const MODEL_REQUIRED_FILES = {
-  "decoder.int8.onnx": 1024 * 1024,  // 至少 1MB
-  "encoder.int8.onnx": 1024 * 1024,  // 至少 1MB
-  "tokens.txt": 100,                  // 至少 100 字节
+  "model.int8.onnx": 1024 * 1024,   // 至少 1MB
+  "voices.bin": 1024 * 1024,        // 至少 1MB
+  "tokens.txt": 100,                 // 至少 100 字节
+  "lexicon-us-en.txt": 1024 * 1024,  // 至少 1MB
+  "lexicon-zh.txt": 1024 * 1024,     // 至少 1MB
+  "dict/jieba.dict.utf8": 1024 * 1024, // jieba 分词词典
 };
 
 /**
@@ -538,10 +531,23 @@ async function downloadFromGitee(partNames, archiveName, targetDir, requiredFile
 
     // 5. 复制到目标目录
     onProgress?.("复制文件", "写入缓存目录");
-    if (!fs.existsSync(extractedDir)) {
-      throw new Error(`解压后找不到目录: ${archiveName}`);
+    // 兼容两种归档结构：
+    //   a) 归档内有顶层目录（archiveName/...）→ 从 extractedDir 复制
+    //   b) 文件直接在归档根目录 → 从 TTS_TEMP_DIR 根复制（按必需清单过滤，避免误复制其他残留）
+    if (fs.existsSync(extractedDir)) {
+      fs.cpSync(extractedDir, targetDir, { recursive: true });
+    } else {
+      // 根目录模式：只复制必需清单中的文件（含 dict/ 子目录）
+      for (const [filename] of Object.entries(requiredFiles)) {
+        const src = path.join(TTS_TEMP_DIR, filename);
+        const dest = path.join(targetDir, filename);
+        if (!fs.existsSync(src)) {
+          throw new Error(`解压后缺少文件: ${filename}`);
+        }
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(src, dest);
+      }
     }
-    fs.cpSync(extractedDir, targetDir, { recursive: true });
 
     // 6. 校验解压后的文件
     onProgress?.("校验文件", "检查完整性");
@@ -729,60 +735,6 @@ export async function ensureWasmReady(onProgress, { signal, force = false } = {}
   await wasmReadyPromise;
 }
 
-/** 确保 vocoder 文件已缓存 */
-let vocoderReady = false;
-let vocoderReadyPromise = null;
-let vocoderLastFailure = 0;
-// vocos_24khz.onnx 的精确大小（来自官方 release，用于严格校验，
-// 防止残缺/损坏文件被误判为有效缓存）
-const VOCODER_EXPECTED_SIZE = 54157409;
-
-export async function ensureVocoderReady(onProgress, { signal, force = false } = {}) {
-  if (force) { vocoderReady = false; vocoderReadyPromise = null; }
-  if (vocoderReady) return;
-  if (vocoderReadyPromise) return vocoderReadyPromise;
-  if (Date.now() - vocoderLastFailure < 30000) throw new Error("上次下载失败，请 30 秒后重试");
-
-  const vocoderPath = path.join(TTS_MODEL_CACHE, VOCODER_FILENAME);
-  // 严格校验：存在且大小精确匹配（54157409 字节），残缺文件不通过
-  if (fs.existsSync(vocoderPath)) {
-    try {
-      const size = fs.statSync(vocoderPath).size;
-      if (size === VOCODER_EXPECTED_SIZE) {
-        vocoderReady = true;
-        return;
-      }
-      // 大小不匹配：可能是残缺/旧版本文件，删除后重新下载
-      console.warn(`[tts-proxy] vocoder 缓存大小异常 (${size} != ${VOCODER_EXPECTED_SIZE})，重新下载`);
-      try { fs.unlinkSync(vocoderPath); } catch {}
-    } catch (e) {
-      console.warn(`[tts-proxy] vocoder 缓存校验失败: ${e.message}，重新下载`);
-      try { fs.unlinkSync(vocoderPath); } catch {}
-    }
-  }
-
-  // Gitee 优先，GitHub 备用
-  vocoderReadyPromise = (async () => {
-    onProgress?.("开始下载", "尝试 Gitee（国内源）");
-    // downloadFile 的回调是纯数字进度，包装成 (step, detail) 双参，
-    // 与 Gitee 分卷下载的回调形态保持一致（SSE/日志都能正确显示）
-    const wrapProgress = (pct) => onProgress?.(`下载中 ${pct}%`, VOCODER_FILENAME);
-    try {
-      await downloadFile(GITEE_VOCODER_URL, vocoderPath, VOCODER_EXPECTED_SIZE, wrapProgress, { signal });
-    } catch (e) {
-      console.warn(`[tts-proxy] Gitee vocoder 失败: ${e.message}，尝试 GitHub`);
-      await downloadFile(GITHUB_VOCODER_URL, vocoderPath, VOCODER_EXPECTED_SIZE, wrapProgress, { signal });
-    }
-    // 下载完成后二次校验（downloadFile 的 minSize 已校验，这里防御性复查）
-    const size = fs.statSync(vocoderPath).size;
-    if (size !== VOCODER_EXPECTED_SIZE) {
-      throw new Error(`vocoder 下载后大小异常 (${size} != ${VOCODER_EXPECTED_SIZE})`);
-    }
-    vocoderReady = true;
-  })().catch((e) => { vocoderLastFailure = Date.now(); vocoderReadyPromise = null; throw e; });
-  await vocoderReadyPromise;
-}
-
 /** 确保模型文件已缓存 */
 let modelReady = false;
 let modelReadyPromise = null;
@@ -800,14 +752,13 @@ export async function ensureModelReady(onProgress, { signal, force = false } = {
 }
 
 /**
- * 依次确保 TTS 资源（WASM + 模型 + vocoder）全部就绪
+ * 依次确保 TTS 资源（WASM + 模型）全部就绪
  * 供服务器启动时预加载和 /tts/prepare 复用；任一步失败会抛出该步错误，
  * 但内部各步自带缓存校验与 30 秒失败冷却，可安全重试
  */
 export async function ensureTTSResources(onProgress, options = {}) {
   await ensureWasmReady(onProgress, options);
   await ensureModelReady(onProgress, options);
-  await ensureVocoderReady(onProgress, options);
 }
 
 /**
@@ -845,10 +796,11 @@ router.get("/tts/wasm/:filename", requireAuth, async (req, res) => {
   }
 });
 
-// GET /api/rag/tts/model/:filename — 获取模型文件
+// GET /api/rag/tts/model/:filename — 获取模型文件（支持 dict/ 子路径）
 router.get("/tts/model/:filename", requireAuth, async (req, res) => {
   const filename = sanitizeFilename(req.params.filename);
   if (!filename) return res.status(400).json({ error: "无效的文件名" });
+  // 子路径（dict/...）在 Express 的 :filename 中会包含斜杠？不会——需要匹配两层
   const filePath = path.join(TTS_MODEL_CACHE, filename);
   if (!filePath.startsWith(TTS_MODEL_CACHE)) return res.status(400).json({ error: "无效的文件名" });
 
@@ -862,54 +814,37 @@ router.get("/tts/model/:filename", requireAuth, async (req, res) => {
   }
 });
 
-// GET /api/rag/tts/model/espeak-ng-data/:filename — 获取 espeak 数据文件
-router.get("/tts/model/espeak-ng-data/:filename", requireAuth, async (req, res) => {
+// GET /api/rag/tts/model/dict/:filename — 获取 jieba 分词词典（Kokoro dictDir）
+router.get("/tts/model/dict/:filename", requireAuth, async (req, res) => {
   const filename = sanitizeFilename(req.params.filename);
   if (!filename) return res.status(400).json({ error: "无效的文件名" });
-  const filePath = path.join(TTS_MODEL_CACHE, "espeak-ng-data", filename);
-  if (!filePath.startsWith(path.join(TTS_MODEL_CACHE, "espeak-ng-data"))) return res.status(400).json({ error: "无效的文件名" });
+  const filePath = path.join(TTS_MODEL_CACHE, "dict", filename);
+  if (!filePath.startsWith(path.join(TTS_MODEL_CACHE, "dict"))) return res.status(400).json({ error: "无效的文件名" });
 
   try {
     await ensureModelReady();
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: "file not found" });
     serveFile(res, filePath, "application/octet-stream");
   } catch (e) {
-    console.error("[tts-proxy] espeak error:", e.message);
-    if (!res.headersSent) res.status(500).json({ error: "加载 espeak 数据失败: " + e.message });
+    console.error("[tts-proxy] dict error:", e.message);
+    if (!res.headersSent) res.status(500).json({ error: "加载 dict 失败: " + e.message });
   }
 });
 
-// GET /api/rag/tts/model/vocoder/:filename — 获取 vocoder 模型
-router.get("/tts/model/vocoder/:filename", requireAuth, async (req, res) => {
+// GET /api/rag/tts/model/dict/pos_dict/:filename — 获取 jieba 词性标注词典
+router.get("/tts/model/dict/pos_dict/:filename", requireAuth, async (req, res) => {
   const filename = sanitizeFilename(req.params.filename);
   if (!filename) return res.status(400).json({ error: "无效的文件名" });
-  if (filename !== VOCODER_FILENAME) return res.status(404).json({ error: "file not found" });
-  const filePath = path.join(TTS_MODEL_CACHE, filename);
-
-  try {
-    await ensureVocoderReady();
-    if (!fs.existsSync(filePath)) return res.status(404).json({ error: "file not found" });
-    serveFile(res, filePath, "application/octet-stream");
-  } catch (e) {
-    console.error("[tts-proxy] vocoder error:", e.message);
-    if (!res.headersSent) res.status(500).json({ error: "加载 vocoder 失败: " + e.message });
-  }
-});
-
-// GET /api/rag/tts/model/test_wavs/:filename — 获取参考音频文件
-router.get("/tts/model/test_wavs/:filename", requireAuth, async (req, res) => {
-  const filename = sanitizeFilename(req.params.filename);
-  if (!filename) return res.status(400).json({ error: "无效的文件名" });
-  const filePath = path.join(TTS_MODEL_CACHE, "test_wavs", filename);
-  if (!filePath.startsWith(path.join(TTS_MODEL_CACHE, "test_wavs"))) return res.status(400).json({ error: "无效的文件名" });
+  const filePath = path.join(TTS_MODEL_CACHE, "dict", "pos_dict", filename);
+  if (!filePath.startsWith(path.join(TTS_MODEL_CACHE, "dict", "pos_dict"))) return res.status(400).json({ error: "无效的文件名" });
 
   try {
     await ensureModelReady();
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: "file not found" });
-    serveFile(res, filePath, "audio/wav");
+    serveFile(res, filePath, "application/octet-stream");
   } catch (e) {
-    console.error("[tts-proxy] test_wavs error:", e.message);
-    if (!res.headersSent) res.status(500).json({ error: "加载参考音频失败: " + e.message });
+    console.error("[tts-proxy] dict pos_dict error:", e.message);
+    if (!res.headersSent) res.status(500).json({ error: "加载 dict pos_dict 失败: " + e.message });
   }
 });
 
@@ -953,14 +888,6 @@ router.get("/tts/prepare", requireAuth, async (req, res) => {
     }, { signal: abortController.signal, force });
     if (clientDisconnected) return;
     sendEvent("step", { step: "语音模型", detail: "就绪 ✓" });
-
-    // 准备 vocoder
-    sendEvent("step", { step: "Vocoder", detail: "下载中..." });
-    await ensureVocoderReady((step, detail) => {
-      sendEvent("step", { step: `Vocoder: ${step}`, detail });
-    }, { signal: abortController.signal, force });
-    if (clientDisconnected) return;
-    sendEvent("step", { step: "Vocoder", detail: "就绪 ✓" });
 
     sendEvent("done", { success: true });
   } catch (e) {

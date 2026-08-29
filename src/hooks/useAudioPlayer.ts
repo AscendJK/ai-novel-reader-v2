@@ -48,7 +48,7 @@ export function useAudioPlayer({
   const pendingAutoPlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const {
-    playing, paused, speed, playbackRate, pitch, voiceId, engine, autoNextChapter,
+    playing, paused, speed, playbackRate, pitch, voiceId, engine, autoNextChapter, chunkSize,
     currentNovelId, currentChapterIndex,
     setPlaying, setPaused, setCurrentChapter,
     setParagraphProgress, setGenerating, setEngine,
@@ -174,9 +174,10 @@ export function useAudioPlayer({
     setCurrentChapter(novelId, chapterIndex);
     setGenerating(true);
 
-    // 单次生成 ≤150 字（原 300）：浏览器端 WASM 推理慢（RTF>1），
-    // 300 字在性能较差的设备上容易触发 120s 生成超时，调小 chunk 可显著降低单次耗时
-    const prepared = prepareTextForTTS(chapterContent, 150);
+    // 单次生成 ≤chunkSize 字（设置页可调，默认 150，范围 30-500）：
+    // 浏览器端 WASM 推理慢（RTF>1），大 chunk 在性能差的设备上容易触发 120s 生成超时，
+    // 调小 chunk 可显著降低单次耗时；高配设备可调大减少生成次数
+    const prepared = prepareTextForTTS(chapterContent, chunkSize);
     // 从 prepareTextForTTS 结果中提取段落总数（已过滤短段落）
     // 每个 chunk 的 paragraphIndices 长度之和即为实际段落数
     const totalParaCount = prepared.reduce((sum, c) => sum + c.paragraphIndices.length, 0);

@@ -51,6 +51,8 @@ export interface TTSState {
   pitch: number;
   /** 自动翻章 */
   autoNextChapter: boolean;
+  /** 单次生成字数上限（离线引擎分块大小，30-500，默认 150） */
+  chunkSize: number;
   /** TTS 引擎类型 */
   engine: "zipvoice" | "webspeech";
 
@@ -70,6 +72,7 @@ export interface TTSState {
   setVolume: (volume: number) => void;
   setPitch: (pitch: number) => void;
   setAutoNextChapter: (auto: boolean) => void;
+  setChunkSize: (chunkSize: number) => void;
   setEngine: (engine: "zipvoice" | "webspeech") => void;
   /** 顶栏朗读按钮触发计数器（外部递增，AudioPlayer 监听） */
   startRequested: number;
@@ -97,6 +100,8 @@ interface PersistedSettings {
   autoNextChapter: boolean;
   engine: "zipvoice" | "webspeech";
   modelDownloaded: boolean;
+  /** 单次生成字数上限（离线引擎分块大小，30-500，默认 150） */
+  chunkSize: number;
 }
 
 function loadSettings(): PersistedSettings {
@@ -105,11 +110,12 @@ function loadSettings(): PersistedSettings {
     if (raw) {
       const s = JSON.parse(raw);
       // 兼容旧数据：旧版本 speed/volume/pitch 是全局的，迁移为两个引擎各自一份
-      // 兼容旧音色：ZipVoice 0-9 旧音色（0-4 女声/5-9 男声）→ 新 0-2（3 个参考音频音色）
-      let zipvoiceVoiceId = s.zipvoiceVoiceId || s.voiceId || "0";
+      // 兼容旧音色：旧 ZipVoice 音色 0-2 → Kokoro 默认女声 45（晓北）；
+      // 超出 Kokoro 中文音色范围（45-52）的旧 sid 统一回退到 45
+      let zipvoiceVoiceId = s.zipvoiceVoiceId || s.voiceId || "45";
       const oldSid = parseInt(String(zipvoiceVoiceId), 10);
-      if (!Number.isNaN(oldSid) && (oldSid < 0 || oldSid > 2)) {
-        zipvoiceVoiceId = oldSid >= 5 ? "2" : "0"; // 旧男声→男声，旧女声→女声 1
+      if (!Number.isNaN(oldSid) && (oldSid < 45 || oldSid > 52)) {
+        zipvoiceVoiceId = "45"; // 旧音色全部映射到默认女声晓北
       }
       return {
         zipvoiceVoiceId,
@@ -124,10 +130,17 @@ function loadSettings(): PersistedSettings {
         autoNextChapter: s.autoNextChapter ?? true,
         engine: (s.engine === "zipvoice" || s.engine === "webspeech") ? s.engine : "webspeech",
         modelDownloaded: s.modelDownloaded ?? false,
+        chunkSize: clampChunkSize(s.chunkSize ?? 150),
       };
     }
   } catch { /* ignore */ }
-  return { zipvoiceVoiceId: "0", webspeechVoiceId: "", zipvoiceSpeed: 1.0, webspeechSpeed: 1.0, zipvoiceVolume: 1.0, webspeechVolume: 1.0, zipvoicePitch: 1.0, webspeechPitch: 1.0, playbackRate: 1.0, autoNextChapter: true, engine: "webspeech", modelDownloaded: false };
+  return { zipvoiceVoiceId: "45", webspeechVoiceId: "", zipvoiceSpeed: 1.0, webspeechSpeed: 1.0, zipvoiceVolume: 1.0, webspeechVolume: 1.0, zipvoicePitch: 1.0, webspeechPitch: 1.0, playbackRate: 1.0, autoNextChapter: true, engine: "webspeech", modelDownloaded: false, chunkSize: 150 };
+}
+
+/** chunkSize 合法范围：30-500 字 */
+function clampChunkSize(v: number): number {
+  const n = Math.round(Number(v) || 150);
+  return Math.max(30, Math.min(500, n));
 }
 
 // Cached settings to avoid repeated localStorage reads
@@ -177,6 +190,7 @@ export const useTTSStore = create<TTSState>((set, get) => ({
   volume: defaults.engine === "zipvoice" ? defaults.zipvoiceVolume : defaults.webspeechVolume,
   pitch: defaults.engine === "zipvoice" ? defaults.zipvoicePitch : defaults.webspeechPitch,
   autoNextChapter: defaults.autoNextChapter,
+  chunkSize: defaults.chunkSize,
   engine: defaults.engine,
 
   // 朗读触发（顶栏按钮 → AudioPlayer 监听）
@@ -276,6 +290,14 @@ export const useTTSStore = create<TTSState>((set, get) => ({
     const s = get(); set({ autoNextChapter });
     const settings = getCachedSettings();
     settings.autoNextChapter = autoNextChapter;
+    settings.modelDownloaded = s.modelDownloaded;
+    saveSettings(settings);
+  },
+  setChunkSize: (chunkSize) => {
+    const clamped = clampChunkSize(chunkSize);
+    const s = get(); set({ chunkSize: clamped });
+    const settings = getCachedSettings();
+    settings.chunkSize = clamped;
     settings.modelDownloaded = s.modelDownloaded;
     saveSettings(settings);
   },

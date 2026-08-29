@@ -192,7 +192,7 @@ startServers();
 
 // ── TTS 资源预加载 ───────────────────────────────────────────
 // 启动后延迟 5 秒（避开启动高峰：备份/证书/WAL），后台自动检查并下载
-// ZipVoice 所需资源（WASM + 模型 + vocoder，约 400MB）。
+// Kokoro 所需资源（WASM + 模型，约 190MB）。
 // 失败不阻塞启动、不崩溃：日志记录后，由 /api/rag/tts/prepare 触发重试
 //（ensure* 内部有 30 秒失败冷却，可安全重复调用）。
 setTimeout(() => {
@@ -219,9 +219,9 @@ setTimeout(() => {
     console.log(`[tts-preload] ${step}${detail ? `: ${detail}` : ""}`);
   };
   ensureTTSResources(progressLogger).then(() => {
-    console.log("[tts-preload] ZipVoice 资源就绪（WASM + 模型 + vocoder）");
+    console.log("[tts-preload] Kokoro 资源就绪（WASM + 模型）");
   }).catch((e) => {
-    console.warn(`[tts-preload] ZipVoice 资源预加载失败（可稍后通过 /tts/prepare 重试）: ${e.message}`);
+    console.warn(`[tts-preload] Kokoro 资源预加载失败（可稍后通过 /tts/prepare 重试）: ${e.message}`);
   });
 }, 5000);
 
