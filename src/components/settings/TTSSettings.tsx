@@ -19,18 +19,10 @@ export function TTSSettings() {
   const [loading, setLoading] = useState(false);
   const [loadAttempted, setLoadAttempted] = useState(false);
 
-  // —— 语音诊断（临时排查用：定位 Android Edge 语音列表问题，确认后可移除）——
-  const [diag, setDiag] = useState({
-    getVoicesCount: 0,
-    speakEvent: "未触发",
-    voicesChanged: false,
-    speechSynthesisExists: typeof speechSynthesis !== "undefined",
-  });
-
   // 平台能力检测（Web Speech API 支持情况）：
-  // - Android Chromium（Chrome/Edge）：支持（走 Google TTS），但 getVoices() 需 speak 唤醒引擎
+  // - Android Chromium（Chrome/Edge）：speak() 可用，但部分版本 getVoices() 恒空（不提供列表）
   // - iOS（WebKit）：支持，但 speak() 必须在用户手势内调用
-  // - 桌面：支持
+  // - 桌面：完整支持
   const speechPlatform = useMemo(() => {
     if (typeof navigator === "undefined" || typeof speechSynthesis === "undefined") return "unsupported";
     const ua = navigator.userAgent || "";
@@ -42,13 +34,6 @@ export function TTSSettings() {
   const insecureContext = typeof window !== "undefined"
     && typeof window.isSecureContext === "boolean"
     && !window.isSecureContext;
-
-  // 平台不支持（speechSynthesis 不存在）或非安全上下文时的提示文案
-  const unsupportedHint = speechPlatform === "unsupported"
-    ? "当前浏览器不支持 Web Speech 语音朗读"
-    : insecureContext
-      ? "需通过 HTTPS 访问才能使用浏览器语音朗读"
-      : "";
 
   // 语音列表去重：getVoices() 每次可能返回新数组引用，
   // 内容未变化时不 setState，避免每 2 秒触发重渲染
@@ -70,21 +55,11 @@ export function TTSSettings() {
     const tryRead = () => {
       const all = speechSynthesis.getVoices();
       applyVoices(all);
-      // 诊断：getVoices() 返回数量（值变化时才 setState，避免每 2s 重渲染）
-      setDiag(d => (d.getVoicesCount === all.length ? d : { ...d, getVoicesCount: all.length }));
     };
     tryRead();
     const poll = setInterval(tryRead, 2000);
     return () => clearInterval(poll);
   }, [applyVoices]);
-
-  // 诊断：仅记录 voiceschanged 事件是否发生（不调用 getVoices，避免事件风暴）
-  useEffect(() => {
-    if (typeof speechSynthesis === "undefined") return;
-    const onDiagVoicesChanged = () => setDiag(d => (d.voicesChanged ? d : { ...d, voicesChanged: true }));
-    speechSynthesis.addEventListener?.("voiceschanged", onDiagVoicesChanged);
-    return () => speechSynthesis.removeEventListener?.("voiceschanged", onDiagVoicesChanged);
-  }, []);
 
   // 分类：按语言分组（中文优先）→ 按网络细分（本地/在线/未知）。纯计算，缓存避免重复执行。
   const voiceGroups = useMemo(() => classifyVoices(browserVoices), [browserVoices]);
@@ -154,12 +129,8 @@ export function TTSSettings() {
     try {
       const dummy = new SpeechSynthesisUtterance("​");
       dummy.lang = "zh-CN";
-      dummy.onstart = () => {
-        // 兜底轮询已在运行，无需额外逻辑；仅记录诊断事件
-        setDiag(d => (d.speakEvent === "onstart" ? d : { ...d, speakEvent: "onstart" }));
-      };
+      dummy.onstart = () => { /* 兜底轮询已在运行，无需额外逻辑 */ };
       dummy.onerror = () => {
-        setDiag(d => (d.speakEvent === "onerror" ? d : { ...d, speakEvent: "onerror" }));
         // speak 失败但语音列表可能已填充（部分引擎），再读一次兜底
         const after = speechSynthesis.getVoices();
         if (after.length > 0) applyVoices(after);
@@ -239,36 +210,30 @@ export function TTSSettings() {
           </div>
         ) : (
           <div className="space-y-2">
-            {loadAttempted && !loading ? (
+            {speechPlatform === "unsupported" ? (
+              <p className="text-xs text-muted-foreground">当前浏览器不支持 Web Speech 语音朗读</p>
+            ) : insecureContext ? (
+              <p className="text-xs text-muted-foreground">需通过 HTTPS 访问才能使用浏览器语音朗读</p>
+            ) : loadAttempted && !loading ? (
               <p className="text-xs text-muted-foreground">
-                {unsupportedHint || "当前浏览器未返回语音列表，将使用系统默认语音朗读（不影响朗读功能）"}
+                {speechPlatform === "android"
+                  ? "此浏览器（Android 版）不提供语音列表，将使用系统默认语音朗读（朗读功能正常）"
+                  : "当前浏览器未返回语音列表，将使用系统默认语音朗读（不影响朗读功能）"}
               </p>
             ) : (
               <>
                 <p className="text-xs text-muted-foreground">
-                  {unsupportedHint || (loading ? "正在加载语音列表..." : "未检测到语音，点击下方按钮加载")}
+                  {loading ? "正在加载语音列表..." : "未检测到语音，点击下方按钮加载"}
                 </p>
-                {speechPlatform !== "unsupported" && (
-                  <Button variant="outline" size="sm" className="h-7 text-[10px]"
-                    onClick={loadVoices} disabled={loading}>
-                    {loading ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
-                    {loading ? "加载中..." : "加载语音列表"}
-                  </Button>
-                )}
+                <Button variant="outline" size="sm" className="h-7 text-[10px]"
+                  onClick={loadVoices} disabled={loading}>
+                  {loading ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                  {loading ? "加载中..." : "加载语音列表"}
+                </Button>
               </>
             )}
           </div>
         )}
-      </div>
-
-      {/* 语音诊断（临时排查用，确认后可移除） */}
-      <div className="rounded border border-dashed p-2 text-[10px] text-muted-foreground space-y-0.5 leading-relaxed">
-        <p className="font-medium">语音诊断（排查用）</p>
-        <p>版本：{__APP_VERSION__}（{__GIT_HASH__}）</p>
-        <p>speechSynthesis：{diag.speechSynthesisExists ? "存在" : "不存在"}</p>
-        <p>getVoices() 当前返回：{diag.getVoicesCount} 个</p>
-        <p>最近 speak 事件：{diag.speakEvent}</p>
-        <p>voiceschanged 事件：{diag.voicesChanged ? "已触发" : "未触发"}</p>
       </div>
 
       {/* 语速 */}
