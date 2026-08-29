@@ -12,7 +12,6 @@ function makeVoice(overrides: Partial<SpeechSynthesisVoice> & { voiceURI: string
     lang: "zh-CN",
     localService: true,
     default: false,
-    voiceURI: overrides.voiceURI,
     ...overrides,
   } as SpeechSynthesisVoice;
 }
