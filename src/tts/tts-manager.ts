@@ -77,11 +77,12 @@ class WebSpeechTTSEngine {
       const timeout = setTimeout(() => resolve(), 10000);
       const handler = () => {
         clearTimeout(timeout);
-        speechSynthesis.removeEventListener("voiceschanged", handler);
+        // 可选链：部分移动 WebView 的 speechSynthesis 非标准 EventTarget
+        speechSynthesis.removeEventListener?.("voiceschanged", handler);
         clearInterval(poll);
         resolve();
       };
-      speechSynthesis.addEventListener("voiceschanged", handler);
+      speechSynthesis.addEventListener?.("voiceschanged", handler);
       const poll = setInterval(() => {
         if (speechSynthesis.getVoices().length > 0) handler();
       }, 500);

@@ -19,6 +19,32 @@ export function TTSSettings() {
   const [loading, setLoading] = useState(false);
   const [loadAttempted, setLoadAttempted] = useState(false);
 
+  // 平台能力检测（Web Speech API 支持情况）：
+  // - Android Chromium（Chrome/Edge）：speechSynthesis 从未实现语音合成，getVoices() 恒空
+  // - iOS（WebKit）：支持，但 speak() 必须在用户手势内调用
+  // - 桌面：支持
+  const speechPlatform = useMemo(() => {
+    if (typeof navigator === "undefined" || typeof speechSynthesis === "undefined") return "unsupported";
+    const ua = navigator.userAgent || "";
+    if (/Android/i.test(ua) && /Chrome|Edg\//i.test(ua)) return "android-chromium";
+    if (/Android/i.test(ua)) return "android";
+    if (/iPad|iPhone|iPod/i.test(ua)) return "ios";
+    return "desktop";
+  }, []);
+  // 安全上下文：Web Speech API 仅在 HTTPS（或 localhost）可用
+  const insecureContext = typeof window !== "undefined"
+    && typeof window.isSecureContext === "boolean"
+    && !window.isSecureContext;
+
+  // 当前平台不支持时的提示文案
+  const unsupportedHint = speechPlatform === "android-chromium"
+    ? "此浏览器（Android 版 Chrome/Edge）不支持浏览器语音朗读，建议使用桌面浏览器或其他引擎"
+    : speechPlatform === "unsupported"
+      ? "当前浏览器不支持 Web Speech 语音朗读"
+      : insecureContext
+        ? "需通过 HTTPS 访问才能使用浏览器语音朗读"
+        : "";
+
   // 语音列表去重：getVoices() 每次可能返回新数组引用，
   // 内容未变化时不 setState，避免每 2 秒触发重渲染
   const lastVoicesKeyRef = useRef<string>("");
@@ -38,7 +64,7 @@ export function TTSSettings() {
       applyVoices(all);
     };
     tryRead();
-    const poll = setInterval(tryRead, 2000);
+    const poll = setInterval(tryRead, 1000);
     return () => clearInterval(poll);
   }, [applyVoices]);
 
@@ -73,8 +99,20 @@ export function TTSSettings() {
 
   const loadVoices = useCallback(() => {
     if (voicesLoaded) return;
+    if (typeof speechSynthesis === "undefined") {
+      setLoading(false);
+      setLoadAttempted(true);
+      return;
+    }
     setLoading(true);
     setLoadAttempted(true);
+    // iOS 推荐流程：手势内先读一次 getVoices（部分 WebKit 版本此时已填充列表）
+    const initial = speechSynthesis.getVoices();
+    if (initial.length > 0) {
+      applyVoices(initial);
+      setLoading(false);
+      return;
+    }
     // 零宽空格 — 触发 Chrome 引擎但不产生 audible 声音
     const dummy = new SpeechSynthesisUtterance("​");
     dummy.lang = "zh-CN";
@@ -96,7 +134,14 @@ export function TTSSettings() {
       }, 250);
       loadVoicesRef.current.poll = poll;
     };
-    dummy.onerror = () => setLoading(false);
+    dummy.onerror = () => {
+      // speak 失败但语音列表可能已填充（部分引擎），再读一次兜底
+      const after = speechSynthesis.getVoices();
+      if (after.length > 0) {
+        applyVoices(after);
+      }
+      setLoading(false);
+    };
     speechSynthesis.speak(dummy);
     const fb = setTimeout(() => setLoading(false), 12000);
     loadVoicesRef.current.fallback = fb;
@@ -172,18 +217,20 @@ export function TTSSettings() {
           <div className="space-y-2">
             {loadAttempted && !loading ? (
               <p className="text-xs text-muted-foreground">
-                当前浏览器未返回语音列表，将使用系统默认语音朗读（不影响朗读功能）
+                {unsupportedHint || "当前浏览器未返回语音列表，将使用系统默认语音朗读（不影响朗读功能）"}
               </p>
             ) : (
               <>
                 <p className="text-xs text-muted-foreground">
-                  {loading ? "正在加载语音列表..." : "未检测到语音，点击下方按钮加载"}
+                  {unsupportedHint || (loading ? "正在加载语音列表..." : "未检测到语音，点击下方按钮加载")}
                 </p>
-                <Button variant="outline" size="sm" className="h-7 text-[10px]"
-                  onClick={loadVoices} disabled={loading}>
-                  {loading ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
-                  {loading ? "加载中..." : "加载语音列表"}
-                </Button>
+                {speechPlatform !== "unsupported" && (
+                  <Button variant="outline" size="sm" className="h-7 text-[10px]"
+                    onClick={loadVoices} disabled={loading}>
+                    {loading ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                    {loading ? "加载中..." : "加载语音列表"}
+                  </Button>
+                )}
               </>
             )}
           </div>
