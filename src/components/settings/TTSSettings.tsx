@@ -1,6 +1,6 @@
 /**
  * TTS 语音朗读设置
- * 使用浏览器内置 Web Speech API
+ * 支持双引擎：Web Speech（浏览器内置）+ ZipVoice（离线，sherpa-onnx WASM）
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
@@ -9,15 +9,24 @@ import { Separator } from "@/components/ui/separator";
 import { Loader2, Play } from "lucide-react";
 import { useTTSStore } from "@/stores/tts-store";
 import { classifyVoices } from "@/tts/voice-classify";
+import { ZH_VOICES } from "@/tts/zipvoice-engine";
+import { getTTSPreloadStatus } from "@/tts/tts-preload";
 
 export function TTSSettings() {
   const {
-    voiceId, speed, pitch, autoNextChapter, browserVoices,
-    setVoiceId, setSpeed, setPitch, setAutoNextChapter, setBrowserVoices,
+    voiceId, speed, pitch, autoNextChapter, browserVoices, engine,
+    setVoiceId, setSpeed, setPitch, setAutoNextChapter, setBrowserVoices, setEngine,
   } = useTTSStore();
 
   const [loading, setLoading] = useState(false);
   const [loadAttempted, setLoadAttempted] = useState(false);
+
+  // ZipVoice 预加载状态（登录后自动触发，此处仅展示）
+  const [preloadStatus, setPreloadStatus] = useState(getTTSPreloadStatus());
+  useEffect(() => {
+    const timer = setInterval(() => setPreloadStatus(getTTSPreloadStatus()), 2000);
+    return () => clearInterval(timer);
+  }, []);
 
   // 平台能力检测（Web Speech API 支持情况）：
   // - Android Chromium（Chrome/Edge）：speak() 可用，但部分版本 getVoices() 恒空（不提供列表）
@@ -172,13 +181,48 @@ export function TTSSettings() {
     <div className="space-y-4">
       <div>
         <p className="font-medium text-sm">语音朗读</p>
-        <p className="text-xs text-muted-foreground">使用浏览器内置 Web Speech API 进行中文语音朗读</p>
+        <p className="text-xs text-muted-foreground">
+          {engine === "webspeech"
+            ? "使用浏览器内置 Web Speech API（免下载）"
+            : "使用 ZipVoice 离线引擎（sherpa-onnx WASM，可离线）"}
+        </p>
       </div>
 
       <Separator />
 
-      {/* 语音选择 */}
+      {/* 朗读引擎切换 */}
       <div className="space-y-2">
+        <p className="text-xs font-medium text-muted-foreground">朗读引擎</p>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            aria-label="朗读引擎：Web Speech（浏览器内置）"
+            className={`rounded-lg border px-3 py-2 text-left transition-colors ${engine === "webspeech" ? "border-primary bg-primary/10" : "hover:bg-muted"}`}
+            onClick={() => setEngine("webspeech")}
+          >
+            <p className="text-xs font-medium">Web Speech</p>
+            <p className="text-[10px] text-muted-foreground">浏览器内置 · 免下载</p>
+          </button>
+          <button
+            aria-label="朗读引擎：ZipVoice（离线引擎）"
+            className={`rounded-lg border px-3 py-2 text-left transition-colors ${engine === "zipvoice" ? "border-primary bg-primary/10" : "hover:bg-muted"}`}
+            onClick={() => setEngine("zipvoice")}
+          >
+            <p className="text-xs font-medium">ZipVoice 离线</p>
+            <p className="text-[10px] text-muted-foreground">本地推理 · 可离线</p>
+          </button>
+        </div>
+        <p className="text-[10px] text-muted-foreground">
+          {engine === "webspeech"
+            ? "Android 版 Edge/Chrome 可能无法选择音色，可切换到 ZipVoice"
+            : "首次使用需下载语音模型（约 380MB），下载完成后完全离线"}
+        </p>
+      </div>
+
+      <Separator />
+
+      {/* 语音选择（按引擎分支） */}
+      {engine === "webspeech" ? (
+        <div className="space-y-2">
         <p className="text-xs font-medium text-muted-foreground">语音选择</p>
         {voicesLoaded ? (
           <div className="flex gap-2">
@@ -235,6 +279,35 @@ export function TTSSettings() {
           </div>
         )}
       </div>
+      ) : (
+        /* ZipVoice：离线音色选择 */
+        <div className="space-y-2">
+          <p className="text-xs font-medium text-muted-foreground">离线音色</p>
+          <select
+            aria-label="离线音色选择"
+            className="w-full text-xs border rounded px-2 py-1.5 bg-background"
+            value={ZH_VOICES[voiceId] ? voiceId : "0"}
+            onChange={(e) => setVoiceId(e.target.value)}
+          >
+            {Object.entries(ZH_VOICES).map(([id, v]) => (
+              <option key={id} value={id}>{v.name}</option>
+            ))}
+          </select>
+          <p className="text-[10px] text-muted-foreground">
+            ZipVoice 离线引擎，生成在本地完成（无网络请求）
+          </p>
+          {/* 资源预加载状态（登录后自动触发） */}
+          {engine === "zipvoice" && preloadStatus === "downloading" && (
+            <p className="text-[10px] text-amber-500">正在后台下载语音资源（约 380MB），完成后即可离线使用</p>
+          )}
+          {engine === "zipvoice" && preloadStatus === "ready" && (
+            <p className="text-[10px] text-green-600">✓ 语音资源已就绪，可离线使用</p>
+          )}
+          {engine === "zipvoice" && (preloadStatus === "skipped" || preloadStatus === "failed" || preloadStatus === "idle") && (
+            <p className="text-[10px] text-muted-foreground">首次朗读时会自动下载模型，请耐心等待</p>
+          )}
+        </div>
+      )}
 
       {/* 语速 */}
       <div className="space-y-2">
