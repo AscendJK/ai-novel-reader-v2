@@ -37,10 +37,15 @@ export function useAudioPlayer({
   const managerRef = useRef<TTSManager | null>(null);
   // H11 fix: 追踪自动翻章定时器，stop 时清除
   const autoNextTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // U13: 自动翻章超时兜底（翻章后 8 秒未开始新章则复位）
+  // U13: 自动翻章超时兜底（翻章后 20 秒未开始新章则复位）
   const pendingAutoNextTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // B5: 自动翻章后等新章节加载完成再自动播放
   const pendingAutoPlayRef = useRef(false);
+  // U14: 自动翻章的目标章节索引。chapterIndex 必须到达该索引后才自动播放，
+  // 防止异步加载章节时 addChapters 先替换当前章内容触发误播放（自动翻章概率停止根因）
+  const pendingAutoPlayIndexRef = useRef<number | null>(null);
+  // 自动播放延迟定时器（stop/卸载时清理；调度建立后不随重渲染取消，避免竞态丢失播放）
+  const pendingAutoPlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const {
     playing, paused, speed, playbackRate, pitch, voiceId, engine, autoNextChapter,
@@ -55,6 +60,7 @@ export function useAudioPlayer({
     return () => {
       if (autoNextTimerRef.current) clearTimeout(autoNextTimerRef.current);
       if (pendingAutoNextTimeoutRef.current) clearTimeout(pendingAutoNextTimeoutRef.current);
+      if (pendingAutoPlayTimerRef.current) clearTimeout(pendingAutoPlayTimerRef.current);
       managerRef.current?.destroy();
       managerRef.current = null;
     };
@@ -70,6 +76,22 @@ export function useAudioPlayer({
     if (hadPendingAutoNext) {
       // R13: 自动翻章定时器还没触发 — 用户手动切章，清除自动播放标志
       pendingAutoPlayRef.current = false;
+      pendingAutoPlayIndexRef.current = null;
+      managerRef.current?.stop();
+      reset();
+    } else if (pendingAutoPlayRef.current && pendingAutoPlayIndexRef.current !== null
+      && pendingAutoPlayIndexRef.current !== chapterIndex) {
+      // U14: 自动翻章流程中（定时器已触发）用户手动切到其他章节 → 取消自动播放
+      pendingAutoPlayRef.current = false;
+      pendingAutoPlayIndexRef.current = null;
+      if (pendingAutoPlayTimerRef.current) {
+        clearTimeout(pendingAutoPlayTimerRef.current);
+        pendingAutoPlayTimerRef.current = null;
+      }
+      if (pendingAutoNextTimeoutRef.current) {
+        clearTimeout(pendingAutoNextTimeoutRef.current);
+        pendingAutoNextTimeoutRef.current = null;
+      }
       managerRef.current?.stop();
       reset();
     } else if (!pendingAutoPlayRef.current) {
@@ -77,7 +99,7 @@ export function useAudioPlayer({
       managerRef.current?.stop();
       reset();
     }
-    // pendingAutoPlayRef 为 true 且定时器已触发 → 自动翻章正常流程，autoplay effect 处理
+    // pendingAutoPlayRef 为 true 且已到达目标章节 → 自动翻章正常流程，autoplay effect 处理
   }, [chapterIndex, reset]);
 
   const playRef = useRef<typeof play>(null!); // B4+B5: 在 play 定义前声明，定义后赋值
@@ -198,8 +220,12 @@ export function useAudioPlayer({
       onEnd: () => {
         setPaused(false);
         if (autoNextChapter && onNextChapter) {
+          // 防止重复 onEnd（浏览器偶发）重复调度翻章
+          if (pendingAutoPlayRef.current) return;
           // B5: 标记自动翻章进行中，等新章节加载完自动播放
           pendingAutoPlayRef.current = true;
+          // U14: 记录目标章节索引，chapterIndex 到达后才自动播放
+          pendingAutoPlayIndexRef.current = (chapterIndex ?? 0) + 1;
           // U12: 翻章间隙保持播放栏可见（generating=true 表示“准备下一章”），
           // 避免播放栏消失被用户感知为“退出朗读”；新章 onPlay 后恢复正常
           setGenerating(true);
@@ -207,14 +233,15 @@ export function useAudioPlayer({
             autoNextTimerRef.current = null;
             onNextChapter();
           }, 500);
-          // U13: 若翻章后 8 秒内未成功开始新章播放，恢复未播放状态（防止卡在“生成中”）
+          // U13: 若翻章后 20 秒内未成功开始新章播放，恢复未播放状态（防止卡在“生成中”）
           pendingAutoNextTimeoutRef.current = setTimeout(() => {
             if (pendingAutoPlayRef.current) {
               pendingAutoPlayRef.current = false;
+              pendingAutoPlayIndexRef.current = null;
               setGenerating(false);
               setPlaying(false);
             }
-          }, 8000);
+          }, 20000);
         } else {
           setPlaying(false);
         }
@@ -308,6 +335,11 @@ export function useAudioPlayer({
   const stop = useCallback(() => {
     savePosition();
     pendingAutoPlayRef.current = false;
+    pendingAutoPlayIndexRef.current = null;
+    if (pendingAutoPlayTimerRef.current) {
+      clearTimeout(pendingAutoPlayTimerRef.current);
+      pendingAutoPlayTimerRef.current = null;
+    }
     if (autoNextTimerRef.current) {
       clearTimeout(autoNextTimerRef.current);
       autoNextTimerRef.current = null;
@@ -326,17 +358,33 @@ export function useAudioPlayer({
   const stopRef = useRef(stop);
   // B2: 自动翻章后章节加载完自动播放
   useEffect(() => {
-    if (pendingAutoPlayRef.current && chapterContent) {
-      pendingAutoPlayRef.current = false;
-      if (pendingAutoNextTimeoutRef.current) {
-        clearTimeout(pendingAutoNextTimeoutRef.current);
-        pendingAutoNextTimeoutRef.current = null;
-      }
-      // U12: 延迟到 play 引用稳定后再播（play 依赖 chapterContent，
-      // 若立即调用可能捕获到旧的闭包导致直接 return）
-      const t = setTimeout(() => playRef.current(), 350);
-      return () => clearTimeout(t);
+    if (!pendingAutoPlayRef.current) return;
+    // U14: 目标章节未就绪（chapterIndex 未到达目标）时不消费标志。
+    // 异步加载章节时 addChapters 会先替换当前章内容并触发重渲染，
+    // 若此刻消费标志，后续 setSelectedChapter 的 cleanup 会取消已调度的
+    // 播放且无人再调度 → 朗读静默停止（自动翻章概率停止的根因）。
+    if (chapterIndex == null || pendingAutoPlayIndexRef.current !== chapterIndex) return;
+    if (!chapterContent || chapterContent.length === 0) return; // 内容未加载，继续等待
+    if (pendingAutoPlayTimerRef.current) return; // 已为该章节调度过，避免重复
+    // 目标章节已就绪，取消 U13 超时兜底（自动播放即将开始）
+    if (pendingAutoNextTimeoutRef.current) {
+      clearTimeout(pendingAutoNextTimeoutRef.current);
+      pendingAutoNextTimeoutRef.current = null;
     }
+    // U12: 延迟到 play 引用稳定后再播（play 依赖 chapterContent，
+    // 若立即调用可能捕获到旧的闭包导致直接 return）
+    const targetIndex = chapterIndex;
+    pendingAutoPlayTimerRef.current = setTimeout(() => {
+      pendingAutoPlayTimerRef.current = null;
+      // 最终校验：期间被 stop/手动切章则不自动播放
+      if (!pendingAutoPlayRef.current) return;
+      if (pendingAutoPlayIndexRef.current !== targetIndex) return;
+      pendingAutoPlayRef.current = false;
+      pendingAutoPlayIndexRef.current = null;
+      playRef.current();
+    }, 350);
+    // 注意：不返回 cleanup —— 调度一旦建立，后续重渲染（如同章节内容再次
+    // 更新）不得取消自动播放；取消只能通过 stop()/手动切章/组件卸载
   }, [chapterContent, chapterIndex]);
   useEffect(() => { stopRef.current = stop; }, [stop]);
   const onPrevRef = useRef(onPrevChapter);

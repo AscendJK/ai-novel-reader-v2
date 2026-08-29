@@ -166,9 +166,9 @@ export function AudioPlayer({
             </Button>
           )}
 
-          {isActive && (
+          {(isActive || generating) && (
             <Button variant="ghost" size="sm" className="min-h-[44px] min-w-[44px] p-1.5 sm:h-8 sm:w-8 sm:p-0"
-              onClick={stop} title="停止">
+              onClick={stop} title={generating ? "取消（停止朗读）" : "停止"}>
               <Square className="h-4 w-4" />
             </Button>
           )}
