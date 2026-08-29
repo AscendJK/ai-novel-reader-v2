@@ -20,13 +20,12 @@ export function TTSSettings() {
   const [loadAttempted, setLoadAttempted] = useState(false);
 
   // 平台能力检测（Web Speech API 支持情况）：
-  // - Android Chromium（Chrome/Edge）：speechSynthesis 从未实现语音合成，getVoices() 恒空
+  // - Android Chromium（Chrome/Edge）：支持（走 Google TTS），但 getVoices() 需 speak 唤醒引擎
   // - iOS（WebKit）：支持，但 speak() 必须在用户手势内调用
   // - 桌面：支持
   const speechPlatform = useMemo(() => {
     if (typeof navigator === "undefined" || typeof speechSynthesis === "undefined") return "unsupported";
     const ua = navigator.userAgent || "";
-    if (/Android/i.test(ua) && /Chrome|Edg\//i.test(ua)) return "android-chromium";
     if (/Android/i.test(ua)) return "android";
     if (/iPad|iPhone|iPod/i.test(ua)) return "ios";
     return "desktop";
@@ -36,14 +35,12 @@ export function TTSSettings() {
     && typeof window.isSecureContext === "boolean"
     && !window.isSecureContext;
 
-  // 当前平台不支持时的提示文案
-  const unsupportedHint = speechPlatform === "android-chromium"
-    ? "此浏览器（Android 版 Chrome/Edge）不支持浏览器语音朗读，建议使用桌面浏览器或其他引擎"
-    : speechPlatform === "unsupported"
-      ? "当前浏览器不支持 Web Speech 语音朗读"
-      : insecureContext
-        ? "需通过 HTTPS 访问才能使用浏览器语音朗读"
-        : "";
+  // 平台不支持（speechSynthesis 不存在）或非安全上下文时的提示文案
+  const unsupportedHint = speechPlatform === "unsupported"
+    ? "当前浏览器不支持 Web Speech 语音朗读"
+    : insecureContext
+      ? "需通过 HTTPS 访问才能使用浏览器语音朗读"
+      : "";
 
   // 语音列表去重：getVoices() 每次可能返回新数组引用，
   // 内容未变化时不 setState，避免每 2 秒触发重渲染
@@ -64,7 +61,7 @@ export function TTSSettings() {
       applyVoices(all);
     };
     tryRead();
-    const poll = setInterval(tryRead, 1000);
+    const poll = setInterval(tryRead, 500);
     return () => clearInterval(poll);
   }, [applyVoices]);
 
@@ -106,43 +103,54 @@ export function TTSSettings() {
     }
     setLoading(true);
     setLoadAttempted(true);
-    // iOS 推荐流程：手势内先读一次 getVoices（部分 WebKit 版本此时已填充列表）
+
+    // 1) 手势内先读一次（iOS/部分浏览器此时已填充列表）
     const initial = speechSynthesis.getVoices();
     if (initial.length > 0) {
       applyVoices(initial);
       setLoading(false);
       return;
     }
-    // 零宽空格 — 触发 Chrome 引擎但不产生 audible 声音
-    const dummy = new SpeechSynthesisUtterance("​");
-    dummy.lang = "zh-CN";
-    dummy.onstart = () => {
-      let attempts = 0;
-      const poll = setInterval(() => {
-        attempts++;
-        const all = speechSynthesis.getVoices();
-        if (all.length > 0) {
-          applyVoices(all);
-          clearInterval(poll);
-          loadVoicesRef.current.poll = null;
-          setLoading(false);
-        } else if (attempts > 40) {
-          clearInterval(poll);
-          loadVoicesRef.current.poll = null;
-          setLoading(false);
-        }
-      }, 250);
-      loadVoicesRef.current.poll = poll;
-    };
-    dummy.onerror = () => {
-      // speak 失败但语音列表可能已填充（部分引擎），再读一次兜底
-      const after = speechSynthesis.getVoices();
-      if (after.length > 0) {
-        applyVoices(after);
+
+    // 2) 兜底轮询：不依赖 speak 的任何事件回调（Android 上零宽空格可能被
+    //    Google TTS 忽略，onstart/onerror 都不触发），12s 内每 500ms 读一次
+    let attempts = 0;
+    const poll = setInterval(() => {
+      attempts++;
+      const all = speechSynthesis.getVoices();
+      if (all.length > 0) {
+        applyVoices(all);
+        clearInterval(poll);
+        loadVoicesRef.current.poll = null;
+        setLoading(false);
+      } else if (attempts === 3) {
+        // 3) 零宽空格未唤醒引擎时，升级为真实短文本强制唤醒（中文句号几乎无声）
+        try {
+          const wake = new SpeechSynthesisUtterance("。");
+          wake.lang = "zh-CN";
+          speechSynthesis.speak(wake);
+        } catch { /* 忽略 */ }
+      } else if (attempts > 24) {
+        clearInterval(poll);
+        loadVoicesRef.current.poll = null;
+        setLoading(false);
       }
-      setLoading(false);
-    };
-    speechSynthesis.speak(dummy);
+    }, 500);
+    loadVoicesRef.current.poll = poll;
+
+    // 4) 零宽空格无声触发（首选：桌面 Chrome/部分 Android 生效）
+    try {
+      const dummy = new SpeechSynthesisUtterance("​");
+      dummy.lang = "zh-CN";
+      dummy.onstart = () => { /* 兜底轮询已在运行，无需额外逻辑 */ };
+      dummy.onerror = () => {
+        // speak 失败但语音列表可能已填充（部分引擎），再读一次兜底
+        const after = speechSynthesis.getVoices();
+        if (after.length > 0) applyVoices(after);
+      };
+      speechSynthesis.speak(dummy);
+    } catch { /* 忽略 */ }
+
     const fb = setTimeout(() => setLoading(false), 12000);
     loadVoicesRef.current.fallback = fb;
   }, [voicesLoaded, applyVoices]);
