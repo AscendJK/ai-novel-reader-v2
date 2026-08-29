@@ -1,15 +1,23 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useNovelStore } from "../novel-store";
 import { userKey } from "@/lib/user-utils";
+import type { Novel } from "@/parsers/types";
 
 describe("技术债修复验证: setCurrentNovel/reloadReadingPositions", () => {
-  const novel1: any = {
+  const novel1: Novel = {
     id: "novel-1",
+    title: "测试小说",
+    fileName: "test.txt",
+    fileFormat: "txt",
+    totalChars: 100,
+    chapterCount: 4,
+    createdAt: 0,
+    updatedAt: 0,
     chapters: [
-      { id: "c0", index: 0 },
-      { id: "c1", index: 1 },
-      { id: "c2", index: 2 },
-      { id: "c3", index: 3 },
+      { id: "c0", index: 0, title: "c0", content: "内容0", novelId: "novel-1", startOffset: 0, endOffset: 10 },
+      { id: "c1", index: 1, title: "c1", content: "内容1", novelId: "novel-1", startOffset: 10, endOffset: 20 },
+      { id: "c2", index: 2, title: "c2", content: "内容2", novelId: "novel-1", startOffset: 20, endOffset: 30 },
+      { id: "c3", index: 3, title: "c3", content: "内容3", novelId: "novel-1", startOffset: 30, endOffset: 40 },
     ],
   };
 
