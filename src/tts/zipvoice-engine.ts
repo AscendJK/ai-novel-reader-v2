@@ -54,10 +54,20 @@ export function isModelLoaded(): boolean {
 
 // ── Worker 生命周期 ────────────────────────────────────────
 
-function getWorker(): Worker {
+async function getWorker(): Promise<Worker> {
   if (!ttsWorker) {
     const base = import.meta.env.BASE_URL || "/";
-    ttsWorker = new Worker(new URL(base + "sherpa-tts/sherpa-onnx-tts.worker.js", window.location.origin));
+    const workerUrl = base + "sherpa-tts/sherpa-onnx-tts.worker.js";
+    // 用 fetch + blob URL 创建 worker：
+    // crossOriginIsolated（COEP）页面下，直接 new Worker(文件 URL) 会被
+    // Chrome 以 ERR_BLOCKED_BY_RESPONSE 拒绝（worker 脚本的 COEP 检查），
+    // 即使脚本同源且带 CORP 头也会失败；blob URL 继承页面 origin，可正常加载。
+    // worker.js 内部已有 WrappedURL 处理 blob base（new URL(".", import.meta.url)）。
+    const resp = await fetch(workerUrl);
+    if (!resp.ok) throw new Error(`Worker 脚本下载失败: ${resp.status}`);
+    const code = await resp.text();
+    const blobUrl = URL.createObjectURL(new Blob([code], { type: "application/javascript" }));
+    ttsWorker = new Worker(blobUrl);
     ttsWorker.onmessage = handleWorkerMessage;
     ttsWorker.onerror = (e) => {
       // 完整诊断信息：message 为空通常表示脚本 fetch 失败（404/CSP/COEP/网络）
@@ -92,7 +102,7 @@ function getWorker(): Worker {
  * files 会被 transfer（零拷贝），重试时调用方需传入未 detach 的 buffer。
  */
 async function initWorker(files: Map<string, ArrayBuffer>): Promise<void> {
-  const w = getWorker();
+  const w = await getWorker();
   await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => {
       readyWaiter = null;
@@ -346,6 +356,7 @@ export async function generateAudio(
   const sid = parseInt(voiceId, 10) || 0;
 
   const id = nextRequestId++;
+  const worker = await getWorker();
   const audio = await new Promise<Float32Array>((resolve, reject) => {
     // H5 fix: 生成超时
     const timer = setTimeout(() => {
@@ -353,7 +364,7 @@ export async function generateAudio(
       reject(new Error("音频生成超时"));
     }, GENERATE_TIMEOUT_MS);
     pendingRequests.set(id, { resolve, reject, timer });
-    getWorker().postMessage({ type: "generate", id, text, sid, speed });
+    worker.postMessage({ type: "generate", id, text, sid, speed });
   });
 
   await onChunk?.(audio);
@@ -376,13 +387,14 @@ export async function generateAudioFull(
   const sid = parseInt(voiceId, 10) || 0;
 
   const id = nextRequestId++;
+  const worker = await getWorker();
   const audio = await new Promise<Float32Array>((resolve, reject) => {
     const timer = setTimeout(() => {
       pendingRequests.delete(id);
       reject(new Error("音频生成超时"));
     }, GENERATE_TIMEOUT_MS);
     pendingRequests.set(id, { resolve, reject, timer });
-    getWorker().postMessage({ type: "generate", id, text, sid, speed });
+    worker.postMessage({ type: "generate", id, text, sid, speed });
   });
 
   return { audio, sampleRate: SAMPLE_RATE };

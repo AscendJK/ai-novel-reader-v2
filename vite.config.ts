@@ -56,6 +56,11 @@ export default defineConfig({
         // 脚本，在 COEP: credentialless 下可能被拒绝（缓存响应无 CORP 头），
         // 导致 Worker 加载失败。走网络由 GitHub Pages 直出（200）更可靠。
         globIgnores: ["**/sherpa-tts/**"],
+        // 禁用 workbox 的导航 fallback：否则 NavigationRoute 会抢先对导航
+        // 响应 respondWith(precache index.html)，COI 注入的 fetch listener
+        // 无法再添加 COOP/COEP 头，页面永远无法 crossOriginIsolated。
+        // 导航请求由 COI 代码处理（网络 + 加头），PWA 离线导航不适用。
+        navigateFallback: null,
         runtimeCaching: [
           // Model files are downloaded through backend proxy, not from GitHub Pages
           // Don't cache /models/ paths to avoid interfering with the fetch interceptor
