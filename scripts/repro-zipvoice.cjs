@@ -25,8 +25,10 @@ if (isMainThread) {
     "encoder.int8.onnx",
     "tokens.txt",
     "lexicon.txt",
-    "vocos-22khz-univ.onnx",
+    "vocos_24khz.onnx",
     "test_wavs/news-female.wav",
+    "test_wavs/news-female-2.wav",
+    "test_wavs/leijun-1.wav",
   ];
   for (const f of wasmFiles) {
     const p = path.join(WASM_DIR, f);
@@ -38,28 +40,41 @@ if (isMainThread) {
     if (fs.existsSync(p)) files[f] = fs.readFileSync(p);
     else console.log(`[main] 警告: 模型文件缺失 ${f}`);
   }
-  // vocoder：先尝试 24kHz（修复候选），回退 22kHz
-  const vocoder24 = path.join(TTS_TEMP, "vocos_24khz.onnx");
+  // vocoder：24kHz（与浏览器 worker 一致；22kHz 会导致 C++ 11903128 崩溃）
+  const vocoder24 = path.join(MODEL_DIR, "vocos_24khz.onnx");
   const vocoder22 = path.join(TTS_TEMP, "vocos-22khz-univ.onnx");
   const vocoderPath = fs.existsSync(vocoder24) ? vocoder24 : vocoder22;
   if (fs.existsSync(vocoderPath)) {
-    files["vocos-22khz-univ.onnx"] = fs.readFileSync(vocoderPath);
+    files["vocos_24khz.onnx"] = fs.readFileSync(vocoderPath);
     console.log("[main] 使用 vocoder: " + path.basename(vocoderPath));
   } else console.log("[main] 警告: vocoder 缺失");
   console.log(`[main] 已加载 ${Object.keys(files).length} 个文件`);
   console.log(`[main] decoder.int8.onnx: ${(files["decoder.int8.onnx"]?.length / 1048576).toFixed(1)}MB`);
 
   const w = new Worker(__filename, { workerData: { files } });
+  // 与浏览器 worker 一致的 3 个音色（sid → 参考音频）循环验证
+  const TEST_TEXTS = [
+    "各位村民，大家新年好。",  // 与参考文本重叠，验证杂音修复
+    "今天天气真不错，我们一起出去走走吧。",
+    "人工智能正在改变我们的生活方式。",
+  ];
+  let sid = 0;
   w.on("message", (msg) => {
     if (msg.type === "log") console.log("[worker]", msg.data);
     else if (msg.type === "ready") {
-      console.log("[main] 模型就绪，开始生成...");
-      w.postMessage({ type: "generate", text: "你好，这是一段测试语音。", id: 1 });
+      console.log("[main] 模型就绪，开始生成（3 音色循环）...");
+      w.postMessage({ type: "generate", text: TEST_TEXTS[0], sid: 0, speed: 1.0, id: 0 });
     } else if (msg.type === "result") {
-      console.log(`[main] 生成成功! samples=${msg.samples.length}, sampleRate=${msg.sampleRate}`);
-      process.exit(0);
+      console.log(`[main] 音色 ${sid} 生成成功! samples=${msg.samples.length}, sampleRate=${msg.sampleRate}`);
+      sid++;
+      if (sid < 3) {
+        w.postMessage({ type: "generate", text: TEST_TEXTS[sid], sid, speed: 1.0, id: sid });
+      } else {
+        console.log("[main] 全部 3 个音色验证通过");
+        process.exit(0);
+      }
     } else if (msg.type === "error") {
-      console.log(`[main] 生成失败: ${msg.message}`);
+      console.log(`[main] 生成失败（音色 ${sid}）: ${msg.message}`);
       process.exit(1);
     }
   });
@@ -122,7 +137,7 @@ if (isMainThread) {
         for (const part of parts) { cur += "/" + part; try { Module.FS_createPath("/", cur.slice(1), true, true); } catch {} }
       };
       mkdirp(modelDir);
-      const modelFiles = ["tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx", "lexicon.txt", "vocos-22khz-univ.onnx"];
+      const modelFiles = ["tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx", "lexicon.txt", "vocos_24khz.onnx"];
       for (const name of modelFiles) {
         if (files[name]) {
           Module.FS_createDataFile(modelDir, name, new Uint8Array(files[name]), true, true, true);
@@ -142,12 +157,11 @@ if (isMainThread) {
       const config = {
         offlineTtsModelConfig: {
           debug: true,
-          maxNumSentences: 1,
           offlineTtsZipVoiceModelConfig: {
             tokens: "/api/rag/tts/model/tokens.txt",
             encoder: "/api/rag/tts/model/encoder.int8.onnx",
             decoder: "/api/rag/tts/model/decoder.int8.onnx",
-            vocoder: "/api/rag/tts/model/vocos-22khz-univ.onnx",
+            vocoder: "/api/rag/tts/model/vocos_24khz.onnx",
             dataDir: "/espeak-ng-data",
             lexicon: "/api/rag/tts/model/lexicon.txt",
           },
@@ -183,10 +197,20 @@ if (isMainThread) {
         return { audio: samples, sampleRate };
       }
 
-      const decoded = decodeWav(files["test_wavs/news-female.wav"]);
-      log(`参考音频解码: ${decoded.audio.length} samples, ${decoded.sampleRate} Hz`);
-      const shortRef = decoded.audio.slice(0, 24000);
-      const refTxt = "各位村民大家新年好";
+      // 与浏览器 worker 一致：3 个音色 → 3 个参考音频 + 匹配转录（官方 prompt.txt）
+      const REF_AUDIOS = [
+        { file: "test_wavs/news-female.wav", text: "各位村民, 大家新年好! 近期, 湖北省武汉市等多个地区" },
+        { file: "test_wavs/news-female-2.wav", text: "本台消息, 中共中央国务院, 近日印发关于构建数据基础制度, 更好发挥数据要素作用的意见." },
+        { file: "test_wavs/leijun-1.wav", text: "那还是36年前, 1987年. 我呢考上了武汉大学的计算机系." },
+      ];
+      const refAudios = [];
+      for (const ref of REF_AUDIOS) {
+        if (files[ref.file]) {
+          const d = decodeWav(files[ref.file]);
+          refAudios.push({ audio: d.audio, sampleRate: d.sampleRate, text: ref.text });
+          log(`参考音频解码: ${ref.file} → ${d.audio.length} samples, ${d.sampleRate} Hz`);
+        }
+      }
 
       parentPort.postMessage({ type: "ready" });
 
@@ -195,12 +219,19 @@ if (isMainThread) {
       require("worker_threads").parentPort.on("message", async (msg) => {
         if (msg.type === "generate") {
           try {
-            log("调用 generateWithConfig...");
+            // 按音色选择参考音频（与浏览器 worker 一致，越界回退到 0）
+            const refIdx = Math.min(Math.max(parseInt(msg.sid, 10) || 0, 0), refAudios.length - 1);
+            const ref = refAudios[refIdx] || refAudios[0];
+            log("调用 generateWithConfig (sid=" + refIdx + ")...");
             const audio = tts.generateWithConfig(msg.text, {
-              referenceAudio: shortRef,
-              referenceSampleRate: 24000,
-              referenceText: refTxt,
-              silenceScale: 0,
+              speed: msg.speed ?? 1.0,
+              referenceAudio: ref.audio,
+              referenceSampleRate: ref.sampleRate,
+              referenceText: ref.text,
+              // 不传 silenceScale（默认 0.2，保留句间停顿）；
+              // 官方 zipvoice 参数：numSteps=4 + min_char_in_sentence=10
+              numSteps: 4,
+              extra: { min_char_in_sentence: 10 },
             });
             log("生成返回: " + audio.samples.length + " samples, " + audio.sampleRate + " Hz");
             pp.postMessage({ type: "result", samples: Array.from(audio.samples).slice(0, 10), sampleRate: audio.sampleRate });

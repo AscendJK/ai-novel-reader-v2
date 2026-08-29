@@ -4,7 +4,25 @@
 const MODEL_BASE = "/api/rag/tts/model";
 let pageOrigin = "";
 let tts = null;
-let refAudioData = null; // 缓存参考音频 Float32Array
+
+// 音色 → 参考音频映射（ZipVoice 是 zero-shot 克隆模型，音色由参考音频决定）
+// 参考文本必须与参考音频内容逐字匹配（官方 prompt.txt 转录）
+const REF_AUDIOS = [
+  {
+    file: "test_wavs/news-female.wav",
+    text: "各位村民, 大家新年好! 近期, 湖北省武汉市等多个地区",
+  },
+  {
+    file: "test_wavs/news-female-2.wav",
+    text: "本台消息, 中共中央国务院, 近日印发关于构建数据基础制度, 更好发挥数据要素作用的意见.",
+  },
+  {
+    file: "test_wavs/leijun-1.wav",
+    text: "那还是36年前, 1987年. 我呢考上了武汉大学的计算机系.",
+  },
+];
+// 解码后的参考音频缓存：{ audio: Float32Array, sampleRate: number }
+let refAudios = [];
 
 function log(msg) { console.log("[Worker] " + msg); }
 
@@ -145,11 +163,17 @@ async function init(files, origin) {
         log("  " + name + ": " + data.length + " B");
       }
     }
-    // 缓存参考音频（news-female.wav）为 Float32Array，供生成时使用
-    if (files["test_wavs/news-female.wav"]) {
-      const decoded = decodeWav(files["test_wavs/news-female.wav"]);
-      refAudioData = decoded.audio;
-      log("参考音频已解码: " + refAudioData.length + " samples, " + decoded.sampleRate + " Hz");
+    // 解码全部参考音频为 Float32Array，供生成时使用（音色选择）
+    refAudios = [];
+    for (const ref of REF_AUDIOS) {
+      if (files[ref.file]) {
+        const decoded = decodeWav(files[ref.file]);
+        refAudios.push({ audio: decoded.audio, sampleRate: decoded.sampleRate });
+        log("参考音频已解码: " + ref.file + " → " + decoded.audio.length + " samples, " + decoded.sampleRate + " Hz");
+      }
+    }
+    if (refAudios.length === 0) {
+      throw new Error("参考音频缺失（test_wavs 未随模型缓存）");
     }
 
     // 7. 创建 TTS 实例
@@ -157,7 +181,6 @@ async function init(files, origin) {
     const config = {
       offlineTtsModelConfig: {
         debug: false,
-        maxNumSentences: 1,
         offlineTtsZipVoiceModelConfig: {
           tokens: MODEL_BASE + "/tokens.txt",
           encoder: MODEL_BASE + "/encoder.int8.onnx",
@@ -170,6 +193,8 @@ async function init(files, origin) {
       },
       ruleFsts: "",
       ruleFars: "",
+      // 顶层字段（sherpa-onnx JS 胶水在 OfflineTtsConfig 层读取）：
+      // 控制句子切分粒度，配合 generate 的 extra.min_char_in_sentence 使用
       maxNumSentences: 1,
     };
     tts = createOfflineTts(Module, config);
@@ -188,16 +213,21 @@ self.onmessage = async (e) => {
   } else if (msg.type === "generate") {
     if (!tts) { self.postMessage({ type: "error", id: msg.id, message: "TTS 未初始化" }); return; }
     try {
-      // 修复：3秒短参考音频 + referenceText
-      const shortRef = refAudioData.slice(0, 24000); // 1秒
-      const refTxt = "各位村民大家新年好";
+      // 按音色选择参考音频（sid → 参考音频索引，越界回退到 0）
+      const refIdx = Math.min(Math.max(parseInt(msg.sid, 10) || 0, 0), refAudios.length - 1);
+      const ref = refAudios[refIdx] || refAudios[0];
+      const refTxt = REF_AUDIOS[refIdx]?.text || REF_AUDIOS[0].text;
+      // ZipVoice 官方参数：
+      // - referenceAudio 必须用完整参考音频 + 匹配的完整转录（截断会导致克隆特征错位 → 杂音）
+      // - silenceScale 用默认 0.2（不传），0 会抹掉句间停顿导致语速急促
+      // - numSteps: 4（官方 zipvoice 推荐），extra.min_char_in_sentence: 10（官方示例）
       let audio = tts.generateWithConfig(msg.text, {
-        sid: msg.sid || 0,
         speed: msg.speed ?? 1.0, // 语速（设置页生成参数），之前漏传导致永远用默认语速
-        referenceAudio: shortRef,
-        referenceSampleRate: 24000,
+        referenceAudio: ref.audio,
+        referenceSampleRate: ref.sampleRate,
         referenceText: refTxt,
-        silenceScale: 0,
+        numSteps: 4,
+        extra: { min_char_in_sentence: 10 },
       });
       const copy = new Float32Array(audio.samples);
       self.postMessage({ type: "sherpa-onnx-tts-result", id: msg.id, samples: copy, sampleRate: audio.sampleRate }, [copy.buffer]);

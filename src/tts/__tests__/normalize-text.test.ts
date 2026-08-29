@@ -2,19 +2,19 @@ import { describe, it, expect } from "vitest";
 import { normalizeText } from "../zipvoice-engine";
 
 describe("normalizeText（OOV 字符清洗）", () => {
-  it("删除中文引号（词表 OOV 字符）", () => {
+  it("中文引号替换为逗号（保留停顿，与 prepareTextForTTS 一致）", () => {
     expect(normalizeText("她说：“你好。”")).toBe("她说：你好。");
-    expect(normalizeText("‘单引号’内容")).toBe("单引号内容");
+    expect(normalizeText("‘单引号’内容")).toBe("，单引号，内容");
   });
 
-  it("删除英文引号", () => {
-    expect(normalizeText('He said "hi"')).toBe("He said hi");
+  it("英文引号替换为逗号", () => {
+    expect(normalizeText('He said "hi"')).toBe("He said ，hi，");
   });
 
-  it("删除书名号/括号类装饰符号", () => {
-    expect(normalizeText("《红楼梦》很好看")).toBe("红楼梦很好看");
-    expect(normalizeText("【重要】通知")).toBe("重要通知");
-    expect(normalizeText("「甲」和『乙』")).toBe("甲和乙");
+  it("书名号/括号类装饰符号替换为逗号（保留停顿）；英文方括号删除", () => {
+    expect(normalizeText("《红楼梦》很好看")).toBe("，红楼梦，很好看");
+    expect(normalizeText("【重要】通知")).toBe("，重要，通知");
+    expect(normalizeText("「甲」和『乙』")).toBe("，甲，和，乙，");
   });
 
   it("删除英文方括号（matcha 词表 OOV 字符，消除 Ignore OOV 警告）", () => {
@@ -22,10 +22,10 @@ describe("normalizeText（OOV 字符清洗）", () => {
     expect(normalizeText("收到[系统]提示")).toBe("收到系统提示");
   });
 
-  it("省略号/破折号/间隔号转为空格", () => {
-    expect(normalizeText("他……走了")).toBe("他 走了");
-    expect(normalizeText("一二三——四")).toBe("一二三 四");
-    expect(normalizeText("艾米莉·勃朗特")).toBe("艾米莉 勃朗特");
+  it("连续标点清理：标点后紧跟的逗号删除", () => {
+    expect(normalizeText("一二三——四")).toBe("一二三，四");
+    expect(normalizeText("他说：“你好。”")).toBe("他说：你好。");
+    expect(normalizeText("他说：‘明天见。’")).toBe("他说：明天见。");
   });
 
   it("压缩连续空白并去除首尾", () => {
@@ -42,7 +42,7 @@ describe("normalizeText（OOV 字符清洗）", () => {
     expect(normalizeText("   ")).toBe("");
   });
 
-  it("中文引号删除后语句仍然可读", () => {
+  it("中文引号替换为逗号后语句仍然可读", () => {
     const input = "他说：“今天的天气真好。”她又说：‘明天见。’";
     expect(normalizeText(input)).toBe("他说：今天的天气真好。她又说：明天见。");
   });

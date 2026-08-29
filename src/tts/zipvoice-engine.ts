@@ -8,18 +8,12 @@ import { isCacheReady, getCachedFiles, downloadAndCache } from "./tts-cache";
 import { apiFetch } from "@/lib/api-client";
 
 // ── 模型配置 ───────────────────────────────────────────────
-// 中文语音列表（ZipVoice 音色）
+// ZipVoice 离线音色（zero-shot 克隆：音色由参考音频决定，sid 仅作索引）
+// 参考音频来自模型包 test_wavs/，参考文本必须与音频内容逐字匹配（prompt.txt）
 export const ZH_VOICES: Record<string, { name: string; gender: string }> = {
-  "0": { name: "音色 0（女声）", gender: "female" },
-  "1": { name: "音色 1（女声）", gender: "female" },
-  "2": { name: "音色 2（女声）", gender: "female" },
-  "3": { name: "音色 3（女声）", gender: "female" },
-  "4": { name: "音色 4（女声）", gender: "female" },
-  "5": { name: "音色 5（男声）", gender: "male" },
-  "6": { name: "音色 6（男声）", gender: "male" },
-  "7": { name: "音色 7（男声）", gender: "male" },
-  "8": { name: "音色 8（男声）", gender: "male" },
-  "9": { name: "音色 9（男声）", gender: "male" },
+  "0": { name: "女声 1（新闻）", gender: "female" },
+  "1": { name: "女声 2（新闻）", gender: "female" },
+  "2": { name: "男声（雷军）", gender: "male" },
 };
 
 const DEFAULT_VOICE = "0";
@@ -53,20 +47,29 @@ export function isModelLoaded(): boolean {
 }
 
 /**
- * 清洗 TTS 输入文本：删除/替换 matcha-tts 中文词表（lexicon）中不存在的
- * 装饰性符号，避免 worker 打印大量 "Ignore OOV" 警告（如中文引号 “”）。
+ * 清洗 TTS 输入文本：删除/替换词表（lexicon）中不存在的装饰性符号，
+ * 避免 worker 打印大量 "Ignore OOV" 警告。
+ * 与 text-preprocess.prepareTextForTTS 的清洗语义保持一致：
+ * 引号/书名号/破折号 → 逗号（保留停顿感），省略号/杂项 → 空格。
  * 保留句读标点（，。！？；：、）——它们用于韵律控制且在词表中。
  */
 export function normalizeText(text: string): string {
   return text
-    // 中文/英文引号：词表无此字符，直接删除（引号无语义，不影响朗读）
-    .replace(/[“”‘’"']/g, "")
-    // 书名号、括号类装饰符号（含英文方括号 []，matcha 词表无此字符）
-    .replace(/[《》〈〉「」『』【】〔〕\[\]]/g, "")
-    // 省略号/破折号/间隔号/波浪线等 → 空格（保留停顿感）
-    .replace(/[…—–·・〜～~]/g, " ")
+    // 中文/英文引号：词表无此字符，替换为逗号（与 prepareTextForTTS 一致，保留停顿）
+    .replace(/[“”‘’"']/g, "，")
+    // 书名号、括号类装饰符号 → 逗号（保留停顿）；英文方括号 [] 删除（行内装饰）
+    .replace(/[《》〈〉「」『』【】〔〕]/g, "，")
+    .replace(/[\[\]]/g, "")
+    // 省略号/间隔号/波浪线等 → 空格（保留停顿感）；破折号 → 逗号（与 prepareTextForTTS 一致）
+    .replace(/[…·・〜～~]/g, " ")
+    .replace(/[—–]/g, "，")
     // 杂项符号：竖线、下划线、星号、反引号、反斜杠等
     .replace(/[|_`*\\^]/g, " ")
+    // emoji 等装饰符号（词表无此字符）
+    .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu, " ")
+    // 连续标点清理：标点后紧跟的逗号删除（如 "：，" → "："，"。，" → "。"），
+    // 避免引号替换产生双标点朗读停顿异常
+    .replace(/([，。！？；：、])(\s*，)+/g, "$1")
     // 压缩连续空白（含全角空格 U+3000）
     .replace(/\s+/g, " ")
     .trim();

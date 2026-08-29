@@ -105,8 +105,14 @@ function loadSettings(): PersistedSettings {
     if (raw) {
       const s = JSON.parse(raw);
       // 兼容旧数据：旧版本 speed/volume/pitch 是全局的，迁移为两个引擎各自一份
+      // 兼容旧音色：ZipVoice 0-9 旧音色（0-4 女声/5-9 男声）→ 新 0-2（3 个参考音频音色）
+      let zipvoiceVoiceId = s.zipvoiceVoiceId || s.voiceId || "0";
+      const oldSid = parseInt(String(zipvoiceVoiceId), 10);
+      if (!Number.isNaN(oldSid) && (oldSid < 0 || oldSid > 2)) {
+        zipvoiceVoiceId = oldSid >= 5 ? "2" : "0"; // 旧男声→男声，旧女声→女声 1
+      }
       return {
-        zipvoiceVoiceId: s.zipvoiceVoiceId || s.voiceId || "0",
+        zipvoiceVoiceId,
         webspeechVoiceId: s.webspeechVoiceId || "",
         zipvoiceSpeed: s.zipvoiceSpeed ?? s.speed ?? 1.0,
         webspeechSpeed: s.webspeechSpeed ?? s.speed ?? 1.0,

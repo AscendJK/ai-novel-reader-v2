@@ -64,6 +64,8 @@ export function prepareTextForTTS(content: string, maxChunkLength: number = 300)
         .replace(/[''']/g, "，")
         .replace(/\s*[—–]\s*/g, "，") // 破折号替换为逗号停顿
         .replace(/[《》〈〉]/g, "，") // 书名号替换为逗号停顿
+        // 连续标点清理：标点后紧跟的逗号删除（"：，" → "："），与 zipvoice-engine.normalizeText 一致
+        .replace(/([，。！？；：、])(\s*，)+/g, "$1")
         .trim();
       // 过滤整段由方括号包裹的装饰性内容（作者的话/网站标记/占位符，
       // 如 "[大家新年好]"、"[本章完]"、"[]"）。这类内容不属于正文，

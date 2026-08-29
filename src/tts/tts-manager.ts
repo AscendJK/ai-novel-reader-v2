@@ -299,13 +299,9 @@ class ZipVoiceTTSEngine {
   private startedAt = 0;
   private currentBuffer: AudioBuffer | null = null;
   private voice = "0";
-  private playbackRate = 1.0;
   private pendingPlayResolve: (() => void) | null = null;
 
   setVoice(voiceId: string) { this.voice = voiceId; }
-
-  /** 播放倍速（与生成语速独立：生成时用设置页语速，播放时用此倍速） */
-  setPlaybackRate(rate: number) { this.playbackRate = Math.max(0.5, Math.min(3.0, rate)); }
 
   private getAudioContext(): AudioContext {
     if (!this.audioContext) this.audioContext = new AudioContext();
@@ -325,7 +321,8 @@ class ZipVoiceTTSEngine {
       const startPlayback = () => {
         const source = ctx.createBufferSource();
         source.buffer = buffer;
-        source.playbackRate.value = this.playbackRate; // 播放倍速（独立于生成语速）
+        // 播放固定 1.0 倍速：倍速已并入生成 speed（模型级变速保音高），
+        // AudioBufferSourceNode.playbackRate 是重采样会变调（花栗鼠音）
         source.connect(ctx.destination);
         this.currentSource = source;
         this.currentBuffer = buffer;
@@ -390,7 +387,7 @@ class ZipVoiceTTSEngine {
         }
         const source = ctx.createBufferSource();
         source.buffer = this.currentBuffer;
-        source.playbackRate.value = this.playbackRate; // 恢复时保持倍速
+        // 同 playOneBuffer：播放固定 1.0 倍速，倍速由生成 speed 控制（保音高）
         source.connect(ctx.destination);
         const resolve = this.pendingPlayResolve;
         source.onended = () => { this.currentSource = null; if (!this.paused) { this.currentBuffer = null; this.pendingPlayResolve = null; resolve?.(); } };
@@ -464,24 +461,27 @@ export class TTSManager {
       this.generationId++;
       this.webSpeech.stop();
       this.speakFromParagraph(para);
+    } else if (this.engine === "zipvoice" && this.zipvoice?.isSpeaking()) {
+      // ZipVoice：语速是生成参数，需用新语速重新生成当前 chunk（保音高）
+      this.restartZipVoiceFromCurrentChunk();
     }
   }
 
   /**
-   * 播放倍速（正文朗读栏，独立于设置页生成语速）。
-   * - ZipVoice：生成用设置页语速，播放时 AudioBufferSourceNode.playbackRate 生效，即时调整
+   * 播放倍速（正文朗读栏）。
+   * - ZipVoice：倍速并入生成 speed（模型级变速保音高），需重新生成当前 chunk；
+   *   不再用 AudioBufferSourceNode.playbackRate（重采样会变调）
    * - WebSpeech：最终 rate = 生成语速 × 倍速，需重新 speak
    */
   setPlaybackRate(playbackRate: number) {
     this.playbackRate = Math.max(0.5, Math.min(3.0, playbackRate));
-    if (this.engine === "zipvoice" && this.zipvoice) {
-      this.zipvoice.setPlaybackRate(this.playbackRate);
+    if (this.engine === "zipvoice" && this.zipvoice?.isSpeaking()) {
+      this.restartZipVoiceFromCurrentChunk();
     } else if (this.engine === "webspeech" && this.webSpeech.isSpeaking()) {
       const para = this.currentParagraphIndex;
       this.generationId++;
       this.webSpeech.stop();
       this.speakFromParagraph(para);
-    } else {
     }
   }
   setVolume(volume: number) { this.volume = Math.max(0, Math.min(1, volume)); }
@@ -509,6 +509,19 @@ export class TTSManager {
     }
     // 找不到则从当前 chunk 继续
     this.speakNextChunk();
+  }
+
+  /**
+   * ZipVoice 语速/倍速变更后的恢复：从当前 chunk 用新参数重新生成。
+   * ZipVoice 一次生成整个 chunk 音频（无 chunk 内段落定位），
+   * 因此从当前 chunk 开头重读，与 seekToChunk 行为一致。
+   */
+  private restartZipVoiceFromCurrentChunk(): void {
+    if (this.engine !== "zipvoice" || !this.zipvoice) return;
+    const chunkIdx = this.currentChunkIndex;
+    if (chunkIdx >= 0 && chunkIdx < this.chunks.length) {
+      this.seekToChunk(chunkIdx);
+    }
   }
 
   async speak(chunks: TTSChunk[], callbacks: TTSPlaybackCallbacks): Promise<void> {
@@ -568,7 +581,9 @@ export class TTSManager {
     if (this.engine === "zipvoice" && this.zipvoice) {
       this.callbacks.onChunkStart?.(this.currentChunkIndex, this.chunks.length, chunk.paragraphIndex);
       await new Promise(r => setTimeout(r, 0));
-      await this.zipvoice.speak(chunk.text, this.speed, {
+      // 有效语速 = 设置页生成语速 × 朗读栏播放倍速（clamp 到 sherpa-onnx 官方 0.4-3.5）
+      const effectiveSpeed = Math.max(0.4, Math.min(3.5, this.speed * this.playbackRate));
+      await this.zipvoice.speak(chunk.text, effectiveSpeed, {
         onPlay: () => {
           if (this.stopped || this.generationId !== genId) return;
           this.callbacks.onPlay?.();
