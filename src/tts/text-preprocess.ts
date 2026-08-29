@@ -21,6 +21,27 @@ export function buildOrderedParaIndices(chunks: TTSChunk[]): number[] {
 }
 
 /**
+ * 按“原始段落索引”定位所在 chunk。
+ * 优先匹配包含该段落的 chunk（组内任意段）；找不到（如段落已被过滤）时
+ * 回退到第一个起点 >= paraIndex 的 chunk；再无则回退最后一个。
+ * 用于位置恢复 / seek 跳转：避免只用组内第一段比较导致跳到下一组丢句。
+ */
+export function findChunkIndexByPara(chunks: TTSChunk[], paraIndex: number): number {
+  if (chunks.length === 0) return -1;
+  // 1) 包含该段落的 chunk（paraIndex 落在 [组首, 组尾] 区间内）
+  const contain = chunks.findIndex(c =>
+    paraIndex >= c.paragraphIndex &&
+    paraIndex <= c.paragraphIndices[c.paragraphIndices.length - 1]
+  );
+  if (contain >= 0) return contain;
+  // 2) 回退：第一个起点 >= paraIndex 的 chunk
+  const next = chunks.findIndex(c => c.paragraphIndex >= paraIndex);
+  if (next >= 0) return next;
+  // 3) 兜底：最后一个 chunk
+  return chunks.length - 1;
+}
+
+/**
  * 将章节文本分割为适合 TTS 的段落
  * - 按自然段落分割
  * - 过滤过短段落（< 5 字）

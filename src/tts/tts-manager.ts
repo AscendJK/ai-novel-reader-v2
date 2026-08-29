@@ -525,7 +525,12 @@ export class TTSManager {
         },
         onEnd: () => {
           if (this.stopped || this.generationId !== genId) return;
-          this.callbacks.onChunkEnd?.(this.currentChunkIndex, this.chunks.length, chunk.paragraphIndex);
+          // ZipVoice 每个 chunk 是一整段音频，无组内逐段追踪；
+          // 结束时传组内最后一段的原始索引，与 WebSpeech 路径（handleChunkEnded）对齐
+          const lastIdx = chunk.paragraphIndices?.length
+            ? chunk.paragraphIndices[chunk.paragraphIndices.length - 1]
+            : chunk.paragraphIndex;
+          this.callbacks.onChunkEnd?.(this.currentChunkIndex, this.chunks.length, lastIdx);
           this.currentChunkIndex++;
           this.speakNextChunk();
         },

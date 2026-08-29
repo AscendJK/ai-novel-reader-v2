@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { prepareTextForTTS, buildOrderedParaIndices } from "../text-preprocess";
+import { prepareTextForTTS, buildOrderedParaIndices, findChunkIndexByPara } from "../text-preprocess";
 
 describe("prepareTextForTTS", () => {
   it("空内容返回空数组", () => {
@@ -135,6 +135,43 @@ describe("prepareTextForTTS", () => {
       expect(ordered.indexOf(targetPara)).toBe(targetFilteredIdx);
       // 且原始索引一定是一个真实段落的索引（>=0）
       expect(targetPara).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  describe("findChunkIndexByPara（chunk 精确定位）", () => {
+    // 直接构造 chunk 分组（不依赖 prepareTextForTTS 的合并行为，聚焦定位逻辑）：
+    //   chunk0: [0,1]（合并组）
+    //   chunk1: [2]（独立段）
+    //   chunk2: [3,4]（合并组）
+    const chunks = [
+      { text: "第一段。第二段。", paragraphIndex: 0, paragraphIndices: [0, 1], paragraphBreaks: [0, 5] },
+      { text: "第三段。", paragraphIndex: 2, paragraphIndices: [2], paragraphBreaks: [0] },
+      { text: "第四段。第五段。", paragraphIndex: 3, paragraphIndices: [3, 4], paragraphBreaks: [0, 5] },
+    ];
+
+    it("定位到组内第一段", () => {
+      expect(findChunkIndexByPara(chunks, 0)).toBe(0);
+    });
+
+    it("定位到组内中间段（修复跳组丢句）", () => {
+      // 段落 1 在 [0,1] 组内：旧逻辑（只用组首比较）会跳到下一组，新逻辑应落在本组
+      expect(findChunkIndexByPara(chunks, 1)).toBe(0);
+    });
+
+    it("定位到独立段落所在组", () => {
+      expect(findChunkIndexByPara(chunks, 2)).toBe(1);
+    });
+
+    it("定位到组内末段", () => {
+      expect(findChunkIndexByPara(chunks, 4)).toBe(2);
+    });
+
+    it("段落不存在（超出范围）时回退到最后一个 chunk", () => {
+      expect(findChunkIndexByPara(chunks, 99)).toBe(2);
+    });
+
+    it("空 chunks 返回 -1", () => {
+      expect(findChunkIndexByPara([], 0)).toBe(-1);
     });
   });
 });

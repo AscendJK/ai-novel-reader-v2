@@ -6,7 +6,7 @@
 import { useRef, useCallback, useEffect, useState } from "react";
 import { useTTSStore } from "@/stores/tts-store";
 import { TTSManager, type TTSChunk } from "@/tts/tts-manager";
-import { prepareTextForTTS, buildOrderedParaIndices } from "@/tts/text-preprocess";
+import { prepareTextForTTS, buildOrderedParaIndices, findChunkIndexByPara } from "@/tts/text-preprocess";
 import { showToast } from "@/lib/toast-store";
 
 const TTS_POS_KEY = "novel-reader-tts-position";
@@ -168,8 +168,9 @@ export function useAudioPlayer({
     const savedPara = loadPosition();
     let startChunkIdx = 0;
     if (savedPara != null && savedPara > 0) {
-      const found = chunks.findIndex(c => c.paragraphIndex >= savedPara);
-      if (found >= 0) startChunkIdx = found;
+      // 精确定位：优先找“包含 savedPara 的 chunk”（组内任意段），
+      // 避免只用组内第一段比较导致恢复时跳到下一组丢句
+      startChunkIdx = findChunkIndexByPara(chunks, savedPara);
     }
     setParagraphProgress(chunks[startChunkIdx]?.paragraphIndex ?? 0, totalParaCount);
 
@@ -262,10 +263,9 @@ export function useAudioPlayer({
     const manager = getManager();
     if (manager.isPlaying() || manager.isPaused()) {
       const chunks = chunksRef.current;
-      const chunkIdx = chunks.findIndex(c => c.paragraphIndex >= paraIndex);
-      // 超出范围时定位到最后一段
+      // 精确定位所在 chunk（组内任意段），找不到时回退到最近的后续 chunk
+      const chunkIdx = findChunkIndexByPara(chunks, paraIndex);
       if (chunkIdx >= 0) manager.seekToChunk(chunkIdx);
-      else if (chunks.length > 0) manager.seekToChunk(chunks.length - 1);
     } else {
       try { localStorage.setItem(TTS_POS_KEY, JSON.stringify({ novelId, chapterIndex, paragraph: paraIndex })); } catch { /* localStorage 不可用时忽略 */ }
       play();
