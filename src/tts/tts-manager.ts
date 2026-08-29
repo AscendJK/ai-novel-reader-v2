@@ -37,6 +37,37 @@ export interface TTSPlaybackCallbacks {
 }
 
 /**
+ * 二分查找：字符位置 → paragraphBreaks 中的段落下标（两引擎共用）
+ */
+export function findParagraphByCharIndex(charIdx: number, breaks: number[]): number {
+  let lo = 0, hi = breaks.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (breaks[mid] <= charIdx) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
+/**
+ * 线性进度 → 段落原始索引（ZipVoice 用：音频匀速播放，
+ * 播放进度 × 总字符数 → 字符位置 → 段落映射）。
+ * progress 需在 [0,1] 内；totalChars ≤ 0 时按 1 处理避免除零。
+ */
+export function mapProgressToParagraph(
+  progress: number,
+  totalChars: number,
+  breaks: number[],
+  indices: number[],
+): number | null {
+  if (breaks.length === 0 || indices.length === 0) return null;
+  const p = Math.max(0, Math.min(1, progress));
+  const charPos = Math.floor(p * Math.max(1, totalChars));
+  const idx = findParagraphByCharIndex(charPos, breaks);
+  return idx >= 0 && idx < indices.length ? indices[idx] : null;
+}
+
+/**
  * Web Speech API TTS 引擎
  * 段落追踪：优先使用 onboundary 字符位置映射，检测到不可用时降级为校准语速估算
  */
@@ -97,17 +128,6 @@ class WebSpeechTTSEngine {
 
   // ── 段落追踪：字符位置映射 ──
 
-  /** 二分查找：charIndex → paragraphBreaks 中的段落索引 */
-  private findParagraphByCharIndex(charIdx: number, breaks: number[]): number {
-    let lo = 0, hi = breaks.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1;
-      if (breaks[mid] <= charIdx) lo = mid;
-      else hi = mid - 1;
-    }
-    return lo;
-  }
-
   /** 从已用时间估算当前字符位置，再映射到段落（降级方案） */
   private estimateParagraphFromTime(
     elapsedMs: number, text: string, speed: number,
@@ -115,7 +135,7 @@ class WebSpeechTTSEngine {
   ): number {
     const charsPerSec = this.calibratedCharsPerSec * Math.max(0.5, Math.min(3, speed));
     const charPos = Math.min(Math.floor((elapsedMs / 1000) * charsPerSec), text.length - 1);
-    return indices[this.findParagraphByCharIndex(charPos, breaks)];
+    return indices[findParagraphByCharIndex(charPos, breaks)];
   }
 
   /** 启动降级定时器（onboundary 不可用时使用） */
@@ -175,7 +195,7 @@ class WebSpeechTTSEngine {
       }
 
       // 字符位置 → 段落映射（二分查找）
-      const paraIdx = this.findParagraphByCharIndex(e.charIndex, breaks);
+      const paraIdx = findParagraphByCharIndex(e.charIndex, breaks);
       if (paraIdx >= 0 && paraIdx < indices.length) {
         onParagraphChange(indices[paraIdx]);
       }
@@ -304,6 +324,12 @@ class ZipVoiceTTSEngine {
   private currentBuffer: AudioBuffer | null = null;
   private voice = "45";
   private pendingPlayResolve: (() => void) | null = null;
+  // 段落追踪状态（基于音频播放时间的线性估算）
+  private paraTimer: ReturnType<typeof setInterval> | null = null;
+  private trackText = "";
+  private trackBreaks: number[] | null = null;
+  private trackIndices: number[] | null = null;
+  private trackOnParagraphChange: ((paraIdx: number) => void) | null = null;
 
   setVoice(voiceId: string) { this.voice = voiceId; }
 
@@ -332,6 +358,46 @@ class ZipVoiceTTSEngine {
     }
   }
 
+  /**
+   * 启动 chunk 内逐段高亮：音频匀速播放，播放进度 × 总字符数 →
+   * 字符位置 → 段落映射。与 Web Speech 的 onboundary 逐句高亮对齐。
+   */
+  private startParagraphTracking(
+    buffer: AudioBuffer, text: string,
+    breaks: number[], indices: number[],
+    onParagraphChange: (paraIdx: number) => void,
+  ): void {
+    this.stopParagraphTracking();
+    this.trackText = text;
+    this.trackBreaks = breaks;
+    this.trackIndices = indices;
+    this.trackOnParagraphChange = onParagraphChange;
+    const ctx = this.getAudioContext();
+    this.paraTimer = setInterval(() => {
+      // 暂停/未播放时不推进；currentSource 被 stop（暂停）时跳过
+      if (this.paused || !this.currentSource) return;
+      const elapsed = ctx.currentTime - this.startedAt;
+      if (elapsed < 0) return;
+      const progress = buffer.duration > 0 ? Math.min(elapsed / buffer.duration, 1) : 1;
+      const paraIdx = mapProgressToParagraph(progress, text.length, breaks, indices);
+      if (paraIdx !== null) onParagraphChange(paraIdx);
+    }, 200);
+  }
+
+  private stopParagraphTracking(): void {
+    if (this.paraTimer) { clearInterval(this.paraTimer); this.paraTimer = null; }
+  }
+
+  /** 恢复播放时重启段落追踪（startedAt 已在 resume 中修正） */
+  private restartParagraphTracking(buffer: AudioBuffer): void {
+    if (this.trackBreaks && this.trackIndices && this.trackOnParagraphChange) {
+      this.startParagraphTracking(
+        buffer, this.trackText, this.trackBreaks, this.trackIndices,
+        this.trackOnParagraphChange,
+      );
+    }
+  }
+
   private playOneBuffer(buffer: AudioBuffer): Promise<void> {
     return new Promise((resolve) => {
       const ctx = this.getAudioContext();
@@ -356,6 +422,7 @@ class ZipVoiceTTSEngine {
         this.paused = false;
         source.onended = () => {
           this.currentSource = null;
+          this.stopParagraphTracking();
           if (!this.paused) { this.currentBuffer = null; this.pendingPlayResolve = null; resolve(); }
         };
         try { source.start(); } catch { resolve(); } // context 已关闭等异常时不要卡死
@@ -373,7 +440,11 @@ class ZipVoiceTTSEngine {
     });
   }
 
-  async speak(text: string, speed: number, callbacks: TTSPlaybackCallbacks, isCancelled?: () => boolean): Promise<void> {
+  async speak(
+    text: string, speed: number, callbacks: TTSPlaybackCallbacks, isCancelled?: () => boolean,
+    paragraphBreaks?: number[], paragraphIndices?: number[],
+    onParagraphChange?: (paraIdx: number) => void,
+  ): Promise<void> {
     this.stop();
     this.stopped = false;
     const ctx = this.getAudioContext();
@@ -394,6 +465,10 @@ class ZipVoiceTTSEngine {
         const buffer = ctx.createBuffer(1, audioData.length, 24000);
         buffer.copyToChannel(new Float32Array(audioData), 0);
         if (firstChunk) { firstChunk = false; callbacks.onPlay?.(); }
+        // 多段 chunk：播放期间按音频进度逐段高亮（与 Web Speech onboundary 对齐）
+        if (paragraphBreaks && paragraphIndices && paragraphIndices.length > 1 && onParagraphChange) {
+          this.startParagraphTracking(buffer, text, paragraphBreaks, paragraphIndices, onParagraphChange);
+        }
         await this.playOneBuffer(buffer);
       });
       if (!this.stopped) callbacks.onEnd?.();
@@ -413,6 +488,7 @@ class ZipVoiceTTSEngine {
       } catch { /* already stopped */ }
       this.currentSource = null;
       this.paused = true;
+      this.stopParagraphTracking();
     }
   }
 
@@ -428,17 +504,24 @@ class ZipVoiceTTSEngine {
         // 同 playOneBuffer：播放固定 1.0 倍速，倍速由生成 speed 控制（保音高）
         source.connect(ctx.destination);
         const resolve = this.pendingPlayResolve;
-        source.onended = () => { this.currentSource = null; if (!this.paused) { this.currentBuffer = null; this.pendingPlayResolve = null; resolve?.(); } };
+        source.onended = () => {
+          this.currentSource = null;
+          this.stopParagraphTracking();
+          if (!this.paused) { this.currentBuffer = null; this.pendingPlayResolve = null; resolve?.(); }
+        };
         this.currentSource = source;
         this.startedAt = ctx.currentTime - this.pausedAt;
         this.paused = false;
         try { source.start(0, this.pausedAt); } catch { resolve?.(); }
+        // 恢复播放：重启段落追踪（startedAt 已修正，进度从暂停点继续）
+        this.restartParagraphTracking(this.currentBuffer);
       } catch { /* context closed, buffer detached */ }
     }
   }
 
   stop(): void {
     this.stopped = true;
+    this.stopParagraphTracking();
     if (this.currentSource) { try { this.currentSource.stop(); } catch { /* 已停止的 source 忽略 */ } this.currentSource = null; }
     if (this.pendingPlayResolve) { this.pendingPlayResolve(); this.pendingPlayResolve = null; }
     this.currentBuffer = null;
@@ -659,7 +742,14 @@ export class TTSManager {
           if (this.stopped || this.generationId !== genId) return;
           this.callbacks.onError?.(err);
         },
-      }, () => this.stopped || this.generationId !== genId);
+      }, () => this.stopped || this.generationId !== genId,
+        // 多段 chunk：播放期间按音频进度逐段高亮（与 Web Speech 的 onboundary 对齐）
+        chunk.paragraphBreaks, chunk.paragraphIndices,
+        (paraIdx) => {
+          if (this.stopped || this.generationId !== genId) return;
+          this.currentParagraphIndex = paraIdx;
+          this.callbacks.onParagraphChange?.(paraIdx);
+        });
     } else {
       // 顺序播放：chunk 完成后立即播放下一个（不使用预队列）
       // 最终语速 = 设置页生成语速 × 正文朗读栏播放倍速
