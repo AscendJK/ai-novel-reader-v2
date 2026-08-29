@@ -3,15 +3,23 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 import path from "path";
 import fs from "fs";
+import { execSync } from "child_process";
 
 // GitHub Pages 部署路径（根据仓库名调整）
 const BASE_PATH = "/ai-novel-reader-v2/";
 const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf-8"));
 
+// 构建时注入当前 git commit hash（用于线上版本排查；非 git 环境时回退）
+let gitHash = "unknown";
+try {
+  gitHash = execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim();
+} catch { /* 非 git 环境忽略 */ }
+
 export default defineConfig({
   base: BASE_PATH,
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
+    __GIT_HASH__: JSON.stringify(gitHash),
   },
   plugins: [
     // sherpa-onnx 需要正确的 MIME 类型和 CORP header
