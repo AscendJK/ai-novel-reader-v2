@@ -40,6 +40,13 @@ async function init(files, origin) {
     const dataUrl = URL.createObjectURL(new Blob([files["sherpa-onnx-wasm-main-tts.data"]], { type: "application/octet-stream" }));
 
     // 2. 补全 Module 配置后加载 classic 胶水
+    // 在 importScripts 之前预设 onRuntimeInitialized（Emscripten 只在胶水执行
+    // 期间读取该回调；data 文件通过 runDependency 异步加载，runtime 就绪后触发）
+    let runtimeReadyResolve, runtimeReadyReject;
+    const runtimeReady = new Promise((resolve, reject) => { runtimeReadyResolve = resolve; runtimeReadyReject = reject; });
+    const runtimeTimer = setTimeout(() => runtimeReadyReject(new Error("Emscripten runtime 初始化超时 (60s)")), 60000);
+    self.Module.onRuntimeInitialized = () => { clearTimeout(runtimeTimer); runtimeReadyResolve(); };
+
     self.Module.wasmBinary = files["sherpa-onnx-wasm-main-tts.wasm"];
     self.Module.getPreloadedPackage = () => files["sherpa-onnx-wasm-main-tts.data"];
     self.Module.locateFile = (filePath) => {
@@ -53,6 +60,17 @@ async function init(files, origin) {
     importScripts(ttsApiUrl);     // 暴露 createOfflineTts
     log("TTS API 就绪");
     const Module = self.Module;
+
+    // 3. 等待 Emscripten runtime 就绪（wasm 实例化完成）
+    // 1.13.6 的 data 文件（espeak-ng-data）通过 runDependency 异步加载，
+    // 在 runtime 就绪前 HEAP8 等内存视图未定义，提前 FS_createDataFile 会报
+    // "Cannot read properties of undefined (reading 'buffer')"。
+    if (!Module.calledRun && !Module.runtimeInitialized) {
+      await runtimeReady;
+    } else {
+      clearTimeout(runtimeTimer);
+    }
+    log("Emscripten runtime 就绪");
 
     // 3. 将模型文件写入 Emscripten 虚拟文件系统（/api/rag/tts/model/）
     log("写入模型文件到虚拟文件系统...");
