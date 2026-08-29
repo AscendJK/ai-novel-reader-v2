@@ -22,6 +22,17 @@ async function init(files, origin) {
   try {
     log("初始化 (Kokoro + 1.13.6 classic)...");
 
+    // 诊断：确认浏览器拿到的引擎 JS 文件是 classic（var Module）还是 ESM（import.meta）
+    try {
+      const decoder = new TextDecoder();
+      const mainJs = files["sherpa-onnx-wasm-main-tts.js"];
+      const mainStr = decoder.decode(mainJs.slice(0, 512));
+      const ttsJs = files["sherpa-onnx-tts.js"];
+      const ttsStr = decoder.decode(ttsJs.slice(0, 256));
+      log(`诊断 main-tts.js: ${mainJs.byteLength}B 开头="${mainStr.slice(0, 40).replace(/\n/g, " ")}" 含import.meta=${mainStr.includes("import.meta")}`);
+      log(`诊断 tts.js: ${ttsJs.byteLength}B 开头="${ttsStr.slice(0, 40).replace(/\n/g, " ")}"`);
+    } catch (de) { log("诊断日志失败: " + de.message); }
+
     // 1. 为 JS/WASM/data 文件创建 Blob URL
     const wasmMainJsUrl = URL.createObjectURL(new Blob([files["sherpa-onnx-wasm-main-tts.js"]], { type: "application/javascript" }));
     const ttsApiUrl = URL.createObjectURL(new Blob([files["sherpa-onnx-tts.js"]], { type: "application/javascript" }));

@@ -10,9 +10,12 @@ const DB_VERSION = 1;
 const STORE_NAME = "files";
 
 // 缓存文件列表（key: 文件名, value: ArrayBuffer）
-// 引擎升级到 Kokoro v1.0 后，key 加 kokoro-v1/ 前缀强制刷新浏览器旧缓存
-//（旧 ZipVoice 引擎同名 key 缓存了 ESM 版 js/完整版 data，复用会加载失败）
-const CACHE_PREFIX = "kokoro-v1/";
+// 引擎升级到 Kokoro v1.0 后，key 加 kokoro-v2/ 前缀强制刷新浏览器旧缓存。
+// v2：v1 前缀缓存可能已存入被 HTTP 强缓存污染的旧 ESM 文件，再升级一次。
+const CACHE_PREFIX = "kokoro-v2/";
+// 下载 URL 的版本参数：与 CACHE_PREFIX 同步，绕开浏览器 HTTP 强缓存
+//（服务器 serveFile 已改 no-cache，此为双保险）
+const CACHE_URL_VERSION = 2;
 const CACHE_FILES = [
   // WASM 引擎 + espeak-ng-data（TTS 需要的语音数据，精简 data 17MB）
   "sherpa-onnx-wasm-main-tts.js",
@@ -170,6 +173,8 @@ export function downloadAndCache(
     } else {
       apiPath = `/api/rag/tts/model/${name}`;
     }
+    // 版本参数：URL 变化绕开浏览器 HTTP 强缓存（引擎/模型升级时同步递增 CACHE_URL_VERSION）
+    apiPath += `?v=${CACHE_URL_VERSION}`;
     const response = await apiFetch(apiPath);
     if (!response.ok) throw new Error(`下载 ${file} 失败: HTTP ${response.status}`);
 

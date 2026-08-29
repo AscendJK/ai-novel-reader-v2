@@ -777,7 +777,10 @@ function serveFile(res, filePath, contentType) {
   const stat = fs.statSync(filePath);
   res.setHeader("Content-Type", contentType);
   res.setHeader("Content-Length", stat.size);
-  res.setHeader("Cache-Control", "public, max-age=604800");
+  // no-cache：文件内容可能随引擎/模型升级变化，浏览器 HTTP 强缓存（7 天）
+  // 会导致升级后仍拿到旧文件（曾引发 ESM/classic 加载错误）。
+  // 持久化由前端 IndexedDB 承担，这里只需每次重新验证。
+  res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
   const stream = fs.createReadStream(filePath);
   stream.on("error", (err) => {
