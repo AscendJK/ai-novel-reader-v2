@@ -52,6 +52,26 @@ export function isModelLoaded(): boolean {
   return modelLoaded && !disposed;
 }
 
+/**
+ * 清洗 TTS 输入文本：删除/替换 matcha-tts 中文词表（lexicon）中不存在的
+ * 装饰性符号，避免 worker 打印大量 "Ignore OOV" 警告（如中文引号 “”）。
+ * 保留句读标点（，。！？；：、）——它们用于韵律控制且在词表中。
+ */
+export function normalizeText(text: string): string {
+  return text
+    // 中文/英文引号：词表无此字符，直接删除（引号无语义，不影响朗读）
+    .replace(/[“”‘’"']/g, "")
+    // 书名号、括号类装饰符号
+    .replace(/[《》〈〉「」『』【】〔〕]/g, "")
+    // 省略号/破折号/间隔号/波浪线等 → 空格（保留停顿感）
+    .replace(/[…—–·・〜～~]/g, " ")
+    // 杂项符号：竖线、下划线、星号、反引号、反斜杠等
+    .replace(/[|_`*\\^]/g, " ")
+    // 压缩连续空白（含全角空格 U+3000）
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 // ── Worker 生命周期 ────────────────────────────────────────
 
 async function getWorker(): Promise<Worker> {
@@ -351,6 +371,7 @@ export async function generateAudio(
     throw new Error("ZipVoice 模型未加载，请先调用 loadModel()");
   }
 
+  const cleanText = normalizeText(text);
   const speed = options?.speed ?? 1.0;
   const voiceId = options?.voice || DEFAULT_VOICE;
   const sid = parseInt(voiceId, 10) || 0;
@@ -364,7 +385,7 @@ export async function generateAudio(
       reject(new Error("音频生成超时"));
     }, GENERATE_TIMEOUT_MS);
     pendingRequests.set(id, { resolve, reject, timer });
-    worker.postMessage({ type: "generate", id, text, sid, speed });
+    worker.postMessage({ type: "generate", id, text: cleanText, sid, speed });
   });
 
   await onChunk?.(audio);
@@ -382,6 +403,7 @@ export async function generateAudioFull(
     throw new Error("ZipVoice 模型未加载，请先调用 loadModel()");
   }
 
+  const cleanText = normalizeText(text);
   const speed = options?.speed ?? 1.0;
   const voiceId = options?.voice || DEFAULT_VOICE;
   const sid = parseInt(voiceId, 10) || 0;
@@ -394,7 +416,7 @@ export async function generateAudioFull(
       reject(new Error("音频生成超时"));
     }, GENERATE_TIMEOUT_MS);
     pendingRequests.set(id, { resolve, reject, timer });
-    worker.postMessage({ type: "generate", id, text, sid, speed });
+    worker.postMessage({ type: "generate", id, text: cleanText, sid, speed });
   });
 
   return { audio, sampleRate: SAMPLE_RATE };
