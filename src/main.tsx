@@ -17,11 +17,12 @@ const updateSW = registerSW({
     window.dispatchEvent(new CustomEvent("sw-offline-ready"));
   },
   onRegisteredSW(_swUrl, registration) {
-    // COI：首次注册后 reload 一次，让 crossOriginIsolated（COOP/COEP 头）生效。
-    // sw.js 首次安装时尚未控制页面，导航未被拦截，SAB 不可用；
-    // reload 后 SW 控制页面 → COI 头生效 → SharedArrayBuffer 可用（ZipVoice）。
+    // COI：页面必须成为 crossOriginIsolated（COOP/COEP 头由 SW 注入），
+    // SharedArrayBuffer 才可用（sherpa-onnx WASM 是 SHARED_MEMORY 构建）。
+    // SW 首次安装时未控制页面、或更新后导航未被拦截时，COI 不会生效，
+    // 此时 reload 一次让 SW 接管（sessionStorage 防循环）。
     try {
-      if (!sessionStorage.getItem("coi-reloaded") && registration && !navigator.serviceWorker.controller) {
+      if (!sessionStorage.getItem("coi-reloaded") && registration && !window.crossOriginIsolated) {
         sessionStorage.setItem("coi-reloaded", "1");
         window.location.reload();
       }

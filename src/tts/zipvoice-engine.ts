@@ -34,6 +34,8 @@ let disposed = false;
 let loadingPromise: Promise<void> | null = null;
 let nextRequestId = 0;
 const pendingRequests = new Map<number, { resolve: (audio: Float32Array) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+// 当前等待 worker ready 的 resolve/reject（供 onerror 快速失败，避免卡 10 分钟超时）
+let readyWaiter: { resolve: () => void; reject: (err: Error) => void } | null = null;
 
 export interface ZipVoiceGenerateOptions {
   voice?: string;
@@ -58,9 +60,23 @@ function getWorker(): Worker {
     ttsWorker = new Worker(new URL(base + "sherpa-tts/sherpa-onnx-tts.worker.js", window.location.origin));
     ttsWorker.onmessage = handleWorkerMessage;
     ttsWorker.onerror = (e) => {
+      // 完整诊断信息：message 为空通常表示脚本 fetch 失败（404/CSP/COEP/网络）
+      const detail = {
+        message: e.message,
+        filename: e.filename,
+        lineno: e.lineno,
+        colno: e.colno,
+        error: e.error ? String(e.error) : null,
+        crossOriginIsolated: typeof window !== "undefined" ? window.crossOriginIsolated : undefined,
+        hasSAB: typeof SharedArrayBuffer !== "undefined",
+      };
       const msg = e.message || e.error?.message || `Worker 加载失败 (${e.filename || "?"}:${e.lineno || "?"})`;
-      console.error("[TTS Worker] error:", msg, e);
+      console.error("[TTS Worker] error:", msg, detail);
       modelLoaded = false;
+      // 快速失败当前等待 ready 的流程（loadModel 会自动重试）
+      const waiter = readyWaiter;
+      readyWaiter = null;
+      if (waiter) waiter.reject(new Error(msg));
       for (const [, p] of pendingRequests) {
         clearTimeout(p.timer);
         p.reject(new Error(msg));
@@ -69,6 +85,60 @@ function getWorker(): Worker {
     };
   }
   return ttsWorker;
+}
+
+/**
+ * 创建 Worker 并发送 init（含文件数据），等待 ready。
+ * files 会被 transfer（零拷贝），重试时调用方需传入未 detach 的 buffer。
+ */
+async function initWorker(files: Map<string, ArrayBuffer>): Promise<void> {
+  const w = getWorker();
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      readyWaiter = null;
+      w.removeEventListener("message", handler);
+      try { w.terminate(); } catch {}
+      ttsWorker = null;
+      modelLoaded = false;
+      reject(new Error("模型加载超时（10分钟）"));
+    }, 600000);
+    const handler = (e: MessageEvent) => {
+      if (e.data.type === "sherpa-onnx-tts-ready") {
+        clearTimeout(timeout);
+        w.removeEventListener("message", handler);
+        readyWaiter = null;
+        modelLoaded = true;
+        resolve();
+      } else if (e.data.type === "error") {
+        clearTimeout(timeout);
+        w.removeEventListener("message", handler);
+        readyWaiter = null;
+        try { w.terminate(); } catch {}
+        ttsWorker = null;
+        modelLoaded = false;
+        reject(new Error(e.data.message));
+      }
+    };
+    readyWaiter = { resolve, reject };
+    w.addEventListener("message", handler);
+
+    // 构造 files 对象，用 transfer 传输大文件（零拷贝）。
+    // 注意：slice(0) 拷贝一份，避免重试时原 buffer 已被 detach。
+    const filesObj: Record<string, ArrayBuffer> = {};
+    const transferables: ArrayBuffer[] = [];
+    for (const [key, value] of files) {
+      const copy = value.slice(0);
+      filesObj[key] = copy;
+      transferables.push(copy);
+    }
+    // 传递页面 origin 和模型基础路径给 Worker
+    w.postMessage({
+      type: "init",
+      files: filesObj,
+      pageOrigin: window.location.origin,
+      modelBase: "/api/rag/tts/model",
+    }, transferables);
+  });
 }
 
 function handleWorkerMessage(e: MessageEvent): void {
@@ -229,49 +299,23 @@ export async function loadModel(
       const files = await getCachedFiles();
       console.log("[TTS] 从 IndexedDB 加载", files.size, "个文件");
 
-      // 5. 创建 Worker 并发送文件数据
-      const w = getWorker();
+      // 5. 创建 Worker 并发送文件数据（失败自动重试一次）
       options?.onProgress?.(85);
-
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          w.terminate();
+      let initError: Error | null = null;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          await initWorker(files);
+          initError = null;
+          break;
+        } catch (err) {
+          initError = err instanceof Error ? err : new Error(String(err));
+          console.warn(`[TTS] Worker 初始化失败（第 ${attempt} 次），${attempt < 2 ? "自动重试" : "放弃"}: ${initError.message}`);
+          try { ttsWorker?.terminate(); } catch {}
           ttsWorker = null;
           modelLoaded = false;
-          reject(new Error("模型加载超时（10分钟）"));
-        }, 600000);
-        const handler = (e: MessageEvent) => {
-          if (e.data.type === "sherpa-onnx-tts-ready") {
-            clearTimeout(timeout);
-            w.removeEventListener("message", handler);
-            modelLoaded = true;
-            resolve();
-          } else if (e.data.type === "error") {
-            clearTimeout(timeout);
-            w.removeEventListener("message", handler);
-            w.terminate();
-            ttsWorker = null;
-            modelLoaded = false;
-            reject(new Error(e.data.message));
-          }
-        };
-        w.addEventListener("message", handler);
-
-        // 构造 files 对象，用 transfer 传输大文件（零拷贝）
-        const filesObj: Record<string, ArrayBuffer> = {};
-        const transferables: ArrayBuffer[] = [];
-        for (const [key, value] of files) {
-          filesObj[key] = value;
-          transferables.push(value);
         }
-        // 传递页面 origin 和模型基础路径给 Worker
-        w.postMessage({
-          type: "init",
-          files: filesObj,
-          pageOrigin: window.location.origin,
-          modelBase: "/api/rag/tts/model",
-        }, transferables);
-      });
+      }
+      if (initError) throw initError;
 
       options?.onProgress?.(100);
     } catch (err) {

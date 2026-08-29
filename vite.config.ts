@@ -52,6 +52,10 @@ export default defineConfig({
       registerType: "prompt",
       workbox: {
         globPatterns: ["**/*.{js,css,html,svg,woff2}"],
+        // TTS worker 不走 precache：precache 用 Cache Storage 响应加载 worker
+        // 脚本，在 COEP: credentialless 下可能被拒绝（缓存响应无 CORP 头），
+        // 导致 Worker 加载失败。走网络由 GitHub Pages 直出（200）更可靠。
+        globIgnores: ["**/sherpa-tts/**"],
         runtimeCaching: [
           // Model files are downloaded through backend proxy, not from GitHub Pages
           // Don't cache /models/ paths to avoid interfering with the fetch interceptor
