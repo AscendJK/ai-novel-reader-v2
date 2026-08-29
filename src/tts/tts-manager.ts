@@ -4,7 +4,7 @@
  * 支持流式播放（边生成边播放 + 预生成下一章）
  */
 
-import { loadModel, isModelLoaded, generateAudio } from "./zipvoice-engine";
+import { loadModel, isModelLoaded, generateAudio, resetWorker } from "./zipvoice-engine";
 
 export type TTSEngine = "zipvoice" | "webspeech";
 
@@ -319,6 +319,14 @@ class ZipVoiceTTSEngine {
     return new Promise((resolve) => {
       const ctx = this.getAudioContext();
       const startPlayback = () => {
+        // 自动播放策略：resume 被拒时 context 仍是 suspended，
+        // source.start() 静默失败（不发声也不触发 onended）→ promise 永不 resolve → 朗读链卡死。
+        // 此时放弃该 chunk 并 resolve，避免整章无声卡死。
+        if (ctx.state === "suspended") {
+          console.warn("[TTS] AudioContext 无法恢复（自动播放策略），跳过该 chunk");
+          resolve();
+          return;
+        }
         const source = ctx.createBufferSource();
         source.buffer = buffer;
         // 播放固定 1.0 倍速：倍速已并入生成 speed（模型级变速保音高），
@@ -337,23 +345,34 @@ class ZipVoiceTTSEngine {
         this.pendingPlayResolve = resolve;
       };
       if (ctx.state === "suspended") {
-        // resume 被拒（无用户手势）时也继续 startPlayback，避免 promise 永不 resolve 卡死
-        ctx.resume().then(startPlayback).catch(() => startPlayback());
+        ctx.resume().then(() => {
+          if (ctx.state === "running") startPlayback();
+          else { console.warn("[TTS] AudioContext.resume 后仍非 running，跳过该 chunk"); resolve(); }
+        }).catch(() => {
+          console.warn("[TTS] AudioContext.resume 被拒绝，跳过该 chunk");
+          resolve();
+        });
       } else startPlayback();
     });
   }
 
-  async speak(text: string, speed: number, callbacks: TTSPlaybackCallbacks): Promise<void> {
+  async speak(text: string, speed: number, callbacks: TTSPlaybackCallbacks, isCancelled?: () => boolean): Promise<void> {
     this.stop();
     this.stopped = false;
     const ctx = this.getAudioContext();
     if (ctx.state === "suspended") {
       try { await ctx.resume(); } catch { /* 自动播放策略拒绝，继续尝试 */ }
+      if (ctx.state !== "running") {
+        // 无法出声：直接报错而非静默跳过所有 chunk（避免朗读瞬间“播完”触发自动翻章）
+        callbacks.onError?.("浏览器阻止了自动播放，请点击页面任意位置后重试");
+        return;
+      }
     }
     let firstChunk = true;
     try {
       await generateAudio(text, { voice: this.voice, speed }, async (audioData) => {
-        if (this.stopped) return;
+        // 双重防护：引擎内部 stopped（主动停止）+ 会话失效（停止后重开的旧结果串扰）
+        if (this.stopped || isCancelled?.()) return;
         const buffer = ctx.createBuffer(1, audioData.length, 24000);
         buffer.copyToChannel(new Float32Array(audioData), 0);
         if (firstChunk) { firstChunk = false; callbacks.onPlay?.(); }
@@ -361,6 +380,7 @@ class ZipVoiceTTSEngine {
       });
       if (!this.stopped) callbacks.onEnd?.();
     } catch (err) {
+      if (this.stopped) return; // 主动停止（resetWorker reject）导致的取消，静默丢弃
       const msg = err instanceof Error ? err.message : String(err);
       callbacks.onError?.(`音频生成失败: ${msg}`);
     }
@@ -606,7 +626,7 @@ export class TTSManager {
           if (this.stopped || this.generationId !== genId) return;
           this.callbacks.onError?.(err);
         },
-      });
+      }, () => this.stopped || this.generationId !== genId);
     } else {
       // 顺序播放：chunk 完成后立即播放下一个（不使用预队列）
       // 最终语速 = 设置页生成语速 × 正文朗读栏播放倍速
@@ -673,6 +693,9 @@ export class TTSManager {
     this.currentParagraphIndex = 0;
     if (this.zipvoice) this.zipvoice.stop();
     this.webSpeech.stop();
+    // 立即中断 worker 推理：wasm 同步推理无法取消单次任务，
+    // 只能 terminate worker 让 CPU 立刻释放；结果也不会再回来（pending 已 reject）
+    resetWorker();
     this.callbacks.onStop?.();
   }
 
@@ -713,6 +736,8 @@ export class TTSManager {
     this.generationId++;
     if (this.zipvoice) { this.zipvoice.destroy(); this.zipvoice = null; }
     this.webSpeech.destroy();
+    // 组件卸载：中断 worker 推理，避免页面切走后 CPU 仍在跑
+    resetWorker();
     this.callbacks.onStop?.();
   }
 }

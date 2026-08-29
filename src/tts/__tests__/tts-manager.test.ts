@@ -5,6 +5,7 @@ vi.mock("../zipvoice-engine", () => ({
   isModelLoaded: () => true,
   loadModel: vi.fn(async () => {}),
   generateAudio: vi.fn(async () => {}),
+  resetWorker: vi.fn(),
 }));
 
 // ── Mock 浏览器 Web Speech API ──

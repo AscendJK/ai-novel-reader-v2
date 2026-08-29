@@ -436,7 +436,9 @@ export async function generateAudioFull(
   const id = nextRequestId++;
   const worker = await getWorker();
   const t0 = performance.now();
-  console.log(`[TTS] 请求生成(完整预览) #${id}: ${cleanText.length} 字, voice=${voiceId}(sid=${sid}), speed=${speed}, 超时 ${GENERATE_TIMEOUT_MS / 1000}s`);
+  // 与 generateAudio 一致：动态超时（每字最多 4s，下限 120s）
+  const timeoutMs = Math.max(GENERATE_TIMEOUT_MS, cleanText.length * 4000);
+  console.log(`[TTS] 请求生成(完整预览) #${id}: ${cleanText.length} 字, voice=${voiceId}(sid=${sid}), speed=${speed}, 超时 ${(timeoutMs / 1000).toFixed(0)}s`);
   // zipvoice 无逐步进度回调，用时间推进展示生成进度（每 10s 一条）
   const progressTimer = setInterval(() => {
     console.log(`[TTS] ⏳ 生成中(完整预览) #${id}: 已等待 ${((performance.now() - t0) / 1000).toFixed(0)}s`);
@@ -448,7 +450,7 @@ export async function generateAudioFull(
         pendingRequests.delete(id);
         console.warn(`[TTS] 生成超时(完整预览) #${id}: ${((performance.now() - t0) / 1000).toFixed(1)}s 未返回`);
         reject(new Error("音频生成超时"));
-      }, GENERATE_TIMEOUT_MS);
+      }, timeoutMs);
       pendingRequests.set(id, { resolve, reject, timer });
       worker.postMessage({ type: "generate", id, text: cleanText, sid, speed });
     });
@@ -462,19 +464,28 @@ export async function generateAudioFull(
 
 // ── 释放 ───────────────────────────────────────────────────
 
-export function dispose(): void {
-  disposed = true;
+/**
+ * 中断所有进行中的生成并销毁当前 worker（停止朗读时调用）。
+ * sherpa-onnx wasm 推理是同步阻塞的，无法取消单次推理，
+ * 只能 terminate worker 立即中断 CPU 占用；结果也不会再回来。
+ * 下次朗读会重新初始化 worker（模型文件来自缓存，约 3-5 秒）。
+ */
+export function resetWorker(): void {
   modelLoaded = false;
+  loadingPromise = null;
+  readyWaiter = null;
   if (ttsWorker) {
-    ttsWorker.postMessage({ type: "dispose" });
-    ttsWorker.terminate();
+    try { ttsWorker.terminate(); } catch { /* 已销毁的 worker 忽略 */ }
     ttsWorker = null;
   }
-  // H7 fix: 清理 loadingPromise，避免 stale rejected promise
-  loadingPromise = null;
   for (const [, p] of pendingRequests) {
     clearTimeout(p.timer);
-    p.reject(new Error("TTS disposed"));
+    p.reject(new Error("已停止"));
   }
   pendingRequests.clear();
+}
+
+export function dispose(): void {
+  disposed = true;
+  resetWorker();
 }
