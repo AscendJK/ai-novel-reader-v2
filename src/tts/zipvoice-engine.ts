@@ -381,15 +381,19 @@ export async function generateAudio(
 
   const id = nextRequestId++;
   const worker = await getWorker();
+  const t0 = performance.now();
+  console.log(`[TTS] 请求生成 #${id}: ${cleanText.length} 字, voice=${voiceId}(sid=${sid}), speed=${speed}, 超时 ${GENERATE_TIMEOUT_MS / 1000}s`);
   const audio = await new Promise<Float32Array>((resolve, reject) => {
     // H5 fix: 生成超时
     const timer = setTimeout(() => {
       pendingRequests.delete(id);
+      console.warn(`[TTS] 生成超时 #${id}: ${((performance.now() - t0) / 1000).toFixed(1)}s 未返回，已放弃该 chunk`);
       reject(new Error("音频生成超时"));
     }, GENERATE_TIMEOUT_MS);
     pendingRequests.set(id, { resolve, reject, timer });
     worker.postMessage({ type: "generate", id, text: cleanText, sid, speed });
   });
+  console.log(`[TTS] 生成完成 #${id}: ${audio.length} samples ≈ ${(audio.length / SAMPLE_RATE).toFixed(1)}s 音频, 耗时 ${((performance.now() - t0) / 1000).toFixed(1)}s`);
 
   await onChunk?.(audio);
 }
@@ -413,14 +417,18 @@ export async function generateAudioFull(
 
   const id = nextRequestId++;
   const worker = await getWorker();
+  const t0 = performance.now();
+  console.log(`[TTS] 请求生成(完整预览) #${id}: ${cleanText.length} 字, voice=${voiceId}(sid=${sid}), speed=${speed}, 超时 ${GENERATE_TIMEOUT_MS / 1000}s`);
   const audio = await new Promise<Float32Array>((resolve, reject) => {
     const timer = setTimeout(() => {
       pendingRequests.delete(id);
+      console.warn(`[TTS] 生成超时(完整预览) #${id}: ${((performance.now() - t0) / 1000).toFixed(1)}s 未返回`);
       reject(new Error("音频生成超时"));
     }, GENERATE_TIMEOUT_MS);
     pendingRequests.set(id, { resolve, reject, timer });
     worker.postMessage({ type: "generate", id, text: cleanText, sid, speed });
   });
+  console.log(`[TTS] 生成完成(完整预览) #${id}: ${audio.length} samples ≈ ${(audio.length / SAMPLE_RATE).toFixed(1)}s 音频, 耗时 ${((performance.now() - t0) / 1000).toFixed(1)}s`);
 
   return { audio, sampleRate: SAMPLE_RATE };
 }

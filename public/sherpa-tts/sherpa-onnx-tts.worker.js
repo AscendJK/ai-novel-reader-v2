@@ -221,6 +221,8 @@ self.onmessage = async (e) => {
       // - referenceAudio 必须用完整参考音频 + 匹配的完整转录（截断会导致克隆特征错位 → 杂音）
       // - silenceScale 用默认 0.2（不传），0 会抹掉句间停顿导致语速急促
       // - numSteps: 4（官方 zipvoice 推荐），extra.min_char_in_sentence: 10（官方示例）
+      const genStart = performance.now();
+      log(`[generate] id=${msg.id} 开始: ${msg.text.length} 字, sid=${msg.sid ?? 0}, speed=${msg.speed ?? 1.0}, ref=${REF_AUDIOS[refIdx]?.file || "?"}`);
       let audio = tts.generateWithConfig(msg.text, {
         speed: msg.speed ?? 1.0, // 语速（设置页生成参数），之前漏传导致永远用默认语速
         referenceAudio: ref.audio,
@@ -229,6 +231,11 @@ self.onmessage = async (e) => {
         numSteps: 4,
         extra: { min_char_in_sentence: 10 },
       });
+      const genMs = performance.now() - genStart;
+      const audioSecs = audio.samples.length / audio.sampleRate;
+      // RTF（real-time factor）= 生成耗时 / 音频时长：>1 表示生成比播放慢，越大越容易超时
+      const rtf = (genMs / 1000) / audioSecs;
+      log(`[generate] id=${msg.id} 完成: ${audio.samples.length} samples ≈ ${audioSecs.toFixed(1)}s 音频, 耗时 ${genMs.toFixed(0)}ms, RTF=${rtf.toFixed(2)}`);
       const copy = new Float32Array(audio.samples);
       self.postMessage({ type: "sherpa-onnx-tts-result", id: msg.id, samples: copy, sampleRate: audio.sampleRate }, [copy.buffer]);
     } catch (err) {

@@ -583,6 +583,8 @@ export class TTSManager {
       await new Promise(r => setTimeout(r, 0));
       // 有效语速 = 设置页生成语速 × 朗读栏播放倍速（clamp 到 sherpa-onnx 官方 0.4-3.5）
       const effectiveSpeed = Math.max(0.4, Math.min(3.5, this.speed * this.playbackRate));
+      const chunkT0 = performance.now();
+      console.log(`[TTS] ▶ 生成 chunk ${this.currentChunkIndex + 1}/${this.chunks.length}: ${chunk.text.length} 字, speed=${effectiveSpeed.toFixed(2)}`);
       await this.zipvoice.speak(chunk.text, effectiveSpeed, {
         onPlay: () => {
           if (this.stopped || this.generationId !== genId) return;
@@ -595,6 +597,7 @@ export class TTSManager {
           const lastIdx = chunk.paragraphIndices?.length
             ? chunk.paragraphIndices[chunk.paragraphIndices.length - 1]
             : chunk.paragraphIndex;
+          console.log(`[TTS] ✓ chunk ${this.currentChunkIndex + 1}/${this.chunks.length} 播放结束（生成+播放共 ${((performance.now() - chunkT0) / 1000).toFixed(1)}s）`);
           this.callbacks.onChunkEnd?.(this.currentChunkIndex, this.chunks.length, lastIdx);
           this.currentChunkIndex++;
           this.speakNextChunk();
