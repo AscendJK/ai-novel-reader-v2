@@ -303,7 +303,7 @@ export function useAudioPlayer({
       setGenerating(false);
       setPlaying(false);
     });
-  }, [chapterContent, chapterIndex, novelId, engine, voiceId, speed, playbackRate, pitch, autoNextChapter, getManager, setCurrentChapter, setGenerating, setParagraphProgress, setPlaying, onNextChapter, loadPosition, setBrowserVoices, setEngine, setModelDownloaded, setModelDownloading]);
+  }, [chapterContent, chapterIndex, novelId, engine, voiceId, speed, playbackRate, pitch, autoNextChapter, getManager, setCurrentChapter, setGenerating, setParagraphProgress, setPlaying, setPaused, onNextChapter, loadPosition, setBrowserVoices, setEngine, setModelDownloaded, setModelDownloading, zipvoiceChunkSize, webspeechChunkSize]);
 
   // R13: 暂停/恢复（WebSpeech 使用 cancel+re-speak 模式，绕过移动端 resume bug）
   const togglePause = useCallback(async () => {

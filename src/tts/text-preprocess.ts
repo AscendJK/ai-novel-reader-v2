@@ -54,11 +54,15 @@ export function prepareTextForTTS(content: string, maxChunkLength: number = 300)
   if (!content || content.trim().length === 0) return [];
 
   // 步骤1: 清洗每个段落，保留原始索引
+  // 注意：必须先按原始换行 split，再逐段剥 HTML 标签——
+  // 若在 split 前全局剥标签，跨行标签（如 <p\nclass=...>）内的换行会被
+  // 一并删除导致相邻段落合并，段落索引与正文渲染（content.split(/\n+/)）
+  // 错位，朗读高亮会指向错误段落。逐段剥则段落数与正文严格一致。
   const cleaned = content
-    .replace(/<[^>]*>/g, "") // 去除 HTML 标签
-    .split(/\n+/) // 按换行分割
+    .split(/\n+/)
     .map((p, i): { text: string; index: number } | null => {
       const text = p
+        .replace(/<[^>]*>/g, "") // 去除 HTML 标签（逐段剥，不影响段落数）
         .replace(/\s+/g, " ") // 合并连续空白
         .replace(/["""]/g, "，") // 引号替换为逗号停顿
         .replace(/[''']/g, "，")
@@ -70,11 +74,11 @@ export function prepareTextForTTS(content: string, maxChunkLength: number = 300)
       // 过滤整段由方括号包裹的装饰性内容（作者的话/网站标记/占位符，
       // 如 "[大家新年好]"、"[本章完]"、"[]"）。这类内容不属于正文，
       // 朗读出来就是正文里的“杂音”。
-      if (/^\[[^\[\]]{1,40}\]$/.test(text)) return null;
+      if (/^\[[^[\]]{1,40}\]$/.test(text)) return null;
       return {
         // 删除行内方括号：matcha-tts 词表无此字符（OOV 警告），
         // 且浏览器 TTS 会把 "[" 读成“左方括号”。
-        text: text.replace(/[\[\]]/g, ""),
+        text: text.replace(/[[\]]/g, ""),
         index: i,
       };
     })

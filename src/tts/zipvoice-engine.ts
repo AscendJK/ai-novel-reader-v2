@@ -64,13 +64,15 @@ export function normalizeText(text: string): string {
     .replace(/[“”‘’"']/g, "，")
     // 书名号、括号类装饰符号 → 逗号（保留停顿）；英文方括号 [] 删除（行内装饰）
     .replace(/[《》〈〉「」『』【】〔〕]/g, "，")
-    .replace(/[\[\]]/g, "")
+    .replace(/[[\]]/g, "")
     // 省略号/间隔号/波浪线等 → 空格（保留停顿感）；破折号 → 逗号（与 prepareTextForTTS 一致）
     .replace(/[…·・〜～~]/g, " ")
     .replace(/[—–]/g, "，")
     // 杂项符号：竖线、下划线、星号、反引号、反斜杠等
     .replace(/[|_`*\\^]/g, " ")
-    // emoji 等装饰符号（词表无此字符）
+    // emoji 等装饰符号（词表无此字符）；u 标志按码点匹配，
+    // eslint 的 no-misleading-character-class 对 emoji 组合字符误报，此处按码点替换是预期行为
+    // eslint-disable-next-line no-misleading-character-class
     .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu, " ")
     // 连续标点清理：标点后紧跟的逗号删除（如 "：，" → "："，"。，" → "。"），
     // 避免引号替换产生双标点朗读停顿异常
@@ -135,7 +137,7 @@ async function initWorker(files: Map<string, ArrayBuffer>): Promise<void> {
     const timeout = setTimeout(() => {
       readyWaiter = null;
       w.removeEventListener("message", handler);
-      try { w.terminate(); } catch {}
+      try { w.terminate(); } catch { /* worker 可能已终止 */ }
       ttsWorker = null;
       modelLoaded = false;
       reject(new Error("模型加载超时（10分钟）"));
@@ -151,7 +153,7 @@ async function initWorker(files: Map<string, ArrayBuffer>): Promise<void> {
         clearTimeout(timeout);
         w.removeEventListener("message", handler);
         readyWaiter = null;
-        try { w.terminate(); } catch {}
+        try { w.terminate(); } catch { /* worker 可能已终止 */ }
         ttsWorker = null;
         modelLoaded = false;
         reject(new Error(e.data.message));
@@ -349,7 +351,7 @@ export async function loadModel(
         } catch (err) {
           initError = err instanceof Error ? err : new Error(String(err));
           console.warn(`[TTS] Worker 初始化失败（第 ${attempt} 次），${attempt < 2 ? "自动重试" : "放弃"}: ${initError.message}`);
-          try { ttsWorker?.terminate(); } catch {}
+          try { ttsWorker?.terminate(); } catch { /* worker 可能已终止 */ }
           ttsWorker = null;
           modelLoaded = false;
         }

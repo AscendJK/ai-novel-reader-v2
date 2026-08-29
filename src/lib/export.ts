@@ -8,7 +8,8 @@ function download(blob: Blob, filename: string) {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  // 延迟 revoke：Safari 在 click 后立即 revoke 会导致下载失败
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function timestamp(): string {

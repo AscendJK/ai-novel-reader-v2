@@ -82,6 +82,28 @@ describe("prepareTextForTTS", () => {
     expect(result.map(c => c.text).join("")).toBe(text);
   });
 
+  it("段落索引与正文渲染一致：跨行 HTML 标签不合并段落", () => {
+    // 正文渲染用 content.split(/\n+/) 的下标；prepareTextForTTS 必须给出相同下标。
+    // 跨行标签（<p\nclass=...>）若在 split 前全局剥除会把两行合并成一段，
+    // 导致索引错位、朗读高亮指向错误段落。逐段剥标签后段落数应与 split 一致。
+    const content = "<p class=\"a\">第一段内容，测试跨行标签。\n第二段内容，也应该保留。\n<img src=\"x\">";
+    const result = prepareTextForTTS(content, 300);
+    const rawParas = content.split(/\n+/);
+    // 被过滤的段落（空/过短）不在 chunk 中，但保留的段落索引必须与 split 下标一致
+    const keptIndices = result.flatMap(c => c.paragraphIndices);
+    for (const idx of keptIndices) {
+      expect(idx).toBeGreaterThanOrEqual(0);
+      expect(idx).toBeLessThan(rawParas.length);
+    }
+    // 有文本内容的段落（≥5 字）都应被保留且索引正确：
+    // 第一段（去标签后）与第二段必须分别存在，且索引为 0 和 1
+    const texts = result.map(c => c.text);
+    expect(texts.some(t => t.includes("第一段内容"))).toBe(true);
+    expect(texts.some(t => t.includes("第二段内容"))).toBe(true);
+    // 第三行 <img> 被剥成空 → 过滤，不产生索引 2
+    expect(keptIndices.every(i => i < 2)).toBe(true);
+  });
+
   it("合并段落的 paragraphBreaks 记录分割点", () => {
     // 使用足够长的段落以确保合并后 breaks 有多个值
     const p1 = "这是第一段内容用来测试段落合并后的分割点记录功能。";

@@ -304,6 +304,11 @@ class WebSpeechTTSEngine {
 
   stop(): void {
     this.clearParaTimer();
+    // 清理降级检测定时器（stop 后不再需要，避免悬空 1.5s）
+    if (this.fallbackCheckTimer) {
+      clearTimeout(this.fallbackCheckTimer);
+      this.fallbackCheckTimer = null;
+    }
     if (this.available) speechSynthesis.cancel();
     this.utterance = null;
   }
@@ -560,6 +565,8 @@ export class TTSManager {
 
   constructor() {
     this.webSpeech = new WebSpeechTTSEngine();
+    // 注册为活跃实例（供设置页试听停止朗读）；模块级引用非闭包别名，规则误报
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
     activeManager = this;
   }
 
