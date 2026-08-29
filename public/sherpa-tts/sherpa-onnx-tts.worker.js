@@ -192,6 +192,8 @@ self.onmessage = async (e) => {
       const shortRef = refAudioData.slice(0, 24000); // 1秒
       const refTxt = "各位村民大家新年好";
       let audio = tts.generateWithConfig(msg.text, {
+        sid: msg.sid || 0,
+        speed: msg.speed ?? 1.0, // 语速（设置页生成参数），之前漏传导致永远用默认语速
         referenceAudio: shortRef,
         referenceSampleRate: 24000,
         referenceText: refTxt,
