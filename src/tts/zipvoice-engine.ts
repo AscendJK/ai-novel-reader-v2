@@ -5,7 +5,7 @@
  * 模型：Kokoro multi-lang v1.0 int8（53 音色，中文 sid 45-52）
  */
 
-import { isCacheReady, getCachedFiles, downloadAndCache } from "./tts-cache";
+import { isCacheReady, getCachedFiles, downloadAndCache, stripCachePrefix } from "./tts-cache";
 import { apiFetch } from "@/lib/api-client";
 
 // ── 模型配置 ───────────────────────────────────────────────
@@ -162,11 +162,12 @@ async function initWorker(files: Map<string, ArrayBuffer>): Promise<void> {
 
     // 构造 files 对象，用 transfer 传输大文件（零拷贝）。
     // 注意：slice(0) 拷贝一份，避免重试时原 buffer 已被 detach。
+    // 缓存 key 带 kokoro-v1/ 前缀，传给 worker 时还原为短文件名
     const filesObj: Record<string, ArrayBuffer> = {};
     const transferables: ArrayBuffer[] = [];
     for (const [key, value] of files) {
       const copy = value.slice(0);
-      filesObj[key] = copy;
+      filesObj[stripCachePrefix(key)] = copy;
       transferables.push(copy);
     }
     // 传递页面 origin 和模型基础路径给 Worker

@@ -10,7 +10,9 @@ const DB_VERSION = 1;
 const STORE_NAME = "files";
 
 // 缓存文件列表（key: 文件名, value: ArrayBuffer）
-// Kokoro multi-lang v1.0 int8：WASM 引擎（精简 data 含 espeak-ng-data）+ 模型 + jieba 分词 dict
+// 引擎升级到 Kokoro v1.0 后，key 加 kokoro-v1/ 前缀强制刷新浏览器旧缓存
+//（旧 ZipVoice 引擎同名 key 缓存了 ESM 版 js/完整版 data，复用会加载失败）
+const CACHE_PREFIX = "kokoro-v1/";
 const CACHE_FILES = [
   // WASM 引擎 + espeak-ng-data（TTS 需要的语音数据，精简 data 17MB）
   "sherpa-onnx-wasm-main-tts.js",
@@ -37,7 +39,12 @@ const CACHE_FILES = [
   "dict/pos_dict/prob_emit.utf8",
   "dict/pos_dict/prob_start.utf8",
   "dict/pos_dict/prob_trans.utf8",
-];
+].map((f) => CACHE_PREFIX + f);
+
+/** 去掉缓存前缀，还原为文件名（传给 worker / 拼 API 路径用） */
+export function stripCachePrefix(key: string): string {
+  return key.startsWith(CACHE_PREFIX) ? key.slice(CACHE_PREFIX.length) : key;
+}
 
 
 // H6 fix: 缓存 IDBDatabase 实例，避免重复打开连接
@@ -153,14 +160,15 @@ export function downloadAndCache(
 
     // 下载（使用 apiFetch 带上认证头）
     onProgress?.(file, 0, 0);
+    const name = stripCachePrefix(file);
     let apiPath: string;
-    if (file.startsWith("sherpa-onnx-wasm-main-tts.") || file === "sherpa-onnx-tts.js") {
-      apiPath = `/api/rag/tts/wasm/${file}`;
-    } else if (file.startsWith("dict/")) {
+    if (name.startsWith("sherpa-onnx-wasm-main-tts.") || name === "sherpa-onnx-tts.js") {
+      apiPath = `/api/rag/tts/wasm/${name}`;
+    } else if (name.startsWith("dict/")) {
       // dict 子目录：走专用路由（/tts/model/dict/...）
-      apiPath = `/api/rag/tts/model/${file}`;
+      apiPath = `/api/rag/tts/model/${name}`;
     } else {
-      apiPath = `/api/rag/tts/model/${file}`;
+      apiPath = `/api/rag/tts/model/${name}`;
     }
     const response = await apiFetch(apiPath);
     if (!response.ok) throw new Error(`下载 ${file} 失败: HTTP ${response.status}`);
