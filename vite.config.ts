@@ -118,10 +118,9 @@ export default defineConfig({
       usePolling: false,
     },
     headers: {
-      // sherpa-onnx WASM 使用 pthreads，需要 SharedArrayBuffer
-      // SharedArrayBuffer 要求页面是 cross-origin isolated
-      // 使用 require-corp（比 credentialless 兼容性更好，Firefox 也支持）
-      // 注意：生产环境（GitHub Pages）无法设置自定义 header，需使用 coi-serviceworker
+      // 当前 WASM 为单线程构建（numThreads=1，无 pthread 符号），不需要 SharedArrayBuffer。
+      // 以下头为早期 pthread 构建遗留，保留以便本地调试多线程版本；
+      // 生产环境（GitHub Pages）无这些头也能正常运行（单线程推理）。
       "Cross-Origin-Opener-Policy": "same-origin",
       "Cross-Origin-Embedder-Policy": "require-corp",
     },

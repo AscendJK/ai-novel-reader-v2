@@ -50,7 +50,9 @@ async function init(files, origin) {
   try {
     const hasSAB = typeof SharedArrayBuffer !== "undefined";
     log("crossOriginIsolated=" + self.crossOriginIsolated + " SharedArrayBuffer=" + hasSAB);
-    if (!hasSAB) throw new Error("SharedArrayBuffer 不可用");
+    // 当前 WASM 为单线程构建（numThreads=1，无 pthread 符号），不需要 SharedArrayBuffer。
+    // GitHub Pages 无法设置 COOP/COEP 响应头，SAB 不可用是常态，直接以单线程运行。
+    // 若未来换用 pthread 构建，Emscripten 会在缺少 SAB 时自行抛出明确错误。
 
     // 1. 为 JS 文件创建 Blob URL
     log("创建 Blob URL...");
