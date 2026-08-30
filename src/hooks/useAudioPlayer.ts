@@ -232,6 +232,7 @@ export function useAudioPlayer({
         if (total > 0) setGenerating(true);
       },
       onBufferChange: (buffered) => setBufferedChunks(buffered),
+      onGenerating: (g) => setGenerating(g),
       onChunkStart: (_i, _total, paraIdx) => setParagraphProgress(paraIdx, totalParaCount),
       onChunkEnd: (_i, _total, paraIdx) => setParagraphProgress(paraIdx, totalParaCount),
       onParagraphChange: (paraIdx) => setParagraphProgress(paraIdx, totalParaCount),

@@ -11,12 +11,13 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Loader2, Play, Server, Cpu, Volume2, Download, CheckCircle2, AlertTriangle } from "lucide-react";
-import { useTTSStore } from "@/stores/tts-store";
+import { useTTSStore, type TTSEngine } from "@/stores/tts-store";
 import { classifyVoices } from "@/tts/voice-classify";
 import { ZH_VOICES, generateAudioFull, loadModel, isModelLoaded } from "@/tts/zipvoice-engine";
 import { checkServerInference, synthesizeServer } from "@/tts/server-engine";
 import { getActiveTTSManager } from "@/tts/tts-manager";
 import { getTTSPreloadStatus, preloadZipVoice } from "@/tts/tts-preload";
+import { isCacheReady } from "@/tts/tts-cache";
 import { apiFetch } from "@/lib/api-client";
 
 export function TTSSettings() {
@@ -29,6 +30,15 @@ export function TTSSettings() {
 
   const [loading, setLoading] = useState(false);
   const [loadAttempted, setLoadAttempted] = useState(false);
+
+  // 切换朗读引擎：若正在朗读，先停止当前引擎（避免旧引擎继续出声、UI 已切新引擎的错乱），
+  // 再切换设置。停止通过活跃 manager 走完整状态清理（含 server 排队取消 / worker 中断）。
+  const switchEngine = useCallback((next: TTSEngine) => {
+    if (next === engine) return;
+    const manager = getActiveTTSManager();
+    if (manager) manager.stop();
+    setEngine(next);
+  }, [engine, setEngine]);
 
   // ZipVoice 预加载状态（登录后自动触发，此处仅展示）
   const [preloadStatus, setPreloadStatus] = useState(getTTSPreloadStatus());
@@ -172,8 +182,11 @@ export function TTSSettings() {
     if (previewing) return;
     const state = useTTSStore.getState();
     if (state.playing) {
-      speechSynthesis.cancel();
-      state.reset();
+      // 与 ZipVoice/Server 试听一致：通过活跃 manager 停止朗读（同步内部状态），
+      // 避免直接 speechSynthesis.cancel() 导致 manager 不知情、播放链"复活"
+      const manager = getActiveTTSManager();
+      if (manager) manager.stop();
+      else state.reset();
     }
     const utterance = new SpeechSynthesisUtterance("各位村民，大家新年好。近期，湖北省武汉市等多个地区。");
     utterance.lang = "zh-CN";
@@ -394,7 +407,17 @@ export function TTSSettings() {
   }, [serverPreviewing]);
 
   // 浏览器推理资源就绪状态（IndexedDB 缓存 + 服务器模型）
-  const browserReady = isModelLoaded() || (typeof window !== "undefined" && !!window.indexedDB);
+  // P2-3 fix: 旧逻辑 isModelLoaded() || !!window.indexedDB 恒真（几乎所有浏览器都支持
+  // IndexedDB），用户误以为模型就绪。改为真实检测：模型已加载 / 预加载完成 / 缓存齐全。
+  const [browserCached, setBrowserCached] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    isCacheReady()
+      .then(ok => { if (!cancelled) setBrowserCached(ok); })
+      .catch(() => { /* IndexedDB 不可用时保持 false */ });
+    return () => { cancelled = true; };
+  }, []);
+  const browserReady = isModelLoaded() || preloadStatus === "ready" || browserCached;
 
   return (
     <div className="space-y-4">
@@ -418,7 +441,7 @@ export function TTSSettings() {
           <button
             aria-label="朗读引擎：服务端推理"
             className={`rounded-lg border px-2 py-2 text-left transition-colors ${engine === "server" ? "border-primary bg-primary/10" : "hover:bg-muted"}`}
-            onClick={() => setEngine("server")}
+            onClick={() => switchEngine("server")}
           >
             <p className="text-xs font-medium flex items-center gap-1">
               <Server className="h-3 w-3 shrink-0" /> 服务端推理
@@ -438,7 +461,7 @@ export function TTSSettings() {
           <button
             aria-label="朗读引擎：浏览器推理（离线）"
             className={`rounded-lg border px-2 py-2 text-left transition-colors ${engine === "zipvoice" ? "border-primary bg-primary/10" : "hover:bg-muted"}`}
-            onClick={() => setEngine("zipvoice")}
+            onClick={() => switchEngine("zipvoice")}
           >
             <p className="text-xs font-medium flex items-center gap-1">
               <Cpu className="h-3 w-3 shrink-0" /> 浏览器推理
@@ -452,7 +475,7 @@ export function TTSSettings() {
           <button
             aria-label="朗读引擎：Web Speech（浏览器内置）"
             className={`rounded-lg border px-2 py-2 text-left transition-colors ${engine === "webspeech" ? "border-primary bg-primary/10" : "hover:bg-muted"}`}
-            onClick={() => setEngine("webspeech")}
+            onClick={() => switchEngine("webspeech")}
           >
             <p className="text-xs font-medium flex items-center gap-1">
               <Volume2 className="h-3 w-3 shrink-0" /> Web Speech

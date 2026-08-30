@@ -4,7 +4,7 @@
  * 支持流式播放（边生成边播放 + 预生成下一章）
  */
 
-import { loadModel, isModelLoaded, generateAudio, resetWorker } from "./zipvoice-engine";
+import { loadModel, generateAudio, resetWorker } from "./zipvoice-engine";
 import { synthesizeServer, cancelServerInference } from "./server-engine";
 
 export type TTSEngine = "server" | "zipvoice" | "webspeech";
@@ -39,6 +39,8 @@ export interface TTSPlaybackCallbacks {
   onPrepareProgress?: (ready: number, total: number) => void;
   /** 播放中缓冲水位变化（已缓存待播段数） */
   onBufferChange?: (buffered: number) => void;
+  /** 播放中现场生成（缓冲未命中）状态变化：true=正在生成下一段音频 */
+  onGenerating?: (generating: boolean) => void;
 }
 
 /**
@@ -112,6 +114,10 @@ class WebSpeechTTSEngine {
 
   async waitForVoices(): Promise<SpeechSynthesisVoice[]> {
     if (!this.available) return [];
+    // Android Chromium 部分版本 getVoices() 恒空（不提供列表，但 speak() 正常）。
+    // 此时等待 10s 超时毫无意义——直接返回当前列表，朗读用系统默认语音。
+    const ua = typeof navigator !== "undefined" ? navigator.userAgent || "" : "";
+    if (/Android/i.test(ua)) return speechSynthesis.getVoices();
     if (speechSynthesis.getVoices().length > 0) return speechSynthesis.getVoices();
     await new Promise<void>(resolve => {
       const timeout = setTimeout(() => resolve(), 10000);
@@ -260,50 +266,6 @@ class WebSpeechTTSEngine {
     const u = this.utterance;
     setTimeout(() => {
       if (this.utterance === u) speechSynthesis.speak(u);
-    }, 60);
-  }
-
-  /** 顺序播放下一段（不使用预队列，移动端兼容性更好） */
-  queue(
-    text: string, speed: number, volume: number, pitch: number,
-    onStart: () => void, onEnd: () => void, onError: (err: string) => void,
-    paragraphBreaks?: number[], paragraphIndices?: number[],
-    onParagraphChange?: (paraIndex: number) => void,
-  ): void {
-    if (!this.available) return;
-    this.ensureVoice();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = speed;
-    utterance.volume = volume;
-    utterance.pitch = pitch;
-    utterance.lang = "zh-CN";
-    if (this.voice) utterance.voice = this.voice;
-
-    if (paragraphBreaks && paragraphIndices && paragraphIndices.length > 1) {
-      utterance.onstart = () => onStart();
-      utterance.onend = () => {
-        this.clearParaTimer();
-        onEnd();
-      };
-      utterance.onerror = (e) => {
-        this.clearParaTimer();
-        if (e.error !== "canceled" && e.error !== "interrupted") onError(e.error);
-      };
-      this.setupParagraphTracking(
-        utterance, paragraphBreaks, paragraphIndices,
-        onParagraphChange, text, speed,
-      );
-    } else {
-      utterance.onstart = () => onStart();
-      utterance.onend = () => onEnd();
-      utterance.onerror = (e) => {
-        if (e.error !== "canceled" && e.error !== "interrupted") onError(e.error);
-      };
-    }
-    // 与 speak() 一致：延迟 speak 避免 cancel 竞态
-    this.utterance = utterance;
-    setTimeout(() => {
-      if (this.utterance === utterance) speechSynthesis.speak(utterance);
     }, 60);
   }
 
@@ -642,6 +604,8 @@ export class TTSManager {
   private generationId = 0;
   private seekId = 0;
   private userPaused = false;
+  // 上次使用过的 Kokoro 引擎类型（stop/destroy 时决定是否释放浏览器 worker）
+  private lastKokoroKind: "server" | "zipvoice" | null = null;
   // ── 预生成缓冲池（A+C 方案）：播放时并行推理后续多段 ──
   private prefetchCount = 3;                       // 目标缓冲段数 K（可配置 1-10）
   private buffered: { index: number; buffer: AudioBuffer }[] = []; // 已缓存待播段（按 index 有序）
@@ -664,12 +628,24 @@ export class TTSManager {
    * - server：服务端 Python 推理（快）
    * - zipvoice：浏览器 wasm 推理（离线）
    * webspeech 引擎返回 null。
+   *
+   * P0 fix: 校验实例类型与当前 engine 匹配。TTSManager 在组件生命周期内
+   * 是单例（useAudioPlayer.getManager 只创建一次），setEngine 只改字段；
+   * 若不校验，server → zipvoice 切换后仍返回旧的 ServerKokoroEngine，
+   * 导致实际走错引擎（且 zipvoice 路径还会白白下载 380MB 模型）。
    */
   private getKokoroEngine(): ZipVoiceTTSEngine | null {
     if (this.engine === "webspeech") return null;
+    const expected = this.engine === "server" ? ServerKokoroEngine : BrowserKokoroEngine;
+    if (this.zipvoice && !(this.zipvoice instanceof expected)) {
+      console.warn(`[TTS] 引擎类型不匹配（当前 ${this.engine}），重建 Kokoro 引擎实例`);
+      this.zipvoice.destroy();
+      this.zipvoice = null;
+    }
     if (!this.zipvoice) {
       this.zipvoice = this.engine === "server" ? new ServerKokoroEngine() : new BrowserKokoroEngine();
     }
+    this.lastKokoroKind = this.engine === "server" ? "server" : "zipvoice";
     return this.zipvoice;
   }
 
@@ -812,7 +788,10 @@ export class TTSManager {
         this.webSpeech.stop();
         this.speakNextChunk();
       }
-    } else if (this.zipvoice) this.zipvoice.setVoice(voiceId);
+    } else {
+      // 用 getKokoroEngine 统一入口：引擎切换后实例类型已校验重建，参数设置到正确实例
+      this.getKokoroEngine()?.setVoice(voiceId);
+    }
   }
 
   setSpeed(speed: number) {
@@ -823,7 +802,7 @@ export class TTSManager {
       this.generationId++;
       this.webSpeech.stop();
       this.speakFromParagraph(para);
-    } else if (this.zipvoice?.isSpeaking()) {
+    } else if (this.engine !== "webspeech" && this.getKokoroEngine()?.isSpeaking()) {
       // Kokoro（server/zipvoice）：语速是生成参数，需用新语速重新生成当前 chunk（保音高）
       this.restartZipVoiceFromCurrentChunk();
     }
@@ -837,7 +816,7 @@ export class TTSManager {
    */
   setPlaybackRate(playbackRate: number) {
     this.playbackRate = Math.max(0.5, Math.min(3.0, playbackRate));
-    if (this.zipvoice?.isSpeaking()) {
+    if (this.engine !== "webspeech" && this.getKokoroEngine()?.isSpeaking()) {
       this.restartZipVoiceFromCurrentChunk();
     } else if (this.engine === "webspeech" && this.webSpeech.isSpeaking()) {
       const para = this.currentParagraphIndex;
@@ -922,8 +901,10 @@ export class TTSManager {
         await kokoro.ensureResumed();
         const kokoroGenId = this.generationId; // 捕获本次朗读代次，供加载/预生成后校验
 
-        // 浏览器推理（zipvoice）需要先在浏览器加载模型；服务端推理无需
-        if (this.engine === "zipvoice" && !isModelLoaded()) {
+        // 浏览器推理（zipvoice）需要先在浏览器加载模型；服务端推理无需。
+        // 无条件调用 loadModel：模型已加载且池大小一致时立即返回（幂等）；
+        // 用户修改了 workerCount 时在 loadModel 内检测并重建池。
+        if (this.engine === "zipvoice") {
           callbacks.onModelProgress?.(0);
           await loadModel({ onProgress: (p) => callbacks.onModelProgress?.(p) });
           if (this.generationId !== kokoroGenId) return;
@@ -968,17 +949,21 @@ export class TTSManager {
       } else {
         const chunkT0 = performance.now();
         console.log(`[TTS] ▶ 生成 chunk ${this.currentChunkIndex + 1}/${this.chunks.length} (${this.engine === "server" ? "服务端" : "浏览器"}): ${chunk.text.length} 字, speed=${effectiveSpeed.toFixed(2)}`);
+        // 现场生成（缓冲未命中）：通知 UI 显示"生成中"（浏览器推理可能需 60-120s）
+        this.callbacks.onGenerating?.(true);
         try {
           buffer = await this.zipvoice.generateBuffer(
             chunk.text, effectiveSpeed,
             () => this.stopped || this.generationId !== genId,
           );
         } catch (err) {
+          this.callbacks.onGenerating?.(false);
           if (this.stopped || this.generationId !== genId) return; // 取消静默
           const msg = err instanceof Error ? err.message : String(err);
           this.callbacks.onError?.(`音频生成失败: ${msg}`);
           return;
         }
+        this.callbacks.onGenerating?.(false);
         console.log(`[TTS] ✓ 生成完成（${((performance.now() - chunkT0) / 1000).toFixed(1)}s）`);
       }
       if (this.stopped || this.generationId !== genId) return;
@@ -1087,9 +1072,12 @@ export class TTSManager {
     this.cancelServerInference(); // 释放服务器队列（服务端推理）
     if (this.zipvoice) this.zipvoice.stop();
     this.webSpeech.stop();
-    // 立即中断 worker 推理：wasm 同步推理无法取消单次任务，
-    // 只能 terminate worker 让 CPU 立刻释放；结果也不会再回来（pending 已 reject）
-    resetWorker();
+    // 仅浏览器推理需要立即中断 worker：wasm 同步推理无法取消单次任务，
+    // 只能 terminate worker 让 CPU 立刻释放；结果也不会再回来（pending 已 reject）。
+    // server/webspeech 朗读不涉及浏览器 worker，无需卸载（避免反复加载 3-5s）。
+    if (this.lastKokoroKind === "zipvoice") {
+      resetWorker();
+    }
     this.callbacks.onStop?.();
   }
 
@@ -1117,13 +1105,13 @@ export class TTSManager {
   }
 
   isPlaying(): boolean {
-    if (this.engine !== "webspeech" && this.zipvoice) return this.zipvoice.isSpeaking();
-    return this.webSpeech.isSpeaking();
+    if (this.engine === "webspeech") return this.webSpeech.isSpeaking();
+    return this.getKokoroEngine()?.isSpeaking() ?? false;
   }
 
   isPaused(): boolean {
-    if (this.engine !== "webspeech" && this.zipvoice) return this.zipvoice.isPaused();
-    return this.userPaused;
+    if (this.engine === "webspeech") return this.userPaused;
+    return this.getKokoroEngine()?.isPaused() ?? false;
   }
 
   destroy(): void {

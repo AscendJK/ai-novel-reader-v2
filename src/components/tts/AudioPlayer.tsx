@@ -74,7 +74,14 @@ export function AudioPlayer({
   // 进度坐标：store.currentParagraph 是“原始段落索引”（供正文高亮），
   // 进度条/段数显示需用“过滤后序号”（在 orderedParaIndices 中的位置），
   // 避免过滤短段落后索引与总数错位（如 90/80 段、进度 >100%）。
-  const progressIdx = orderedParaIndices.indexOf(currentParagraph);
+  // 当前段落不在列表中（被过滤/初始化）时回退到最近的前一段，避免显示 0/total。
+  let progressIdx = orderedParaIndices.indexOf(currentParagraph);
+  if (progressIdx < 0) {
+    for (let i = orderedParaIndices.length - 1; i >= 0; i--) {
+      if (orderedParaIndices[i] < currentParagraph) { progressIdx = i; break; }
+    }
+    if (progressIdx < 0) progressIdx = 0;
+  }
   const safeProgressIdx = progressIdx >= 0 ? progressIdx : 0;
   const progressPct = totalParagraphs > 0
     ? Math.min(100, ((safeProgressIdx + 1) / totalParagraphs) * 100)

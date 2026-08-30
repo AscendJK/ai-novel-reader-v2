@@ -34,6 +34,7 @@ let ttsWorkers: Worker[] = [];          // Worker 池（每 worker 独立 wasm �
 let workerBusy: boolean[] = [];         // 各 worker 是否忙（同一时刻每 worker 1 个任务）
 let taskQueue: Task[] = [];             // 等待空闲 worker 的任务队列（FIFO）
 let workerPoolSize = 1;                 // 目标池大小（1-3，每个约 400-500MB 内存）
+let activePoolSize = 0;                 // 上次成功建立的池大小（检测设置变更需重建）
 let modelLoaded = false;
 let disposed = false;
 let loadingPromise: Promise<void> | null = null;
@@ -41,6 +42,13 @@ let nextRequestId = 0;
 const pendingRequests = new Map<number, { resolve: (audio: Float32Array) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 // 当前等待 worker ready 的 resolve/reject（供 onerror 快速失败，避免卡 10 分钟超时）
 let readyWaiter: { resolve: () => void; reject: (err: Error) => void } | null = null;
+// requestId → 正在执行的 worker index（worker 崩溃时精确 reject 对应任务，不误伤其他 worker）
+const taskWorkerMap = new Map<number, number>();
+// worker index → blob URL（terminate 时 revoke，防止 URL 对象泄漏）
+const workerBlobUrls = new Map<number, string>();
+// Worker 自动重建节流（崩溃后避免加载风暴）
+let lastRebuildAt = 0;
+const REBUILD_COOLDOWN_MS = 30000;
 
 interface Task {
   id: number;
@@ -124,6 +132,7 @@ async function createWorker(index: number): Promise<Worker> {
   const code = await resp.text();
   const blobUrl = URL.createObjectURL(new Blob([code], { type: "application/javascript" }));
   const worker = new Worker(blobUrl);
+  workerBlobUrls.set(index, blobUrl);
   // BUGFIX: worker 必须写回池数组，否则 loadModel 的 new Array(n) 稀疏数组
   // 元素全为 undefined，dispatchTask 里 ttsWorkers[idx].postMessage 会崩溃。
   ttsWorkers[index] = worker;
@@ -146,18 +155,87 @@ async function createWorker(index: number): Promise<Worker> {
     //（后续任务派发给其他正常 worker；不自动重建，避免加载风暴）
     if (index >= 0 && index < workerBusy.length) workerBusy[index] = false;
     if (index >= 0 && index < ttsWorkers.length) ttsWorkers[index] = undefined as unknown as Worker;
+    // 回收 blob URL，防止对象泄漏
+    const url = workerBlobUrls.get(index);
+    if (url) { try { URL.revokeObjectURL(url); } catch { /* 忽略 */ } workerBlobUrls.delete(index); }
+    // 只 reject 在该 worker 上执行的任务（其他 worker 的任务继续正常完成）
+    for (const [id, wIdx] of taskWorkerMap) {
+      if (wIdx === index) {
+        taskWorkerMap.delete(id);
+        const pending = pendingRequests.get(id);
+        if (pending) {
+          pendingRequests.delete(id);
+          clearTimeout(pending.timer);
+          pending.reject(new Error(msg));
+        }
+      }
+    }
     // 快速失败当前等待 ready 的流程（loadModel 会自动重试）
     const waiter = readyWaiter;
     readyWaiter = null;
     if (waiter) waiter.reject(new Error(msg));
-    for (const [, p] of pendingRequests) {
-      clearTimeout(p.timer);
-      p.reject(new Error(msg));
-    }
-    pendingRequests.clear();
-    taskQueue = [];
+    // 崩溃后自动重建（节流），避免「所有 worker 崩溃 → 任务无限排队到超时」的死锁
+    scheduleRebuild();
   };
   return worker;
+}
+
+/** 运行期 worker 崩溃后的自动重建（节流 30s，防止加载风暴） */
+function scheduleRebuild(): void {
+  const now = Date.now();
+  if (now - lastRebuildAt < REBUILD_COOLDOWN_MS) return;
+  if (disposed || loadingPromise) return;
+  // 池中是否还有存活 worker：全崩时重建整个池；部分崩溃时补建缺失槽位
+  const alive = ttsWorkers.filter(Boolean).length;
+  if (alive === 0 && !modelLoaded && taskQueue.length > 0) {
+    lastRebuildAt = now;
+    console.warn("[TTS] 所有 worker 已崩溃，尝试自动重建...");
+    void (async () => {
+      try {
+        const files = await getCachedFiles();
+        if (files.size === 0) throw new Error("模型缓存缺失，无法重建 worker");
+        if (disposed) return;
+        // 重建整个池（沿用上次池大小）
+        const targetSize = Math.max(1, activePoolSize || workerPoolSize);
+        ttsWorkers = new Array(targetSize) as Worker[];
+        workerBusy = new Array(targetSize).fill(false);
+        for (let idx = 0; idx < targetSize; idx++) {
+          try { await initWorker(files, idx); }
+          catch (err) { console.warn(`[TTS] 重建 Worker #${idx} 失败:`, err); break; }
+        }
+        const aliveNow = ttsWorkers.filter(Boolean).length;
+        modelLoaded = aliveNow > 0;
+        console.log(`[TTS] Worker 自动重建完成（${aliveNow}/${targetSize} 个可用）`);
+        // 重建后派发排队任务
+        while (taskQueue.length > 0) {
+          const next = taskQueue.shift();
+          if (next) dispatchTask(next);
+        }
+      } catch (err) {
+        console.warn("[TTS] Worker 自动重建失败:", err);
+      }
+    })();
+  } else if (alive > 0) {
+    // 部分崩溃：补建缺失槽位（仅在排队任务堆积时）
+    if (taskQueue.length >= 2) {
+      const missing = ttsWorkers.findIndex(w => !w);
+      if (missing >= 0 && now - lastRebuildAt >= REBUILD_COOLDOWN_MS) {
+        lastRebuildAt = now;
+        void (async () => {
+          try {
+            const files = await getCachedFiles();
+            if (files.size === 0 || disposed) return;
+            await initWorker(files, missing);
+            console.log(`[TTS] Worker #${missing} 已自动补建`);
+            while (taskQueue.length > 0) {
+              const next = taskQueue.shift();
+              if (next) dispatchTask(next);
+            }
+          } catch (err) { console.warn(`[TTS] Worker #${missing} 补建失败:`, err); }
+        })();
+      }
+    }
+  }
 }
 
 /** worker 空闲回调：分配下一个排队任务 */
@@ -177,15 +255,30 @@ function dispatchTask(task: Task): void {
     if (!workerBusy[i] && ttsWorkers[i]) { idx = i; break; }
   }
   if (idx === -1) {
+    // 快速失败：若模型已卸载/所有 worker 已崩溃，不再排队（排队 → 120s 超时才报错，
+    // 用户感知为卡死）。有存活 worker 时仍正常排队等待空闲。
+    const alive = ttsWorkers.some(Boolean);
+    if (!alive) {
+      const pending = pendingRequests.get(task.id);
+      if (pending) {
+        pendingRequests.delete(task.id);
+        clearTimeout(pending.timer);
+        pending.reject(new Error(modelLoaded ? "所有 Worker 已崩溃，请重试" : "Kokoro 模型未加载，请先调用 loadModel()"));
+      }
+      console.warn(`[TTS] 任务 #${task.id} 无可用 Worker，快速失败（存活 ${ttsWorkers.filter(Boolean).length}/${ttsWorkers.length}）`);
+      return;
+    }
     taskQueue.push(task);
     return;
   }
   workerBusy[idx] = true;
+  taskWorkerMap.set(task.id, idx);
   try {
     ttsWorkers[idx]!.postMessage({ type: "generate", id: task.id, text: task.text, sid: task.sid, speed: task.speed });
   } catch (err) {
     // postMessage 失败（worker 已终止等）：释放 busy，避免该槽位永久卡死
     workerBusy[idx] = false;
+    taskWorkerMap.delete(task.id);
     taskQueue.push(task);
     console.warn(`[TTS] 派发任务 #${task.id} 到 Worker #${idx} 失败，重新入队:`, err);
   }
@@ -204,6 +297,7 @@ async function initWorker(files: Map<string, ArrayBuffer>, index: number): Promi
       w.removeEventListener("message", handler);
       try { w.terminate(); } catch { /* worker 可能已终止 */ }
       ttsWorkers[index] = undefined as unknown as Worker;
+      revokeWorkerBlob(index);
       modelLoaded = false;
       reject(new Error("模型加载超时（10分钟）"));
     }, 600000);
@@ -220,6 +314,7 @@ async function initWorker(files: Map<string, ArrayBuffer>, index: number): Promi
         readyWaiter = null;
         try { w.terminate(); } catch { /* worker 可能已终止 */ }
         ttsWorkers[index] = undefined as unknown as Worker;
+        revokeWorkerBlob(index);
         modelLoaded = false;
         reject(new Error(e.data.message));
       }
@@ -247,6 +342,12 @@ async function initWorker(files: Map<string, ArrayBuffer>, index: number): Promi
   });
 }
 
+/** 回收 worker 的 blob URL（terminate/失败路径调用，防止 URL 对象泄漏） */
+function revokeWorkerBlob(index: number): void {
+  const url = workerBlobUrls.get(index);
+  if (url) { try { URL.revokeObjectURL(url); } catch { /* 忽略 */ } workerBlobUrls.delete(index); }
+}
+
 function handleWorkerMessage(e: MessageEvent, workerIndex: number): void {
   const msg = e.data;
 
@@ -257,6 +358,7 @@ function handleWorkerMessage(e: MessageEvent, workerIndex: number): void {
   } else if (msg.type === "sherpa-onnx-tts-result") {
     // C4 fix: 用 requestId 精确匹配，而非取第一个
     const id = msg.id;
+    taskWorkerMap.delete(id);
     if (id !== undefined && pendingRequests.has(id)) {
       const pending = pendingRequests.get(id)!;
       pendingRequests.delete(id);
@@ -280,6 +382,7 @@ function handleWorkerMessage(e: MessageEvent, workerIndex: number): void {
       modelLoaded = false;
     }
     const id = msg.id;
+    taskWorkerMap.delete(id);
     if (id !== undefined && pendingRequests.has(id)) {
       const pending = pendingRequests.get(id)!;
       pendingRequests.delete(id);
@@ -356,7 +459,16 @@ export async function checkTTSCache(): Promise<{ wasmReady: boolean; modelReady:
 export async function loadModel(
   options?: { onProgress?: (progress: number) => void }
 ): Promise<void> {
-  if (modelLoaded && !disposed) return;
+  if (modelLoaded && !disposed) {
+    // 用户修改了 Worker 池大小（设置页 workerCount）→ 需按新池大小重建
+    const targetSize = Math.max(1, Math.min(workerPoolSize, 3));
+    if (activePoolSize !== targetSize) {
+      console.log(`[TTS] Worker 池大小变更（${activePoolSize} → ${targetSize}），重建模型 Worker...`);
+      resetWorker();
+    } else {
+      return;
+    }
+  }
   if (loadingPromise) return loadingPromise;
 
   disposed = false;
@@ -410,13 +522,25 @@ export async function loadModel(
             console.warn(`[TTS] Worker #${idx} 初始化失败（第 ${attempt} 次），${attempt < 2 ? "自动重试" : "放弃"}: ${initError.message}`);
             try { ttsWorkers[idx]?.terminate(); } catch { /* worker 可能已终止 */ }
             ttsWorkers[idx] = undefined as unknown as Worker;
+            revokeWorkerBlob(idx);
             modelLoaded = false;
           }
         }
         if (!ok) break;
       }
-      if (initError) throw initError;
-      console.log(`[TTS] Worker 池就绪（${targetSize} 个并行推理）`);
+      if (initError) {
+        // 部分 worker 已成功初始化：保留可用 worker（降级运行），
+        // 不抛错（避免 TTSManager 整体降级到 Web Speech，浪费已加载的模型）
+        const alive = ttsWorkers.filter(Boolean).length;
+        if (alive > 0) {
+          console.warn(`[TTS] Worker 池部分初始化失败：${alive}/${targetSize} 个可用，降级继续（内存受限或资源不足）`);
+          modelLoaded = true;
+        } else {
+          throw initError;
+        }
+      }
+      activePoolSize = targetSize;
+      console.log(`[TTS] Worker 池就绪（${ttsWorkers.filter(Boolean).length}/${targetSize} 个并行推理）`);
 
       options?.onProgress?.(100);
     } catch (err) {
@@ -463,6 +587,7 @@ export async function generateAudio(
       // H5 fix: 生成超时（动态：短文本下限 120s，长文本按每字 4s 预留）
       const timer = setTimeout(() => {
         pendingRequests.delete(id);
+        taskWorkerMap.delete(id);
         console.warn(`[TTS] 生成超时 #${id}: ${((performance.now() - t0) / 1000).toFixed(1)}s 未返回，已放弃该 chunk`);
         reject(new Error("音频生成超时"));
       }, timeoutMs);
@@ -508,6 +633,7 @@ export async function generateAudioFull(
     audio = await new Promise<Float32Array>((resolve, reject) => {
       const timer = setTimeout(() => {
         pendingRequests.delete(id);
+        taskWorkerMap.delete(id);
         console.warn(`[TTS] 生成超时(完整预览) #${id}: ${((performance.now() - t0) / 1000).toFixed(1)}s 未返回`);
         reject(new Error("音频生成超时"));
       }, timeoutMs);
@@ -539,9 +665,16 @@ export function resetWorker(): void {
       try { w.terminate(); } catch { /* 已销毁的 worker 忽略 */ }
     }
   }
+  // 回收所有 blob URL（terminate 后对象无人引用，显式 revoke 防泄漏）
+  for (const url of workerBlobUrls.values()) {
+    try { URL.revokeObjectURL(url); } catch { /* 忽略 */ }
+  }
+  workerBlobUrls.clear();
   ttsWorkers = [];
   workerBusy = [];
   taskQueue = [];
+  taskWorkerMap.clear();
+  activePoolSize = 0;
   for (const [, p] of pendingRequests) {
     clearTimeout(p.timer);
     p.reject(new Error("已停止"));

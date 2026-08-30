@@ -53,9 +53,42 @@ export function stripCachePrefix(key: string): string {
 
 // H6 fix: 缓存 IDBDatabase 实例，避免重复打开连接
 let dbInstance: IDBDatabase | null = null;
+// 历史缓存前缀（模型/引擎升级后旧 key 不再使用，需清理避免 IndexedDB 存储泄漏）
+const LEGACY_PREFIXES = ["kokoro-v1/", "kokoro-v2/"];
+// 幂等标记：每个页面会话只清理一次
+let legacyCleanupStarted = false;
+
+/** 清理旧前缀缓存（升级后残留的 ~400MB 旧文件），防止多次升级逼近浏览器配额 */
+function cleanupLegacyCache(db: IDBDatabase): void {
+  if (legacyCleanupStarted) return;
+  legacyCleanupStarted = true;
+  try {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    const store = tx.objectStore(STORE_NAME);
+    const keysReq = store.getAllKeys();
+    keysReq.onsuccess = () => {
+      const keys = keysReq.result as IDBValidKey[];
+      for (const key of keys) {
+        const k = String(key);
+        if (LEGACY_PREFIXES.some(p => k.startsWith(p))) {
+          try { store.delete(key); } catch { /* 忽略单条删除失败 */ }
+        }
+      }
+      if (keys.length > 0) {
+        const removed = keys.filter(k => LEGACY_PREFIXES.some(p => String(k).startsWith(p))).length;
+        if (removed > 0) console.log(`[TTS] 已清理 ${removed} 个旧版本缓存文件（存储释放）`);
+      }
+    };
+    // 事务错误静默（清理失败不影响主流程）
+    tx.onerror = () => { /* 忽略 */ };
+  } catch { /* IndexedDB 不可用时忽略 */ }
+}
 
 function openDB(): Promise<IDBDatabase> {
-  if (dbInstance) return Promise.resolve(dbInstance);
+  if (dbInstance) {
+    cleanupLegacyCache(dbInstance);
+    return Promise.resolve(dbInstance);
+  }
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
@@ -68,6 +101,7 @@ function openDB(): Promise<IDBDatabase> {
         dbInstance?.close();
         dbInstance = null;
       };
+      cleanupLegacyCache(dbInstance);
       resolve(dbInstance);
     };
     request.onerror = () => reject(request.error);

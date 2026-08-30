@@ -34,8 +34,18 @@ export async function checkServerInference(): Promise<ServerInferenceStatus> {
 
 /** 解析 16-bit PCM WAV → Float32Array */
 function decodeWav(arrayBuf: ArrayBuffer): { samples: Float32Array; sampleRate: number } {
+  if (arrayBuf.byteLength < 44) throw new Error("WAV 解析失败：文件过短");
   const dv = new DataView(arrayBuf);
+  // 校验 RIFF/WAVE 头 + fmt 块（格式变更时立即报错，避免静默解析出错误音频）
+  const riff = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
+  const wave = String.fromCharCode(dv.getUint8(8), dv.getUint8(9), dv.getUint8(10), dv.getUint8(11));
+  if (riff !== "RIFF" || wave !== "WAVE") throw new Error("WAV 解析失败：非法 RIFF/WAVE 头");
+  const audioFormat = dv.getUint16(20, true);
+  const channels = dv.getUint16(22, true);
   const sampleRate = dv.getUint32(24, true);
+  if (audioFormat !== 1) throw new Error(`WAV 解析失败：不支持的编码格式 ${audioFormat}（仅支持 PCM）`);
+  if (channels !== 1) throw new Error(`WAV 解析失败：不支持的声道数 ${channels}（仅支持单声道）`);
+  if (sampleRate <= 0) throw new Error("WAV 解析失败：非法采样率");
   // 定位 data chunk（标准 WAV：fmt 后可能跟扩展，搜索 "data"）
   let dataOffset = 12;
   let dataSize = 0;
