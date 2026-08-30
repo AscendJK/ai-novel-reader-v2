@@ -127,6 +127,14 @@ export function normalizeText(text: string): string {
     // eslint 的 no-misleading-character-class 对 emoji 组合字符误报，此处按码点替换是预期行为
     // eslint-disable-next-line no-misleading-character-class
     .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu, " ")
+    // 全角字母 Ａ-Ｚ ａ-ｚ → 映射回 ASCII（实测全角字母被 espeak-ng 逐字乱读，映射后正常）
+    .replace(/[\uFF21-\uFF3A\uFF41-\uFF5A]/g, (m) => String.fromCharCode(m.charCodeAt(0) - 0xfee0))
+    // 白名单过滤（最后防线）：Kokoro 词表外字符不会被跳过，而是被 espeak-ng
+    // 硬拼成一串怪音（症状：内容乱读、中英混合、时长膨胀）。只保留实测能正确
+    // 朗读的字符（ASCII、Latin-1 字母/常用符号、CJK 统一表意、中文标点、
+    // 全角标点/数字），其余（U+FFFD、CJK 兼容/扩展、假名、々〇、带圈字符、
+    // 罗马数字、emoji、©®¤¨¬±、数学/箭头符号等）统一替换为空格保留停顿。
+    .replace(/[^\u0020-\u007E\u00A2\u00A3\u00A5-\u00A7\u00AA\u00B0\u00B5-\u00B7\u00BA\u00C0-\u00FF\u2013\u2014\u2018-\u201D\u2022\u2026\u2027\u203B\u3001\u3002\u3008-\u3011\u3014\u3015\u301C\u303F\uFF01-\uFF19\uFF1A-\uFF1F\uFF3B-\uFF40\uFF5B-\uFF5E\u4E00-\u9FFF]/gu, " ")
     // 连续标点清理：标点后紧跟的逗号删除（如 "：，" → "："，"。，" → "。"），
     // 避免引号替换产生双标点朗读停顿异常
     .replace(/([，。！？；：、])(\s*，)+/g, "$1")
