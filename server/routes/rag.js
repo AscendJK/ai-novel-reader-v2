@@ -1140,6 +1140,10 @@ function shutdownPyProcess(reason = "shutdown") {
 // 后端退出（含 SIGINT/SIGTERM → process.exit → exit 事件）时立即终止 worker，
 // 避免等待当前生成完成或 stdin EOF 才退出
 process.on("exit", () => shutdownPyProcess("server-exit"));
+// 双保险：SIGINT/SIGTERM 时直接终止 worker（不依赖 index.js 的 process.exit 链路，
+// 防止退出链路被改动后 Python 推理进程残留占内存/锁模型文件）
+process.on("SIGINT", () => shutdownPyProcess("server-sigint"));
+process.on("SIGTERM", () => shutdownPyProcess("server-sigterm"));
 
 /**
  * 辅助函数：流式发送文件（带错误处理）

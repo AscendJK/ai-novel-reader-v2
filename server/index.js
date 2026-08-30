@@ -171,18 +171,45 @@ async function startServers() {
       } else {
         console.error("[ssl] HTTPS server error:", err.message);
       }
+      process.exit(1); // 端口冲突/监听失败必须退出，避免半启动状态让客户端连上旧实例
     });
     httpsServer.listen(HTTPS_PORT, "0.0.0.0", () => {
       console.log(`[sync] https://0.0.0.0:${HTTPS_PORT} (${isFullMode ? "full" : "api-only"})`);
     });
     // Also start HTTP server for backward compatibility
-    app.listen(PORT, "0.0.0.0", () => {
+    const httpServer = app.listen(PORT, "0.0.0.0", () => {
       console.log(`[sync] http://0.0.0.0:${PORT} (${isFullMode ? "full" : "api-only"})`);
+    });
+    httpServer.on("error", (err) => {
+      if (err.code === "EADDRINUSE") {
+        console.error(`[server] ⚠️ 端口 ${PORT} 已被占用：可能有旧的服务端进程仍在运行（node.exe / python.exe）。`);
+        console.error(`[server] 请先彻底关闭旧进程再启动本服务：`);
+        console.error(`[server]   任务管理器结束 node.exe 和 python.exe，或执行:`);
+        console.error(`[server]     taskkill /F /IM node.exe /T`);
+        console.error(`[server]     taskkill /F /IM python.exe`);
+        console.error(`[server]   或改用其他端口: set PORT=5175 && npm run server`);
+      } else {
+        console.error("[server] HTTP server error:", err.message);
+      }
+      process.exit(1);
     });
   } else {
     // Start HTTP server only
-    app.listen(PORT, "0.0.0.0", () => {
+    const httpServer = app.listen(PORT, "0.0.0.0", () => {
       console.log(`[sync] http://0.0.0.0:${PORT} (${isFullMode ? "full" : "api-only"})`);
+    });
+    httpServer.on("error", (err) => {
+      if (err.code === "EADDRINUSE") {
+        console.error(`[server] ⚠️ 端口 ${PORT} 已被占用：可能有旧的服务端进程仍在运行（node.exe / python.exe）。`);
+        console.error(`[server] 请先彻底关闭旧进程再启动本服务：`);
+        console.error(`[server]   任务管理器结束 node.exe 和 python.exe，或执行:`);
+        console.error(`[server]     taskkill /F /IM node.exe /T`);
+        console.error(`[server]     taskkill /F /IM python.exe`);
+        console.error(`[server]   或改用其他端口: set PORT=5175 && npm run server`);
+      } else {
+        console.error("[server] HTTP server error:", err.message);
+      }
+      process.exit(1);
     });
   }
 }
