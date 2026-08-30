@@ -12,7 +12,7 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-REM Extract major version number (e.g., v18.20.4 -> 18)
+REM Extract major version number (e.g., v18.20.4 -^> 18)
 for /f "tokens=1 delims=." %%a in ('node -v') do set "NODE_VER_FULL=%%a"
 set "NODE_VER=%NODE_VER_FULL:v=%"
 
@@ -32,22 +32,26 @@ if !NODE_VER! gtr 22 (
 
 echo Node.js version: !NODE_VER! [OK]
 
-REM TTS 服务端推理依赖 Python + sherpa-onnx（可选）：缺失仅影响"服务端推理"引擎，
-REM 浏览器推理与 Web Speech 不受影响。探测并提示，不阻塞启动。
+REM TTS server-side inference needs Python + sherpa-onnx - optional dependency.
+REM If missing, only the Server TTS engine is unavailable; browser and Web Speech still work.
 set "PY_OK="
 for %%C in (python python3 py) do (
     if not defined PY_OK (
-        where %%C >nul 2>&1 && (
-            %%C -c "import sherpa_onnx" >nul 2>&1 && set "PY_OK=1"
+        where %%C >nul 2>&1
+        if not errorlevel 1 (
+            %%C -c "import sherpa_onnx" >nul 2>&1
+            if not errorlevel 1 (
+                set "PY_OK=1"
+            )
         )
     )
 )
 if not defined PY_OK (
     echo.
-    echo [NOTE] Python + sherpa-onnx 未检测到（可选依赖）。
-    echo   服务端推理引擎将不可用。如需使用，请安装 Python 3.9+ 后运行：
-    echo     pip install sherpa-onnx
-    echo   浏览器推理与 Web Speech 朗读不受影响。
+    echo [NOTE] Python + sherpa-onnx not detected - optional dependency.
+    echo   Server-side TTS engine will be unavailable. To enable it:
+    echo   pip install sherpa-onnx
+    echo   Browser and Web Speech engines are not affected.
     echo.
 )
 
