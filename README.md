@@ -486,7 +486,7 @@ MIT License
 
 **三层下载链路：**
 
-1. **模型源**：WASM 引擎（含精简 espeak-ng-data）从 Gitee release 	ts-kokoro-v1.0 下载；模型（Kokoro v1.0 fp32，约 310MB）从 GitHub 官方 	ts-models release 下载
+1. **模型源**：WASM 引擎（含精简 espeak-ng-data）从 Gitee release `Kokoro_fp32_v1.0` 下载；模型（Kokoro v1.0 fp32，约 310MB）优先从 Gitee 同 release 下载 7z 分卷（国内快），失败自动降级 GitHub 官方 tts-models release（含 gh-proxy / gh.llkk.cc 加速镜像）
 2. **服务器缓存**（server/data/tts-cache/）：**服务器启动后自动检查并下载**缺失资源（延迟 5 秒触发，失败不阻塞启动、自动冷却重试，也可通过 /api/rag/tts/prepare 手动触发）
 3. **浏览器缓存（IndexedDB）**：**用户登录后自动检测**，若本地无缓存则通过后端 API（带鉴权）逐文件拉取约 380MB 存入浏览器 IndexedDB，只需一次，之后完全离线使用
 

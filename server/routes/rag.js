@@ -327,15 +327,15 @@ const TTS_TEMP_DIR = path.resolve(__dirname, "../data/tts-temp");
 
 // ── 下载源配置 ──
 // 方案4: 分离式标准部署 — 通用 WASM 运行时 + 独立模型文件
-const TTS_RELEASE_TAG = "tts-kokoro-v1.0";
+const TTS_RELEASE_TAG = "Kokoro_fp32_v1.0";
 const SHERPA_VER = "v1.13.6";
 // 分离式标准部署：WASM 运行时（精简 data 含 espeak-ng-data）+ 独立模型文件
 // WASM 运行时文件名（用户上传到 Gitee 的实际名称）
 const WASM_ARCHIVE_NAME = "sherpa-onnx-wasm-simd-1.13.6-kokoro-slim";
 // 模型文件（Kokoro multi-lang v1.0 fp32：model.onnx/voices.bin/tokens/lexicon/fst/dict）
 // ⚠️ 必须用 fp32 包：v1.0 int8 模型（model.int8.onnx）在 1.13.6 wasm 上
-// 生成全 NaN 音频（听不到声音，已用 Node 探针复现）。Gitee release 上的
-// 模型分卷内容是 int8，故模型改走 GitHub 官方 tts-models 源。
+// 生成全 NaN 音频（听不到声音，已用 Node 探针复现）。
+// 下载顺序：Gitee fp32 分卷（国内快）→ GitHub 官方 tts-models + 镜像（后备）
 const MODEL_ARCHIVE_NAME = "kokoro-multi-lang-v1_0";
 
 // Gitee（优先国内源；WASM 引擎 + fp32 模型分卷均放这里）
