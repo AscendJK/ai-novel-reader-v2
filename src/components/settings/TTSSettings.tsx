@@ -21,8 +21,8 @@ import { apiFetch } from "@/lib/api-client";
 
 export function TTSSettings() {
   const {
-    voiceId, speed, pitch, autoNextChapter, browserVoices, engine, zipvoiceChunkSize,
-    setVoiceId, setSpeed, setPitch, setAutoNextChapter, setBrowserVoices, setEngine, setZipvoiceChunkSize,
+    voiceId, speed, pitch, autoNextChapter, browserVoices, engine, chunkSize,
+    setVoiceId, setSpeed, setPitch, setAutoNextChapter, setBrowserVoices, setEngine, setChunkSize,
   } = useTTSStore();
 
   const [loading, setLoading] = useState(false);
@@ -399,9 +399,11 @@ export function TTSSettings() {
       <div>
         <p className="font-medium text-sm">语音朗读</p>
         <p className="text-xs text-muted-foreground">
-          {engine === "webspeech"
-            ? "使用浏览器内置 Web Speech API（免下载）"
-            : "使用 ZipVoice 离线引擎（sherpa-onnx WASM，可离线）"}
+          {engine === "server"
+            ? "服务端推理：服务器 Python 多线程生成（快，可边听边推理）"
+            : engine === "zipvoice"
+              ? "浏览器推理：本地 wasm 生成（可离线）"
+              : "浏览器内置 Web Speech API（免下载）"}
         </p>
       </div>
 
@@ -652,19 +654,19 @@ export function TTSSettings() {
         </div>
       )}
 
-      {/* 单次生成字数（Kokoro 引擎分块大小；Web Speech 无此概念，隐藏） */}
+      {/* 单次生成字数（当前引擎分块大小，三引擎各自独立；Web Speech 无此概念，隐藏） */}
       {engine !== "webspeech" && (
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-muted-foreground">
               {engine === "server" ? "单次生成字数（服务端推理）" : "单次生成字数（浏览器推理）"}
             </p>
-            <span className="text-xs text-muted-foreground">{zipvoiceChunkSize} 字</span>
+            <span className="text-xs text-muted-foreground">{chunkSize} 字</span>
           </div>
           <input type="range" min={30} max={500} step={10}
-            value={zipvoiceChunkSize}
+            value={chunkSize}
             aria-label="单次生成字数"
-            onChange={(e) => setZipvoiceChunkSize(parseInt(e.target.value, 10))}
+            onChange={(e) => setChunkSize(parseInt(e.target.value, 10))}
             className="w-full h-1.5" />
           <div className="flex justify-between text-[10px] text-muted-foreground">
             <span>30</span><span>150</span><span>300</span><span>500</span>

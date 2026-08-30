@@ -460,11 +460,13 @@ class ZipVoiceTTSEngine {
     });
   }
 
-  async speak(
-    text: string, speed: number, callbacks: TTSPlaybackCallbacks, isCancelled?: () => boolean,
-    paragraphBreaks?: number[], paragraphIndices?: number[],
-    onParagraphChange?: (paraIdx: number) => void,
-  ): Promise<void> {
+  /**
+   * 仅生成音频（不播放）：返回 AudioBuffer。
+   * 供流水线预生成下一段使用；isCancelled 在生成完成后检查（wasm 同步推理无法中途取消）。
+   */
+  async generateBuffer(
+    text: string, speed: number, isCancelled?: () => boolean,
+  ): Promise<AudioBuffer> {
     this.stop();
     this.stopped = false;
     const ctx = this.getAudioContext();
@@ -473,23 +475,60 @@ class ZipVoiceTTSEngine {
     }
     // 移到块外重新检查：避免 TS 对块内 ctx.state 的窄化（resume 可能成功也可能被拒）
     if (ctx.state !== "running") {
-      // 无法出声：直接报错而非静默跳过所有 chunk（避免朗读瞬间“播完”触发自动翻章）
+      throw new Error("浏览器阻止了自动播放，请点击页面任意位置后重试");
+    }
+    const { samples, sampleRate } = await this.generate(text, this.voice, speed);
+    if (this.stopped || isCancelled?.()) throw new Error("已取消");
+    const buffer = ctx.createBuffer(1, samples.length, sampleRate);
+    buffer.copyToChannel(new Float32Array(samples), 0);
+    return buffer;
+  }
+
+  /**
+   * 播放已生成的 AudioBuffer（不生成）。
+   * onPlay 在开始出声时回调；onEnd 在播放完毕回调（主动 stop 不触发）。
+   * @param text 段落追踪用文本（多段 chunk 按音频进度映射段落）
+   */
+  async playBuffer(
+    buffer: AudioBuffer,
+    callbacks: { onPlay?: () => void; onEnd?: () => void; onError?: (err: string) => void },
+    isCancelled?: () => boolean,
+    text?: string,
+    paragraphBreaks?: number[], paragraphIndices?: number[],
+    onParagraphChange?: (paraIdx: number) => void,
+  ): Promise<void> {
+    if (this.stopped || isCancelled?.()) return;
+    const ctx = this.getAudioContext();
+    if (ctx.state === "suspended") {
+      try { await ctx.resume(); } catch { /* 继续尝试播放 */ }
+    }
+    if (ctx.state !== "running") {
       callbacks.onError?.("浏览器阻止了自动播放，请点击页面任意位置后重试");
       return;
     }
-    let firstChunk = true;
+    callbacks.onPlay?.();
+    // 多段 chunk：播放期间按音频进度逐段高亮（与 Web Speech onboundary 对齐）
+    if (text && paragraphBreaks && paragraphIndices && paragraphIndices.length > 1 && onParagraphChange) {
+      this.startParagraphTracking(buffer, text, paragraphBreaks, paragraphIndices, onParagraphChange);
+    }
+    await this.playOneBuffer(buffer);
+    if (!this.stopped && !isCancelled?.()) callbacks.onEnd?.();
+  }
+
+  /** 生成并播放一段（便捷方法：generateBuffer + playBuffer） */
+  async speak(
+    text: string, speed: number, callbacks: TTSPlaybackCallbacks, isCancelled?: () => boolean,
+    paragraphBreaks?: number[], paragraphIndices?: number[],
+    onParagraphChange?: (paraIdx: number) => void,
+  ): Promise<void> {
     try {
-      const { samples, sampleRate } = await this.generate(text, this.voice, speed);
+      const buffer = await this.generateBuffer(text, speed, isCancelled);
       if (this.stopped || isCancelled?.()) return;
-      const buffer = ctx.createBuffer(1, samples.length, sampleRate);
-      buffer.copyToChannel(new Float32Array(samples), 0);
-      if (firstChunk) { firstChunk = false; callbacks.onPlay?.(); }
-      // 多段 chunk：播放期间按音频进度逐段高亮（与 Web Speech onboundary 对齐）
-      if (paragraphBreaks && paragraphIndices && paragraphIndices.length > 1 && onParagraphChange) {
-        this.startParagraphTracking(buffer, text, paragraphBreaks, paragraphIndices, onParagraphChange);
-      }
-      await this.playOneBuffer(buffer);
-      if (!this.stopped) callbacks.onEnd?.();
+      await this.playBuffer(
+        buffer,
+        { onPlay: () => callbacks.onPlay?.(), onEnd: () => callbacks.onEnd?.(), onError: (err) => callbacks.onError?.(err) },
+        isCancelled, text, paragraphBreaks, paragraphIndices, onParagraphChange,
+      );
     } catch (err) {
       if (this.stopped) return; // 主动停止（resetWorker reject）导致的取消，静默丢弃
       const msg = err instanceof Error ? err.message : String(err);
@@ -597,6 +636,9 @@ export class TTSManager {
   private generationId = 0;
   private seekId = 0;
   private userPaused = false;
+  // ── 流水线预生成（播放当前段时并行推理下一段）──
+  private prefetched: { index: number; buffer: AudioBuffer } | null = null;
+  private prefetchPromise: Promise<void> | null = null;
 
   constructor() {
     this.webSpeech = new WebSpeechTTSEngine();
@@ -630,6 +672,42 @@ export class TTSManager {
   prewarmZipVoiceAudio(): void {
     const engine = this.getKokoroEngine();
     engine?.prewarm();
+  }
+
+  /**
+   * 流水线预生成：播放当前段时并行推理下一段。
+   * 启动 chunks[nextIndex] 的生成，完成后缓存到 prefetched（带 genId 校验，作废即丢弃）。
+   */
+  private startPrefetch(nextIndex: number, effectiveSpeed: number): void {
+    const kokoro = this.zipvoice;
+    if (!kokoro || this.engine === "webspeech") return;
+    if (nextIndex < 0 || nextIndex >= this.chunks.length) return;
+    if (this.prefetchPromise || this.prefetched?.index === nextIndex) return; // 已有预生成
+    const genId = this.generationId;
+    const nextChunk = this.chunks[nextIndex];
+    this.prefetchPromise = (async () => {
+      try {
+        const buffer = await kokoro.generateBuffer(
+          nextChunk.text, effectiveSpeed,
+          () => this.stopped || this.generationId !== genId,
+        );
+        if (this.stopped || this.generationId !== genId) return; // 作废：停止/seek/语速变更
+        this.prefetched = { index: nextIndex, buffer };
+      } catch (e) {
+        // 预生成失败不中断当前播放：下一段播放时会走正常生成路径并抛出错误
+        if (!this.stopped && this.generationId === genId) {
+          console.warn(`[TTS] 预生成 chunk ${nextIndex + 1} 失败（稍后重试）:`, e instanceof Error ? e.message : e);
+        }
+      } finally {
+        this.prefetchPromise = null;
+      }
+    })();
+  }
+
+  /** 清空预生成缓存（停止/seek/语速变更/新 speak 时调用） */
+  private clearPrefetch(): void {
+    this.prefetched = null;
+    this.prefetchPromise = null;
   }
 
   setVoice(voiceId: string) {
@@ -725,6 +803,7 @@ export class TTSManager {
     this.generationId++;
     this.seekId++;
     this.currentParagraphIndex = 0;
+    this.clearPrefetch();
     if (this.zipvoice) this.zipvoice.stop();
     this.webSpeech.stop();
 
@@ -778,32 +857,64 @@ export class TTSManager {
       await new Promise(r => setTimeout(r, 0));
       // 有效语速 = 设置页生成语速 × 朗读栏播放倍速（clamp 到 sherpa-onnx 官方 0.4-3.5）
       const effectiveSpeed = Math.max(0.4, Math.min(3.5, this.speed * this.playbackRate));
+
+      // ── 流水线：优先使用预生成结果（播放上一段时已并行推理完成）──
+      // 两条路径（预生成命中 / 现场生成）都保证赋值或 return，之后 buffer 必非空
+      let buffer: AudioBuffer;
+      if (this.prefetched?.index === this.currentChunkIndex) {
+        buffer = this.prefetched.buffer;
+        this.prefetched = null;
+        this.prefetchPromise = null;
+        console.log(`[TTS] ▶ chunk ${this.currentChunkIndex + 1}/${this.chunks.length} 使用预生成音频（${this.engine === "server" ? "服务端" : "浏览器"}）`);
+      } else {
+        const chunkT0 = performance.now();
+        console.log(`[TTS] ▶ 生成 chunk ${this.currentChunkIndex + 1}/${this.chunks.length} (${this.engine === "server" ? "服务端" : "浏览器"}): ${chunk.text.length} 字, speed=${effectiveSpeed.toFixed(2)}`);
+        try {
+          buffer = await this.zipvoice.generateBuffer(
+            chunk.text, effectiveSpeed,
+            () => this.stopped || this.generationId !== genId,
+          );
+        } catch (err) {
+          if (this.stopped || this.generationId !== genId) return; // 取消静默
+          const msg = err instanceof Error ? err.message : String(err);
+          this.callbacks.onError?.(`音频生成失败: ${msg}`);
+          return;
+        }
+        console.log(`[TTS] ✓ 生成完成（${((performance.now() - chunkT0) / 1000).toFixed(1)}s）`);
+      }
+      if (this.stopped || this.generationId !== genId) return;
+
+      // ── 流水线：播放当前段的同时，并行推理下一段 ──
+      this.startPrefetch(this.currentChunkIndex + 1, effectiveSpeed);
+
       const chunkT0 = performance.now();
-      console.log(`[TTS] ▶ 生成 chunk ${this.currentChunkIndex + 1}/${this.chunks.length} (${this.engine === "server" ? "服务端" : "浏览器"}): ${chunk.text.length} 字, speed=${effectiveSpeed.toFixed(2)}`);
-      await this.zipvoice.speak(chunk.text, effectiveSpeed, {
-        onPlay: () => {
-          if (this.stopped || this.generationId !== genId) return;
-          this.callbacks.onPlay?.();
+      await this.zipvoice.playBuffer(
+        buffer,
+        {
+          onPlay: () => {
+            if (this.stopped || this.generationId !== genId) return;
+            this.callbacks.onPlay?.();
+          },
+          onEnd: () => {
+            if (this.stopped || this.generationId !== genId) return;
+            // Kokoro 每个 chunk 是一整段音频，无组内逐段追踪；
+            // 结束时传组内最后一段的原始索引，与 WebSpeech 路径（handleChunkEnded）对齐
+            const lastIdx = chunk.paragraphIndices?.length
+              ? chunk.paragraphIndices[chunk.paragraphIndices.length - 1]
+              : chunk.paragraphIndex;
+            console.log(`[TTS] ✓ chunk ${this.currentChunkIndex + 1}/${this.chunks.length} 播放结束（生成+播放共 ${((performance.now() - chunkT0) / 1000).toFixed(1)}s）`);
+            this.callbacks.onChunkEnd?.(this.currentChunkIndex, this.chunks.length, lastIdx);
+            this.currentChunkIndex++;
+            this.speakNextChunk();
+          },
+          onError: (err) => {
+            if (this.stopped || this.generationId !== genId) return;
+            this.callbacks.onError?.(err);
+          },
         },
-        onEnd: () => {
-          if (this.stopped || this.generationId !== genId) return;
-          // Kokoro 每个 chunk 是一整段音频，无组内逐段追踪；
-          // 结束时传组内最后一段的原始索引，与 WebSpeech 路径（handleChunkEnded）对齐
-          const lastIdx = chunk.paragraphIndices?.length
-            ? chunk.paragraphIndices[chunk.paragraphIndices.length - 1]
-            : chunk.paragraphIndex;
-          console.log(`[TTS] ✓ chunk ${this.currentChunkIndex + 1}/${this.chunks.length} 播放结束（生成+播放共 ${((performance.now() - chunkT0) / 1000).toFixed(1)}s）`);
-          this.callbacks.onChunkEnd?.(this.currentChunkIndex, this.chunks.length, lastIdx);
-          this.currentChunkIndex++;
-          this.speakNextChunk();
-        },
-        onError: (err) => {
-          if (this.stopped || this.generationId !== genId) return;
-          this.callbacks.onError?.(err);
-        },
-      }, () => this.stopped || this.generationId !== genId,
+        () => this.stopped || this.generationId !== genId,
         // 多段 chunk：播放期间按音频进度逐段高亮（与 Web Speech 的 onboundary 对齐）
-        chunk.paragraphBreaks, chunk.paragraphIndices,
+        chunk.text, chunk.paragraphBreaks, chunk.paragraphIndices,
         (paraIdx) => {
           if (this.stopped || this.generationId !== genId) return;
           this.currentParagraphIndex = paraIdx;
@@ -873,6 +984,7 @@ export class TTSManager {
     this.generationId++;
     this.seekId++;
     this.currentParagraphIndex = 0;
+    this.clearPrefetch(); // 丢弃预生成
     if (this.zipvoice) this.zipvoice.stop();
     this.webSpeech.stop();
     // 立即中断 worker 推理：wasm 同步推理无法取消单次任务，
@@ -889,6 +1001,7 @@ export class TTSManager {
       this.generationId++;
       this.userPaused = false;
       this.stopped = true;
+      this.clearPrefetch(); // 丢弃预生成（目标 chunk 可能不是预生成的）
       if (this.zipvoice) this.zipvoice.stop();
       this.webSpeech.stop();
       this.currentChunkIndex = index;
@@ -916,6 +1029,7 @@ export class TTSManager {
     this.stopped = true;
     this.userPaused = false;
     this.generationId++;
+    this.clearPrefetch();
     if (this.zipvoice) { this.zipvoice.destroy(); this.zipvoice = null; }
     this.webSpeech.destroy();
     // 组件卸载：中断 worker 推理，避免页面切走后 CPU 仍在跑

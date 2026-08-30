@@ -48,7 +48,7 @@ export function useAudioPlayer({
   const pendingAutoPlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const {
-    playing, paused, speed, playbackRate, pitch, voiceId, engine, autoNextChapter, zipvoiceChunkSize, webspeechChunkSize,
+    playing, paused, speed, playbackRate, pitch, voiceId, engine, autoNextChapter, chunkSize,
     currentNovelId, currentChapterIndex,
     setPlaying, setPaused, setCurrentChapter,
     setParagraphProgress, setGenerating, setEngine,
@@ -177,9 +177,8 @@ export function useAudioPlayer({
     setCurrentChapter(novelId, chapterIndex);
     setGenerating(true);
 
-    // 单次生成 ≤zipvoiceChunkSize 字（设置页可调，默认 60，范围 30-500）：
-    // Kokoro 引擎（server/zipvoice）共用此分块；Web Speech 使用独立的 webspeechChunkSize
-    const chunkLimit = engine === "webspeech" ? webspeechChunkSize : zipvoiceChunkSize;
+    // 单次生成 ≤chunkSize 字（设置页可调，三引擎各自独立：server 150 / zipvoice 60 / webspeech 300）
+    const chunkLimit = chunkSize;
     const prepared = prepareTextForTTS(chapterContent, chunkLimit);
     // 从 prepareTextForTTS 结果中提取段落总数（已过滤短段落）
     // 每个 chunk 的 paragraphIndices 长度之和即为实际段落数
@@ -301,7 +300,7 @@ export function useAudioPlayer({
       setGenerating(false);
       setPlaying(false);
     });
-  }, [chapterContent, chapterIndex, novelId, engine, voiceId, speed, playbackRate, pitch, autoNextChapter, getManager, setCurrentChapter, setGenerating, setParagraphProgress, setPlaying, setPaused, onNextChapter, loadPosition, setBrowserVoices, setEngine, setModelDownloaded, setModelDownloading, zipvoiceChunkSize, webspeechChunkSize]);
+  }, [chapterContent, chapterIndex, novelId, engine, voiceId, speed, playbackRate, pitch, autoNextChapter, getManager, setCurrentChapter, setGenerating, setParagraphProgress, setPlaying, setPaused, onNextChapter, loadPosition, setBrowserVoices, setEngine, setModelDownloaded, setModelDownloading, chunkSize]);
 
   // R13: 暂停/恢复（WebSpeech 使用 cancel+re-speak 模式，绕过移动端 resume bug）
   const togglePause = useCallback(async () => {

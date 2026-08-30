@@ -70,3 +70,12 @@ docs/plans/
 .fetch/
 # OpenSquilla runtime workspace
 .opensquilla/
+
+# Local agent memory / workspace files (not for public repo)
+MEMORY.md
+memory/
+USER.md
+IDENTITY.md
+SOUL.md
+AGENTS.md
+TOOLS.md

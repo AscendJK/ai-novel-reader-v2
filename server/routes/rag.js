@@ -863,33 +863,35 @@ let pyNextId = 1;
 let pyLastError = "";         // 上次失败原因（status 接口展示）
 let pyCandidates = ["python", "python3", "py"]; // 依次探测可用的 Python 命令
 
-/** 探测可用的 python 命令（缓存结果） */
+/** 探测可用的 python 命令（缓存 60s：部署后装好 Python 无需重启即可生效） */
 let _pyCmdCache = null;
+let _pyCmdCacheAt = 0;
 async function detectPythonCommand() {
-  if (_pyCmdCache !== null) return _pyCmdCache;
+  if (_pyCmdCache !== null && Date.now() - _pyCmdCacheAt < 60000) return _pyCmdCache;
   for (const cmd of pyCandidates) {
     try {
       const { stdout } = await execFileAsync(cmd, ["-c", "import sherpa_onnx; print('ok')"], { timeout: 15000, windowsHide: true });
       if (String(stdout).trim() === "ok") {
         _pyCmdCache = cmd;
+        _pyCmdCacheAt = Date.now();
         return cmd;
       }
     } catch { /* 尝试下一个 */ }
   }
   _pyCmdCache = "";
+  _pyCmdCacheAt = Date.now();
   return _pyCmdCache;
 }
 
-/** 检查服务端推理是否可用（Python + sherpa_onnx + 模型就绪） */
+/** 检查服务端推理是否可用（Python + sherpa_onnx + 模型文件就绪）。
+ *  ⚠️ 只检查文件存在性，绝不触发下载（ensureModelReady 会下载 350MB，
+ *  status 轮询被设置页每 30s 调用，一旦误触发就违背"模型按需下载"）。 */
 export async function checkServerInferenceReady() {
   const pyCmd = await detectPythonCommand();
   if (!pyCmd) return { supported: false, ready: false, reason: "服务器未安装 Python 或 sherpa-onnx（pip install sherpa-onnx）" };
-  try {
-    await ensureModelReady();
-    return { supported: true, ready: true, reason: "" };
-  } catch (e) {
-    return { supported: true, ready: false, reason: `模型未就绪: ${e.message}` };
-  }
+  const modelExists = fs.existsSync(path.join(TTS_MODEL_CACHE, "model.onnx"));
+  if (!modelExists) return { supported: true, ready: false, reason: "模型未下载（设置页启用服务端推理时自动下载）" };
+  return { supported: true, ready: true, reason: "" };
 }
 
 /** 确保 Python 推理进程已启动（模型就绪 + 进程 ready） */
