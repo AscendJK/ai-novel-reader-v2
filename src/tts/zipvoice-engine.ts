@@ -142,6 +142,10 @@ async function createWorker(index: number): Promise<Worker> {
     const msg = e.message || e.error?.message || `Worker 加载失败 (${e.filename || "?"}:${e.lineno || "?"})`;
     console.error(`[TTS Worker #${index}] error:`, msg, detail);
     modelLoaded = false;
+    // 崩溃槽位失效：busy 释放 + 元素置 undefined，dispatchTask 会跳过它
+    //（后续任务派发给其他正常 worker；不自动重建，避免加载风暴）
+    if (index >= 0 && index < workerBusy.length) workerBusy[index] = false;
+    if (index >= 0 && index < ttsWorkers.length) ttsWorkers[index] = undefined as unknown as Worker;
     // 快速失败当前等待 ready 的流程（loadModel 会自动重试）
     const waiter = readyWaiter;
     readyWaiter = null;
@@ -164,22 +168,21 @@ function onWorkerIdle(index: number): void {
   if (next) dispatchTask(next);
 }
 
-/** 调度：找空闲 worker 分配任务；无空闲或池未就绪则入队等待 */
+/** 调度：找有效空闲 worker 分配任务；无可用则入队等待 */
 function dispatchTask(task: Task): void {
-  const idx = workerBusy.findIndex((b) => !b);
-  if (idx === -1 || idx >= ttsWorkers.length) {
-    taskQueue.push(task);
-    return;
+  // 遍历找"空闲且 worker 存在"的槽位：崩溃/未初始化的槽位（w=undefined）必须跳过，
+  // 否则 findIndex 会反复选中失效槽位，任务入队后永远无人派发（死锁到超时）
+  let idx = -1;
+  for (let i = 0; i < workerBusy.length; i++) {
+    if (!workerBusy[i] && ttsWorkers[i]) { idx = i; break; }
   }
-  const w = ttsWorkers[idx];
-  if (!w) {
-    // 池元素缺失（未初始化完成）：入队等待，不占用 busy 标记
+  if (idx === -1) {
     taskQueue.push(task);
     return;
   }
   workerBusy[idx] = true;
   try {
-    w.postMessage({ type: "generate", id: task.id, text: task.text, sid: task.sid, speed: task.speed });
+    ttsWorkers[idx]!.postMessage({ type: "generate", id: task.id, text: task.text, sid: task.sid, speed: task.speed });
   } catch (err) {
     // postMessage 失败（worker 已终止等）：释放 busy，避免该槽位永久卡死
     workerBusy[idx] = false;

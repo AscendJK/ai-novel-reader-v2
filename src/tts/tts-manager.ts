@@ -467,12 +467,14 @@ class ZipVoiceTTSEngine {
   /**
    * 仅生成音频（不播放）：返回 AudioBuffer。
    * 供流水线预生成下一段使用；isCancelled 在生成完成后检查（wasm 同步推理无法中途取消）。
+   * 注意：不能调用 this.stop()——缓冲池模式下 pumpPrefetch 会在播放当前段时
+   * 并行调用本方法，stop() 会中断正在播放的 source 导致当前段被截断。
+   * 播放状态（currentSource/currentBuffer）由 playBuffer/pause/resume/stop 管理。
    */
   async generateBuffer(
     text: string, speed: number, isCancelled?: () => boolean,
   ): Promise<AudioBuffer> {
-    this.stop();
-    this.stopped = false;
+    this.stopped = false; // 重置引擎级作废标志（新一轮生成）
     const ctx = this.getAudioContext();
     if (ctx.state === "suspended") {
       try { await ctx.resume(); } catch { /* 自动播放策略拒绝，继续尝试 */ }
@@ -696,8 +698,11 @@ export class TTSManager {
     // 水位目标：当前播放 index + K；预生成阶段则推进到 K
     const base = this.preparing ? 0 : this.currentChunkIndex + 1;
     const target = Math.min(this.chunks.length, base + this.prefetchCount);
-    while (this.generateWatermark < target) {
-      const idx = this.generateWatermark++;
+    // 游标从 max(已提交进度, 当前应提交起点) 开始：
+    // seek 后 clearPrefetch 把 watermark 重置为 0，但不能重新提交 seek 之前的段
+    let cursor = Math.max(this.generateWatermark, base);
+    while (cursor < target) {
+      const idx = cursor++;
       const chunk = this.chunks[idx];
       if (!chunk) break;
       // 异步生成：完成后若未作废则入缓冲（按 index 有序插入）
@@ -726,6 +731,7 @@ export class TTSManager {
         }
       })();
     }
+    this.generateWatermark = cursor; // 更新已提交进度（含 seek 后跳过的旧段）
   }
 
   /** 预生成阶段目标段数（当前水位与总段数的较小值） */
@@ -749,9 +755,17 @@ export class TTSManager {
     this.callbacks.onPrepareProgress?.(0, total);
     this.pumpPrefetch(); // 并行提交前 K 段生成（worker 池自动并行）
     // 等待：全部完成 或 用户立即播放（至少 1 段就绪）或 被停止
+    // 兜底：60s 无新进展（全部失败/卡死）则用已就绪的段开始播放，缺失段播放时现场生成
+    let lastReady = this.prepareReady;
+    let lastProgressAt = Date.now();
     while (this.preparing && this.prepareReady < total) {
       if (this.stopped || this.generationId !== genId) { this.preparing = false; return; }
       if (this.skipPrepareRequested && this.prepareReady >= 1) { this.preparing = false; break; }
+      if (this.prepareReady > lastReady) { lastReady = this.prepareReady; lastProgressAt = Date.now(); }
+      else if (Date.now() - lastProgressAt > 60000) {
+        console.warn(`[TTS] 预生成无进展 ${this.prepareReady}/${total} 段（60s），提前开始播放`);
+        break;
+      }
       await new Promise(r => setTimeout(r, 100));
     }
     this.preparing = false;

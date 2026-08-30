@@ -36,6 +36,7 @@ const mockCancelServerInference = vi.mocked(cancelServerInference);
 
 // ── Mock Web Audio API（jsdom 无 AudioContext）──
 class MockAudioBufferSource {
+  static stopCount = 0; // 统计 source.stop() 调用（验证播放不被预生成打断）
   buffer: unknown = null;
   onended: (() => void) | null = null;
   playbackRate = { value: 1 };
@@ -44,7 +45,7 @@ class MockAudioBufferSource {
     // 模拟播放 120ms 后自然结束
     setTimeout(() => this.onended?.(), 120);
   }
-  stop() { this.onended = null; }
+  stop() { this.onended = null; MockAudioBufferSource.stopCount++; }
 }
 class MockAudioBuffer {
   duration: number;
@@ -216,6 +217,28 @@ describe("TTSManager 流水线预生成", () => {
     expect(Math.max(...bufferLevels)).toBeGreaterThanOrEqual(2);
     // 播放结束（全部 chunk 消费完）后水位归 0
     expect(bufferLevels[bufferLevels.length - 1]).toBe(0);
+    manager.destroy();
+  }, 10000);
+
+  it("播放中并行预生成不中断当前段（回归：generateBuffer 不得调用 stop）", async () => {
+    const manager = new TTSManager();
+    manager.setEngine("server");
+    manager.setPrefetchCount(1); // 预生成 1 段：播放 chunk0 时 pump 提交 chunk1
+    const chunks = makeChunks();
+    const chunkStarts: number[] = [];
+    const done = new Promise<void>((resolve) => {
+      manager.speak(chunks, {
+        onChunkStart: (i) => chunkStarts.push(i),
+        onEnd: () => resolve(),
+      }).catch(() => {});
+    });
+
+    const stopsBefore = MockAudioBufferSource.stopCount;
+    await done; // 全部自然播放结束（若预生成打断播放，onEnd 永不触发 → 超时）
+    // 播放期间 source.stop() 只能来自 pause/TTSManager.stop（本测试都没有），
+    // 因此 stopCount 不变 = 预生成任务没有中断当前段（P0 回归）
+    expect(MockAudioBufferSource.stopCount).toBe(stopsBefore);
+    expect(chunkStarts.length).toBeGreaterThanOrEqual(2); // 流水线正常衔接
     manager.destroy();
   }, 10000);
 
