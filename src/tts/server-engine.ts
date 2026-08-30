@@ -88,3 +88,16 @@ export async function synthesizeServer(
   console.log(`[TTS-server] 生成完成: ${samples.length} samples ≈ ${(samples.length / sampleRate).toFixed(1)}s 音频, 耗时 ${((performance.now() - t0) / 1000).toFixed(1)}s`);
   return { samples, sampleRate };
 }
+
+/**
+ * 取消当前用户所有排队中的服务端推理请求（停止朗读时调用）。
+ * 服务器立即释放队列位置（其他用户无需等待作废请求生成完）。
+ * fire-and-forget：网络失败静默，不影响停止流程。
+ */
+export async function cancelServerInference(): Promise<void> {
+  try {
+    await apiFetch("/api/rag/tts/cancel", { method: "POST" });
+  } catch {
+    /* 静默：取消失败不影响本地停止 */
+  }
+}

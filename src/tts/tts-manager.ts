@@ -5,7 +5,7 @@
  */
 
 import { loadModel, isModelLoaded, generateAudio, resetWorker } from "./zipvoice-engine";
-import { synthesizeServer } from "./server-engine";
+import { synthesizeServer, cancelServerInference } from "./server-engine";
 
 export type TTSEngine = "server" | "zipvoice" | "webspeech";
 
@@ -710,6 +710,15 @@ export class TTSManager {
     this.prefetchPromise = null;
   }
 
+  /**
+   * 停止服务端推理的排队请求（fire-and-forget，不阻塞停止流程）。
+   * 只有 server 引擎需要：zipvoice（浏览器推理）无服务器队列。
+   */
+  private cancelServerInference(): void {
+    if (this.engine !== "server") return;
+    cancelServerInference().catch(() => { /* 静默 */ });
+  }
+
   setVoice(voiceId: string) {
     this.voiceId = voiceId;
     if (this.engine === "webspeech") {
@@ -804,6 +813,7 @@ export class TTSManager {
     this.seekId++;
     this.currentParagraphIndex = 0;
     this.clearPrefetch();
+    this.cancelServerInference(); // 新朗读开始：清理上一轮遗留的排队请求
     if (this.zipvoice) this.zipvoice.stop();
     this.webSpeech.stop();
 
@@ -985,6 +995,7 @@ export class TTSManager {
     this.seekId++;
     this.currentParagraphIndex = 0;
     this.clearPrefetch(); // 丢弃预生成
+    this.cancelServerInference(); // 释放服务器队列（服务端推理）
     if (this.zipvoice) this.zipvoice.stop();
     this.webSpeech.stop();
     // 立即中断 worker 推理：wasm 同步推理无法取消单次任务，
@@ -1002,6 +1013,7 @@ export class TTSManager {
       this.userPaused = false;
       this.stopped = true;
       this.clearPrefetch(); // 丢弃预生成（目标 chunk 可能不是预生成的）
+      this.cancelServerInference(); // 旧 chunk 的排队请求作废，释放队列
       if (this.zipvoice) this.zipvoice.stop();
       this.webSpeech.stop();
       this.currentChunkIndex = index;
@@ -1030,6 +1042,7 @@ export class TTSManager {
     this.userPaused = false;
     this.generationId++;
     this.clearPrefetch();
+    this.cancelServerInference();
     if (this.zipvoice) { this.zipvoice.destroy(); this.zipvoice = null; }
     this.webSpeech.destroy();
     // 组件卸载：中断 worker 推理，避免页面切走后 CPU 仍在跑

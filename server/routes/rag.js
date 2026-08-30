@@ -154,10 +154,14 @@ router.post("/tts/synthesize", requireAuth, rateLimit(60), async (req, res) => {
       return res.status(400).json({ error: "text required" });
     }
     if (text.length > 2000) return res.status(400).json({ error: "单次最多 2000 字" });
+    // 队列上限：防止大量前端同时朗读导致排队无限堆积
+    if (pyQueue.size >= TTS_PY_QUEUE_LIMIT) {
+      return res.status(503).json({ error: "服务器推理繁忙，请稍后再试" });
+    }
     const s = Math.max(0.4, Math.min(3.5, Number(speed) || 1.0));
     const voiceId = Number.isInteger(Number(sid)) ? Math.max(0, Math.min(102, Number(sid))) : 45;
 
-    const result = await pyGenerate(text, voiceId, s);
+    const result = await pyGenerate(text, voiceId, s, req.username);
     const wavBuf = Buffer.from(result.wavBase64, "base64");
     res.setHeader("Content-Type", "audio/wav");
     res.setHeader("Content-Length", wavBuf.length);
@@ -166,6 +170,17 @@ router.post("/tts/synthesize", requireAuth, rateLimit(60), async (req, res) => {
   } catch (e) {
     console.error("[tts-py] synthesize error:", e.message);
     res.status(500).json({ error: "服务端推理失败: " + e.message });
+  }
+});
+
+// POST /api/rag/tts/cancel — 取消当前用户所有排队中的服务端推理请求
+// 前端停止朗读时调用，立即释放队列位置（其他用户无需等待作废请求生成完）。
+router.post("/tts/cancel", requireAuth, (req, res) => {
+  try {
+    const cancelled = cancelPyRequests(req.username);
+    res.json({ cancelled });
+  } catch (e) {
+    res.status(500).json({ error: "取消失败: " + e.message });
   }
 });
 
@@ -853,6 +868,7 @@ const TTS_WORKER_PY = path.resolve(__dirname, "../tts-worker.py");
 const TTS_PY_THREADS = 8;
 const TTS_PY_START_TIMEOUT = 30000;   // 进程启动 + 模型加载超时（本地实测约 3s）
 const TTS_PY_GEN_TIMEOUT = 180000;    // 单次生成超时（60 字 chunk 8 线程约 10s，预留余量）
+const TTS_PY_QUEUE_LIMIT = 30;        // 排队上限：超过直接 503，防止多前端堆积拖垮所有人
 
 let pyProc = null;            // Python 子进程
 let pyReady = false;          // 是否收到 ready 消息
@@ -988,18 +1004,55 @@ async function ensurePyProcess() {
   return pyStartPromise;
 }
 
-/** 提交一次生成请求，返回 { sampleRate, wavBase64 } */
-async function pyGenerate(text, sid, speed) {
-  await ensurePyProcess();
+/** 提交一次生成请求，返回 { sampleRate, wavBase64 }。
+ *  username 用于取消协议：前端停止时按用户清掉排队中的请求。
+ *  先入队（等待 Python 就绪期间也可被 cancel 取消），进程就绪后再写入 stdin。 */
+async function pyGenerate(text, sid, speed, username = "") {
   const id = pyNextId++;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      pyQueue.delete(id);
-      reject(new Error(`服务端推理超时（${TTS_PY_GEN_TIMEOUT / 1000}s）`));
+      if (pyQueue.has(id)) {
+        pyQueue.delete(id);
+        reject(new Error(`服务端推理超时（${TTS_PY_GEN_TIMEOUT / 1000}s）`));
+      }
     }, TTS_PY_GEN_TIMEOUT);
-    pyQueue.set(id, { resolve, reject, timer });
-    pyProc.stdin.write(JSON.stringify({ id, text, sid, speed }) + "\n");
+    pyQueue.set(id, { resolve, reject, timer, username, started: false });
+    // 异步等进程就绪后写入；期间被 cancel 移除则静默放弃（reject 已由 cancel 触发）
+    (async () => {
+      try {
+        await ensurePyProcess();
+        if (!pyQueue.has(id)) return; // 已被 cancel 取消
+        pyQueue.get(id).started = true;
+        pyProc.stdin.write(JSON.stringify({ id, text, sid, speed }) + "\n");
+      } catch (e) {
+        if (pyQueue.has(id)) {
+          clearTimeout(timer);
+          pyQueue.delete(id);
+          reject(e instanceof Error ? e : new Error(String(e)));
+        }
+      }
+    })();
   });
+}
+
+/** 取消某用户所有排队中的请求（前端停止朗读时调用）。
+ *  - 未开始的请求：直接从队列移除，Python 不再生成（释放队列位置给其他用户）
+ *  - 正在生成的请求：无法中断 Python，但结果返回时队列中已无该 id，自动丢弃
+ *  ⚠️ 不依赖 pyReady：Python 启动窗口内（pyReady=false）也有排队中的请求需要取消。
+ * 返回被取消的请求数。 */
+export function cancelPyRequests(username) {
+  if (!username) return 0;
+  let cancelled = 0;
+  for (const [id, p] of pyQueue) {
+    if (p.username === username) {
+      clearTimeout(p.timer);
+      pyQueue.delete(id);
+      p.reject(new Error("服务端推理已取消"));
+      cancelled++;
+    }
+  }
+  if (cancelled > 0) console.log(`[tts-py] 用户 ${username} 取消 ${cancelled} 个排队请求`);
+  return cancelled;
 }
 
 /**

@@ -27,7 +27,10 @@ vi.mock("../server-engine", () => ({
     await new Promise(r => setTimeout(r, 10)); // 模拟网络 + Python 推理耗时
     return { samples: new Float32Array(24000), sampleRate: 24000 }; // 1 秒音频
   }),
+  cancelServerInference: vi.fn(async () => {}),
 }));
+
+import { cancelServerInference as mockCancelServerInference } from "../server-engine";
 
 // ── Mock Web Audio API（jsdom 无 AudioContext）──
 class MockAudioBufferSource {
@@ -158,6 +161,31 @@ describe("TTSManager 流水线预生成", () => {
     // seek 后从 chunk2 重新生成（旧预生成 chunk1 被丢弃）
     const seekCalls = generateCalls.slice(callsBeforeSeek);
     expect(seekCalls.some(c => c.text === "第三段。")).toBe(true);
+    manager.destroy();
+  }, 10000);
+
+  it("停止/seek/新朗读时通知服务器取消排队请求（仅 server 引擎）", async () => {
+    const manager = new TTSManager();
+    manager.setEngine("server");
+    const chunks = makeChunks();
+    mockCancelServerInference.mockClear();
+
+    const speakPromise = manager.speak(chunks, { onChunkEnd: () => {}, onEnd: () => {} }).catch(() => {});
+    await flush(20); // chunk0 生成中（或预生成已启动）
+    expect(mockCancelServerInference).toHaveBeenCalledTimes(1); // speak 启动时清理旧队列
+
+    manager.stop();
+    await flush(20);
+    expect(mockCancelServerInference).toHaveBeenCalledTimes(2); // 停止时取消排队请求
+
+    // seek 也会触发取消（旧请求作废释放队列）
+    manager.speak(chunks, { onChunkEnd: () => {}, onEnd: () => {} }).catch(() => {});
+    await flush(20);
+    const beforeSeek = mockCancelServerInference.mock.calls.length;
+    manager.seekToChunk(1);
+    expect(mockCancelServerInference.mock.calls.length).toBe(beforeSeek + 1);
+
+    await speakPromise;
     manager.destroy();
   }, 10000);
 });
