@@ -22,7 +22,9 @@ import { apiFetch } from "@/lib/api-client";
 export function TTSSettings() {
   const {
     voiceId, speed, pitch, autoNextChapter, browserVoices, engine, chunkSize,
+    prefetchCount, workerCount,
     setVoiceId, setSpeed, setPitch, setAutoNextChapter, setBrowserVoices, setEngine, setChunkSize,
+    setPrefetchCount, setWorkerCount,
   } = useTTSStore();
 
   const [loading, setLoading] = useState(false);
@@ -675,6 +677,53 @@ export function TTSSettings() {
             {engine === "server"
               ? "每次生成一段音频的字数上限：服务端推理快（RTF≈0.6），可适当调大减少生成次数；按句子边界切分，不会拆开一句话"
               : "每次生成一段音频的字数上限：调小更不容易超时（低配设备），调大减少生成次数（高配设备）。按句子边界切分，不会拆开一句话"}
+          </p>
+        </div>
+      )}
+
+      {/* 开播前预生成段数（Kokoro 引擎：先缓冲 K 段再开始播放，播放中继续后台生成；Web Speech 无此概念） */}
+      {engine !== "webspeech" && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium text-muted-foreground">
+              {engine === "server" ? "开播前预生成段数（服务端推理）" : "开播前预生成段数（浏览器推理）"}
+            </p>
+            <span className="text-xs text-muted-foreground">{prefetchCount} 段</span>
+          </div>
+          <input type="range" min={1} max={10} step={1}
+            value={prefetchCount}
+            aria-label="开播前预生成段数"
+            onChange={(e) => setPrefetchCount(parseInt(e.target.value, 10))}
+            className="w-full h-1.5" />
+          <div className="flex justify-between text-[10px] text-muted-foreground">
+            <span>1 段</span><span>5 段</span><span>10 段</span>
+          </div>
+          <p className="text-[10px] text-muted-foreground">
+            {engine === "server"
+              ? "点击朗读后先预生成 N 段音频再开始播放，避免播放中等待；服务端生成很快，建议 2-3 段"
+              : "点击朗读后先预生成 N 段再开始播放（播放中后台继续生成）。浏览器推理较慢：段数越多开局等待越久、但连续播放越长。默认 3 段，可点「立即播放」跳过等待"}
+          </p>
+        </div>
+      )}
+
+      {/* 并行推理 Worker 数（仅浏览器推理：多 Worker 并行生成，内存换速度） */}
+      {engine === "zipvoice" && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium text-muted-foreground">并行推理 Worker 数</p>
+            <span className="text-xs text-muted-foreground">{workerCount} 个</span>
+          </div>
+          <input type="range" min={1} max={3} step={1}
+            value={workerCount}
+            aria-label="并行推理 Worker 数"
+            onChange={(e) => setWorkerCount(parseInt(e.target.value, 10))}
+            className="w-full h-1.5" />
+          <div className="flex justify-between text-[10px] text-muted-foreground">
+            <span>1（省内存）</span><span>2</span><span>3（最快）</span>
+          </div>
+          <p className="text-[10px] text-amber-600">
+            每个 Worker 独立加载模型，约占用 400-500MB 内存。3 个 Worker 预生成等待约缩短 3 倍（如 3 段从 3-5 分钟 → 1-1.5 分钟），但总内存约 1.2-1.35GB。
+            低内存设备（8GB 以下）建议保持 1 个。修改后下次朗读生效。
           </p>
         </div>
       )}

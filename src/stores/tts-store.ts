@@ -33,6 +33,12 @@ export interface TTSState {
   generating: boolean;
   /** 生成进度 0-100 */
   generateProgress: number;
+  /** 预生成阶段：已完成段数（Kokoro 引擎开播前缓冲） */
+  prepareReady: number;
+  /** 预生成阶段：目标段数（0=未启用） */
+  prepareTotal: number;
+  /** 播放中缓冲水位（已缓存待播段数） */
+  bufferedChunks: number;
 
   // ── 模型状态 ──
   /** 模型是否已下载 */
@@ -57,6 +63,10 @@ export interface TTSState {
   autoNextChapter: boolean;
   /** 单次生成字数上限（当前引擎分块，30-500） */
   chunkSize: number;
+  /** 开播前预生成段数（Kokoro 引擎：server/zipvoice 生效，1-10） */
+  prefetchCount: number;
+  /** 浏览器推理并行 Worker 数（仅 zipvoice 生效，1-3；每个约占用 400-500MB 内存） */
+  workerCount: number;
   /** TTS 引擎类型 */
   engine: TTSEngine;
 
@@ -77,6 +87,14 @@ export interface TTSState {
   setPitch: (pitch: number) => void;
   setAutoNextChapter: (auto: boolean) => void;
   setChunkSize: (chunkSize: number) => void;
+  /** 开播前预生成段数（写入当前引擎参数，Kokoro 引擎生效） */
+  setPrefetchCount: (count: number) => void;
+  /** 浏览器推理并行 Worker 数（仅 zipvoice 生效，下次朗读应用） */
+  setWorkerCount: (count: number) => void;
+  /** 预生成阶段进度（manager 回调 → 朗读栏显示） */
+  setPrepareProgress: (ready: number, total: number) => void;
+  /** 播放中缓冲水位（manager 回调 → 朗读栏显示） */
+  setBufferedChunks: (buffered: number) => void;
   setEngine: (engine: TTSEngine) => void;
   /** 顶栏朗读按钮触发计数器（外部递增，AudioPlayer 监听） */
   startRequested: number;
@@ -97,12 +115,15 @@ interface PersistedSettings {
   serverVolume: number;
   serverPitch: number;
   serverChunkSize: number;
+  serverPrefetchCount: number;
   // 浏览器推理（wasm 离线）
   zipvoiceVoiceId: string;
   zipvoiceSpeed: number;
   zipvoiceVolume: number;
   zipvoicePitch: number;
   zipvoiceChunkSize: number;
+  zipvoicePrefetchCount: number;
+  zipvoiceWorkerCount: number;
   // 浏览器内置
   webspeechVoiceId: string;
   webspeechSpeed: number;
@@ -122,6 +143,18 @@ function clampChunkSize(v: number): number {
   return Math.max(30, Math.min(500, n));
 }
 
+/** prefetchCount 合法范围：1-10 段（0=关闭预生成，设置页不提供） */
+function clampPrefetchCount(v: number): number {
+  const n = Math.round(Number(v) || 3);
+  return Math.max(1, Math.min(10, n));
+}
+
+/** workerCount 合法范围：1-3（每个 worker 约 400-500MB 内存） */
+function clampWorkerCount(v: number): number {
+  const n = Math.round(Number(v) || 1);
+  return Math.max(1, Math.min(3, n));
+}
+
 /** 兼容旧音色：旧 ZipVoice 音色 0-2 → Kokoro 默认女声 45（晓北） */
 function normalizeKokoroVoiceId(v: unknown, fallback = "45"): string {
   const s = String(v ?? "");
@@ -133,8 +166,8 @@ function normalizeKokoroVoiceId(v: unknown, fallback = "45"): string {
 
 function loadSettings(): PersistedSettings {
   const defaults: PersistedSettings = {
-    serverVoiceId: "45", serverSpeed: 1.0, serverVolume: 1.0, serverPitch: 1.0, serverChunkSize: 150,
-    zipvoiceVoiceId: "45", zipvoiceSpeed: 1.0, zipvoiceVolume: 1.0, zipvoicePitch: 1.0, zipvoiceChunkSize: 60,
+    serverVoiceId: "45", serverSpeed: 1.0, serverVolume: 1.0, serverPitch: 1.0, serverChunkSize: 150, serverPrefetchCount: 2,
+    zipvoiceVoiceId: "45", zipvoiceSpeed: 1.0, zipvoiceVolume: 1.0, zipvoicePitch: 1.0, zipvoiceChunkSize: 60, zipvoicePrefetchCount: 3, zipvoiceWorkerCount: 1,
     webspeechVoiceId: "", webspeechSpeed: 1.0, webspeechVolume: 1.0, webspeechPitch: 1.0, webspeechChunkSize: 300,
     playbackRate: 1.0, autoNextChapter: true, engine: "webspeech", modelDownloaded: false,
   };
@@ -154,11 +187,14 @@ function loadSettings(): PersistedSettings {
       serverVolume: Number(s.serverVolume ?? s.zipvoiceVolume ?? s.volume ?? 1.0),
       serverPitch: Number(s.serverPitch ?? s.zipvoicePitch ?? s.pitch ?? 1.0),
       serverChunkSize: clampChunkSize(s.serverChunkSize ?? s.zipvoiceChunkSize ?? s.chunkSize ?? 150),
+      serverPrefetchCount: clampPrefetchCount(s.serverPrefetchCount ?? s.zipvoicePrefetchCount ?? 2),
       zipvoiceVoiceId: normalizeKokoroVoiceId(s.zipvoiceVoiceId ?? s.voiceId ?? "45"),
       zipvoiceSpeed: Number(s.zipvoiceSpeed ?? s.speed ?? 1.0),
       zipvoiceVolume: Number(s.zipvoiceVolume ?? s.volume ?? 1.0),
       zipvoicePitch: Number(s.zipvoicePitch ?? s.pitch ?? 1.0),
       zipvoiceChunkSize: clampChunkSize(s.zipvoiceChunkSize ?? s.chunkSize ?? 60),
+      zipvoicePrefetchCount: clampPrefetchCount(s.zipvoicePrefetchCount ?? 3),
+      zipvoiceWorkerCount: clampWorkerCount(s.zipvoiceWorkerCount ?? 1),
       webspeechVoiceId: String(s.webspeechVoiceId ?? ""),
       webspeechSpeed: Number(s.webspeechSpeed ?? s.speed ?? 1.0),
       webspeechVolume: Number(s.webspeechVolume ?? s.volume ?? 1.0),
@@ -202,11 +238,11 @@ function getVoiceIdForEngine(engine: TTSEngine, p: PersistedSettings): string {
   return p.webspeechVoiceId;
 }
 
-// 当前引擎生效的 speed/volume/pitch（三引擎完全独立）
+// 当前引擎生效的 speed/volume/pitch/chunkSize/prefetchCount（三引擎完全独立）
 function getParamsForEngine(engine: TTSEngine, p: PersistedSettings) {
-  if (engine === "server") return { speed: p.serverSpeed, volume: p.serverVolume, pitch: p.serverPitch, chunkSize: p.serverChunkSize };
-  if (engine === "zipvoice") return { speed: p.zipvoiceSpeed, volume: p.zipvoiceVolume, pitch: p.zipvoicePitch, chunkSize: p.zipvoiceChunkSize };
-  return { speed: p.webspeechSpeed, volume: p.webspeechVolume, pitch: p.webspeechPitch, chunkSize: p.webspeechChunkSize };
+  if (engine === "server") return { speed: p.serverSpeed, volume: p.serverVolume, pitch: p.serverPitch, chunkSize: p.serverChunkSize, prefetchCount: p.serverPrefetchCount };
+  if (engine === "zipvoice") return { speed: p.zipvoiceSpeed, volume: p.zipvoiceVolume, pitch: p.zipvoicePitch, chunkSize: p.zipvoiceChunkSize, prefetchCount: p.zipvoicePrefetchCount };
+  return { speed: p.webspeechSpeed, volume: p.webspeechVolume, pitch: p.webspeechPitch, chunkSize: p.webspeechChunkSize, prefetchCount: 0 };
 }
 
 // 把当前生效值写回当前引擎的持久化参数
@@ -224,6 +260,16 @@ function writeChunkSize(p: PersistedSettings, engine: TTSEngine, size: number): 
   if (engine === "server") p.serverChunkSize = size;
   else if (engine === "zipvoice") p.zipvoiceChunkSize = size;
   else p.webspeechChunkSize = size;
+}
+
+function writePrefetchCount(p: PersistedSettings, engine: TTSEngine, count: number): void {
+  if (engine === "server") p.serverPrefetchCount = count;
+  else if (engine === "zipvoice") p.zipvoicePrefetchCount = count;
+  // webspeech 无预生成概念，忽略
+}
+
+function writeWorkerCount(p: PersistedSettings, count: number): void {
+  p.zipvoiceWorkerCount = count; // 仅浏览器推理使用
 }
 
 const initialParams = getParamsForEngine(defaults.engine, defaults);
@@ -256,7 +302,14 @@ export const useTTSStore = create<TTSState>((set, get) => ({
   pitch: initialParams.pitch,
   autoNextChapter: defaults.autoNextChapter,
   chunkSize: initialParams.chunkSize,
+  prefetchCount: initialParams.prefetchCount,
+  workerCount: defaults.zipvoiceWorkerCount,
   engine: defaults.engine,
+
+  // 预生成缓冲状态（Kokoro 引擎朗读时）
+  prepareReady: 0,
+  prepareTotal: 0,
+  bufferedChunks: 0,
 
   // 朗读触发（顶栏按钮 → AudioPlayer 监听）
   startRequested: 0,
@@ -278,6 +331,8 @@ export const useTTSStore = create<TTSState>((set, get) => ({
   setDuration: (duration) => set({ duration }),
   setParagraphProgress: (current, total) => set({ currentParagraph: current, totalParagraphs: total }),
   setGenerating: (generating, progress) => set({ generating, generateProgress: progress ?? 0 }),
+  setPrepareProgress: (ready, total) => set({ prepareReady: ready, prepareTotal: total }),
+  setBufferedChunks: (buffered) => set({ bufferedChunks: buffered }),
   setModelDownloaded: (downloaded) => {
     set({ modelDownloaded: downloaded });
     const s = get();
@@ -347,6 +402,22 @@ export const useTTSStore = create<TTSState>((set, get) => ({
     settings.modelDownloaded = s.modelDownloaded;
     saveSettings(settings);
   },
+  setPrefetchCount: (count) => {
+    const clamped = clampPrefetchCount(count);
+    const s = get(); set({ prefetchCount: clamped });
+    const settings = getCachedSettings();
+    writePrefetchCount(settings, s.engine, clamped);
+    settings.modelDownloaded = s.modelDownloaded;
+    saveSettings(settings);
+  },
+  setWorkerCount: (count) => {
+    const clamped = clampWorkerCount(count);
+    set({ workerCount: clamped });
+    const settings = getCachedSettings();
+    writeWorkerCount(settings, clamped);
+    settings.modelDownloaded = get().modelDownloaded;
+    saveSettings(settings);
+  },
   setEngine: (engine) => {
     const s = get();
     const settings = getCachedSettings();
@@ -362,6 +433,9 @@ export const useTTSStore = create<TTSState>((set, get) => ({
       volume: params.volume,
       pitch: params.pitch,
       chunkSize: params.chunkSize,
+      prefetchCount: params.prefetchCount,
+      // workerCount 仅浏览器推理使用（全局设置，不随引擎切换）
+      workerCount: settings.zipvoiceWorkerCount,
     });
     settings.engine = engine;
     settings.modelDownloaded = s.modelDownloaded;

@@ -30,7 +30,10 @@ const GENERATE_TIMEOUT_MS = 120000;
 
 // ── 状态 ───────────────────────────────────────────────────
 
-let ttsWorker: Worker | null = null;
+let ttsWorkers: Worker[] = [];          // Worker 池（每 worker 独立 wasm 实例，并行推理）
+let workerBusy: boolean[] = [];         // 各 worker 是否忙（同一时刻每 worker 1 个任务）
+let taskQueue: Task[] = [];             // 等待空闲 worker 的任务队列（FIFO）
+let workerPoolSize = 1;                 // 目标池大小（1-3，每个约 400-500MB 内存）
 let modelLoaded = false;
 let disposed = false;
 let loadingPromise: Promise<void> | null = null;
@@ -38,6 +41,26 @@ let nextRequestId = 0;
 const pendingRequests = new Map<number, { resolve: (audio: Float32Array) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 // 当前等待 worker ready 的 resolve/reject（供 onerror 快速失败，避免卡 10 分钟超时）
 let readyWaiter: { resolve: () => void; reject: (err: Error) => void } | null = null;
+
+interface Task {
+  id: number;
+  text: string;
+  sid: number;
+  speed: number;
+}
+
+/**
+ * 设置浏览器推理并行 Worker 数（1-3）。
+ * 仅在模型未加载时生效（下次朗读应用）；已加载时需 resetWorker 后重建。
+ * 内存提醒：每个 Worker 独立加载模型，约占用 400-500MB。
+ */
+export function setWorkerPoolSize(n: number): void {
+  workerPoolSize = Math.max(1, Math.min(3, Math.round(n) || 1));
+}
+
+export function getWorkerPoolSize(): number {
+  return workerPoolSize;
+}
 
 export interface ZipVoiceGenerateOptions {
   voice?: string;
@@ -87,61 +110,80 @@ export function normalizeText(text: string): string {
 
 // ── Worker 生命周期 ────────────────────────────────────────
 
-async function getWorker(): Promise<Worker> {
-  if (!ttsWorker) {
-    const base = import.meta.env.BASE_URL || "/";
-    const workerUrl = base + "sherpa-tts/sherpa-onnx-tts.worker.js";
-    // 用 fetch + blob URL 创建 worker：
-    // crossOriginIsolated（COEP）页面下，直接 new Worker(文件 URL) 会被
-    // Chrome 以 ERR_BLOCKED_BY_RESPONSE 拒绝（worker 脚本的 COEP 检查），
-    // 即使脚本同源且带 CORP 头也会失败；blob URL 继承页面 origin，可正常加载。
-    // worker.js 内部已有 WrappedURL 处理 blob base（new URL(".", import.meta.url)）。
-    const resp = await fetch(workerUrl);
-    if (!resp.ok) throw new Error(`Worker 脚本下载失败: ${resp.status}`);
-    const code = await resp.text();
-    const blobUrl = URL.createObjectURL(new Blob([code], { type: "application/javascript" }));
-    ttsWorker = new Worker(blobUrl);
-    ttsWorker.onmessage = handleWorkerMessage;
-    ttsWorker.onerror = (e) => {
-      // 完整诊断信息：message 为空通常表示脚本 fetch 失败（404/CSP/COEP/网络）
-      const detail = {
-        message: e.message,
-        filename: e.filename,
-        lineno: e.lineno,
-        colno: e.colno,
-        error: e.error ? String(e.error) : null,
-        crossOriginIsolated: typeof window !== "undefined" ? window.crossOriginIsolated : undefined,
-        hasSAB: typeof SharedArrayBuffer !== "undefined",
-      };
-      const msg = e.message || e.error?.message || `Worker 加载失败 (${e.filename || "?"}:${e.lineno || "?"})`;
-      console.error("[TTS Worker] error:", msg, detail);
-      modelLoaded = false;
-      // 快速失败当前等待 ready 的流程（loadModel 会自动重试）
-      const waiter = readyWaiter;
-      readyWaiter = null;
-      if (waiter) waiter.reject(new Error(msg));
-      for (const [, p] of pendingRequests) {
-        clearTimeout(p.timer);
-        p.reject(new Error(msg));
-      }
-      pendingRequests.clear();
+/** 创建第 index 个 worker（blob URL，兼容 COEP 限制），绑定消息处理 */
+async function createWorker(index: number): Promise<Worker> {
+  const base = import.meta.env.BASE_URL || "/";
+  const workerUrl = base + "sherpa-tts/sherpa-onnx-tts.worker.js";
+  // 用 fetch + blob URL 创建 worker：
+  // crossOriginIsolated（COEP）页面下，直接 new Worker(文件 URL) 会被
+  // Chrome 以 ERR_BLOCKED_BY_RESPONSE 拒绝（worker 脚本的 COEP 检查），
+  // 即使脚本同源且带 CORP 头也会失败；blob URL 继承页面 origin，可正常加载。
+  // worker.js 内部已有 WrappedURL 处理 blob base（new URL(".", import.meta.url)）。
+  const resp = await fetch(workerUrl);
+  if (!resp.ok) throw new Error(`Worker 脚本下载失败: ${resp.status}`);
+  const code = await resp.text();
+  const blobUrl = URL.createObjectURL(new Blob([code], { type: "application/javascript" }));
+  const worker = new Worker(blobUrl);
+  worker.onmessage = (e) => handleWorkerMessage(e, index);
+  worker.onerror = (e) => {
+    // 完整诊断信息：message 为空通常表示脚本 fetch 失败（404/CSP/COEP/网络）
+    const detail = {
+      message: e.message,
+      filename: e.filename,
+      lineno: e.lineno,
+      colno: e.colno,
+      error: e.error ? String(e.error) : null,
+      crossOriginIsolated: typeof window !== "undefined" ? window.crossOriginIsolated : undefined,
+      hasSAB: typeof SharedArrayBuffer !== "undefined",
     };
+    const msg = e.message || e.error?.message || `Worker 加载失败 (${e.filename || "?"}:${e.lineno || "?"})`;
+    console.error(`[TTS Worker #${index}] error:`, msg, detail);
+    modelLoaded = false;
+    // 快速失败当前等待 ready 的流程（loadModel 会自动重试）
+    const waiter = readyWaiter;
+    readyWaiter = null;
+    if (waiter) waiter.reject(new Error(msg));
+    for (const [, p] of pendingRequests) {
+      clearTimeout(p.timer);
+      p.reject(new Error(msg));
+    }
+    pendingRequests.clear();
+    taskQueue = [];
+  };
+  return worker;
+}
+
+/** worker 空闲回调：分配下一个排队任务 */
+function onWorkerIdle(index: number): void {
+  workerBusy[index] = false;
+  const next = taskQueue.shift();
+  if (next) dispatchTask(next);
+}
+
+/** 调度：找空闲 worker 分配任务；无空闲则入队等待 */
+function dispatchTask(task: Task): void {
+  const idx = workerBusy.findIndex((b) => !b);
+  if (idx === -1 || idx >= ttsWorkers.length) {
+    taskQueue.push(task);
+    return;
   }
-  return ttsWorker;
+  workerBusy[idx] = true;
+  ttsWorkers[idx].postMessage({ type: "generate", id: task.id, text: task.text, sid: task.sid, speed: task.speed });
 }
 
 /**
- * 创建 Worker 并发送 init（含文件数据），等待 ready。
- * files 会被 transfer（零拷贝），重试时调用方需传入未 detach 的 buffer。
+ * 初始化第 index 个 Worker（创建 + 发送 init 含文件数据，等待 ready）。
+ * files 会被 slice 拷贝后 transfer（零拷贝传输，原 buffer 保留可复用）。
+ * 串行调用（一次一个），避免多 worker 同时加载造成内存峰值叠加。
  */
-async function initWorker(files: Map<string, ArrayBuffer>): Promise<void> {
-  const w = await getWorker();
+async function initWorker(files: Map<string, ArrayBuffer>, index: number): Promise<void> {
+  const w = await createWorker(index);
   await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => {
       readyWaiter = null;
       w.removeEventListener("message", handler);
       try { w.terminate(); } catch { /* worker 可能已终止 */ }
-      ttsWorker = null;
+      ttsWorkers[index] = undefined as unknown as Worker;
       modelLoaded = false;
       reject(new Error("模型加载超时（10分钟）"));
     }, 600000);
@@ -157,7 +199,7 @@ async function initWorker(files: Map<string, ArrayBuffer>): Promise<void> {
         w.removeEventListener("message", handler);
         readyWaiter = null;
         try { w.terminate(); } catch { /* worker 可能已终止 */ }
-        ttsWorker = null;
+        ttsWorkers[index] = undefined as unknown as Worker;
         modelLoaded = false;
         reject(new Error(e.data.message));
       }
@@ -185,13 +227,13 @@ async function initWorker(files: Map<string, ArrayBuffer>): Promise<void> {
   });
 }
 
-function handleWorkerMessage(e: MessageEvent): void {
+function handleWorkerMessage(e: MessageEvent, workerIndex: number): void {
   const msg = e.data;
 
   if (msg.type === "sherpa-onnx-tts-ready") {
     modelLoaded = true;
     disposed = false;
-    console.log("[TTS] Kokoro ready, modelType:", msg.modelType, "numSpeakers:", msg.numSpeakers);
+    console.log(`[TTS] Kokoro ready #${workerIndex}, modelType:`, msg.modelType, "numSpeakers:", msg.numSpeakers);
   } else if (msg.type === "sherpa-onnx-tts-result") {
     // C4 fix: 用 requestId 精确匹配，而非取第一个
     const id = msg.id;
@@ -216,10 +258,11 @@ function handleWorkerMessage(e: MessageEvent): void {
         pending.resolve(samples);
       }
     }
+    onWorkerIdle(workerIndex); // 该 worker 空闲，派发排队任务
   } else if (msg.type === "sherpa-onnx-tts-generation-progress") {
     // progress callback
   } else if (msg.type === "error") {
-    console.error("[TTS Worker] error:", msg.message);
+    console.error(`[TTS Worker #${workerIndex}] error:`, msg.message);
     // C5 fix: 初始化失败时重置 modelLoaded
     if (msg.message?.includes("初始化")) {
       modelLoaded = false;
@@ -239,6 +282,7 @@ function handleWorkerMessage(e: MessageEvent): void {
         pending?.reject(new Error(msg.message));
       }
     }
+    onWorkerIdle(workerIndex); // 失败也释放 worker
   }
 }
 
@@ -343,23 +387,32 @@ export async function loadModel(
       const files = await getCachedFiles();
       console.log("[TTS] 从 IndexedDB 加载", files.size, "个文件");
 
-      // 5. 创建 Worker 并发送文件数据（失败自动重试一次）
+      // 5. 创建 Worker 池（串行 init，避免多 worker 同时加载造成内存峰值叠加）并发送文件数据
       options?.onProgress?.(85);
+      const targetSize = Math.max(1, Math.min(workerPoolSize, 3));
+      ttsWorkers = new Array(targetSize) as Worker[];
+      workerBusy = new Array(targetSize).fill(false);
+      taskQueue = [];
       let initError: Error | null = null;
-      for (let attempt = 1; attempt <= 2; attempt++) {
-        try {
-          await initWorker(files);
-          initError = null;
-          break;
-        } catch (err) {
-          initError = err instanceof Error ? err : new Error(String(err));
-          console.warn(`[TTS] Worker 初始化失败（第 ${attempt} 次），${attempt < 2 ? "自动重试" : "放弃"}: ${initError.message}`);
-          try { ttsWorker?.terminate(); } catch { /* worker 可能已终止 */ }
-          ttsWorker = null;
-          modelLoaded = false;
+      for (let idx = 0; idx < targetSize; idx++) {
+        let ok = false;
+        for (let attempt = 1; attempt <= 2 && !ok; attempt++) {
+          try {
+            await initWorker(files, idx);
+            initError = null;
+            ok = true;
+          } catch (err) {
+            initError = err instanceof Error ? err : new Error(String(err));
+            console.warn(`[TTS] Worker #${idx} 初始化失败（第 ${attempt} 次），${attempt < 2 ? "自动重试" : "放弃"}: ${initError.message}`);
+            try { ttsWorkers[idx]?.terminate(); } catch { /* worker 可能已终止 */ }
+            ttsWorkers[idx] = undefined as unknown as Worker;
+            modelLoaded = false;
+          }
         }
+        if (!ok) break;
       }
       if (initError) throw initError;
+      console.log(`[TTS] Worker 池就绪（${targetSize} 个并行推理）`);
 
       options?.onProgress?.(100);
     } catch (err) {
@@ -391,12 +444,11 @@ export async function generateAudio(
   const sid = parseInt(voiceId, 10) || 0;
 
   const id = nextRequestId++;
-  const worker = await getWorker();
   const t0 = performance.now();
   // 动态超时：Kokoro fp32 wasm 单线程推理本地实测 RTF≈5-8（每字约 1.5-2s），
   // 慢设备（无 SIMD/低配 CPU）可达更高。每字预留 6s，下限 120s。
   const timeoutMs = Math.max(GENERATE_TIMEOUT_MS, cleanText.length * 6000);
-  console.log(`[TTS] 请求生成 #${id}: ${cleanText.length} 字, voice=${voiceId}(sid=${sid}), speed=${speed}, 超时 ${(timeoutMs / 1000).toFixed(0)}s`);
+  console.log(`[TTS] 请求生成 #${id}: ${cleanText.length} 字, voice=${voiceId}(sid=${sid}), speed=${speed}, 超时 ${(timeoutMs / 1000).toFixed(0)}s, 池=${ttsWorkers.length}`);
   // zipvoice 无逐步进度回调，用时间推进展示生成进度（每 10s 一条）
   const progressTimer = setInterval(() => {
     console.log(`[TTS] ⏳ 生成中 #${id}: 已等待 ${((performance.now() - t0) / 1000).toFixed(0)}s`);
@@ -411,7 +463,7 @@ export async function generateAudio(
         reject(new Error("音频生成超时"));
       }, timeoutMs);
       pendingRequests.set(id, { resolve, reject, timer });
-      worker.postMessage({ type: "generate", id, text: cleanText, sid, speed });
+      dispatchTask({ id, text: cleanText, sid, speed }); // 池调度：空闲 worker 立即处理，否则排队
     });
   } finally {
     clearInterval(progressTimer);
@@ -439,7 +491,6 @@ export async function generateAudioFull(
   const sid = parseInt(voiceId, 10) || 0;
 
   const id = nextRequestId++;
-  const worker = await getWorker();
   const t0 = performance.now();
   // 与 generateAudio 一致：动态超时（每字最多 6s，下限 120s）
   const timeoutMs = Math.max(GENERATE_TIMEOUT_MS, cleanText.length * 6000);
@@ -457,7 +508,7 @@ export async function generateAudioFull(
         reject(new Error("音频生成超时"));
       }, timeoutMs);
       pendingRequests.set(id, { resolve, reject, timer });
-      worker.postMessage({ type: "generate", id, text: cleanText, sid, speed });
+      dispatchTask({ id, text: cleanText, sid, speed }); // 池调度（预览同样走池，占用 1 个 worker）
     });
   } finally {
     clearInterval(progressTimer);
@@ -479,10 +530,14 @@ export function resetWorker(): void {
   modelLoaded = false;
   loadingPromise = null;
   readyWaiter = null;
-  if (ttsWorker) {
-    try { ttsWorker.terminate(); } catch { /* 已销毁的 worker 忽略 */ }
-    ttsWorker = null;
+  for (const w of ttsWorkers) {
+    if (w) {
+      try { w.terminate(); } catch { /* 已销毁的 worker 忽略 */ }
+    }
   }
+  ttsWorkers = [];
+  workerBusy = [];
+  taskQueue = [];
   for (const [, p] of pendingRequests) {
     clearTimeout(p.timer);
     p.reject(new Error("已停止"));

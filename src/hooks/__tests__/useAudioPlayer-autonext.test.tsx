@@ -18,6 +18,8 @@ const h = vi.hoisted(() => {
     setSpeed() {}
     setPlaybackRate() {}
     setPitch() {}
+    setPrefetchCount() {}
+    skipPrepare() {}
     prewarmZipVoiceAudio() {}
     async speak(_chunks: unknown, callbacks: Record<string, unknown>) {
       mockSpeak(callbacks);

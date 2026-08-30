@@ -49,6 +49,10 @@ export function AudioPlayer({
 }: AudioPlayerProps) {
   const generating = useTTSStore(s => s.generating);
   const generateProgress = useTTSStore(s => s.generateProgress);
+  const prepareReady = useTTSStore(s => s.prepareReady);
+  const prepareTotal = useTTSStore(s => s.prepareTotal);
+  const bufferedChunks = useTTSStore(s => s.bufferedChunks);
+  const engine = useTTSStore(s => s.engine);
   const currentParagraph = useTTSStore(s => s.currentParagraph);
   const totalParagraphs = useTTSStore(s => s.totalParagraphs);
   const playbackRate = useTTSStore(s => s.playbackRate);
@@ -56,7 +60,7 @@ export function AudioPlayer({
   // 设置页生成语速（仅用于展示实际听感 = 生成语速 × 播放倍速）
   const genSpeed = useTTSStore(s => s.speed);
 
-  const { play, togglePause, stop, isActive, isPaused, isPlaying, error, retryCount, seekToParagraph, orderedParaIndices } = useAudioPlayer({
+  const { play, togglePause, stop, isActive, isPaused, isPlaying, error, retryCount, seekToParagraph, skipPrepare, orderedParaIndices } = useAudioPlayer({
     chapterContent,
     chapterIndex,
     novelId,
@@ -130,12 +134,12 @@ export function AudioPlayer({
   return (
     <>
     <div className="fixed bottom-0 left-0 right-0 z-40 bg-background/95 backdrop-blur border-t shadow-lg safe-area-bottom">
-      {/* 生成进度 */}
+      {/* 生成进度（预生成阶段 = 预生成段数进度；播放中 = 缓冲/生成提示） */}
       {generating && (
         <div className="h-1 bg-muted">
           <div
             className="h-full bg-primary transition-all duration-300"
-            style={{ width: `${generateProgress}%` }}
+            style={{ width: `${prepareTotal > 0 && prepareReady < prepareTotal ? (prepareReady / prepareTotal) * 100 : generateProgress}%` }}
           />
         </div>
       )}
@@ -194,9 +198,33 @@ export function AudioPlayer({
                     {Math.min(progressIdx + 1, totalParagraphs)}/{totalParagraphs} 段
                   </span>
                 )}
+                {/* 缓冲水位（Kokoro 引擎播放中） */}
+                {isActive && engine !== "webspeech" && bufferedChunks > 0 && (
+                  <span className="text-[10px] text-emerald-600 shrink-0 hidden sm:inline" title="已预生成的下一段音频数量">
+                    ⏩ 缓冲 {bufferedChunks} 段
+                  </span>
+                )}
               </>
             )}
           </div>
+
+          {/* 预生成阶段提示（开播前缓冲 K 段） */}
+          {generating && prepareTotal > 0 && prepareReady < prepareTotal && (
+            <div className="flex items-center gap-2 mt-0.5">
+              <span className="text-[10px] sm:text-[11px] text-amber-600 truncate">
+                {engine === "zipvoice"
+                  ? `正在预生成 ${Math.min(prepareReady + 1, prepareTotal)}/${prepareTotal} 段（浏览器推理较慢，可先等缓冲或立即播放）...`
+                  : `正在预生成 ${prepareReady}/${prepareTotal} 段...`}
+              </span>
+              {prepareReady >= 1 && (
+                <Button variant="outline" size="sm" className="h-5 px-2 text-[10px] shrink-0"
+                  onClick={skipPrepare} title="用已生成的段立即开始播放，剩余段继续后台生成">
+                  立即播放
+                </Button>
+              )}
+            </div>
+          )}
+
           {isActive && totalParagraphs > 0 && (
             <div className="flex items-center gap-2">
               <div className="flex-1 h-1.5 sm:h-1 bg-muted rounded-full overflow-hidden cursor-pointer"

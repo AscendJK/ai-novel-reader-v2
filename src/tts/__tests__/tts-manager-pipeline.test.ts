@@ -127,21 +127,93 @@ describe("TTSManager 流水线预生成", () => {
   it("停止朗读时丢弃预生成结果", async () => {
     const manager = new TTSManager();
     manager.setEngine("server");
+    manager.setPrefetchCount(3); // 缓冲池默认 K=3
     const chunks = makeChunks();
     const speakPromise = manager.speak(chunks, {
       onChunkEnd: () => {},
       onEnd: () => {},
     }).catch(() => {});
 
-    // chunk0 播放中（预生成 chunk1 已开始）时停止
+    // 预生成阶段会并行提交前 K 段（chunk0/1/2），mock 生成很快全部完成
     await flush(60);
     expect(generateCalls.length).toBeGreaterThanOrEqual(2);
     manager.stop();
 
-    // 停止后不再继续生成/播放后续 chunk
+    // 停止后不再推进水位（chunks 只有 3 段，最多 3 次生成调用）
     await flush(200);
-    expect(generateCalls.length).toBeLessThanOrEqual(2); // chunk1 预生成可能已完成，但不会继续生成 chunk2
+    expect(generateCalls.length).toBeLessThanOrEqual(3);
     await speakPromise;
+    manager.destroy();
+  }, 10000);
+
+  it("开播前预生成 K 段：全部就绪才开始播放（onPrepareProgress 上报进度）", async () => {
+    const manager = new TTSManager();
+    manager.setEngine("server");
+    manager.setPrefetchCount(3);
+    const chunks = makeChunks();
+    const progress: Array<[number, number]> = [];
+    const chunkStarts: number[] = [];
+    const done = new Promise<void>((resolve) => {
+      manager.speak(chunks, {
+        onPrepareProgress: (ready, total) => progress.push([ready, total]),
+        onChunkStart: (i) => chunkStarts.push(i),
+        onEnd: () => resolve(),
+      }).catch(() => {});
+    });
+
+    // 预生成阶段：3 段全部完成前不应开始播放（无 chunkStart）
+    await flush(15);
+    expect(chunkStarts.length).toBe(0);
+    // 进度最终到达 3/3
+    await flush(120);
+    expect(progress[progress.length - 1]).toEqual([3, 3]);
+    // 预生成完成后开始播放
+    expect(chunkStarts.length).toBeGreaterThanOrEqual(1);
+    await done;
+    manager.destroy();
+  }, 10000);
+
+  it("立即播放（skipPrepare）：至少 1 段就绪即可跳过剩余预生成", async () => {
+    const manager = new TTSManager();
+    manager.setEngine("server");
+    manager.setPrefetchCount(3);
+    const chunks = makeChunks();
+    const chunkStarts: number[] = [];
+    const done = new Promise<void>((resolve) => {
+      manager.speak(chunks, {
+        onChunkStart: (i) => chunkStarts.push(i),
+        onEnd: () => resolve(),
+      }).catch(() => {});
+    });
+
+    // mock 生成很快，先等第 1 段就绪，然后立即播放
+    await flush(20);
+    expect(generateCalls.length).toBeGreaterThanOrEqual(1);
+    manager.skipPrepare();
+
+    await done;
+    expect(chunkStarts.length).toBeGreaterThanOrEqual(1);
+    manager.destroy();
+  }, 10000);
+
+  it("播放中并行生成后续段，缓冲水位随播放下降、随生成上升", async () => {
+    const manager = new TTSManager();
+    manager.setEngine("server");
+    manager.setPrefetchCount(3);
+    const chunks = makeChunks();
+    const bufferLevels: number[] = [];
+    const done = new Promise<void>((resolve) => {
+      manager.speak(chunks, {
+        onBufferChange: (n) => bufferLevels.push(n),
+        onEnd: () => resolve(),
+      }).catch(() => {});
+    });
+
+    await done;
+    // 预生成阶段缓冲达到 3（水位），播放时消费、补充保持水位
+    expect(Math.max(...bufferLevels)).toBeGreaterThanOrEqual(2);
+    // 播放结束（全部 chunk 消费完）后水位归 0
+    expect(bufferLevels[bufferLevels.length - 1]).toBe(0);
     manager.destroy();
   }, 10000);
 

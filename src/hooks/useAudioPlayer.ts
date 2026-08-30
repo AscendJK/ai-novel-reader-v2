@@ -6,6 +6,7 @@
 import { useRef, useCallback, useEffect, useState } from "react";
 import { useTTSStore } from "@/stores/tts-store";
 import { TTSManager, type TTSChunk } from "@/tts/tts-manager";
+import { setWorkerPoolSize } from "@/tts/zipvoice-engine";
 import { prepareTextForTTS, buildOrderedParaIndices, findChunkIndexByPara } from "@/tts/text-preprocess";
 import { showToast } from "@/lib/toast-store";
 
@@ -49,10 +50,12 @@ export function useAudioPlayer({
 
   const {
     playing, paused, speed, playbackRate, pitch, voiceId, engine, autoNextChapter, chunkSize,
+    prefetchCount, workerCount,
     currentNovelId, currentChapterIndex,
     setPlaying, setPaused, setCurrentChapter,
     setParagraphProgress, setGenerating, setEngine,
     setModelDownloaded, setModelDownloading, setBrowserVoices, reset,
+    setPrepareProgress, setBufferedChunks,
   } = useTTSStore();
 
   // 初始化/销毁 TTS 管理器
@@ -170,6 +173,9 @@ export function useAudioPlayer({
     manager.setSpeed(speed);
     manager.setPlaybackRate(playbackRate);
     manager.setPitch(pitch);
+    manager.setPrefetchCount(prefetchCount);
+    // 浏览器推理并行 Worker 数：朗读前应用（模型未加载时生效）
+    setWorkerPoolSize(workerCount);
     // 手势窗口内提前创建 AudioContext：首次朗读模型加载需数秒，
     // 若等 speak 内才创建，手势过期 → resume 被拒 → 生成成功但无声
     manager.prewarmZipVoiceAudio();
@@ -218,7 +224,14 @@ export function useAudioPlayer({
         setGenerating(false);
         setPlaying(true);
         setError(null); // R3F3: 手动重试成功，清除错误
+        setPrepareProgress(0, 0); // 预生成阶段结束
       },
+      onPrepareProgress: (ready, total) => {
+        setPrepareProgress(ready, total);
+        // 预生成阶段保持"生成中"状态（播放栏显示进度），完成后 onPlay 清掉
+        if (total > 0) setGenerating(true);
+      },
+      onBufferChange: (buffered) => setBufferedChunks(buffered),
       onChunkStart: (_i, _total, paraIdx) => setParagraphProgress(paraIdx, totalParaCount),
       onChunkEnd: (_i, _total, paraIdx) => setParagraphProgress(paraIdx, totalParaCount),
       onParagraphChange: (paraIdx) => setParagraphProgress(paraIdx, totalParaCount),
@@ -300,7 +313,7 @@ export function useAudioPlayer({
       setGenerating(false);
       setPlaying(false);
     });
-  }, [chapterContent, chapterIndex, novelId, engine, voiceId, speed, playbackRate, pitch, autoNextChapter, getManager, setCurrentChapter, setGenerating, setParagraphProgress, setPlaying, setPaused, onNextChapter, loadPosition, setBrowserVoices, setEngine, setModelDownloaded, setModelDownloading, chunkSize]);
+  }, [chapterContent, chapterIndex, novelId, engine, voiceId, speed, playbackRate, pitch, autoNextChapter, getManager, setCurrentChapter, setGenerating, setParagraphProgress, setPlaying, setPaused, onNextChapter, loadPosition, setBrowserVoices, setEngine, setModelDownloaded, setModelDownloading, chunkSize, prefetchCount, workerCount, setPrepareProgress, setBufferedChunks]);
 
   // R13: 暂停/恢复（WebSpeech 使用 cancel+re-speak 模式，绕过移动端 resume bug）
   const togglePause = useCallback(async () => {
@@ -454,6 +467,8 @@ export function useAudioPlayer({
     error,
     retryCount,
     seekToParagraph,
+    /** 跳过剩余预生成，立即开始播放（至少 1 段就绪时有效） */
+    skipPrepare: () => getManager().skipPrepare(),
     // 过滤后保留的原始段落索引有序数组，供进度条/段数显示/seek 统一坐标
     orderedParaIndices,
   };

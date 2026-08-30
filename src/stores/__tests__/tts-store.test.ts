@@ -161,4 +161,35 @@ describe("TTS 三引擎设置独立", () => {
     expect(p.webspeechVoiceId).toBe("zh-voice-1");
     expect(p.webspeechChunkSize).toBe(300);
   });
+
+  it("预生成段数按引擎独立，Worker 数仅浏览器推理生效", () => {
+    const s = useTTSStore.getState();
+    // zipvoice：默认预生成 3 段、1 worker
+    s.setEngine("zipvoice");
+    expect(useTTSStore.getState().prefetchCount).toBe(3);
+    expect(useTTSStore.getState().workerCount).toBe(1);
+
+    // 调整 zipvoice 预生成段数 + worker 数
+    s.setPrefetchCount(6);
+    s.setWorkerCount(2);
+    expect(useTTSStore.getState().prefetchCount).toBe(6);
+    expect(useTTSStore.getState().workerCount).toBe(2);
+    expect(readPersisted().zipvoicePrefetchCount).toBe(6);
+    expect(readPersisted().zipvoiceWorkerCount).toBe(2);
+
+    // 切到 server：prefetchCount 是 server 自己的（默认 2）
+    s.setEngine("server");
+    expect(useTTSStore.getState().prefetchCount).toBe(2);
+
+    // 切回 zipvoice：6 段 / 2 worker 保留
+    s.setEngine("zipvoice");
+    expect(useTTSStore.getState().prefetchCount).toBe(6);
+    expect(useTTSStore.getState().workerCount).toBe(2);
+
+    // 越界 clamp
+    s.setPrefetchCount(99);
+    expect(useTTSStore.getState().prefetchCount).toBe(10);
+    s.setWorkerCount(0);
+    expect(useTTSStore.getState().workerCount).toBe(1);
+  });
 });

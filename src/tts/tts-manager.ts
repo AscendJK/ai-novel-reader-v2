@@ -35,6 +35,10 @@ export interface TTSPlaybackCallbacks {
   onModelProgress?: (progress: number) => void;
   onModelLoaded?: () => void;
   onVoicesLoaded?: (voices: SpeechSynthesisVoice[]) => void;
+  /** 预生成阶段进度（Kokoro 引擎开播前缓冲；total=0 表示未启用） */
+  onPrepareProgress?: (ready: number, total: number) => void;
+  /** 播放中缓冲水位变化（已缓存待播段数） */
+  onBufferChange?: (buffered: number) => void;
 }
 
 /**
@@ -636,9 +640,13 @@ export class TTSManager {
   private generationId = 0;
   private seekId = 0;
   private userPaused = false;
-  // ── 流水线预生成（播放当前段时并行推理下一段）──
-  private prefetched: { index: number; buffer: AudioBuffer } | null = null;
-  private prefetchPromise: Promise<void> | null = null;
+  // ── 预生成缓冲池（A+C 方案）：播放时并行推理后续多段 ──
+  private prefetchCount = 3;                       // 目标缓冲段数 K（可配置 1-10）
+  private buffered: { index: number; buffer: AudioBuffer }[] = []; // 已缓存待播段（按 index 有序）
+  private generateWatermark = 0;                   // 已提交生成的最高 index+1（水位推进）
+  private preparing = false;                       // 预生成阶段（开播前）
+  private prepareReady = 0;                        // 预生成已完成段数
+  private skipPrepareRequested = false;            // 用户点"立即播放"：提前结束预生成
 
   constructor() {
     this.webSpeech = new WebSpeechTTSEngine();
@@ -675,39 +683,101 @@ export class TTSManager {
   }
 
   /**
-   * 流水线预生成：播放当前段时并行推理下一段。
-   * 启动 chunks[nextIndex] 的生成，完成后缓存到 prefetched（带 genId 校验，作废即丢弃）。
+   * 预生成缓冲池：把生成水位推进到 index+K，并行推理后续段并缓存。
+   * 播放 chunks[i] 前调用，确保 chunks[i+1..i+K] 的生成已提交（worker 池并行）。
+   * 完成结果按 index 有序存入 buffered；genId 变化（停止/seek）即丢弃。
    */
-  private startPrefetch(nextIndex: number, effectiveSpeed: number): void {
+  private pumpPrefetch(): void {
     const kokoro = this.zipvoice;
     if (!kokoro || this.engine === "webspeech") return;
-    if (nextIndex < 0 || nextIndex >= this.chunks.length) return;
-    if (this.prefetchPromise || this.prefetched?.index === nextIndex) return; // 已有预生成
+    if (this.stopped || this.prefetchCount <= 0) return;
     const genId = this.generationId;
-    const nextChunk = this.chunks[nextIndex];
-    this.prefetchPromise = (async () => {
-      try {
-        const buffer = await kokoro.generateBuffer(
-          nextChunk.text, effectiveSpeed,
-          () => this.stopped || this.generationId !== genId,
-        );
-        if (this.stopped || this.generationId !== genId) return; // 作废：停止/seek/语速变更
-        this.prefetched = { index: nextIndex, buffer };
-      } catch (e) {
-        // 预生成失败不中断当前播放：下一段播放时会走正常生成路径并抛出错误
-        if (!this.stopped && this.generationId === genId) {
-          console.warn(`[TTS] 预生成 chunk ${nextIndex + 1} 失败（稍后重试）:`, e instanceof Error ? e.message : e);
+    const effectiveSpeed = Math.max(0.4, Math.min(3.5, this.speed * this.playbackRate));
+    // 水位目标：当前播放 index + K；预生成阶段则推进到 K
+    const base = this.preparing ? 0 : this.currentChunkIndex + 1;
+    const target = Math.min(this.chunks.length, base + this.prefetchCount);
+    while (this.generateWatermark < target) {
+      const idx = this.generateWatermark++;
+      const chunk = this.chunks[idx];
+      if (!chunk) break;
+      // 异步生成：完成后若未作废则入缓冲（按 index 有序插入）
+      (async () => {
+        try {
+          const buffer = await kokoro.generateBuffer(
+            chunk.text, effectiveSpeed,
+            () => this.stopped || this.generationId !== genId,
+          );
+          if (this.stopped || this.generationId !== genId) return; // 作废：停止/seek/语速变更
+          // 有序插入（跳过已存在 index，防止重复提交竞态）
+          if (!this.buffered.some(b => b.index === idx)) {
+            this.buffered.push({ index: idx, buffer });
+            this.buffered.sort((a, b) => a.index - b.index);
+          }
+          if (this.preparing) {
+            this.prepareReady++;
+            this.callbacks.onPrepareProgress?.(this.prepareReady, this.prepareTotal());
+          }
+          this.callbacks.onBufferChange?.(this.buffered.length);
+          console.log(`[TTS] ⏩ 缓冲 +1（index=${idx + 1}, 水位=${this.buffered.length}）`);
+        } catch (e) {
+          if (!this.stopped && this.generationId === genId) {
+            console.warn(`[TTS] 预生成 chunk ${idx + 1} 失败（后续播放时会重试）:`, e instanceof Error ? e.message : e);
+          }
         }
-      } finally {
-        this.prefetchPromise = null;
-      }
-    })();
+      })();
+    }
   }
 
-  /** 清空预生成缓存（停止/seek/语速变更/新 speak 时调用） */
+  /** 预生成阶段目标段数（当前水位与总段数的较小值） */
+  private prepareTotal(): number {
+    return Math.min(this.prefetchCount, this.chunks.length);
+  }
+
+  /**
+   * 开播前预生成 K 段：全部完成（或用户"立即播放"跳过）后返回。
+   * 期间 onPrepareProgress 持续上报 ready/total，UI 显示"正在预生成 X/K 段"。
+   */
+  private async prepareBuffers(): Promise<void> {
+    const kokoro = this.zipvoice;
+    if (!kokoro || this.engine === "webspeech" || this.prefetchCount <= 0) return;
+    if (this.chunks.length === 0) return;
+    const genId = this.generationId;
+    this.preparing = true;
+    this.prepareReady = 0;
+    this.skipPrepareRequested = false;
+    const total = this.prepareTotal();
+    this.callbacks.onPrepareProgress?.(0, total);
+    this.pumpPrefetch(); // 并行提交前 K 段生成（worker 池自动并行）
+    // 等待：全部完成 或 用户立即播放（至少 1 段就绪）或 被停止
+    while (this.preparing && this.prepareReady < total) {
+      if (this.stopped || this.generationId !== genId) { this.preparing = false; return; }
+      if (this.skipPrepareRequested && this.prepareReady >= 1) { this.preparing = false; break; }
+      await new Promise(r => setTimeout(r, 100));
+    }
+    this.preparing = false;
+    this.callbacks.onPrepareProgress?.(this.prepareReady, total);
+    if (this.stopped || this.generationId !== genId) return;
+    console.log(`[TTS] ▶ 预生成完成：${this.prepareReady}/${total} 段就绪，开始播放（缓冲 ${this.buffered.length} 段）`);
+  }
+
+  /** 用户"立即播放"：跳过剩余预生成，用已生成的段开始播（至少 1 段） */
+  skipPrepare(): void {
+    this.skipPrepareRequested = true;
+  }
+
+  /** 设置开播前预生成段数（下次朗读生效；0=关闭） */
+  setPrefetchCount(count: number): void {
+    this.prefetchCount = Math.max(0, Math.min(10, Math.round(count) || 0));
+  }
+
+  /** 清空缓冲与生成水位（停止/seek/语速变更/新 speak 时调用） */
   private clearPrefetch(): void {
-    this.prefetched = null;
-    this.prefetchPromise = null;
+    this.buffered = [];
+    this.generateWatermark = 0;
+    this.preparing = false;
+    this.prepareReady = 0;
+    this.skipPrepareRequested = false;
+    this.callbacks.onBufferChange?.(0);
   }
 
   /**
@@ -836,14 +906,19 @@ export class TTSManager {
         if (!kokoro) throw new Error("Kokoro 引擎创建失败");
         kokoro.setVoice(this.voiceId);
         await kokoro.ensureResumed();
+        const kokoroGenId = this.generationId; // 捕获本次朗读代次，供加载/预生成后校验
 
         // 浏览器推理（zipvoice）需要先在浏览器加载模型；服务端推理无需
         if (this.engine === "zipvoice" && !isModelLoaded()) {
-          const genBeforeLoad = this.generationId;
           callbacks.onModelProgress?.(0);
           await loadModel({ onProgress: (p) => callbacks.onModelProgress?.(p) });
-          if (this.generationId !== genBeforeLoad) return;
+          if (this.generationId !== kokoroGenId) return;
           callbacks.onModelLoaded?.();
+        }
+        // A 方案：开播前预生成 K 段（Kokoro 引擎），期间 UI 显示进度、可"立即播放"
+        if (this.prefetchCount > 0) {
+          await this.prepareBuffers();
+          if (this.stopped || this.generationId !== kokoroGenId) return;
         }
       } catch (err) {
         console.warn("[TTS] Kokoro 引擎加载失败，降级到 Web Speech API:", err);
@@ -868,14 +943,14 @@ export class TTSManager {
       // 有效语速 = 设置页生成语速 × 朗读栏播放倍速（clamp 到 sherpa-onnx 官方 0.4-3.5）
       const effectiveSpeed = Math.max(0.4, Math.min(3.5, this.speed * this.playbackRate));
 
-      // ── 流水线：优先使用预生成结果（播放上一段时已并行推理完成）──
-      // 两条路径（预生成命中 / 现场生成）都保证赋值或 return，之后 buffer 必非空
+      // ── 缓冲池：优先取已预生成的音频（播放上一段时已并行推理完成）──
       let buffer: AudioBuffer;
-      if (this.prefetched?.index === this.currentChunkIndex) {
-        buffer = this.prefetched.buffer;
-        this.prefetched = null;
-        this.prefetchPromise = null;
-        console.log(`[TTS] ▶ chunk ${this.currentChunkIndex + 1}/${this.chunks.length} 使用预生成音频（${this.engine === "server" ? "服务端" : "浏览器"}）`);
+      const cachedIdx = this.buffered.findIndex(b => b.index === this.currentChunkIndex);
+      if (cachedIdx >= 0) {
+        buffer = this.buffered[cachedIdx].buffer;
+        this.buffered.splice(cachedIdx, 1);
+        this.callbacks.onBufferChange?.(this.buffered.length);
+        console.log(`[TTS] ▶ chunk ${this.currentChunkIndex + 1}/${this.chunks.length} 使用缓冲音频（剩余 ${this.buffered.length} 段）`);
       } else {
         const chunkT0 = performance.now();
         console.log(`[TTS] ▶ 生成 chunk ${this.currentChunkIndex + 1}/${this.chunks.length} (${this.engine === "server" ? "服务端" : "浏览器"}): ${chunk.text.length} 字, speed=${effectiveSpeed.toFixed(2)}`);
@@ -894,8 +969,8 @@ export class TTSManager {
       }
       if (this.stopped || this.generationId !== genId) return;
 
-      // ── 流水线：播放当前段的同时，并行推理下一段 ──
-      this.startPrefetch(this.currentChunkIndex + 1, effectiveSpeed);
+      // ── 缓冲池：播放当前段的同时，并行推理后续 K 段 ──
+      this.pumpPrefetch();
 
       const chunkT0 = performance.now();
       await this.zipvoice.playBuffer(
