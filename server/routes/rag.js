@@ -344,6 +344,11 @@ const GITEE_WASM_PARTS = [`${WASM_ARCHIVE_NAME}.7z`];
 // 模型：GitHub 官方 tts-models release（fp32 v1.0，349MB）
 const GITHUB_MODEL_URL =
   "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_0.tar.bz2";
+// GitHub 加速镜像（国内直连 GitHub 下载大文件不稳/慢，依次尝试）
+const GITHUB_MIRRORS = [
+  "https://gh-proxy.com/",
+  "https://gh.llkk.cc/",
+];
 // Gitee 模型分卷已废弃（内容是损坏的 int8，会重新引入无声 bug），不再使用
 const GITEE_MODEL_PARTS = [];
 
@@ -590,9 +595,23 @@ async function downloadFromGitHubTar(url, archiveName, targetDir, requiredFiles,
 
   try {
     onProgress?.("下载中 (GitHub)", "tar.bz2 格式");
-    await downloadFile(url, archivePath, 1024 * 1024, (pct) => {
-      onProgress?.(`下载中 ${pct}% (GitHub)`, "tar.bz2 格式");
-    }, { signal });
+    // 依次尝试官方直连 + 加速镜像（downloadFile 失败会清理残缺文件，重试安全）
+    const urls = [url, ...GITHUB_MIRRORS.map((m) => m + url)];
+    let lastErr = null;
+    for (const u of urls) {
+      if (signal?.aborted) throw new Error("下载已取消");
+      try {
+        await downloadFile(u, archivePath, 1024 * 1024, (pct) => {
+          onProgress?.(`下载中 ${pct}% (GitHub)`, "tar.bz2 格式");
+        }, { signal });
+        lastErr = null;
+        break;
+      } catch (e) {
+        lastErr = e;
+        console.warn(`[tts-proxy] GitHub 下载失败 (${u}): ${e.message}，尝试下一个源`);
+      }
+    }
+    if (lastErr) throw lastErr;
 
     onProgress?.("校验压缩包", "检查文件格式");
     const headerBuf = Buffer.alloc(4);
@@ -763,7 +782,7 @@ export async function ensureModelReady(onProgress, { signal, force = false } = {
   if (modelReadyPromise) return modelReadyPromise;
   if (Date.now() - modelLastFailure < 30000) throw new Error("上次下载失败，请 30 秒后重试");
   modelReadyPromise = downloadAndExtract(
-    GITEE_MODEL_PARTS, null, MODEL_ARCHIVE_NAME, TTS_MODEL_CACHE, MODEL_REQUIRED_FILES, onProgress, { signal, force }
+    GITEE_MODEL_PARTS, GITHUB_MODEL_URL, MODEL_ARCHIVE_NAME, TTS_MODEL_CACHE, MODEL_REQUIRED_FILES, onProgress, { signal, force }
   ).then(() => { modelReady = true; })
    .catch((e) => { modelLastFailure = Date.now(); modelReadyPromise = null; throw e; });
   await modelReadyPromise;

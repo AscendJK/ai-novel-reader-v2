@@ -39,7 +39,7 @@ if (isMainThread) {
     "sherpa-onnx-tts.js",
   ];
   const modelFiles = [
-    "model.int8.onnx", "voices.bin", "tokens.txt",
+    "model.int8.onnx", "model.onnx", "voices.bin", "tokens.txt",
     "lexicon-us-en.txt", "lexicon-zh.txt",
     "date-zh.fst", "number-zh.fst", "phone-zh.fst",
     "dict/jieba.dict.utf8", "dict/hmm_model.utf8", "dict/idf.utf8",
@@ -163,7 +163,7 @@ if (isMainThread) {
       try { Module.FS_createPath("/", dir.slice(1), true, true); } catch {}
     }
     const kokoroFiles = [
-      "model.int8.onnx", "voices.bin", "tokens.txt",
+      "model.onnx", "model.int8.onnx", "voices.bin", "tokens.txt",
       "lexicon-us-en.txt", "lexicon-zh.txt",
       "date-zh.fst", "number-zh.fst", "phone-zh.fst",
     ];
@@ -184,11 +184,12 @@ if (isMainThread) {
     }
     log("dict 写入 " + dictFiles.length + " 个文件");
 
+    const MODEL_NAME = files["model.onnx"] ? "model.onnx" : "model.int8.onnx";
     const config = {
       offlineTtsModelConfig: {
         debug: false,
         offlineTtsKokoroModelConfig: {
-          model: modelDir + "/model.int8.onnx",
+          model: modelDir + "/" + MODEL_NAME,
           voices: modelDir + "/voices.bin",
           tokens: modelDir + "/tokens.txt",
           dataDir: "/espeak-ng-data",
