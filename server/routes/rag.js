@@ -149,8 +149,19 @@ router.get("/tts/status", async (req, res) => {
 // POST /api/rag/tts/synthesize — 服务端推理生成音频（WAV）
 router.post("/tts/synthesize", requireAuth, rateLimit(60), async (req, res) => {
   try {
-    const { text, sid, speed } = req.body || {};
-    if (!text || typeof text !== "string" || text.length === 0) {
+    const { sid, speed } = req.body || {};
+    // 删除孤立代理项（未配对的 \uD800-\uDFFF，损坏的小说源数据；Python pybind11 无法编码会报参数错误）
+    const rawText = (req.body && typeof req.body.text === "string") ? req.body.text : "";
+    const text = rawText.replace(/[\uD800-\uDFFF]/g, (m, offset, str) => {
+      const code = m.charCodeAt(0);
+      if (code >= 0xd800 && code <= 0xdbff) {
+        const next = str.charCodeAt(offset + 1);
+        return next >= 0xdc00 && next <= 0xdfff ? m : "";
+      }
+      const prev = str.charCodeAt(offset - 1);
+      return prev >= 0xd800 && prev <= 0xdbff ? m : "";
+    });
+    if (!text || text.length === 0) {
       return res.status(400).json({ error: "text required" });
     }
     if (text.length > 2000) return res.status(400).json({ error: "单次最多 2000 字" });

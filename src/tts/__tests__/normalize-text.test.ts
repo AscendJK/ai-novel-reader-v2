@@ -42,6 +42,17 @@ describe("normalizeText（OOV 字符清洗）", () => {
     expect(normalizeText("   ")).toBe("");
   });
 
+  it("删除孤立代理项（无效 Unicode，损坏的小说源数据）", () => {
+    // \udcad / \udc82 是孤立代理项，pybind11 无法编码会导致服务端推理报错
+    expect(normalizeText("湖北省\udcad汉市等多个地区\udc82")).toBe("湖北省汉市等多个地区");
+    // 正常 emoji（合法代理对）不会被误删：保留后按 emoji 规则转空格
+    expect(normalizeText("新年好\uD83C\uDF89再见")).toBe("新年好 再见");
+    // 孤立高代理项（后无低代理项）→ 直接删除不留空格；孤立低代理项（前无高代理项）→ 删除
+    expect(normalizeText("a\ud800b\udc00c")).toBe("abc");
+    // 合法补充平面字符（U+10000，合法代理对）→ 保留
+    expect(normalizeText("字\uD800\uDC00符")).toBe("字\uD800\uDC00符");
+  });
+
   it("中文引号替换为逗号后语句仍然可读", () => {
     const input = "他说：“今天的天气真好。”她又说：‘明天见。’";
     expect(normalizeText(input)).toBe("他说：今天的天气真好。她又说：明天见。");

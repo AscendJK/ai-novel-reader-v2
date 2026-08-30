@@ -98,6 +98,18 @@ export function isModelLoaded(): boolean {
  */
 export function normalizeText(text: string): string {
   return text
+    // 删除孤立代理项（未配对的 \ud800-\udfff，损坏的小说源数据；JSON 传输/服务端 pybind11 会失败）
+    // 用回调手动判断：高代理项后无低代理项、低代理项前无高代理项 → 孤立删除；合法代理对（如 emoji）保留
+    // ⚠️ 不能用 lookahead/lookbehind：JS 正则对代理项对的 lookbehind 判定有 bug，会误删合法低代理项
+    .replace(/[\uD800-\uDFFF]/g, (m, offset, str) => {
+      const code = m.charCodeAt(0);
+      if (code >= 0xd800 && code <= 0xdbff) {
+        const next = str.charCodeAt(offset + 1);
+        return next >= 0xdc00 && next <= 0xdfff ? m : "";
+      }
+      const prev = str.charCodeAt(offset - 1);
+      return prev >= 0xd800 && prev <= 0xdbff ? m : "";
+    })
     // 中文/英文引号：词表无此字符，替换为逗号（与 prepareTextForTTS 一致，保留停顿）
     .replace(/[“”‘’"']/g, "，")
     // 书名号、括号类装饰符号 → 逗号（保留停顿）；英文方括号 [] 删除（行内装饰）

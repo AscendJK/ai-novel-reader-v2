@@ -26,6 +26,16 @@ def emit(obj):
     sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
     sys.stdout.flush()
 
+def clean_text(text):
+    """清洗 TTS 输入文本：删除无法编码为 UTF-8 的孤立代理项等无效码点。
+
+    小说数据源偶尔含损坏字符（孤立代理项 \ud800-\udfff），pybind11 把 Python str
+    转 C++ std::string 时按 UTF-8 编码，遇到孤立代理项会抛
+    "incompatible function arguments"，导致整条请求 500。
+    这里在生成前剔除无效码点，保证 generate() 只收到合法文本。
+    """
+    return text.encode("utf-8", errors="ignore").decode("utf-8", errors="ignore")
+
 def samples_to_wav(samples, sample_rate):
     """float32 样本 → 16-bit PCM mono WAV bytes"""
     import numpy as np
@@ -76,7 +86,7 @@ def main():
         req = None
         try:
             req = json.loads(line)
-            text = req.get("text", "")
+            text = clean_text(req.get("text", ""))
             if not text:
                 raise ValueError("text is required")
             sid = int(req.get("sid", 45))
