@@ -30,3 +30,36 @@
 ### 相关提交
 - `2ee5238` fix(tts): Kokoro 生成全 NaN 无声，模型 int8 切回 fp32 + 修正音色 sid
 - `eaea82f` fix(tts): 服务器模型下载接 GitHub 官方源 + 镜像 fallback；探针支持 fp32
+- `a3e910c` feat(tts): 新增服务端推理引擎（Python 原生多线程）+ 模型按需下载 + 设置页三引擎 UI
+
+## 服务端推理（Python）— 2026-08-30 新增
+
+### 为什么做
+浏览器 wasm 单线程 fp32 推理 RTF≈12-13（29 字 69s），无法边听边推理；
+int8 在 1.13.6 wasm 上全 NaN（死路）；官方 wasm 无 pthread/WebGPU 构建。
+
+### 方案：服务器 Python sherpa-onnx 原生多线程
+- `server/tts-worker.py`：常驻进程（stdin/stdout JSON 行协议），
+  sherpa-onnx 1.13.6，8 线程，加载 fp32 v1.0，输出 WAV base64
+- `POST /api/rag/tts/synthesize`（rag.js）：懒启动 Python 进程（队列/超时/崩溃重启），
+  返回 audio/wav
+- `GET /tts/status`：新增 `serverInference` 字段（supported/ready/reason）
+- 性能实测（本机）：模型加载 2.3s；18 字 RTF≈0.6（8 线程 2.5s，4 线程 3.3s，1 线程 10s）
+- 首次 synthesize 4.9s（含进程启动+模型加载），常驻后 2.0s
+
+### 部署要求
+- 服务器 `pip install sherpa-onnx`（本机已验证 1.13.6 可用，Python 3.11）
+- 服务器需有 espeak-ng-data（已复制到 model 目录，来自 v1.1 包 17MB）
+
+### 模型按需下载（不再一打开后端就下载）
+- server/index.js 移除启动 5s 自动 ensureTTSResources
+- AppLayout 移除登录后自动 preloadZipVoice
+- 设置页「启用」按钮触发：服务端推理→/tts/prepare（下载到服务器）；
+  浏览器推理→preloadZipVoice（下载到浏览器 IndexedDB）
+
+### 前端引擎结构
+- TTSEngine = "server" | "zipvoice" | "webspeech"
+- server 与 zipvoice 共用 Kokoro 参数（voiceId/speed/chunkSize），webspeech 独立
+- 引擎选择在设置页：服务端推理（推荐·快）/ 浏览器推理（离线·慢）/ Web Speech（免下载）
+- 关键文件：src/tts/server-engine.ts（新）、src/tts/tts-manager.ts（ServerKokoroEngine）、
+  src/stores/tts-store.ts、src/components/settings/TTSSettings.tsx
