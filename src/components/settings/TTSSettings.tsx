@@ -222,7 +222,9 @@ export function TTSSettings() {
         return;
       }
       const buffer = ctx.createBuffer(1, result.audio.length, result.sampleRate);
-      buffer.copyToChannel(result.audio, 0);
+      // 拷贝一份再写入：copyToChannel 在 TS 5.7+ DOM 类型中要求 Float32Array<ArrayBuffer>，
+      // 与 tts-manager 的 playOneBuffer 写法保持一致
+      buffer.copyToChannel(new Float32Array(result.audio), 0);
       const source = ctx.createBufferSource();
       source.buffer = buffer;
       source.connect(ctx.destination);
