@@ -21,7 +21,8 @@ const h = vi.hoisted(() => {
     prewarmZipVoiceAudio() {}
     async speak(_chunks: unknown, callbacks: Record<string, unknown>) {
       mockSpeak(callbacks);
-      callbacks.onPlay?.();
+      // Record<string, unknown> 索引类型为 unknown，需断言为可调用类型再调用
+      (callbacks.onPlay as (() => void) | undefined)?.();
     }
     pause() {}
     async resume() {}
