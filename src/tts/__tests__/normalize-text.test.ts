@@ -53,6 +53,14 @@ describe("normalizeText（OOV 字符清洗）", () => {
     expect(normalizeText("字\uD800\uDC00符")).toBe("字\uD800\uDC00符");
   });
 
+  it("删除 U+FFFD 替换字符（�，损坏标记，Kokoro 读成怪音）", () => {
+    expect(normalizeText("湖北省\uFFFD汉市等多个地区\uFFFD")).toBe("湖北省汉市等多个地区");
+    // 与孤立代理项混合（用户实际报错场景）
+    expect(normalizeText("湖北省\uFFFD\udcad\uFFFD汉市等多个地区\uFFFD\udc82")).toBe("湖北省汉市等多个地区");
+    // 正常文本不受影响
+    expect(normalizeText("湖北省武汉市等多个地区出现疫情。")).toBe("湖北省武汉市等多个地区出现疫情。");
+  });
+
   it("中文引号替换为逗号后语句仍然可读", () => {
     const input = "他说：“今天的天气真好。”她又说：‘明天见。’";
     expect(normalizeText(input)).toBe("他说：今天的天气真好。她又说：明天见。");

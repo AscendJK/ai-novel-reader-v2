@@ -110,6 +110,9 @@ export function normalizeText(text: string): string {
       const prev = str.charCodeAt(offset - 1);
       return prev >= 0xd800 && prev <= 0xdbff ? m : "";
     })
+    // 删除 U+FFFD 替换字符（�，损坏的小说源数据标记；Kokoro 词表无此字符，
+    // 会把每个 � 读成一串怪音，造成中英混合胡话）
+    .replace(/\uFFFD/g, "")
     // 中文/英文引号：词表无此字符，替换为逗号（与 prepareTextForTTS 一致，保留停顿）
     .replace(/[“”‘’"']/g, "，")
     // 书名号、括号类装饰符号 → 逗号（保留停顿）；英文方括号 [] 删除（行内装饰）
