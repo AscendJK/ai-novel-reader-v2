@@ -30,7 +30,9 @@ vi.mock("../server-engine", () => ({
   cancelServerInference: vi.fn(async () => {}),
 }));
 
-import { cancelServerInference as mockCancelServerInference } from "../server-engine";
+import { cancelServerInference } from "../server-engine";
+// vi.mocked：类型上把真实签名包装成 Mock（运行时已被 vi.mock 工厂替换为 vi.fn）
+const mockCancelServerInference = vi.mocked(cancelServerInference);
 
 // ── Mock Web Audio API（jsdom 无 AudioContext）──
 class MockAudioBufferSource {
