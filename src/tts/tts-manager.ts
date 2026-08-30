@@ -91,6 +91,7 @@ class WebSpeechTTSEngine {
   private boundaryDetectionDone = false;
   private calibratedCharsPerSec = 4; // 默认值，会被首个 onboundary 事件校准
   private chunkStartTime = 0;
+  private lastBoundaryPara: number | null = null; // 上次上报的段落（仅变化时上报）
 
   setVoice(voiceId: string) {
     if (!this.available) return;
@@ -189,6 +190,7 @@ class WebSpeechTTSEngine {
     this.boundaryEventCount = 0;
     this.boundaryDetectionDone = false;
     this.chunkStartTime = performance.now();
+    this.lastBoundaryPara = null; // 重置：新 chunk 首次 boundary 必须上报
 
     utterance.onboundary = (e: SpeechSynthesisEvent) => {
       if (e.charIndex === undefined) return;
@@ -205,10 +207,15 @@ class WebSpeechTTSEngine {
         this.clearParaTimer();
       }
 
-      // 字符位置 → 段落映射（二分查找）
+      // 字符位置 → 段落映射（二分查找）；仅段落变化时上报
+      //（同一段落内多个 boundary 事件不重复触发 store 更新）
       const paraIdx = findParagraphByCharIndex(e.charIndex, breaks);
       if (paraIdx >= 0 && paraIdx < indices.length) {
-        onParagraphChange(indices[paraIdx]);
+        const target = indices[paraIdx];
+        if (target !== this.lastBoundaryPara) {
+          this.lastBoundaryPara = target;
+          onParagraphChange(target);
+        }
       }
     };
 
@@ -312,8 +319,8 @@ class ZipVoiceTTSEngine {
    * @param _voice 音色 id
    * @param _speed 语速
    */
-  protected async generate(_text: string, _voice: string, _speed: number): Promise<{ samples: Float32Array; sampleRate: number }> {
-    void _text; void _voice; void _speed;
+  protected async generate(_text: string, _voice: string, _speed: number, _priority?: boolean): Promise<{ samples: Float32Array; sampleRate: number }> {
+    void _text; void _voice; void _speed; void _priority;
     throw new Error("generate() 未实现");
   }
 
@@ -345,8 +352,11 @@ class ZipVoiceTTSEngine {
   }
 
   /**
-   * 启动 chunk 内逐段高亮：音频匀速播放，播放进度 × 总字符数 →
-   * 字符位置 → 段落映射。与 Web Speech 的 onboundary 逐句高亮对齐。
+   * 启动 chunk 内逐段高亮：字符速率校准 + 时间推进映射。
+   * 初始用「总字符数 / 音频时长」的平均速率，每次跨过段落边界时用
+   * 「实际到达的字符位置 / 已播时长」平滑校准（吸收标点停顿、数字英文
+   * 朗读时长差异），比纯线性进度映射更贴合真实朗读节奏。
+   * 仅段落变化时上报（避免每 200ms 无谓更新 store / 重渲染）。
    */
   private startParagraphTracking(
     buffer: AudioBuffer, text: string,
@@ -359,14 +369,33 @@ class ZipVoiceTTSEngine {
     this.trackIndices = indices;
     this.trackOnParagraphChange = onParagraphChange;
     const ctx = this.getAudioContext();
+    // 初始校准值：整体平均字符速率（字符/秒）
+    const avgRate = text.length / Math.max(0.1, buffer.duration);
+    let calibrated = avgRate;
+    let lastParaIdx: number | null = null;
     this.paraTimer = setInterval(() => {
       // 暂停/未播放时不推进；currentSource 被 stop（暂停）时跳过
       if (this.paused || !this.currentSource) return;
       const elapsed = ctx.currentTime - this.startedAt;
       if (elapsed < 0) return;
-      const progress = buffer.duration > 0 ? Math.min(elapsed / buffer.duration, 1) : 1;
-      const paraIdx = mapProgressToParagraph(progress, text.length, breaks, indices);
-      if (paraIdx !== null) onParagraphChange(paraIdx);
+      const charPos = Math.min(Math.floor(elapsed * calibrated), Math.max(1, text.length));
+      const idx = findParagraphByCharIndex(charPos, breaks);
+      if (idx < 0 || idx >= indices.length) return;
+      const paraIdx = indices[idx];
+      // 跨过段落边界（idx>0）时校准：实际到达 breaks[idx] 用了 elapsed 秒
+      if (idx > 0 && elapsed > 0.3) {
+        const observed = breaks[idx] / elapsed; // 字符/秒（从音频起点到该边界的平均速率）
+        // 平滑更新并限幅，避免单段极短/超长导致速率突变
+        calibrated = Math.max(
+          avgRate * 0.5,
+          Math.min(avgRate * 2.0, calibrated * 0.6 + observed * 0.4),
+        );
+      }
+      // 仅段落变化时上报（B: 消除每 200ms 的无谓 store 更新）
+      if (paraIdx !== lastParaIdx) {
+        lastParaIdx = paraIdx;
+        onParagraphChange(paraIdx);
+      }
     }, 200);
   }
 
@@ -434,7 +463,7 @@ class ZipVoiceTTSEngine {
    * 播放状态（currentSource/currentBuffer）由 playBuffer/pause/resume/stop 管理。
    */
   async generateBuffer(
-    text: string, speed: number, isCancelled?: () => boolean,
+    text: string, speed: number, isCancelled?: () => boolean, priority?: boolean,
   ): Promise<AudioBuffer> {
     this.stopped = false; // 重置引擎级作废标志（新一轮生成）
     const ctx = this.getAudioContext();
@@ -445,7 +474,7 @@ class ZipVoiceTTSEngine {
     if (ctx.state !== "running") {
       throw new Error("浏览器阻止了自动播放，请点击页面任意位置后重试");
     }
-    const { samples, sampleRate } = await this.generate(text, this.voice, speed);
+    const { samples, sampleRate } = await this.generate(text, this.voice, speed, priority);
     if (this.stopped || isCancelled?.()) throw new Error("已取消");
     const buffer = ctx.createBuffer(1, samples.length, sampleRate);
     buffer.copyToChannel(new Float32Array(samples), 0);
@@ -566,9 +595,9 @@ class ZipVoiceTTSEngine {
  * 浏览器离线推理引擎（Kokoro wasm，单线程，可离线）
  */
 class BrowserKokoroEngine extends ZipVoiceTTSEngine {
-  protected async generate(text: string, voice: string, speed: number): Promise<{ samples: Float32Array; sampleRate: number }> {
+  protected async generate(text: string, voice: string, speed: number, priority?: boolean): Promise<{ samples: Float32Array; sampleRate: number }> {
     let audio: Float32Array | null = null;
-    await generateAudio(text, { voice, speed }, async (audioData) => { audio = audioData; });
+    await generateAudio(text, { voice, speed, priority }, async (audioData) => { audio = audioData; });
     if (audio === null) throw new Error("浏览器推理未生成音频");
     return { samples: audio, sampleRate: 24000 };
   }
@@ -613,6 +642,10 @@ export class TTSManager {
   private preparing = false;                       // 预生成阶段（开播前）
   private prepareReady = 0;                        // 预生成已完成段数
   private skipPrepareRequested = false;            // 用户点"立即播放"：提前结束预生成
+  // 预生成在途任务（chunk index → 完成通知）：现场生成时若该段预生成已在 worker 中
+  // 运行/排队，等待其完成而非重复提交（避免同一段生成两遍浪费推理）
+  private inFlightPrefetch = new Set<number>();
+  private prefetchWaiters = new Map<number, (() => void)[]>();
 
   constructor() {
     this.webSpeech = new WebSpeechTTSEngine();
@@ -677,10 +710,16 @@ export class TTSManager {
     // 游标从 max(已提交进度, 当前应提交起点) 开始：
     // seek 后 clearPrefetch 把 watermark 重置为 0，但不能重新提交 seek 之前的段
     let cursor = Math.max(this.generateWatermark, base);
-    while (cursor < target) {
+    // 播放中每次只提交 1 个任务：防止生成慢时水位落后导致一次积压 K 个预生成任务，
+    // 把现场生成（高优先级插队）挤到队尾——这正是"缓冲不足 K 就不播"的根源之一。
+    const limit = this.preparing ? target : Math.min(target, this.generateWatermark + 1);
+    while (cursor < limit) {
       const idx = cursor++;
       const chunk = this.chunks[idx];
       if (!chunk) break;
+      // 已在途（现场生成可能已插队提交同段）→ 跳过，不重复提交
+      if (this.inFlightPrefetch.has(idx)) continue;
+      this.inFlightPrefetch.add(idx);
       // 异步生成：完成后若未作废则入缓冲（按 index 有序插入）
       (async () => {
         try {
@@ -689,6 +728,8 @@ export class TTSManager {
             () => this.stopped || this.generationId !== genId,
           );
           if (this.stopped || this.generationId !== genId) return; // 作废：停止/seek/语速变更
+          // 该段已播放（现场生成插队抢先完成）→ 丢弃，避免残留永不播放的缓冲
+          if (this.currentChunkIndex > idx) return;
           // 有序插入（跳过已存在 index，防止重复提交竞态）
           if (!this.buffered.some(b => b.index === idx)) {
             this.buffered.push({ index: idx, buffer });
@@ -704,6 +745,9 @@ export class TTSManager {
           if (!this.stopped && this.generationId === genId) {
             console.warn(`[TTS] 预生成 chunk ${idx + 1} 失败（后续播放时会重试）:`, e instanceof Error ? e.message : e);
           }
+        } finally {
+          this.inFlightPrefetch.delete(idx);
+          this.notifyPrefetchDone(idx); // 唤醒等待该段的现场生成（成功→缓冲命中；失败→现场生成重试）
         }
       })();
     }
@@ -760,6 +804,24 @@ export class TTSManager {
     this.prefetchCount = Math.max(0, Math.min(10, Math.round(count) || 0));
   }
 
+  /** 唤醒等待指定段预生成完成的现场生成（成功/失败都唤醒，调用方重新检查缓冲） */
+  private notifyPrefetchDone(idx: number): void {
+    const waiters = this.prefetchWaiters.get(idx);
+    if (waiters) {
+      this.prefetchWaiters.delete(idx);
+      for (const w of waiters) w();
+    }
+  }
+
+  /** 注册等待：该段预生成在途时，现场生成等待其完成（不重复提交浪费推理） */
+  private waitPrefetchDone(idx: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const arr = this.prefetchWaiters.get(idx) ?? [];
+      arr.push(resolve);
+      this.prefetchWaiters.set(idx, arr);
+    });
+  }
+
   /** 清空缓冲与生成水位（停止/seek/语速变更/新 speak 时调用） */
   private clearPrefetch(): void {
     this.buffered = [];
@@ -767,6 +829,10 @@ export class TTSManager {
     this.preparing = false;
     this.prepareReady = 0;
     this.skipPrepareRequested = false;
+    // 唤醒全部等待者：调用方会因 stopped/代次变化退出（安全），并清空等待表防泄漏
+    for (const waiters of this.prefetchWaiters.values()) for (const w of waiters) w();
+    this.prefetchWaiters.clear();
+    this.inFlightPrefetch.clear();
     this.callbacks.onBufferChange?.(0);
   }
 
@@ -952,10 +1018,31 @@ export class TTSManager {
         // 现场生成（缓冲未命中）：通知 UI 显示"生成中"（浏览器推理可能需 60-120s）
         this.callbacks.onGenerating?.(true);
         try {
-          buffer = await this.zipvoice.generateBuffer(
-            chunk.text, effectiveSpeed,
-            () => this.stopped || this.generationId !== genId,
-          );
+          // 该段预生成已在途（worker 正在跑/排队）→ 等它完成，不重复提交浪费推理；
+          // 完成后缓冲命中直接播放；预生成失败则回落到现场生成（插队）。
+          if (!this.preparing && this.inFlightPrefetch.has(this.currentChunkIndex)) {
+            await this.waitPrefetchDone(this.currentChunkIndex);
+            if (this.stopped || this.generationId !== genId) return;
+            const readyIdx = this.buffered.findIndex(b => b.index === this.currentChunkIndex);
+            if (readyIdx >= 0) {
+              buffer = this.buffered[readyIdx].buffer;
+              this.buffered.splice(readyIdx, 1);
+              this.callbacks.onBufferChange?.(this.buffered.length);
+            } else {
+              // 预生成失败：现场生成（priority 插队，不被后台任务阻塞）
+              buffer = await this.zipvoice.generateBuffer(
+                chunk.text, effectiveSpeed,
+                () => this.stopped || this.generationId !== genId,
+                true,
+              );
+            }
+          } else {
+            buffer = await this.zipvoice.generateBuffer(
+              chunk.text, effectiveSpeed,
+              () => this.stopped || this.generationId !== genId,
+              true, // priority：现场生成插队到 worker 队列队首，不被后台预生成阻塞
+            );
+          }
         } catch (err) {
           this.callbacks.onGenerating?.(false);
           if (this.stopped || this.generationId !== genId) return; // 取消静默

@@ -22,24 +22,26 @@
 
 **前置条件**：
 - [Node.js](https://nodejs.org) v18~22 LTS（推荐 22）
+- Python 3.9+（**可选**，仅"服务端推理"朗读引擎需要：`pip install sherpa-onnx`；不安装不影响其他功能）
 
 > **Node.js 24+ 用户注意**：`better-sqlite3` 在 Node 24 上缺少预编译二进制，需要 Python 3.x 和 C++ 构建工具。建议使用 **Node.js 22 LTS**。
 
 **方式一：下载后端包（推荐）**
 
-从 [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases) 下载 `ai-novel-reader-backend-v2.x.x.zip`（约 40-45 KB），解压后：
+从 [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases) 下载 `ai-novel-reader-backend-v2.x.x.zip`（约 60 KB），解压后：
 
 - **Windows**：双击 `start.bat`
 - **macOS / Linux**：`chmod +x start.sh && ./start.sh`
 
 脚本会自动安装依赖并启动后端（仅安装服务端依赖，不构建前端）。首次构建索引时会自动从镜像下载模型（需要网络）。
 
-> **精简包内容**：仅包含 `server/` 源码、`package.json`（5 个后端依赖）和启动脚本。启动脚本只执行 `npm install` + `node server/index.js`，不构建前端。运行时数据（数据库、模型缓存、证书）由服务器启动后自动创建。
+> **精简包内容**：仅包含 `server/` 源码（含 `tts-worker.py` 服务端推理脚本）、`package.json`（5 个后端依赖）、启动脚本和 `README.txt`（部署说明）。启动脚本只执行 `npm install` + `node server/index.js`，不构建前端。运行时数据（数据库、模型缓存、证书）由服务器启动后自动创建。
 >
 > **如何更新后端包**：下载新版 zip，直接解压到旧版目录覆盖即可。
 > 后端包不包含 `server/data/` 目录，你的数据库（小说、笔记、阅读进度等）不会丢失。
 > 如果之前修改过 `start.bat`（如自定义端口号），覆盖后需重新修改。
 > 依赖有变动时脚本会自动执行 `npm install`，无需手动操作。
+> 启动脚本会检测 Python + sherpa-onnx（可选依赖），缺失时仅提示、不阻塞启动。
 
 **维护者：如何打包 / 发布后端包**
 
@@ -49,7 +51,7 @@
 npm run pack:backend
 ```
 
-生成 `ai-novel-reader-v2-backend.zip`（约 40-45 KB）。
+生成 `ai-novel-reader-v2-backend.zip`（约 60 KB）。
 
 **自动发布 Release**：推送到 `main` 分支只触发前端部署，不会打包后端。需要发布新版本时打 tag：
 
@@ -58,7 +60,7 @@ git tag v2.1.8
 git push origin v2.1.8
 ```
 
-GitHub Actions（`.github/workflows/release-backend.yml`）会自动运行 `pack-backend.ps1`、校验产物，并创建 Release、上传 zip。也可以在 Actions 页面手动触发（workflow_dispatch）。
+GitHub Actions（`.github/workflows/release-backend.yml`）会自动运行 `pack-backend.ps1`、校验产物（检查 `tts-worker.py`、`rag.js` 等关键文件是否在包内，缺失即失败）、并创建 Release、上传 zip。也可以在 Actions 页面手动触发（workflow_dispatch）。
 
 **方式二：Clone 整个仓库**
 

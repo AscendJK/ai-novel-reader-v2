@@ -13,14 +13,16 @@ import { TTSManager, type TTSChunk } from "../tts-manager";
 
 // ── 分别记录两个引擎的生成调用（区分引擎，验证切换后走了正确引擎）──
 const serverCalls: { text: string; voice: string; speed: number }[] = [];
-const zipvoiceCalls: { text: string; voice: string; speed: number }[] = [];
+const zipvoiceCalls: { text: string; voice: string; speed: number; priority?: boolean }[] = [];
+// 慢速生成开关：模拟浏览器推理慢于播放（触发缓冲耗尽 → 现场生成）
+const { slowGenerateRef } = vi.hoisted(() => ({ slowGenerateRef: { value: false } }));
 
 vi.mock("../zipvoice-engine", () => ({
   isModelLoaded: () => true, // 跳过 loadModel，聚焦引擎实例分发
   loadModel: vi.fn(async () => {}),
-  generateAudio: vi.fn(async (text: string, opts: { voice: string; speed: number }, onChunk: (data: Float32Array) => void) => {
-    zipvoiceCalls.push({ text, voice: opts.voice, speed: opts.speed });
-    await new Promise(r => setTimeout(r, 10)); // 模拟 worker 推理耗时
+  generateAudio: vi.fn(async (text: string, opts: { voice: string; speed: number; priority?: boolean }, onChunk: (data: Float32Array) => void) => {
+    zipvoiceCalls.push({ text, voice: opts.voice, speed: opts.speed, priority: opts.priority });
+    await new Promise(r => setTimeout(r, slowGenerateRef.value ? 500 : 10)); // 慢速模拟 worker 推理耗时
     onChunk(new Float32Array(24000)); // 1 秒音频
   }),
   resetWorker: vi.fn(),
@@ -235,4 +237,40 @@ describe("TTSManager 跨引擎切换", () => {
     await speakPromise;
     manager.destroy();
   }, 10000);
+});
+
+// ── 现场生成 vs 预生成的优先级（P 修复：现场生成插队，不被预生成阻塞）──
+describe("TTSManager 生成优先级", () => {
+  it("prefetchCount=0：无预生成，全部现场生成均带 priority=true（插队）", async () => {
+    zipvoiceCalls.length = 0;
+    const manager = new TTSManager();
+    manager.setPrefetchCount(0); // 关闭预生成 → 每段都现场生成
+    manager.setEngine("zipvoice");
+    const chunks = makeChunks().slice(0, 2);
+    const errors: string[] = [];
+    await speakToEnd(manager, chunks, errors);
+    expect(errors).toEqual([]);
+    expect(zipvoiceCalls.length).toBe(2);
+    expect(zipvoiceCalls.every(c => c.priority === true)).toBe(true);
+    manager.destroy();
+  }, 15000);
+
+  it("prefetchCount=3：预生成足够时全部走预生成（不带 priority），无现场生成", async () => {
+    zipvoiceCalls.length = 0;
+    const manager = new TTSManager();
+    manager.setPrefetchCount(3); // 预生成覆盖全部段（mock 生成 10ms << 播放 120ms）
+    manager.setEngine("zipvoice");
+    const chunks = makeChunks(); // 3 段
+    const errors: string[] = [];
+    await speakToEnd(manager, chunks, errors);
+    expect(errors).toEqual([]);
+    // 预生成（开播前 + 播放中滚动）不带 priority
+    const prefetch = zipvoiceCalls.filter(c => c.priority !== true);
+    // 预生成足够时缓冲始终命中，不应触发任何现场生成（priority=true）
+    const live = zipvoiceCalls.filter(c => c.priority === true);
+    expect(prefetch.length).toBe(2); // chunks 共 2 段，全部预生成
+    expect(live.length).toBe(0);
+    expect(prefetch.length + live.length).toBe(zipvoiceCalls.length);
+    manager.destroy();
+  }, 15000);
 });

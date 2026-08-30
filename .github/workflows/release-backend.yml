@@ -30,7 +30,19 @@ jobs:
           if (-not $zip -or $zip.Length -lt 10000) {
             Write-Error "Package missing or too small: $($zip.Length) bytes"
           }
-          Write-Host "Package OK: $($zip.Length) bytes"
+          # 关键文件存在性检查（直接读 zip 条目，backend-pack-tmp 已被脚本清理）：
+          # 服务端 TTS 推理依赖 tts-worker.py，缺失会导致引擎不可用。
+          # 条目分隔符统一为 '/'（Windows 上 Compress-Archive 可能用 '\'）。
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path "ai-novel-reader-v2-backend.zip"))
+          $names = $archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') }
+          $archive.Dispose()
+          $required = @("server/tts-worker.py", "server/routes/rag.js", "package.json", "start.bat", "start.sh")
+          $missing = @($required | Where-Object { $_ -notin $names })
+          if ($missing.Count -gt 0) {
+            Write-Error "Package missing critical files: $($missing -join ', ')"
+          }
+          Write-Host "Package OK: $($zip.Length) bytes, entries: $($names.Count)"
 
       - name: Create Release
         uses: softprops/action-gh-release@v2

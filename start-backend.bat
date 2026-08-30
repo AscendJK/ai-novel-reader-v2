@@ -32,6 +32,25 @@ if !NODE_VER! gtr 22 (
 
 echo Node.js version: !NODE_VER! [OK]
 
+REM TTS 服务端推理依赖 Python + sherpa-onnx（可选）：缺失仅影响"服务端推理"引擎，
+REM 浏览器推理与 Web Speech 不受影响。探测并提示，不阻塞启动。
+set "PY_OK="
+for %%C in (python python3 py) do (
+    if not defined PY_OK (
+        where %%C >nul 2>&1 && (
+            %%C -c "import sherpa_onnx" >nul 2>&1 && set "PY_OK=1"
+        )
+    )
+)
+if not defined PY_OK (
+    echo.
+    echo [NOTE] Python + sherpa-onnx 未检测到（可选依赖）。
+    echo   服务端推理引擎将不可用。如需使用，请安装 Python 3.9+ 后运行：
+    echo     pip install sherpa-onnx
+    echo   浏览器推理与 Web Speech 朗读不受影响。
+    echo.
+)
+
 if not exist "node_modules\" (
     echo Installing dependencies...
     call npm install

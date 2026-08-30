@@ -55,6 +55,8 @@ interface Task {
   text: string;
   sid: number;
   speed: number;
+  /** 高优先级（现场生成）：入队时插到队首，避免被预生成任务阻塞 */
+  priority?: boolean;
 }
 
 /**
@@ -74,6 +76,8 @@ export interface ZipVoiceGenerateOptions {
   voice?: string;
   speed?: number;
   onProgress?: (progress: number) => void;
+  /** 高优先级（现场生成）：任务插队到队首，不被预生成阻塞 */
+  priority?: boolean;
 }
 
 export interface ZipVoiceAudioResult {
@@ -268,13 +272,21 @@ function dispatchTask(task: Task): void {
       console.warn(`[TTS] 任务 #${task.id} 无可用 Worker，快速失败（存活 ${ttsWorkers.filter(Boolean).length}/${ttsWorkers.length}）`);
       return;
     }
-    taskQueue.push(task);
+    // 高优先级任务（现场生成）插队到队首：播放需要立即生成的段优先于后台预生成，
+    // 否则现场生成会排在预生成任务后面（FIFO），表现为"缓冲不足 K 就不播"
+    const busy = workerBusy.filter(Boolean).length;
+    const kind = task.priority ? "现场生成" : "预生成";
+    if (task.priority) taskQueue.unshift(task);
+    else taskQueue.push(task);
+    console.log(`[TTS] ⏳ 任务 #${task.id}（${kind}）排队：Worker 忙 ${busy}/${ttsWorkers.length}，队列 ${taskQueue.length} 个待派发`);
     return;
   }
   workerBusy[idx] = true;
   taskWorkerMap.set(task.id, idx);
   try {
     ttsWorkers[idx]!.postMessage({ type: "generate", id: task.id, text: task.text, sid: task.sid, speed: task.speed });
+    const kind = task.priority ? "现场生成" : "预生成";
+    console.log(`[TTS] ▶ 派发任务 #${task.id}（${kind}）→ Worker #${idx}（忙 ${workerBusy.filter(Boolean).length}/${workerBusy.length}）`);
   } catch (err) {
     // postMessage 失败（worker 已终止等）：释放 busy，避免该槽位永久卡死
     workerBusy[idx] = false;
@@ -366,11 +378,12 @@ function handleWorkerMessage(e: MessageEvent, workerIndex: number): void {
       const samples = msg.samples instanceof Float32Array
         ? msg.samples
         : new Float32Array(msg.samples);
+      console.log(`[TTS] ✓ Worker #${workerIndex} 完成 #${id}: ${samples.length} samples ≈ ${(samples.length / SAMPLE_RATE).toFixed(1)}s 音频`);
       pending.resolve(samples);
     } else {
       // 无匹配请求（超时/已取消/seek 作废）：丢弃结果，绝不误配给其他请求
       //（池化后多请求并行，旧"取第一个"逻辑会把 A 的音频错配给 B）
-      console.warn(`[TTS] 丢弃无主生成结果 #${id ?? "?"}（已超时/取消）`);
+      console.warn(`[TTS] Worker #${workerIndex} 丢弃无主生成结果 #${id ?? "?"}（已超时/取消）`);
     }
     onWorkerIdle(workerIndex); // 该 worker 空闲，派发排队任务
   } else if (msg.type === "sherpa-onnx-tts-generation-progress") {
@@ -576,28 +589,31 @@ export async function generateAudio(
   // 动态超时：Kokoro fp32 wasm 单线程推理本地实测 RTF≈5-8（每字约 1.5-2s），
   // 慢设备（无 SIMD/低配 CPU）可达更高。每字预留 6s，下限 120s。
   const timeoutMs = Math.max(GENERATE_TIMEOUT_MS, cleanText.length * 6000);
-  console.log(`[TTS] 请求生成 #${id}: ${cleanText.length} 字, voice=${voiceId}(sid=${sid}), speed=${speed}, 超时 ${(timeoutMs / 1000).toFixed(0)}s, 池=${ttsWorkers.length}`);
+  const kind = options?.priority ? "现场生成" : "预生成";
+  console.log(`[TTS] 请求生成 #${id}（${kind}）: ${cleanText.length} 字, voice=${voiceId}(sid=${sid}), speed=${speed}, 超时 ${(timeoutMs / 1000).toFixed(0)}s, 池=${ttsWorkers.length}`);
   // zipvoice 无逐步进度回调，用时间推进展示生成进度（每 10s 一条）
   const progressTimer = setInterval(() => {
-    console.log(`[TTS] ⏳ 生成中 #${id}: 已等待 ${((performance.now() - t0) / 1000).toFixed(0)}s`);
+    const widx = taskWorkerMap.get(id);
+    console.log(`[TTS] ⏳ 生成中 #${id}${widx !== undefined ? `（Worker #${widx}）` : "（排队中）"}: 已等待 ${((performance.now() - t0) / 1000).toFixed(0)}s`);
   }, 10000);
   let audio: Float32Array;
   try {
     audio = await new Promise<Float32Array>((resolve, reject) => {
       // H5 fix: 生成超时（动态：短文本下限 120s，长文本按每字 4s 预留）
       const timer = setTimeout(() => {
+        const widx = taskWorkerMap.get(id);
         pendingRequests.delete(id);
         taskWorkerMap.delete(id);
-        console.warn(`[TTS] 生成超时 #${id}: ${((performance.now() - t0) / 1000).toFixed(1)}s 未返回，已放弃该 chunk`);
+        console.warn(`[TTS] 生成超时 #${id}${widx !== undefined ? `（Worker #${widx}）` : ""}: ${((performance.now() - t0) / 1000).toFixed(1)}s 未返回，已放弃该 chunk`);
         reject(new Error("音频生成超时"));
       }, timeoutMs);
       pendingRequests.set(id, { resolve, reject, timer });
-      dispatchTask({ id, text: cleanText, sid, speed }); // 池调度：空闲 worker 立即处理，否则排队
+      dispatchTask({ id, text: cleanText, sid, speed, priority: options?.priority }); // 池调度：空闲 worker 立即处理，否则排队
     });
   } finally {
     clearInterval(progressTimer);
   }
-  console.log(`[TTS] 生成完成 #${id}: ${audio.length} samples ≈ ${(audio.length / SAMPLE_RATE).toFixed(1)}s 音频, 耗时 ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+  console.log(`[TTS] 生成完成 #${id}: 耗时 ${((performance.now() - t0) / 1000).toFixed(1)}s`);
 
   await onChunk?.(audio);
 }
@@ -626,24 +642,26 @@ export async function generateAudioFull(
   console.log(`[TTS] 请求生成(完整预览) #${id}: ${cleanText.length} 字, voice=${voiceId}(sid=${sid}), speed=${speed}, 超时 ${(timeoutMs / 1000).toFixed(0)}s`);
   // zipvoice 无逐步进度回调，用时间推进展示生成进度（每 10s 一条）
   const progressTimer = setInterval(() => {
-    console.log(`[TTS] ⏳ 生成中(完整预览) #${id}: 已等待 ${((performance.now() - t0) / 1000).toFixed(0)}s`);
+    const widx = taskWorkerMap.get(id);
+    console.log(`[TTS] ⏳ 生成中(完整预览) #${id}${widx !== undefined ? `（Worker #${widx}）` : "（排队中）"}: 已等待 ${((performance.now() - t0) / 1000).toFixed(0)}s`);
   }, 10000);
   let audio: Float32Array;
   try {
     audio = await new Promise<Float32Array>((resolve, reject) => {
       const timer = setTimeout(() => {
+        const widx = taskWorkerMap.get(id);
         pendingRequests.delete(id);
         taskWorkerMap.delete(id);
-        console.warn(`[TTS] 生成超时(完整预览) #${id}: ${((performance.now() - t0) / 1000).toFixed(1)}s 未返回`);
+        console.warn(`[TTS] 生成超时(完整预览) #${id}${widx !== undefined ? `（Worker #${widx}）` : ""}: ${((performance.now() - t0) / 1000).toFixed(1)}s 未返回`);
         reject(new Error("音频生成超时"));
       }, timeoutMs);
       pendingRequests.set(id, { resolve, reject, timer });
-      dispatchTask({ id, text: cleanText, sid, speed }); // 池调度（预览同样走池，占用 1 个 worker）
+      dispatchTask({ id, text: cleanText, sid, speed, priority: options?.priority }); // 池调度（预览同样走池，占用 1 个 worker）
     });
   } finally {
     clearInterval(progressTimer);
   }
-  console.log(`[TTS] 生成完成(完整预览) #${id}: ${audio.length} samples ≈ ${(audio.length / SAMPLE_RATE).toFixed(1)}s 音频, 耗时 ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+  console.log(`[TTS] 生成完成(完整预览) #${id}: 耗时 ${((performance.now() - t0) / 1000).toFixed(1)}s`);
 
   return { audio, sampleRate: SAMPLE_RATE };
 }

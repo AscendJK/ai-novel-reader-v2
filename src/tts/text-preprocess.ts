@@ -45,12 +45,19 @@ export function findChunkIndexByPara(chunks: TTSChunk[], paraIndex: number): num
  * 将章节文本分割为适合 TTS 的段落
  * - 按自然段落分割
  * - 过滤过短段落（< 5 字）
- * - 合并相邻短段落减少 utterance 数量
+ * - 合并相邻短段落减少 utterance 数量（singleParagraphPerChunk=true 时跳过合并，每段独立成 chunk）
  * - 超长段落按句号拆分
  * - 清理特殊字符
  * - paragraphBreaks 供移动端基于时间估算的段落追踪回退
+ *
+ * @param singleParagraphPerChunk 段落级生成：每个 chunk 恰好一个段落（用于 server 引擎精确高亮；
+ *   chunk 边界 = 段落边界，高亮零估算误差）。zipvoice 推理慢仍需合并摊薄成本，保持 false。
  */
-export function prepareTextForTTS(content: string, maxChunkLength: number = 300): TTSChunk[] {
+export function prepareTextForTTS(
+  content: string,
+  maxChunkLength: number = 300,
+  singleParagraphPerChunk: boolean = false,
+): TTSChunk[] {
   if (!content || content.trim().length === 0) return [];
 
   // 步骤1: 清洗每个段落，保留原始索引
@@ -86,35 +93,42 @@ export function prepareTextForTTS(content: string, maxChunkLength: number = 300)
 
   if (cleaned.length === 0) return [];
 
-  // 步骤2: 合并相邻短段落（合计 < 150 字），记录段落分割点
+  // 步骤2: 合并相邻短段落（合计 < 150 字），记录段落分割点。
+  // 段落级模式（server 精确高亮）跳过合并：每段独立成 chunk，chunk 边界 = 段落边界
   interface MergedGroup {
     text: string;
     indices: number[];
     breaks: number[]; // 每个段落在 text 中的起始字符位置
   }
   const merged: MergedGroup[] = [];
-  let buffer = "";
-  let bufferIndices: number[] = [];
-  let bufferBreaks: number[] = [0];
-
-  for (const p of cleaned) {
-    if (buffer.length > 0 && buffer.length + p.text.length + 1 < 150) {
-      // 合并到当前缓冲区
-      bufferBreaks.push(buffer.length + 1); // +1 for "。" separator
-      bufferIndices.push(p.index);
-      buffer += "。" + p.text;
-    } else {
-      // 输出当前缓冲区
-      if (buffer.length > 0) {
-        merged.push({ text: buffer, indices: [...bufferIndices], breaks: [...bufferBreaks] });
-      }
-      buffer = p.text;
-      bufferIndices = [p.index];
-      bufferBreaks = [0];
+  if (singleParagraphPerChunk) {
+    for (const p of cleaned) {
+      merged.push({ text: p.text, indices: [p.index], breaks: [0] });
     }
-  }
-  if (buffer.length > 0) {
-    merged.push({ text: buffer, indices: [...bufferIndices], breaks: [...bufferBreaks] });
+  } else {
+    let buffer = "";
+    let bufferIndices: number[] = [];
+    let bufferBreaks: number[] = [0];
+
+    for (const p of cleaned) {
+      if (buffer.length > 0 && buffer.length + p.text.length + 1 < 150) {
+        // 合并到当前缓冲区
+        bufferBreaks.push(buffer.length + 1); // +1 for "。" separator
+        bufferIndices.push(p.index);
+        buffer += "。" + p.text;
+      } else {
+        // 输出当前缓冲区
+        if (buffer.length > 0) {
+          merged.push({ text: buffer, indices: [...bufferIndices], breaks: [...bufferBreaks] });
+        }
+        buffer = p.text;
+        bufferIndices = [p.index];
+        bufferBreaks = [0];
+      }
+    }
+    if (buffer.length > 0) {
+      merged.push({ text: buffer, indices: [...bufferIndices], breaks: [...bufferBreaks] });
+    }
   }
 
   // 步骤3: 拆分超长段落（拆分后的各片段共享同一组段落索引）

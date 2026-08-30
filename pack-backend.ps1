@@ -30,7 +30,8 @@ $serverFiles = @(
     "server/admin.html",
     "server/rag-builder.js",
     "server/rag-worker.mjs",
-    "server/sync-handler.js"
+    "server/sync-handler.js",
+    "server/tts-worker.py"
 )
 foreach ($f in $serverFiles) {
     Copy-Item $f "backend-pack-tmp/server/"
@@ -47,6 +48,7 @@ Copy-Item "start-backend.bat" "backend-pack-tmp/start.bat"
 Copy-Item "start-backend.sh" "backend-pack-tmp/start.sh"
 Copy-Item "admin-backend.bat" "backend-pack-tmp/admin.bat"
 Copy-Item "admin-backend.sh" "backend-pack-tmp/admin.sh"
+Copy-Item "README-BACKEND.txt" "backend-pack-tmp/README.txt"
 
 # 压缩
 Compress-Archive -Path "backend-pack-tmp/*" -DestinationPath "ai-novel-reader-v2-backend.zip" -Force

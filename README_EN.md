@@ -22,21 +22,22 @@ The backend provides RAG building, data sync, book library management, and other
 
 **Prerequisites**:
 - [Node.js](https://nodejs.org) v18~22 LTS (22 recommended)
+- Python 3.9+ (**optional**, only needed for the "Server Inference" TTS engine: `pip install sherpa-onnx`; all other features work without it)
 
 > **Node.js 24+ users**: `better-sqlite3` lacks prebuilt binaries for Node 24, requiring Python 3.x and C++ build tools. We recommend **Node.js 22 LTS**.
 
 **Option 1: Download backend package (Recommended)**
 
-Download `ai-novel-reader-backend-v2.x.x.zip` (~40-45 KB) from [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases), then:
+Download `ai-novel-reader-backend-v2.x.x.zip` (~60 KB) from [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases), then:
 
 - **Windows**: Double-click `start.bat`
 - **macOS / Linux**: `chmod +x start.sh && ./start.sh`
 
 The script will auto-install dependencies (server-side only, no frontend build) and start the backend. Models will be downloaded from the mirror on first index build (requires network).
 
-> **Package contents**: Only `server/` source code, `package.json` (5 backend dependencies), and start scripts. The start script only runs `npm install` + `node server/index.js` (no frontend build). Runtime data (database, model cache, certificates) is created automatically on first server start.
+> **Package contents**: Only `server/` source code (including `tts-worker.py`, the server-inference script), `package.json` (5 backend dependencies), start scripts, and `README.txt` (deployment notes). The start script only runs `npm install` + `node server/index.js` (no frontend build). Runtime data (database, model cache, certificates) is created automatically on first server start.
 >
-> **How to update**: Download the new zip and extract it directly into your existing backend directory, overwriting files. The backend package does **not** include the `server/data/` directory, so your database (novels, notes, reading progress, etc.) is safe. If you modified `start.bat` (e.g., changed the port), you'll need to re-apply your changes after overwriting. If dependencies changed, the script will automatically run `npm install`.
+> **How to update**: Download the new zip and extract it directly into your existing backend directory, overwriting files. The backend package does **not** include the `server/data/` directory, so your database (novels, notes, reading progress, etc.) is safe. If you modified `start.bat` (e.g., changed the port), you'll need to re-apply your changes after overwriting. If dependencies changed, the script will automatically run `npm install`. The start script also probes for Python + sherpa-onnx (optional) and prints a hint without blocking startup if missing.
 
 **For maintainers: how to build / publish the backend package**
 
@@ -46,7 +47,7 @@ Build locally (cross-platform; works with PowerShell 7 or Windows PowerShell):
 npm run pack:backend
 ```
 
-Produces `ai-novel-reader-v2-backend.zip` (~40-45 KB).
+Produces `ai-novel-reader-v2-backend.zip` (~60 KB).
 
 **Auto-publish a Release**: Pushing to `main` only triggers the frontend deployment — it does not package the backend. To release a new version, create a tag:
 
@@ -55,7 +56,7 @@ git tag v2.1.8
 git push origin v2.1.8
 ```
 
-GitHub Actions (`.github/workflows/release-backend.yml`) then runs `pack-backend.ps1`, verifies the artifact, creates a Release, and uploads the zip. You can also trigger it manually from the Actions tab (workflow_dispatch).
+GitHub Actions (`.github/workflows/release-backend.yml`) then runs `pack-backend.ps1`, verifies the artifact (checks critical files such as `tts-worker.py` and `rag.js` are inside the zip, failing otherwise), creates a Release, and uploads the zip. You can also trigger it manually from the Actions tab (workflow_dispatch).
 
 **Option 2: Clone the entire repo**
 

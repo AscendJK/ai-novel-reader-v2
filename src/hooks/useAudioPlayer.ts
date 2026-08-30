@@ -185,7 +185,9 @@ export function useAudioPlayer({
 
     // 单次生成 ≤chunkSize 字（设置页可调，三引擎各自独立：server 150 / zipvoice 60 / webspeech 300）
     const chunkLimit = chunkSize;
-    const prepared = prepareTextForTTS(chapterContent, chunkLimit);
+    // server 引擎用段落级生成（每 chunk = 1 段）：chunk 边界 = 段落边界 → 高亮精确，零时间估算。
+    // zipvoice 推理慢需合并短段摊薄成本；webspeech 有 onboundary 精确追踪，无需段落级。
+    const prepared = prepareTextForTTS(chapterContent, chunkLimit, engine === "server");
     // 从 prepareTextForTTS 结果中提取段落总数（已过滤短段落）
     // 每个 chunk 的 paragraphIndices 长度之和即为实际段落数
     const totalParaCount = prepared.reduce((sum, c) => sum + c.paragraphIndices.length, 0);
@@ -335,12 +337,16 @@ export function useAudioPlayer({
       const chunks = chunksRef.current;
       // 精确定位所在 chunk（组内任意段），找不到时回退到最近的后续 chunk
       const chunkIdx = findChunkIndexByPara(chunks, paraIndex);
-      if (chunkIdx >= 0) manager.seekToChunk(chunkIdx);
+      if (chunkIdx >= 0) {
+        manager.seekToChunk(chunkIdx);
+        // C: seek 后立即上报目标段落（而非等 chunk 播放到该段），高亮即时到位不经过组内第一段
+        setParagraphProgress(paraIndex, useTTSStore.getState().totalParagraphs || 0);
+      }
     } else {
       try { localStorage.setItem(TTS_POS_KEY, JSON.stringify({ novelId, chapterIndex, paragraph: paraIndex })); } catch { /* localStorage 不可用时忽略 */ }
       play();
     }
-  }, [getManager, play, novelId, chapterIndex]);
+  }, [getManager, play, novelId, chapterIndex, setParagraphProgress]);
 
   // F10: 保存/恢复朗读位置（基于原始段落索引）
   const savePosition = useCallback(() => {

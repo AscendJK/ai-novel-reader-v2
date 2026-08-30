@@ -35,6 +35,26 @@ fi
 
 echo "Node.js version: $(node -v) [OK]"
 
+# TTS 服务端推理依赖 Python + sherpa-onnx（可选）：缺失仅影响"服务端推理"引擎，
+# 浏览器推理与 Web Speech 不受影响。探测并提示，不阻塞启动。
+PY_OK=0
+for CMD in python python3 py; do
+  if command -v "$CMD" &>/dev/null; then
+    if "$CMD" -c "import sherpa_onnx" &>/dev/null; then
+      PY_OK=1
+      break
+    fi
+  fi
+done
+if [ "$PY_OK" -eq 0 ]; then
+  echo ""
+  echo "[NOTE] Python + sherpa-onnx 未检测到（可选依赖）。"
+  echo "  服务端推理引擎将不可用。如需使用，请安装 Python 3.9+ 后运行："
+  echo "    pip install sherpa-onnx"
+  echo "  浏览器推理与 Web Speech 朗读不受影响。"
+  echo ""
+fi
+
 if [ ! -d "node_modules" ]; then
   echo "Installing dependencies..."
   npm install

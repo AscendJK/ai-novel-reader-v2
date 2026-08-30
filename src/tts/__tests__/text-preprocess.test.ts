@@ -126,6 +126,33 @@ describe("prepareTextForTTS", () => {
     expect(result[0].text).not.toContain("</p>");
   });
 
+  it("段落级模式（server 高亮）：每段独立成 chunk，不合并短段", () => {
+    // 三段短段落：默认模式会合并（合计 < 150），段落级模式每段独立
+    const text = "第一段内容。\n第二段内容。\n第三段内容。";
+    const merged = prepareTextForTTS(text, 150);
+    expect(merged.length).toBe(1); // 默认合并成 1 个 chunk
+    expect(merged[0].paragraphIndices).toEqual([0, 1, 2]);
+
+    const single = prepareTextForTTS(text, 150, true);
+    expect(single.length).toBe(3); // 段落级：3 个独立 chunk
+    expect(single[0].paragraphIndices).toEqual([0]);
+    expect(single[1].paragraphIndices).toEqual([1]);
+    expect(single[2].paragraphIndices).toEqual([2]);
+    // 每个 chunk 的 breaks 只有 [0]（单段，起点即文本开头）
+    expect(single.every(c => c.paragraphBreaks.length === 1 && c.paragraphBreaks[0] === 0)).toBe(true);
+  });
+
+  it("段落级模式：超长段落仍按句拆分，短段不合并", () => {
+    const text = "短段落一。\n短段落二。\n这是第三段非常长的内容用来测试段落级模式下超长段落仍然会被正确拆分的逻辑是否正确运行。";
+    const single = prepareTextForTTS(text, 30, true);
+    // 前两段独立成 chunk；第三段超长按句子拆分
+    expect(single[0].paragraphIndices).toEqual([0]);
+    expect(single[1].paragraphIndices).toEqual([1]);
+    for (const chunk of single) {
+      expect(chunk.text.length).toBeLessThanOrEqual(350);
+    }
+  });
+
   it("引号替换为逗号", () => {
     const result = prepareTextForTTS('"你好"说他，"再见"说她。');
     expect(result.length).toBe(1);
