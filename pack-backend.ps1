@@ -43,7 +43,8 @@ Copy-Item "server/middleware/*.js" "backend-pack-tmp/server/middleware/"
 Copy-Item "server/lib/engine-config.js" "backend-pack-tmp/server/lib/"
 
 # 复制并重命名配置和脚本
-Copy-Item "package-server.json" "backend-pack-tmp/package.json"
+# 后端包版本号跟随主 package.json（单一事实来源），避免前后端版本不一致
+node -e "const fs=require('fs');const main=JSON.parse(fs.readFileSync('package.json','utf8'));const pkg=JSON.parse(fs.readFileSync('package-server.json','utf8'));pkg.version=main.version;fs.writeFileSync('backend-pack-tmp/package.json',JSON.stringify(pkg,null,2)+'\n');"
 Copy-Item "start-backend.bat" "backend-pack-tmp/start.bat"
 Copy-Item "start-backend.sh" "backend-pack-tmp/start.sh"
 Copy-Item "admin-backend.bat" "backend-pack-tmp/admin.bat"

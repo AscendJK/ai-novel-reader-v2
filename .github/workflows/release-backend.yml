@@ -36,13 +36,32 @@ jobs:
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path "ai-novel-reader-v2-backend.zip"))
           $names = $archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') }
-          $archive.Dispose()
           $required = @("server/tts-worker.py", "server/routes/rag.js", "package.json", "start.bat", "start.sh")
           $missing = @($required | Where-Object { $_ -notin $names })
           if ($missing.Count -gt 0) {
+            $archive.Dispose()
             Write-Error "Package missing critical files: $($missing -join ', ')"
           }
-          Write-Host "Package OK: $($zip.Length) bytes, entries: $($names.Count)"
+          # 版本一致性校验：tag 触发时，打包产物内 package.json 版本必须与 tag 一致
+          # （手动触发 workflow_dispatch 时 GITHUB_REF_NAME 是分支名，跳过此校验）
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $tag = $env:GITHUB_REF_NAME -replace '^v', ''
+            $entry = $archive.Entries | Where-Object { $_.FullName.Replace('\', '/') -eq "package.json" } | Select-Object -First 1
+            $reader = New-Object System.IO.StreamReader($entry.Open())
+            try {
+              $zipPkg = $reader.ReadToEnd() | ConvertFrom-Json
+            } finally {
+              $reader.Dispose()
+            }
+            $archive.Dispose()
+            if ($zipPkg.version -ne $tag) {
+              Write-Error "Version mismatch: zip package.json=$($zipPkg.version), tag=$tag"
+            }
+            Write-Host "Package OK: $($zip.Length) bytes, entries: $($names.Count), version $($zipPkg.version) matches tag $tag"
+          } else {
+            $archive.Dispose()
+            Write-Host "Package OK: $($zip.Length) bytes, entries: $($names.Count) (manual trigger, skip tag check)"
+          }
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
