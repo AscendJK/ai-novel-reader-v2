@@ -124,6 +124,9 @@ async function createWorker(index: number): Promise<Worker> {
   const code = await resp.text();
   const blobUrl = URL.createObjectURL(new Blob([code], { type: "application/javascript" }));
   const worker = new Worker(blobUrl);
+  // BUGFIX: worker 必须写回池数组，否则 loadModel 的 new Array(n) 稀疏数组
+  // 元素全为 undefined，dispatchTask 里 ttsWorkers[idx].postMessage 会崩溃。
+  ttsWorkers[index] = worker;
   worker.onmessage = (e) => handleWorkerMessage(e, index);
   worker.onerror = (e) => {
     // 完整诊断信息：message 为空通常表示脚本 fetch 失败（404/CSP/COEP/网络）
@@ -155,20 +158,34 @@ async function createWorker(index: number): Promise<Worker> {
 
 /** worker 空闲回调：分配下一个排队任务 */
 function onWorkerIdle(index: number): void {
+  if (index < 0 || index >= workerBusy.length) return;
   workerBusy[index] = false;
   const next = taskQueue.shift();
   if (next) dispatchTask(next);
 }
 
-/** 调度：找空闲 worker 分配任务；无空闲则入队等待 */
+/** 调度：找空闲 worker 分配任务；无空闲或池未就绪则入队等待 */
 function dispatchTask(task: Task): void {
   const idx = workerBusy.findIndex((b) => !b);
   if (idx === -1 || idx >= ttsWorkers.length) {
     taskQueue.push(task);
     return;
   }
+  const w = ttsWorkers[idx];
+  if (!w) {
+    // 池元素缺失（未初始化完成）：入队等待，不占用 busy 标记
+    taskQueue.push(task);
+    return;
+  }
   workerBusy[idx] = true;
-  ttsWorkers[idx].postMessage({ type: "generate", id: task.id, text: task.text, sid: task.sid, speed: task.speed });
+  try {
+    w.postMessage({ type: "generate", id: task.id, text: task.text, sid: task.sid, speed: task.speed });
+  } catch (err) {
+    // postMessage 失败（worker 已终止等）：释放 busy，避免该槽位永久卡死
+    workerBusy[idx] = false;
+    taskQueue.push(task);
+    console.warn(`[TTS] 派发任务 #${task.id} 到 Worker #${idx} 失败，重新入队:`, err);
+  }
 }
 
 /**
@@ -246,17 +263,9 @@ function handleWorkerMessage(e: MessageEvent, workerIndex: number): void {
         : new Float32Array(msg.samples);
       pending.resolve(samples);
     } else {
-      // 降级：旧版 Worker 可能不回传 id，取第一个
-      const firstKey = pendingRequests.keys().next().value;
-      if (firstKey !== undefined) {
-        const pending = pendingRequests.get(firstKey)!;
-        pendingRequests.delete(firstKey);
-        clearTimeout(pending.timer);
-        const samples = msg.samples instanceof Float32Array
-          ? msg.samples
-          : new Float32Array(msg.samples);
-        pending.resolve(samples);
-      }
+      // 无匹配请求（超时/已取消/seek 作废）：丢弃结果，绝不误配给其他请求
+      //（池化后多请求并行，旧"取第一个"逻辑会把 A 的音频错配给 B）
+      console.warn(`[TTS] 丢弃无主生成结果 #${id ?? "?"}（已超时/取消）`);
     }
     onWorkerIdle(workerIndex); // 该 worker 空闲，派发排队任务
   } else if (msg.type === "sherpa-onnx-tts-generation-progress") {
@@ -273,14 +282,6 @@ function handleWorkerMessage(e: MessageEvent, workerIndex: number): void {
       pendingRequests.delete(id);
       clearTimeout(pending.timer);
       pending?.reject(new Error(msg.message));
-    } else {
-      const firstKey = pendingRequests.keys().next().value;
-      if (firstKey !== undefined) {
-        const pending = pendingRequests.get(firstKey)!;
-        pendingRequests.delete(firstKey);
-        clearTimeout(pending.timer);
-        pending?.reject(new Error(msg.message));
-      }
     }
     onWorkerIdle(workerIndex); // 失败也释放 worker
   }
