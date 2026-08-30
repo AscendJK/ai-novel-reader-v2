@@ -9,7 +9,7 @@ import { Separator } from "@/components/ui/separator";
 import { Loader2, Play } from "lucide-react";
 import { useTTSStore } from "@/stores/tts-store";
 import { classifyVoices } from "@/tts/voice-classify";
-import { ZH_VOICES, generateAudioFull } from "@/tts/zipvoice-engine";
+import { ZH_VOICES, generateAudioFull, loadModel } from "@/tts/zipvoice-engine";
 import { getActiveTTSManager } from "@/tts/tts-manager";
 import { getTTSPreloadStatus } from "@/tts/tts-preload";
 
@@ -212,6 +212,10 @@ export function TTSSettings() {
       if (ctx.state === "suspended") {
         try { await ctx.resume(); } catch { /* 下面统一检查 */ }
       }
+      // 首次试听需显式加载模型：generateAudioFull 不自动加载，
+      // 而正文朗读的 speak() 内部会先 loadModel，所以正文能启动而试听报“模型未加载”。
+      // loadModel 幂等：已在正文朗读加载过则直接返回。
+      await loadModel();
       const result = await generateAudioFull(
         "各位村民，大家新年好。近期，湖北省武汉市等多个地区。",
         { voice: previewVoiceId, speed: useTTSStore.getState().speed },
@@ -373,7 +377,7 @@ export function TTSSettings() {
             <p className="text-[10px] text-red-500">试听失败：{zipPreviewError}</p>
           )}
           {zipPreviewing && (
-            <p className="text-[10px] text-amber-500">正在本地生成试听音频（首次需加载模型，可能较慢）...</p>
+            <p className="text-[10px] text-amber-500">正在加载模型并生成试听音频（首次需下载模型，可能较慢）...</p>
           )}
           <p className="text-[10px] text-muted-foreground">
             Kokoro 离线引擎，生成在本地完成（无网络请求）
