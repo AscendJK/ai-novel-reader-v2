@@ -338,7 +338,7 @@ const WASM_ARCHIVE_NAME = "sherpa-onnx-wasm-simd-1.13.6-kokoro-slim";
 // 模型分卷内容是 int8，故模型改走 GitHub 官方 tts-models 源。
 const MODEL_ARCHIVE_NAME = "kokoro-multi-lang-v1_0";
 
-// Gitee（仅 WASM 引擎用）
+// Gitee（优先国内源；WASM 引擎 + fp32 模型分卷均放这里）
 const GITEE_BASE = `https://gitee.com/kunji777/ai-novel-reader-v2/releases/download/${TTS_RELEASE_TAG}`;
 const GITEE_WASM_PARTS = [`${WASM_ARCHIVE_NAME}.7z`];
 // 模型：GitHub 官方 tts-models release（fp32 v1.0，349MB）
@@ -349,8 +349,14 @@ const GITHUB_MIRRORS = [
   "https://gh-proxy.com/",
   "https://gh.llkk.cc/",
 ];
-// Gitee 模型分卷已废弃（内容是损坏的 int8，会重新引入无声 bug），不再使用
-const GITEE_MODEL_PARTS = [];
+// Gitee 模型分卷（fp32 v1.0，7z 压缩 322MB / 4 卷；国内下载快）
+// ⚠️ 旧分卷内容是 int8（在 1.13.6 wasm 生成全 NaN 无声），已重新打包 fp32 上传
+const GITEE_MODEL_PARTS = [
+  "kokoro-multi-lang-v1_0.7z.001",
+  "kokoro-multi-lang-v1_0.7z.002",
+  "kokoro-multi-lang-v1_0.7z.003",
+  "kokoro-multi-lang-v1_0.7z.004",
+];
 
 /** 校验文件名安全（防路径穿越） */
 function sanitizeFilename(filename) {
