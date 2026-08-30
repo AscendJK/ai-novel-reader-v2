@@ -43,7 +43,13 @@ class MockAudioBufferSource {
 }
 class MockAudioBuffer {
   duration: number;
-  constructor(public length: number, public sampleRate: number) { this.duration = length / sampleRate; }
+  length: number;
+  sampleRate: number;
+  constructor(length: number, sampleRate: number) {
+    this.length = length;
+    this.sampleRate = sampleRate;
+    this.duration = length / sampleRate;
+  }
   copyToChannel() { /* noop */ }
 }
 class MockAudioContext {
