@@ -13,7 +13,6 @@ import https from "node:https";
 import { fileURLToPath } from "node:url";
 import { checkpointWAL, createBackup, cleanupDeletedRecords, getBackupConfig, isRestoringBackup } from "./database.js";
 import { novelsRouter, ragRouter, syncRouter, proxyRouter, versionRouter } from "./routes/index.js";
-import { ensureTTSResources } from "./routes/rag.js";
 
 import { mountAdminRoutes } from "./admin.js";
 
@@ -190,40 +189,11 @@ async function startServers() {
 
 startServers();
 
-// ── TTS 资源预加载 ───────────────────────────────────────────
-// 启动后延迟 5 秒（避开启动高峰：备份/证书/WAL），后台自动检查并下载
-// Kokoro 所需资源（WASM + 模型，约 190MB）。
-// 失败不阻塞启动、不崩溃：日志记录后，由 /api/rag/tts/prepare 触发重试
-//（ensure* 内部有 30 秒失败冷却，可安全重复调用）。
-setTimeout(() => {
-  // 进度回调节流：只打印阶段变化和整 10% 进度，避免 400MB 下载刷屏日志。
-  // 兼容两种回调形态：
-  //   1. (step, detail) 双参：step 含百分比（如 "下载分卷 1/3 45%"），detail 为文件名
-  //   2. 单数字参（downloadFile 直接透传）：step 为纯数字（如 45），detail 为 undefined
-  let lastPct = -1;
-  const progressLogger = (step, detail) => {
-    // 纯数字进度先转成 "45%"，与字符串形态统一处理
-    const stepStr = typeof step === "number" ? `${step}%` : String(step);
-    // 从 step + detail 拼接串中提取百分比（两种形态都能覆盖）
-    const pctMatch = /(\d+)%/.exec(`${stepStr} ${detail || ""}`);
-    if (pctMatch) {
-      const pct = parseInt(pctMatch[1], 10);
-      if (pct === lastPct || (pct % 10 !== 0 && pct !== 100)) return;
-      lastPct = pct;
-    }
-    // 纯数字进度（如 45）格式化为 "下载中 45%"，避免打印 "45: undefined"
-    if (typeof step === "number" && !detail) {
-      console.log(`[tts-preload] 下载中 ${step}%`);
-      return;
-    }
-    console.log(`[tts-preload] ${step}${detail ? `: ${detail}` : ""}`);
-  };
-  ensureTTSResources(progressLogger).then(() => {
-    console.log("[tts-preload] Kokoro 资源就绪（WASM + 模型）");
-  }).catch((e) => {
-    console.warn(`[tts-preload] Kokoro 资源预加载失败（可稍后通过 /tts/prepare 重试）: ${e.message}`);
-  });
-}, 5000);
+// ── TTS 资源：按需下载（不再启动时自动下载）──────────────────
+// 模型（约 350MB）只在用户于设置页启用「服务端推理」或「浏览器推理」时
+// 才触发下载（/api/rag/tts/prepare 或首次 synthesize），避免一打开后端
+// 就占用带宽/磁盘。启动时仅记录一个状态提示，失败不阻塞启动。
+// 由设置页的「启用」按钮调用 ensureTTSResources（经 /tts/prepare SSE 端点）。
 
 // ── Maintenance tasks ───────────────────────────────────────
 

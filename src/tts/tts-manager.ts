@@ -5,8 +5,9 @@
  */
 
 import { loadModel, isModelLoaded, generateAudio, resetWorker } from "./zipvoice-engine";
+import { synthesizeServer } from "./server-engine";
 
-export type TTSEngine = "zipvoice" | "webspeech";
+export type TTSEngine = "server" | "zipvoice" | "webspeech";
 
 // 当前活跃的 TTSManager 实例（供设置页试听等场景停止正在进行的朗读）
 let activeManager: TTSManager | null = null;
@@ -317,24 +318,38 @@ class WebSpeechTTSEngine {
 }
 
 /**
- * 离线 TTS 引擎（Kokoro，通过 Web Audio API 播放）
+ * 离线 TTS 引擎基类（Kokoro，通过 Web Audio API 播放）
+ * 播放逻辑（chunk 播放、段落追踪、暂停/恢复/停止）与音频来源解耦：
+ * - ZipVoiceTTSEngine：浏览器 wasm 推理（离线）
+ * - ServerTTSEngine：服务器 Python 推理（快，RTF≈0.6）
  */
 class ZipVoiceTTSEngine {
-  private audioContext: AudioContext | null = null;
-  private currentSource: AudioBufferSourceNode | null = null;
-  private paused = false;
-  private stopped = false;
-  private pausedAt = 0;
-  private startedAt = 0;
-  private currentBuffer: AudioBuffer | null = null;
-  private voice = "45";
-  private pendingPlayResolve: (() => void) | null = null;
+  protected audioContext: AudioContext | null = null;
+  protected currentSource: AudioBufferSourceNode | null = null;
+  protected paused = false;
+  protected stopped = false;
+  protected pausedAt = 0;
+  protected startedAt = 0;
+  protected currentBuffer: AudioBuffer | null = null;
+  protected voice = "45";
+  protected pendingPlayResolve: (() => void) | null = null;
   // 段落追踪状态（基于音频播放时间的线性估算）
   private paraTimer: ReturnType<typeof setInterval> | null = null;
   private trackText = "";
   private trackBreaks: number[] | null = null;
   private trackIndices: number[] | null = null;
   private trackOnParagraphChange: ((paraIdx: number) => void) | null = null;
+
+  /**
+   * 生成音频（由子类实现）：返回 PCM Float32 样本
+   * @param _text 已清洗的文本
+   * @param _voice 音色 id
+   * @param _speed 语速
+   */
+  protected async generate(_text: string, _voice: string, _speed: number): Promise<{ samples: Float32Array; sampleRate: number }> {
+    void _text; void _voice; void _speed;
+    throw new Error("generate() 未实现");
+  }
 
   setVoice(voiceId: string) { this.voice = voiceId; }
 
@@ -464,18 +479,16 @@ class ZipVoiceTTSEngine {
     }
     let firstChunk = true;
     try {
-      await generateAudio(text, { voice: this.voice, speed }, async (audioData) => {
-        // 双重防护：引擎内部 stopped（主动停止）+ 会话失效（停止后重开的旧结果串扰）
-        if (this.stopped || isCancelled?.()) return;
-        const buffer = ctx.createBuffer(1, audioData.length, 24000);
-        buffer.copyToChannel(new Float32Array(audioData), 0);
-        if (firstChunk) { firstChunk = false; callbacks.onPlay?.(); }
-        // 多段 chunk：播放期间按音频进度逐段高亮（与 Web Speech onboundary 对齐）
-        if (paragraphBreaks && paragraphIndices && paragraphIndices.length > 1 && onParagraphChange) {
-          this.startParagraphTracking(buffer, text, paragraphBreaks, paragraphIndices, onParagraphChange);
-        }
-        await this.playOneBuffer(buffer);
-      });
+      const { samples, sampleRate } = await this.generate(text, this.voice, speed);
+      if (this.stopped || isCancelled?.()) return;
+      const buffer = ctx.createBuffer(1, samples.length, sampleRate);
+      buffer.copyToChannel(new Float32Array(samples), 0);
+      if (firstChunk) { firstChunk = false; callbacks.onPlay?.(); }
+      // 多段 chunk：播放期间按音频进度逐段高亮（与 Web Speech onboundary 对齐）
+      if (paragraphBreaks && paragraphIndices && paragraphIndices.length > 1 && onParagraphChange) {
+        this.startParagraphTracking(buffer, text, paragraphBreaks, paragraphIndices, onParagraphChange);
+      }
+      await this.playOneBuffer(buffer);
       if (!this.stopped) callbacks.onEnd?.();
     } catch (err) {
       if (this.stopped) return; // 主动停止（resetWorker reject）导致的取消，静默丢弃
@@ -543,6 +556,28 @@ class ZipVoiceTTSEngine {
 }
 
 /**
+ * 浏览器离线推理引擎（Kokoro wasm，单线程，可离线）
+ */
+class BrowserKokoroEngine extends ZipVoiceTTSEngine {
+  protected async generate(text: string, voice: string, speed: number): Promise<{ samples: Float32Array; sampleRate: number }> {
+    let audio: Float32Array | null = null;
+    await generateAudio(text, { voice, speed }, async (audioData) => { audio = audioData; });
+    if (audio === null) throw new Error("浏览器推理未生成音频");
+    return { samples: audio, sampleRate: 24000 };
+  }
+}
+
+/**
+ * 服务端推理引擎（Kokoro，Python 原生多线程，RTF≈0.6，快）
+ * 依赖服务器 Python + sherpa-onnx；音频经 /api/rag/tts/synthesize 获取。
+ */
+class ServerKokoroEngine extends ZipVoiceTTSEngine {
+  protected async generate(text: string, voice: string, speed: number): Promise<{ samples: Float32Array; sampleRate: number }> {
+    return await synthesizeServer(text, { voice, speed });
+  }
+}
+
+/**
  * TTS 管理器（支持流式播放）
  */
 export class TTSManager {
@@ -573,15 +608,28 @@ export class TTSManager {
   setEngine(engine: TTSEngine) { this.engine = engine; }
 
   /**
-   * 在用户手势窗口内提前创建/恢复 AudioContext（配合 ZipVoice 引擎）。
+   * 获取当前引擎对应的离线（Kokoro）引擎实例：
+   * - server：服务端 Python 推理（快）
+   * - zipvoice：浏览器 wasm 推理（离线）
+   * webspeech 引擎返回 null。
+   */
+  private getKokoroEngine(): ZipVoiceTTSEngine | null {
+    if (this.engine === "webspeech") return null;
+    if (!this.zipvoice) {
+      this.zipvoice = this.engine === "server" ? new ServerKokoroEngine() : new BrowserKokoroEngine();
+    }
+    return this.zipvoice;
+  }
+
+  /**
+   * 在用户手势窗口内提前创建/恢复 AudioContext（配合 Kokoro 引擎）。
    * 首次朗读时模型加载需数秒，手势过期后 resume 被拒 → AudioContext 保持
    * suspended → source.start() 静默失败 → 生成成功但无声。
    * 调用方（朗读按钮点击）必须在 await 之前的同步阶段调用。
    */
   prewarmZipVoiceAudio(): void {
-    if (this.engine !== "zipvoice") return;
-    if (!this.zipvoice) this.zipvoice = new ZipVoiceTTSEngine();
-    this.zipvoice.prewarm();
+    const engine = this.getKokoroEngine();
+    engine?.prewarm();
   }
 
   setVoice(voiceId: string) {
@@ -604,21 +652,21 @@ export class TTSManager {
       this.generationId++;
       this.webSpeech.stop();
       this.speakFromParagraph(para);
-    } else if (this.engine === "zipvoice" && this.zipvoice?.isSpeaking()) {
-      // ZipVoice：语速是生成参数，需用新语速重新生成当前 chunk（保音高）
+    } else if (this.zipvoice?.isSpeaking()) {
+      // Kokoro（server/zipvoice）：语速是生成参数，需用新语速重新生成当前 chunk（保音高）
       this.restartZipVoiceFromCurrentChunk();
     }
   }
 
   /**
    * 播放倍速（正文朗读栏）。
-   * - ZipVoice：倍速并入生成 speed（模型级变速保音高），需重新生成当前 chunk；
+   * - Kokoro（server/zipvoice）：倍速并入生成 speed（模型级变速保音高），需重新生成当前 chunk；
    *   不再用 AudioBufferSourceNode.playbackRate（重采样会变调）
    * - WebSpeech：最终 rate = 生成语速 × 倍速，需重新 speak
    */
   setPlaybackRate(playbackRate: number) {
     this.playbackRate = Math.max(0.5, Math.min(3.0, playbackRate));
-    if (this.engine === "zipvoice" && this.zipvoice?.isSpeaking()) {
+    if (this.zipvoice?.isSpeaking()) {
       this.restartZipVoiceFromCurrentChunk();
     } else if (this.engine === "webspeech" && this.webSpeech.isSpeaking()) {
       const para = this.currentParagraphIndex;
@@ -655,12 +703,13 @@ export class TTSManager {
   }
 
   /**
-   * ZipVoice 语速/倍速变更后的恢复：从当前 chunk 用新参数重新生成。
-   * ZipVoice 一次生成整个 chunk 音频（无 chunk 内段落定位），
+   * Kokoro 引擎（server/zipvoice）语速/倍速变更后的恢复：
+   * 从当前 chunk 用新参数重新生成。
+   * 一次生成整个 chunk 音频（无 chunk 内段落定位），
    * 因此从当前 chunk 开头重读，与 seekToChunk 行为一致。
    */
   private restartZipVoiceFromCurrentChunk(): void {
-    if (this.engine !== "zipvoice" || !this.zipvoice) return;
+    if (!this.zipvoice) return;
     const chunkIdx = this.currentChunkIndex;
     if (chunkIdx >= 0 && chunkIdx < this.chunks.length) {
       this.seekToChunk(chunkIdx);
@@ -692,13 +741,15 @@ export class TTSManager {
       if (loadedVoices.length > 0) callbacks.onVoicesLoaded?.(loadedVoices);
     }
 
-    if (this.engine === "zipvoice") {
+    if (this.engine !== "webspeech") {
       try {
-        if (!this.zipvoice) this.zipvoice = new ZipVoiceTTSEngine();
-        this.zipvoice.setVoice(this.voiceId);
-        await this.zipvoice.ensureResumed();
+        const kokoro = this.getKokoroEngine();
+        if (!kokoro) throw new Error("Kokoro 引擎创建失败");
+        kokoro.setVoice(this.voiceId);
+        await kokoro.ensureResumed();
 
-        if (!isModelLoaded()) {
+        // 浏览器推理（zipvoice）需要先在浏览器加载模型；服务端推理无需
+        if (this.engine === "zipvoice" && !isModelLoaded()) {
           const genBeforeLoad = this.generationId;
           callbacks.onModelProgress?.(0);
           await loadModel({ onProgress: (p) => callbacks.onModelProgress?.(p) });
@@ -706,9 +757,10 @@ export class TTSManager {
           callbacks.onModelLoaded?.();
         }
       } catch (err) {
-        console.warn("[TTS] ZipVoice 加载失败，降级到 Web Speech API:", err);
+        console.warn("[TTS] Kokoro 引擎加载失败，降级到 Web Speech API:", err);
+        const failedEngine = this.engine; // 保存原引擎（server/zipvoice）
         this.engine = "webspeech";
-        callbacks.onFallback?.("zipvoice", "webspeech");
+        callbacks.onFallback?.(failedEngine, "webspeech");
       }
     }
 
@@ -721,13 +773,13 @@ export class TTSManager {
     const chunk = this.chunks[this.currentChunkIndex];
     const genId = this.generationId;
 
-    if (this.engine === "zipvoice" && this.zipvoice) {
+    if (this.engine !== "webspeech" && this.zipvoice) {
       this.callbacks.onChunkStart?.(this.currentChunkIndex, this.chunks.length, chunk.paragraphIndex);
       await new Promise(r => setTimeout(r, 0));
       // 有效语速 = 设置页生成语速 × 朗读栏播放倍速（clamp 到 sherpa-onnx 官方 0.4-3.5）
       const effectiveSpeed = Math.max(0.4, Math.min(3.5, this.speed * this.playbackRate));
       const chunkT0 = performance.now();
-      console.log(`[TTS] ▶ 生成 chunk ${this.currentChunkIndex + 1}/${this.chunks.length}: ${chunk.text.length} 字, speed=${effectiveSpeed.toFixed(2)}`);
+      console.log(`[TTS] ▶ 生成 chunk ${this.currentChunkIndex + 1}/${this.chunks.length} (${this.engine === "server" ? "服务端" : "浏览器"}): ${chunk.text.length} 字, speed=${effectiveSpeed.toFixed(2)}`);
       await this.zipvoice.speak(chunk.text, effectiveSpeed, {
         onPlay: () => {
           if (this.stopped || this.generationId !== genId) return;
@@ -735,7 +787,7 @@ export class TTSManager {
         },
         onEnd: () => {
           if (this.stopped || this.generationId !== genId) return;
-          // ZipVoice 每个 chunk 是一整段音频，无组内逐段追踪；
+          // Kokoro 每个 chunk 是一整段音频，无组内逐段追踪；
           // 结束时传组内最后一段的原始索引，与 WebSpeech 路径（handleChunkEnded）对齐
           const lastIdx = chunk.paragraphIndices?.length
             ? chunk.paragraphIndices[chunk.paragraphIndices.length - 1]
@@ -795,7 +847,7 @@ export class TTSManager {
   }
 
   pause(): void {
-    if (this.engine === "zipvoice" && this.zipvoice) this.zipvoice.pause();
+    if (this.engine !== "webspeech" && this.zipvoice) this.zipvoice.pause();
     else {
       // Web Speech API：保存当前段落位置，cancel 后恢复时从该位置继续
       this.webSpeech.stop();
@@ -805,7 +857,7 @@ export class TTSManager {
   }
 
   async resume(): Promise<void> {
-    if (this.engine === "zipvoice" && this.zipvoice) await this.zipvoice.resume();
+    if (this.engine !== "webspeech" && this.zipvoice) await this.zipvoice.resume();
     else {
       this.webSpeech.stop();
       this.userPaused = false;
@@ -851,12 +903,12 @@ export class TTSManager {
   }
 
   isPlaying(): boolean {
-    if (this.engine === "zipvoice" && this.zipvoice) return this.zipvoice.isSpeaking();
+    if (this.engine !== "webspeech" && this.zipvoice) return this.zipvoice.isSpeaking();
     return this.webSpeech.isSpeaking();
   }
 
   isPaused(): boolean {
-    if (this.engine === "zipvoice" && this.zipvoice) return this.zipvoice.isPaused();
+    if (this.engine !== "webspeech" && this.zipvoice) return this.zipvoice.isPaused();
     return this.userPaused;
   }
 

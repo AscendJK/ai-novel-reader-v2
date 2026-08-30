@@ -178,10 +178,8 @@ export function useAudioPlayer({
     setGenerating(true);
 
     // 单次生成 ≤zipvoiceChunkSize 字（设置页可调，默认 60，范围 30-500）：
-    // 浏览器端 WASM 推理慢（fp32 RTF≈5-8），大 chunk 首块等待时间长且易超时，
-    // 调小 chunk 可显著降低单次耗时；高配设备可调大减少生成次数。
-    // Web Speech 使用独立的 webspeechChunkSize（两者互不影响）
-    const chunkLimit = engine === "zipvoice" ? zipvoiceChunkSize : webspeechChunkSize;
+    // Kokoro 引擎（server/zipvoice）共用此分块；Web Speech 使用独立的 webspeechChunkSize
+    const chunkLimit = engine === "webspeech" ? webspeechChunkSize : zipvoiceChunkSize;
     const prepared = prepareTextForTTS(chapterContent, chunkLimit);
     // 从 prepareTextForTTS 结果中提取段落总数（已过滤短段落）
     // 每个 chunk 的 paragraphIndices 长度之和即为实际段落数

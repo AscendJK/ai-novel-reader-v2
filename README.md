@@ -480,21 +480,31 @@ MIT License
 
 > **已知限制**：Android 版 Edge 的 Web Speech API 存在浏览器自身缺陷——speak() 可以出声，但 getVoices() 永远返回空列表，因此**无法选择音色**，只能使用系统默认语音。遇到此情况请切换到下方的 Kokoro 离线引擎。
 
-### Kokoro 离线引擎（sherpa-onnx WASM）
+### Kokoro 引擎（服务端推理 & 浏览器推理）
 
-基于 sherpa-onnx 1.13.6 的 WASM 离线推理引擎，Kokoro multi-lang v1.0 **fp32** 模型（53 音色，中文 8 音色：女声晓北/晓妮/晓晓/晓伊，男声云健/云希/云夏/云扬），不依赖浏览器语音 API，**在 Android Edge 上也能完整使用**（可选音色、离线可用），补足 Web Speech 的短板。
+基于 sherpa-onnx 1.13.6 的 Kokoro multi-lang v1.0 **fp32** 模型（53 音色，中文 8 音色：女声晓北/晓妮/晓晓/晓伊，男声云健/云希/云夏/云扬）。**两种推理模式**（设置页可切换）：
+
+| 模式 | 推理位置 | 速度 | 依赖 |
+|---|---|---|---|
+| **服务端推理**（推荐） | 服务器 Python（sherpa-onnx 原生多线程，8 线程） | RTF≈0.6，18 字约 2.5s，**可边听边推理** | 服务器装 Python + `pip install sherpa-onnx` |
+| **浏览器推理** | 浏览器 WASM（离线） | RTF≈12，29 字约 69s | 浏览器下载模型（约 380MB）一次，之后完全离线 |
+| Web Speech | 浏览器内置 | 实时 | 免下载，Android 部分版本无法选音色 |
+
+**模型按需下载：** 模型（约 350MB）不再随后端启动自动下载，而是**在设置页选择对应推理模式后，点击「启用」按钮才下载**——服务端推理下载到服务器（一次，多用户共享），浏览器推理下载到浏览器 IndexedDB（每设备一次）。未启用时不占带宽/磁盘。
 
 **三层下载链路：**
 
 1. **模型源**：WASM 引擎（含精简 espeak-ng-data）从 Gitee release `Kokoro_fp32_v1.0` 下载；模型（Kokoro v1.0 fp32，约 310MB）优先从 Gitee 同 release 下载 7z 分卷（国内快），失败自动降级 GitHub 官方 tts-models release（含 gh-proxy / gh.llkk.cc 加速镜像）
-2. **服务器缓存**（server/data/tts-cache/）：**服务器启动后自动检查并下载**缺失资源（延迟 5 秒触发，失败不阻塞启动、自动冷却重试，也可通过 /api/rag/tts/prepare 手动触发）
-3. **浏览器缓存（IndexedDB）**：**用户登录后自动检测**，若本地无缓存则通过后端 API（带鉴权）逐文件拉取约 380MB 存入浏览器 IndexedDB，只需一次，之后完全离线使用
+2. **服务器缓存**（server/data/tts-cache/）：设置页启用服务端推理时自动下载（SSE 进度），也支持手动 /api/rag/tts/prepare
+3. **浏览器缓存（IndexedDB）**：设置页启用浏览器推理时自动拉取（带鉴权，逐文件），只需一次，之后完全离线
 
-> **⚠️ 重要：不要使用 int8 模型**。Kokoro v1.0 int8（model.int8.onnx，114MB）在 1.13.6 wasm 上会生成**全 NaN 音频**（生成/播放链路正常但听不到声音）。必须使用 fp32 包（model.onnx，310MB）。fp32 推理较慢（RTF≈5-8，每字约 1.5-2s），默认单次生成 60 字，低配设备可在设置页继续调小。
+> **⚠️ 重要：不要使用 int8 模型**。Kokoro v1.0 int8（model.int8.onnx，114MB）在 1.13.6 wasm 上会生成**全 NaN 音频**（生成/播放链路正常但听不到声音）。必须使用 fp32 包（model.onnx，310MB）。
 
-**部署要求：**
+**服务端推理部署要求：**
 
-- 后端需能访问 Gitee（国内源）与 GitHub（模型官方源）；首次启用会先后在服务器、浏览器各下载一次模型（约 350MB / 380MB），请耐心等待进度条
+- 服务器安装 Python 3.9+：`pip install sherpa-onnx`（约 30MB，原生多线程推理）
+- 首次在设置页启用时下载模型到服务器（约 350MB，仅一次，之后所有用户共享）
+- 后端需能访问 Gitee（国内源）与 GitHub（模型官方源）
 
 ---
 

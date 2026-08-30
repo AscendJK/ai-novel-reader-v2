@@ -55,8 +55,8 @@ export interface TTSState {
   zipvoiceChunkSize: number;
   /** 一次朗读字数上限（Web Speech 分块，30-500，默认 300） */
   webspeechChunkSize: number;
-  /** TTS 引擎类型 */
-  engine: "zipvoice" | "webspeech";
+  /** TTS 引擎类型：server=服务端推理（快）/ zipvoice=浏览器推理（离线）/ webspeech=浏览器内置 */
+  engine: "server" | "zipvoice" | "webspeech";
 
   // ── Actions ──
   setPlaying: (playing: boolean) => void;
@@ -76,7 +76,7 @@ export interface TTSState {
   setAutoNextChapter: (auto: boolean) => void;
   setZipvoiceChunkSize: (zipvoiceChunkSize: number) => void;
   setWebspeechChunkSize: (webspeechChunkSize: number) => void;
-  setEngine: (engine: "zipvoice" | "webspeech") => void;
+  setEngine: (engine: "server" | "zipvoice" | "webspeech") => void;
   /** 顶栏朗读按钮触发计数器（外部递增，AudioPlayer 监听） */
   startRequested: number;
   requestStart: () => void;
@@ -101,7 +101,7 @@ interface PersistedSettings {
   /** 播放倍速（朗读栏，全局） */
   playbackRate: number;
   autoNextChapter: boolean;
-  engine: "zipvoice" | "webspeech";
+  engine: "server" | "zipvoice" | "webspeech";
   modelDownloaded: boolean;
   /** ZipVoice 单次生成字数上限（30-500，默认 60；旧字段 chunkSize 迁移至此） */
   zipvoiceChunkSize: number;
@@ -133,7 +133,7 @@ function loadSettings(): PersistedSettings {
         webspeechPitch: s.webspeechPitch ?? s.pitch ?? 1.0,
         playbackRate: s.playbackRate ?? 1.0,
         autoNextChapter: s.autoNextChapter ?? true,
-        engine: (s.engine === "zipvoice" || s.engine === "webspeech") ? s.engine : "webspeech",
+        engine: (s.engine === "server" || s.engine === "zipvoice" || s.engine === "webspeech") ? s.engine : "webspeech",
         modelDownloaded: s.modelDownloaded ?? false,
         zipvoiceChunkSize: clampChunkSize(s.zipvoiceChunkSize ?? s.chunkSize ?? 60),
         webspeechChunkSize: clampChunkSize(s.webspeechChunkSize ?? 300),
@@ -165,8 +165,9 @@ function saveSettings(s: PersistedSettings) {
 const defaults = loadSettings();
 
 // 根据当前引擎获取对应的 voiceId
-function getVoiceIdForEngine(engine: "zipvoice" | "webspeech", zipvoiceVoiceId: string, webspeechVoiceId: string): string {
-  return engine === "zipvoice" ? zipvoiceVoiceId : webspeechVoiceId;
+// server 与 zipvoice 共用 Kokoro 音色参数（同一模型），webspeech 独立
+function getVoiceIdForEngine(engine: "server" | "zipvoice" | "webspeech", zipvoiceVoiceId: string, webspeechVoiceId: string): string {
+  return engine === "webspeech" ? webspeechVoiceId : zipvoiceVoiceId;
 }
 
 export const useTTSStore = create<TTSState>((set, get) => ({
@@ -190,11 +191,12 @@ export const useTTSStore = create<TTSState>((set, get) => ({
   modelDownloadProgress: 0,
 
   // 设置 — M14 fix: 每个引擎独立的 voiceId + 生成参数（speed/volume/pitch 按引擎独立）
+  // server 与 zipvoice 共用 Kokoro 参数
   voiceId: getVoiceIdForEngine(defaults.engine, defaults.zipvoiceVoiceId, defaults.webspeechVoiceId),
-  speed: defaults.engine === "zipvoice" ? defaults.zipvoiceSpeed : defaults.webspeechSpeed,
+  speed: defaults.engine === "webspeech" ? defaults.webspeechSpeed : defaults.zipvoiceSpeed,
   playbackRate: defaults.playbackRate,
-  volume: defaults.engine === "zipvoice" ? defaults.zipvoiceVolume : defaults.webspeechVolume,
-  pitch: defaults.engine === "zipvoice" ? defaults.zipvoicePitch : defaults.webspeechPitch,
+  volume: defaults.engine === "webspeech" ? defaults.webspeechVolume : defaults.zipvoiceVolume,
+  pitch: defaults.engine === "webspeech" ? defaults.webspeechPitch : defaults.zipvoicePitch,
   autoNextChapter: defaults.autoNextChapter,
   zipvoiceChunkSize: defaults.zipvoiceChunkSize,
   webspeechChunkSize: defaults.webspeechChunkSize,
@@ -226,13 +228,14 @@ export const useTTSStore = create<TTSState>((set, get) => ({
     const settings = getCachedSettings();
     saveSettings({
       ...settings,
-      zipvoiceVoiceId: s.engine === "zipvoice" ? s.voiceId : settings.zipvoiceVoiceId,
+      // server 与 zipvoice 共用 Kokoro 参数
+      zipvoiceVoiceId: s.engine !== "webspeech" ? s.voiceId : settings.zipvoiceVoiceId,
       webspeechVoiceId: s.engine === "webspeech" ? s.voiceId : settings.webspeechVoiceId,
-      zipvoiceSpeed: s.engine === "zipvoice" ? s.speed : settings.zipvoiceSpeed,
+      zipvoiceSpeed: s.engine !== "webspeech" ? s.speed : settings.zipvoiceSpeed,
       webspeechSpeed: s.engine === "webspeech" ? s.speed : settings.webspeechSpeed,
-      zipvoiceVolume: s.engine === "zipvoice" ? s.volume : settings.zipvoiceVolume,
+      zipvoiceVolume: s.engine !== "webspeech" ? s.volume : settings.zipvoiceVolume,
       webspeechVolume: s.engine === "webspeech" ? s.volume : settings.webspeechVolume,
-      zipvoicePitch: s.engine === "zipvoice" ? s.pitch : settings.zipvoicePitch,
+      zipvoicePitch: s.engine !== "webspeech" ? s.pitch : settings.zipvoicePitch,
       webspeechPitch: s.engine === "webspeech" ? s.pitch : settings.webspeechPitch,
       autoNextChapter: s.autoNextChapter, engine: s.engine, modelDownloaded: downloaded,
     });
@@ -242,7 +245,7 @@ export const useTTSStore = create<TTSState>((set, get) => ({
     const s = get();
     set({ voiceId });
     const settings = getCachedSettings();
-    if (s.engine === "zipvoice") {
+    if (s.engine !== "webspeech") {
       settings.zipvoiceVoiceId = voiceId;
       settings.zipvoiceSpeed = s.speed;
       settings.zipvoiceVolume = s.volume;
@@ -262,7 +265,7 @@ export const useTTSStore = create<TTSState>((set, get) => ({
     const clamped = Math.max(0.5, Math.min(3.0, speed));
     const s = get(); set({ speed: clamped });
     const settings = getCachedSettings();
-    if (s.engine === "zipvoice") settings.zipvoiceSpeed = clamped;
+    if (s.engine !== "webspeech") settings.zipvoiceSpeed = clamped;
     else settings.webspeechSpeed = clamped;
     settings.modelDownloaded = s.modelDownloaded;
     saveSettings(settings);
@@ -279,7 +282,7 @@ export const useTTSStore = create<TTSState>((set, get) => ({
     const clamped = Math.max(0, Math.min(1, volume));
     const s = get(); set({ volume: clamped });
     const settings = getCachedSettings();
-    if (s.engine === "zipvoice") settings.zipvoiceVolume = clamped;
+    if (s.engine !== "webspeech") settings.zipvoiceVolume = clamped;
     else settings.webspeechVolume = clamped;
     settings.modelDownloaded = s.modelDownloaded;
     saveSettings(settings);
@@ -288,7 +291,7 @@ export const useTTSStore = create<TTSState>((set, get) => ({
     const clamped = Math.max(0.5, Math.min(2, pitch));
     const s = get(); set({ pitch: clamped });
     const settings = getCachedSettings();
-    if (s.engine === "zipvoice") settings.zipvoicePitch = clamped;
+    if (s.engine !== "webspeech") settings.zipvoicePitch = clamped;
     else settings.webspeechPitch = clamped;
     settings.modelDownloaded = s.modelDownloaded;
     saveSettings(settings);
@@ -321,12 +324,13 @@ export const useTTSStore = create<TTSState>((set, get) => ({
     const settings = getCachedSettings();
     const newVoiceId = getVoiceIdForEngine(engine, settings.zipvoiceVoiceId, settings.webspeechVoiceId);
     // 切换引擎时载入该引擎独立的生成参数（speed/volume/pitch），互不影响
+    // server 与 zipvoice 共用 Kokoro 参数
     set({
       engine,
       voiceId: newVoiceId,
-      speed: engine === "zipvoice" ? settings.zipvoiceSpeed : settings.webspeechSpeed,
-      volume: engine === "zipvoice" ? settings.zipvoiceVolume : settings.webspeechVolume,
-      pitch: engine === "zipvoice" ? settings.zipvoicePitch : settings.webspeechPitch,
+      speed: engine === "webspeech" ? settings.webspeechSpeed : settings.zipvoiceSpeed,
+      volume: engine === "webspeech" ? settings.webspeechVolume : settings.zipvoiceVolume,
+      pitch: engine === "webspeech" ? settings.webspeechPitch : settings.zipvoicePitch,
     });
     settings.engine = engine;
     settings.modelDownloaded = s.modelDownloaded;

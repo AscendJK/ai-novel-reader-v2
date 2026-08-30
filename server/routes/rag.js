@@ -76,12 +76,7 @@ router.get("/test", rateLimit(5), async (req, res) => {
 // ⚠️ 必须声明在 /:novelId/status 通配路由之前：
 // 否则 /api/rag/tts/status 会被 /:novelId/status（novelId="tts"）匹配，
 // 触发 authNovel 校验返回 401，导致前端预加载永远拿不到状态。
-router.get("/tts/status", (req, res) => {
-  const wasmExists = fs.existsSync(path.join(TTS_WASM_CACHE, "sherpa-onnx-wasm-main-tts.wasm"));
-  const modelExists = fs.existsSync(path.join(TTS_MODEL_CACHE, "model.onnx"));
-  // Kokoro 无需 vocoder；dict 随模型包一起下载
-  res.json({ wasmReady: wasmExists, modelReady: modelExists, vocoderReady: true });
-});
+// （实际定义在下方 tts 资源区，含服务端推理可用性）
 
 // POST /api/rag/encode — encode query text (single small batch, max 20 texts)
 router.post("/encode", rateLimit(30), async (req, res) => {
@@ -125,6 +120,52 @@ router.get("/statuses/all", (req, res) => {
   } catch (e) {
     console.error("[rag] all statuses error:", e);
     res.status(500).json({ error: "查询失败" });
+  }
+});
+
+// ⚠️ TTS 路由必须声明在 /:novelId/status 通配路由之前：
+// 否则 /api/rag/tts/status 会被 /:novelId/status（novelId="tts"）匹配，
+// 触发 authNovel 校验返回 401，导致前端拿不到状态。
+
+// GET /api/rag/tts/status — 检查 TTS 资源是否就绪（含服务端推理可用性）
+router.get("/tts/status", async (req, res) => {
+  const wasmExists = fs.existsSync(path.join(TTS_WASM_CACHE, "sherpa-onnx-wasm-main-tts.wasm"));
+  const modelExists = fs.existsSync(path.join(TTS_MODEL_CACHE, "model.onnx"));
+  // 服务端推理可用性（不触发下载，仅探测）
+  let serverInference = { supported: false, ready: false, reason: "" };
+  try {
+    serverInference = await checkServerInferenceReady();
+  } catch (e) {
+    serverInference = { supported: false, ready: false, reason: e.message };
+  }
+  res.json({
+    wasmReady: wasmExists,
+    modelReady: modelExists,
+    vocoderReady: true,
+    serverInference,
+  });
+});
+
+// POST /api/rag/tts/synthesize — 服务端推理生成音频（WAV）
+router.post("/tts/synthesize", requireAuth, rateLimit(60), async (req, res) => {
+  try {
+    const { text, sid, speed } = req.body || {};
+    if (!text || typeof text !== "string" || text.length === 0) {
+      return res.status(400).json({ error: "text required" });
+    }
+    if (text.length > 2000) return res.status(400).json({ error: "单次最多 2000 字" });
+    const s = Math.max(0.4, Math.min(3.5, Number(speed) || 1.0));
+    const voiceId = Number.isInteger(Number(sid)) ? Math.max(0, Math.min(102, Number(sid))) : 45;
+
+    const result = await pyGenerate(text, voiceId, s);
+    const wavBuf = Buffer.from(result.wavBase64, "base64");
+    res.setHeader("Content-Type", "audio/wav");
+    res.setHeader("Content-Length", wavBuf.length);
+    res.setHeader("Cache-Control", "no-cache");
+    res.send(wavBuf);
+  } catch (e) {
+    console.error("[tts-py] synthesize error:", e.message);
+    res.status(500).json({ error: "服务端推理失败: " + e.message });
   }
 });
 
@@ -315,7 +356,7 @@ router.get("/model-proxy/{*path}", rateLimit(10), async (req, res) => {
 // GitHub: tar.bz2 格式，需要 tar 解压
 // 下载后自动解压到服务器缓存，后续请求直接从缓存读取
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -802,6 +843,161 @@ export async function ensureModelReady(onProgress, { signal, force = false } = {
 export async function ensureTTSResources(onProgress, options = {}) {
   await ensureWasmReady(onProgress, options);
   await ensureModelReady(onProgress, options);
+}
+
+// ── 服务端推理（Python sherpa-onnx 原生多线程）────────────────
+// 浏览器 wasm 单线程推理 RTF≈12-13（29 字要 69s），无法边听边推理；
+// Python 原生 8 线程 RTF≈0.6（18 字只要 2.5s），生成比播放快 1.5 倍。
+// 由 server/tts-worker.py 常驻进程提供，通过 stdin/stdout JSON 行通信。
+const TTS_WORKER_PY = path.resolve(__dirname, "../tts-worker.py");
+const TTS_PY_THREADS = 8;
+const TTS_PY_START_TIMEOUT = 30000;   // 进程启动 + 模型加载超时（本地实测约 3s）
+const TTS_PY_GEN_TIMEOUT = 180000;    // 单次生成超时（60 字 chunk 8 线程约 10s，预留余量）
+
+let pyProc = null;            // Python 子进程
+let pyReady = false;          // 是否收到 ready 消息
+let pyStartPromise = null;    // 启动去重
+let pyBuffer = "";            // stdout 行缓冲
+let pyQueue = new Map();      // id → { resolve, reject, timer }
+let pyNextId = 1;
+let pyLastError = "";         // 上次失败原因（status 接口展示）
+let pyCandidates = ["python", "python3", "py"]; // 依次探测可用的 Python 命令
+
+/** 探测可用的 python 命令（缓存结果） */
+let _pyCmdCache = null;
+async function detectPythonCommand() {
+  if (_pyCmdCache !== null) return _pyCmdCache;
+  for (const cmd of pyCandidates) {
+    try {
+      const { stdout } = await execFileAsync(cmd, ["-c", "import sherpa_onnx; print('ok')"], { timeout: 15000, windowsHide: true });
+      if (String(stdout).trim() === "ok") {
+        _pyCmdCache = cmd;
+        return cmd;
+      }
+    } catch { /* 尝试下一个 */ }
+  }
+  _pyCmdCache = "";
+  return _pyCmdCache;
+}
+
+/** 检查服务端推理是否可用（Python + sherpa_onnx + 模型就绪） */
+export async function checkServerInferenceReady() {
+  const pyCmd = await detectPythonCommand();
+  if (!pyCmd) return { supported: false, ready: false, reason: "服务器未安装 Python 或 sherpa-onnx（pip install sherpa-onnx）" };
+  try {
+    await ensureModelReady();
+    return { supported: true, ready: true, reason: "" };
+  } catch (e) {
+    return { supported: true, ready: false, reason: `模型未就绪: ${e.message}` };
+  }
+}
+
+/** 确保 Python 推理进程已启动（模型就绪 + 进程 ready） */
+async function ensurePyProcess() {
+  const pyCmd = await detectPythonCommand();
+  if (!pyCmd) throw new Error("服务器未安装 Python 或 sherpa-onnx，无法使用服务端推理。请运行: pip install sherpa-onnx");
+  if (pyProc && pyReady) return pyProc;
+  if (pyStartPromise) return pyStartPromise;
+
+  pyStartPromise = (async () => {
+    // 先确保模型文件在服务器上就绪（懒下载：仅在启用服务端推理时触发）
+    await ensureModelReady();
+    if (pyProc && pyReady) return pyProc;
+
+    pyReady = false;
+    pyBuffer = "";
+    pyProc = spawn(pyCmd, [TTS_WORKER_PY, TTS_MODEL_CACHE, String(TTS_PY_THREADS)], {
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+
+    pyProc.stdout.on("data", (chunk) => {
+      pyBuffer += chunk.toString("utf8");
+      let idx;
+      while ((idx = pyBuffer.indexOf("\n")) >= 0) {
+        const line = pyBuffer.slice(0, idx).trim();
+        pyBuffer = pyBuffer.slice(idx + 1);
+        if (!line) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === "ready") {
+            pyReady = true;
+            pyLastError = "";
+            console.log(`[tts-py] 服务端推理就绪 (numSpeakers=${msg.numSpeakers})`);
+          } else if (msg.type === "result") {
+            const pending = pyQueue.get(msg.id);
+            if (pending) {
+              clearTimeout(pending.timer);
+              pyQueue.delete(msg.id);
+              pending.resolve(msg);
+            }
+          } else if (msg.type === "error") {
+            const pending = pyQueue.get(msg.id);
+            if (pending) {
+              clearTimeout(pending.timer);
+              pyQueue.delete(msg.id);
+              pending.reject(new Error(msg.message));
+            }
+          }
+        } catch { /* 非 JSON 行忽略 */ }
+      }
+    });
+    pyProc.stderr.on("data", (chunk) => {
+      const s = String(chunk).trim();
+      if (s) console.warn("[tts-py] stderr:", s.slice(0, 500));
+    });
+    pyProc.on("exit", (code) => {
+      console.warn(`[tts-py] 进程退出 code=${code}`);
+      pyProc = null;
+      pyReady = false;
+      pyStartPromise = null;
+      // 未完成请求全部失败
+      for (const [id, p] of pyQueue) {
+        clearTimeout(p.timer);
+        pyQueue.delete(id);
+        p.reject(new Error("服务端推理进程已退出"));
+      }
+    });
+    pyProc.on("error", (err) => {
+      pyLastError = err.message;
+      console.error("[tts-py] 进程错误:", err.message);
+      pyProc = null;
+      pyReady = false;
+      pyStartPromise = null;
+    });
+
+    // 等待 ready（含模型加载，约 3s）
+    await new Promise((resolve, reject) => {
+      const t0 = Date.now();
+      const timer = setInterval(() => {
+        if (pyReady) { clearInterval(timer); resolve(); }
+        else if (Date.now() - t0 > TTS_PY_START_TIMEOUT) {
+          clearInterval(timer);
+          reject(new Error(pyLastError || "服务端推理启动超时"));
+        }
+      }, 200);
+    });
+    return pyProc;
+  })().catch((e) => {
+    pyStartPromise = null;
+    throw e;
+  });
+
+  return pyStartPromise;
+}
+
+/** 提交一次生成请求，返回 { sampleRate, wavBase64 } */
+async function pyGenerate(text, sid, speed) {
+  await ensurePyProcess();
+  const id = pyNextId++;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pyQueue.delete(id);
+      reject(new Error(`服务端推理超时（${TTS_PY_GEN_TIMEOUT / 1000}s）`));
+    }, TTS_PY_GEN_TIMEOUT);
+    pyQueue.set(id, { resolve, reject, timer });
+    pyProc.stdin.write(JSON.stringify({ id, text, sid, speed }) + "\n");
+  });
 }
 
 /**
