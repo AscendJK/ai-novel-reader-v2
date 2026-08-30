@@ -949,6 +949,7 @@ async function ensurePyProcess() {
               pyQueue.delete(msg.id);
               pending.resolve(msg);
             }
+            if (pyQueue.size === 0) schedulePyIdleShutdown(); // 队列清空：开始计空闲
           } else if (msg.type === "error") {
             const pending = pyQueue.get(msg.id);
             if (pending) {
@@ -956,6 +957,7 @@ async function ensurePyProcess() {
               pyQueue.delete(msg.id);
               pending.reject(new Error(msg.message));
             }
+            if (pyQueue.size === 0) schedulePyIdleShutdown(); // 队列清空：开始计空闲
           }
         } catch { /* 非 JSON 行忽略 */ }
       }
@@ -1008,6 +1010,7 @@ async function ensurePyProcess() {
  *  username 用于取消协议：前端停止时按用户清掉排队中的请求。
  *  先入队（等待 Python 就绪期间也可被 cancel 取消），进程就绪后再写入 stdin。 */
 async function pyGenerate(text, sid, speed, username = "") {
+  cancelPyIdleShutdown(); // 有新请求：取消空闲关闭计划
   const id = pyNextId++;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -1054,6 +1057,45 @@ export function cancelPyRequests(username) {
   if (cancelled > 0) console.log(`[tts-py] 用户 ${username} 取消 ${cancelled} 个排队请求`);
   return cancelled;
 }
+
+// ── 进程生命周期管理 ────────────────────────────────
+// Python 推理进程占 ~925MB 内存，不应无限常驻：
+//  - 空闲超时自动关闭：默认 10 分钟无请求 → 优雅关闭，释放内存；下次朗读懒启动（约 3s）
+//  - 后端退出显式清理：立即 kill，不等当前生成完成 / stdin EOF
+// 可用环境变量 TTS_PY_IDLE_SECONDS 覆盖（测试/部署调优用）
+const TTS_PY_IDLE_TIMEOUT = (Number(process.env.TTS_PY_IDLE_SECONDS) || 600) * 1000;
+
+let pyIdleTimer = null;
+
+/** 计划空闲关闭（仅当队列为空时调用） */
+function schedulePyIdleShutdown() {
+  clearTimeout(pyIdleTimer);
+  pyIdleTimer = setTimeout(() => {
+    console.log(`[tts-py] 空闲 ${TTS_PY_IDLE_TIMEOUT / 1000}s 无请求，关闭推理进程（释放内存）`);
+    shutdownPyProcess("idle");
+  }, TTS_PY_IDLE_TIMEOUT);
+}
+
+/** 取消空闲关闭计划（新请求到来时调用） */
+function cancelPyIdleShutdown() {
+  if (pyIdleTimer) {
+    clearTimeout(pyIdleTimer);
+    pyIdleTimer = null;
+  }
+}
+
+/** 关闭 Python 推理进程（空闲超时 / 后端退出时调用） */
+function shutdownPyProcess(reason = "shutdown") {
+  cancelPyIdleShutdown();
+  if (!pyProc) return;
+  console.log(`[tts-py] 关闭推理进程 (${reason})`);
+  try { pyProc.kill(); } catch { /* 已退出 */ }
+  // pyProc.on("exit") 会重置 pyProc/pyReady/pyStartPromise；队列为空时无 pending 可 reject
+}
+
+// 后端退出（含 SIGINT/SIGTERM → process.exit → exit 事件）时立即终止 worker，
+// 避免等待当前生成完成或 stdin EOF 才退出
+process.on("exit", () => shutdownPyProcess("server-exit"));
 
 /**
  * 辅助函数：流式发送文件（带错误处理）
