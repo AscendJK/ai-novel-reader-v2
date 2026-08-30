@@ -79,7 +79,7 @@ async function init(files, origin) {
       try { Module.FS_createPath("/", dir.slice(1), true, true); } catch {}
     }
     const kokoroFiles = [
-      "model.int8.onnx", "voices.bin", "tokens.txt",
+      "model.onnx", "voices.bin", "tokens.txt",
       "lexicon-us-en.txt", "lexicon-zh.txt",
       "date-zh.fst", "number-zh.fst", "phone-zh.fst",
     ];
@@ -112,7 +112,7 @@ async function init(files, origin) {
       offlineTtsModelConfig: {
         debug: false,
         offlineTtsKokoroModelConfig: {
-          model: modelDir + "/model.int8.onnx",
+          model: modelDir + "/model.onnx",
           voices: modelDir + "/voices.bin",
           tokens: modelDir + "/tokens.txt",
           dataDir: "/espeak-ng-data",

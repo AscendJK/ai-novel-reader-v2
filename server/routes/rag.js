@@ -78,7 +78,7 @@ router.get("/test", rateLimit(5), async (req, res) => {
 // 触发 authNovel 校验返回 401，导致前端预加载永远拿不到状态。
 router.get("/tts/status", (req, res) => {
   const wasmExists = fs.existsSync(path.join(TTS_WASM_CACHE, "sherpa-onnx-wasm-main-tts.wasm"));
-  const modelExists = fs.existsSync(path.join(TTS_MODEL_CACHE, "model.int8.onnx"));
+  const modelExists = fs.existsSync(path.join(TTS_MODEL_CACHE, "model.onnx"));
   // Kokoro 无需 vocoder；dict 随模型包一起下载
   res.json({ wasmReady: wasmExists, modelReady: modelExists, vocoderReady: true });
 });
@@ -332,13 +332,20 @@ const SHERPA_VER = "v1.13.6";
 // 分离式标准部署：WASM 运行时（精简 data 含 espeak-ng-data）+ 独立模型文件
 // WASM 运行时文件名（用户上传到 Gitee 的实际名称）
 const WASM_ARCHIVE_NAME = "sherpa-onnx-wasm-simd-1.13.6-kokoro-slim";
-// 模型文件（model.int8.onnx/voices.bin/tokens/lexicon/fst/dict）
+// 模型文件（Kokoro multi-lang v1.0 fp32：model.onnx/voices.bin/tokens/lexicon/fst/dict）
+// ⚠️ 必须用 fp32 包：v1.0 int8 模型（model.int8.onnx）在 1.13.6 wasm 上
+// 生成全 NaN 音频（听不到声音，已用 Node 探针复现）。Gitee release 上的
+// 模型分卷内容是 int8，故模型改走 GitHub 官方 tts-models 源。
 const MODEL_ARCHIVE_NAME = "kokoro-multi-lang-v1_0";
 
-// Gitee（唯一下载源）
+// Gitee（仅 WASM 引擎用）
 const GITEE_BASE = `https://gitee.com/kunji777/ai-novel-reader-v2/releases/download/${TTS_RELEASE_TAG}`;
 const GITEE_WASM_PARTS = [`${WASM_ARCHIVE_NAME}.7z`];
-const GITEE_MODEL_PARTS = [`${MODEL_ARCHIVE_NAME}.7z.001`, `${MODEL_ARCHIVE_NAME}.7z.002`];
+// 模型：GitHub 官方 tts-models release（fp32 v1.0，349MB）
+const GITHUB_MODEL_URL =
+  "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_0.tar.bz2";
+// Gitee 模型分卷已废弃（内容是损坏的 int8，会重新引入无声 bug），不再使用
+const GITEE_MODEL_PARTS = [];
 
 /** 校验文件名安全（防路径穿越） */
 function sanitizeFilename(filename) {
@@ -395,9 +402,9 @@ const WASM_REQUIRED_FILES = {
   "sherpa-onnx-wasm-main-tts.data": 1024 * 1024,   // espeak-ng-data 精简包（至少 1MB）
 };
 
-// 模型必须包含的文件及最小大小（Kokoro multi-lang v1.0 int8）
+// 模型必须包含的文件及最小大小（Kokoro multi-lang v1.0 fp32）
 const MODEL_REQUIRED_FILES = {
-  "model.int8.onnx": 1024 * 1024,   // 至少 1MB
+  "model.onnx": 1024 * 1024,       // 至少 1MB（fp32 310MB）
   "voices.bin": 1024 * 1024,        // 至少 1MB
   "tokens.txt": 100,                 // 至少 100 字节
   "lexicon-us-en.txt": 1024 * 1024,  // 至少 1MB
@@ -703,18 +710,20 @@ async function downloadAndExtract(giteeParts, githubUrl, archiveName, targetDir,
     console.warn("[tts-proxy] 无法检查磁盘空间:", e.message);
   }
 
-  // 优先 Gitee
-  try {
-    onProgress?.("开始下载", "尝试 Gitee（国内源）");
-    await downloadFromGitee(giteeParts, archiveName, targetDir, requiredFiles, onProgress, { signal });
-    onProgress?.("完成", "Gitee 下载成功");
-    return;
-  } catch (e) {
-    if (signal?.aborted) throw e;
-    console.warn(`[tts-proxy] Gitee 失败: ${e.message}，尝试 GitHub`);
-    onProgress?.("Gitee 失败", e.message + "，切换 GitHub...");
-    if (fs.existsSync(targetDir)) {
-      try { fs.rmSync(targetDir, { recursive: true }); } catch {}
+  // 优先 Gitee（仅当配置了分卷；模型包已切 GitHub 官方源，分卷为空时跳过）
+  if (giteeParts && giteeParts.length > 0) {
+    try {
+      onProgress?.("开始下载", "尝试 Gitee（国内源）");
+      await downloadFromGitee(giteeParts, archiveName, targetDir, requiredFiles, onProgress, { signal });
+      onProgress?.("完成", "Gitee 下载成功");
+      return;
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      console.warn(`[tts-proxy] Gitee 失败: ${e.message}，尝试 GitHub`);
+      onProgress?.("Gitee 失败", e.message + "，切换 GitHub...");
+      if (fs.existsSync(targetDir)) {
+        try { fs.rmSync(targetDir, { recursive: true }); } catch {}
+      }
     }
   }
 

@@ -2,23 +2,26 @@
  * Kokoro TTS 引擎（替换 ZipVoice）
  * 基于 sherpa-onnx 1.13.6 WASM，浏览器端离线推理
  * 推理在 Worker 线程，不阻塞 UI
- * 模型：Kokoro multi-lang v1.0 int8（53 音色，中文 sid 45-52）
+ * 模型：Kokoro multi-lang v1.0 fp32（53 音色，中文 sid 45-52）
+ * 注意：v1.0 int8 模型在 1.13.6 wasm 上生成全 NaN（无声），必须用 fp32。
+ * fp32 推理 RTF≈5-8（int8 约 2.7），单次生成字数建议 ≤60 字。
  */
 
 import { isCacheReady, getCachedFiles, downloadAndCache, stripCachePrefix } from "./tts-cache";
 import { apiFetch } from "@/lib/api-client";
 
 // ── 模型配置 ───────────────────────────────────────────────
-// Kokoro 中文音色（sid 45-52，来自官方 voices.bin；另含 45 个英文/多语音色）
+// Kokoro 中文音色（sid 45-52，官方 v1.0 voices.bin 映射）：
+// 45-48 女声（晓北/晓妮/晓晓/晓伊），49-52 男声（云健/云希/云夏/云扬）
 export const ZH_VOICES: Record<string, { name: string; gender: string }> = {
   "45": { name: "女声 晓北", gender: "female" },
   "46": { name: "女声 晓妮", gender: "female" },
   "47": { name: "女声 晓晓", gender: "female" },
   "48": { name: "女声 晓伊", gender: "female" },
-  "50": { name: "男声 云健", gender: "male" },
-  "51": { name: "男声 云希", gender: "male" },
-  "52": { name: "男声 云夏", gender: "male" },
-  "53": { name: "男声 云扬", gender: "male" },
+  "49": { name: "男声 云健", gender: "male" },
+  "50": { name: "男声 云希", gender: "male" },
+  "51": { name: "男声 云夏", gender: "male" },
+  "52": { name: "男声 云扬", gender: "male" },
 };
 
 const DEFAULT_VOICE = "45";
@@ -390,9 +393,9 @@ export async function generateAudio(
   const id = nextRequestId++;
   const worker = await getWorker();
   const t0 = performance.now();
-  // 动态超时：Kokoro wasm 单线程推理本地实测 RTF≈2.8（每字约 1s），
-  // 慢设备（无 SIMD/低配 CPU）可达 3-4 倍。每字预留 4s，下限 120s。
-  const timeoutMs = Math.max(GENERATE_TIMEOUT_MS, cleanText.length * 4000);
+  // 动态超时：Kokoro fp32 wasm 单线程推理本地实测 RTF≈5-8（每字约 1.5-2s），
+  // 慢设备（无 SIMD/低配 CPU）可达更高。每字预留 6s，下限 120s。
+  const timeoutMs = Math.max(GENERATE_TIMEOUT_MS, cleanText.length * 6000);
   console.log(`[TTS] 请求生成 #${id}: ${cleanText.length} 字, voice=${voiceId}(sid=${sid}), speed=${speed}, 超时 ${(timeoutMs / 1000).toFixed(0)}s`);
   // zipvoice 无逐步进度回调，用时间推进展示生成进度（每 10s 一条）
   const progressTimer = setInterval(() => {
@@ -438,8 +441,8 @@ export async function generateAudioFull(
   const id = nextRequestId++;
   const worker = await getWorker();
   const t0 = performance.now();
-  // 与 generateAudio 一致：动态超时（每字最多 4s，下限 120s）
-  const timeoutMs = Math.max(GENERATE_TIMEOUT_MS, cleanText.length * 4000);
+  // 与 generateAudio 一致：动态超时（每字最多 6s，下限 120s）
+  const timeoutMs = Math.max(GENERATE_TIMEOUT_MS, cleanText.length * 6000);
   console.log(`[TTS] 请求生成(完整预览) #${id}: ${cleanText.length} 字, voice=${voiceId}(sid=${sid}), speed=${speed}, 超时 ${(timeoutMs / 1000).toFixed(0)}s`);
   // zipvoice 无逐步进度回调，用时间推进展示生成进度（每 10s 一条）
   const progressTimer = setInterval(() => {

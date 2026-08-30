@@ -461,7 +461,7 @@ MIT License
 
 ## 语音朗读（TTS）
 
-提供两种朗读引擎：浏览器内置的 **Web Speech API**（免下载、即开即用）和项目自带的 **ZipVoice 离线引擎**（sherpa-onnx WASM，中英双语、可选音色、完全离线）。
+提供两种朗读引擎：浏览器内置的 **Web Speech API**（免下载、即开即用）和项目自带的 **Kokoro 离线引擎**（sherpa-onnx 1.13.6 WASM，中英双语、可选音色、完全离线）。
 
 ### Web Speech（浏览器内置）
 
@@ -478,24 +478,23 @@ MIT License
 - **进度条跳转**：点击进度条跳到指定段落
 - **移动端适配**：播放栏、弹窗面板均适配移动端
 
-> **已知限制**：Android 版 Edge 的 Web Speech API 存在浏览器自身缺陷——`speak()` 可以出声，但 `getVoices()` 永远返回空列表，因此**无法选择音色**，只能使用系统默认语音。遇到此情况请切换到下方的 ZipVoice 离线引擎。
+> **已知限制**：Android 版 Edge 的 Web Speech API 存在浏览器自身缺陷——speak() 可以出声，但 getVoices() 永远返回空列表，因此**无法选择音色**，只能使用系统默认语音。遇到此情况请切换到下方的 Kokoro 离线引擎。
 
-### ZipVoice 离线引擎（sherpa-onnx WASM）
+### Kokoro 离线引擎（sherpa-onnx WASM）
 
-基于 sherpa-onnx 的 WASM 离线推理引擎，中英双语模型，不依赖浏览器语音 API，**在 Android Edge 上也能完整使用**（可选音色、离线可用），补足 Web Speech 的短板。
+基于 sherpa-onnx 1.13.6 的 WASM 离线推理引擎，Kokoro multi-lang v1.0 **fp32** 模型（53 音色，中文 8 音色：女声晓北/晓妮/晓晓/晓伊，男声云健/云希/云夏/云扬），不依赖浏览器语音 API，**在 Android Edge 上也能完整使用**（可选音色、离线可用），补足 Web Speech 的短板。
 
 **三层下载链路：**
 
-1. **模型源（Gitee / GitHub）**：服务器从 Gitee release `tts-zipvoice-v1.0` 下载约 400MB 模型资源（WASM 运行时 + ZipVoice 模型 + vocoder），GitHub 官方源作备用
-2. **服务器缓存**（`server/data/tts-cache/`）：**服务器启动后自动检查并下载**缺失资源（延迟 5 秒触发，失败不阻塞启动、自动冷却重试，也可通过 `/api/rag/tts/prepare` 手动触发）
+1. **模型源**：WASM 引擎（含精简 espeak-ng-data）从 Gitee release 	ts-kokoro-v1.0 下载；模型（Kokoro v1.0 fp32，约 310MB）从 GitHub 官方 	ts-models release 下载
+2. **服务器缓存**（server/data/tts-cache/）：**服务器启动后自动检查并下载**缺失资源（延迟 5 秒触发，失败不阻塞启动、自动冷却重试，也可通过 /api/rag/tts/prepare 手动触发）
 3. **浏览器缓存（IndexedDB）**：**用户登录后自动检测**，若本地无缓存则通过后端 API（带鉴权）逐文件拉取约 380MB 存入浏览器 IndexedDB，只需一次，之后完全离线使用
 
-**修复记录**：早期版本因 vocoder 采样率不匹配（22kHz vocoder 配 24kHz decoder）导致生成时崩溃（C++ 11903128）。已改用官方 `vocos_24khz.onnx`（24kHz）修复，并附 Node 复现脚本（`scripts/repro-zipvoice.cjs`）供回归验证。
+> **⚠️ 重要：不要使用 int8 模型**。Kokoro v1.0 int8（model.int8.onnx，114MB）在 1.13.6 wasm 上会生成**全 NaN 音频**（生成/播放链路正常但听不到声音）。必须使用 fp32 包（model.onnx，310MB）。fp32 推理较慢（RTF≈5-8，每字约 1.5-2s），默认单次生成 60 字，低配设备可在设置页继续调小。
 
-**部署要求**：
+**部署要求：**
 
-- 后端需能访问 Gitee（国内源）或 GitHub；`vocos_24khz.onnx`（51.6MB）已上传至 Gitee release `tts-zipvoice-v1.0`
-- 首次启用会先后在服务器、浏览器各下载一次模型（约 400MB / 380MB），请耐心等待进度条
+- 后端需能访问 Gitee（国内源）与 GitHub（模型官方源）；首次启用会先后在服务器、浏览器各下载一次模型（约 350MB / 380MB），请耐心等待进度条
 
 ---
 

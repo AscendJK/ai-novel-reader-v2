@@ -103,7 +103,7 @@ interface PersistedSettings {
   autoNextChapter: boolean;
   engine: "zipvoice" | "webspeech";
   modelDownloaded: boolean;
-  /** ZipVoice 单次生成字数上限（30-500，默认 150；旧字段 chunkSize 迁移至此） */
+  /** ZipVoice 单次生成字数上限（30-500，默认 60；旧字段 chunkSize 迁移至此） */
   zipvoiceChunkSize: number;
   /** Web Speech 一次朗读字数上限（30-500，默认 300） */
   webspeechChunkSize: number;
@@ -135,17 +135,17 @@ function loadSettings(): PersistedSettings {
         autoNextChapter: s.autoNextChapter ?? true,
         engine: (s.engine === "zipvoice" || s.engine === "webspeech") ? s.engine : "webspeech",
         modelDownloaded: s.modelDownloaded ?? false,
-        zipvoiceChunkSize: clampChunkSize(s.zipvoiceChunkSize ?? s.chunkSize ?? 150),
+        zipvoiceChunkSize: clampChunkSize(s.zipvoiceChunkSize ?? s.chunkSize ?? 60),
         webspeechChunkSize: clampChunkSize(s.webspeechChunkSize ?? 300),
       };
     }
   } catch { /* ignore */ }
-  return { zipvoiceVoiceId: "45", webspeechVoiceId: "", zipvoiceSpeed: 1.0, webspeechSpeed: 1.0, zipvoiceVolume: 1.0, webspeechVolume: 1.0, zipvoicePitch: 1.0, webspeechPitch: 1.0, playbackRate: 1.0, autoNextChapter: true, engine: "webspeech", modelDownloaded: false, zipvoiceChunkSize: 150, webspeechChunkSize: 300 };
+  return { zipvoiceVoiceId: "45", webspeechVoiceId: "", zipvoiceSpeed: 1.0, webspeechSpeed: 1.0, zipvoiceVolume: 1.0, webspeechVolume: 1.0, zipvoicePitch: 1.0, webspeechPitch: 1.0, playbackRate: 1.0, autoNextChapter: true, engine: "webspeech", modelDownloaded: false, zipvoiceChunkSize: 60, webspeechChunkSize: 300 };
 }
 
 /** chunkSize 合法范围：30-500 字 */
 function clampChunkSize(v: number): number {
-  const n = Math.round(Number(v) || 150);
+  const n = Math.round(Number(v) || 60);
   return Math.max(30, Math.min(500, n));
 }
 
