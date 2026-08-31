@@ -143,6 +143,27 @@
   to { opacity: 1; }
 }
 
+/* ── 自动阅读（分页模式）：翻页淡入过渡 ──
+   新页出现时淡入 + 轻微上移（translateY 位移被容器 overflow 裁切时
+   只会碰到页面 padding 区，不会裁到正文） */
+.auto-read-page-in {
+  animation: autoReadPageIn 0.22s ease-out;
+}
+
+@keyframes autoReadPageIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── 自动阅读（分页模式）：页内倒计时进度条 ──
+   用 scaleX（GPU 合成）而非 width，避免每帧触发 layout；
+   时长由组件内联 animationDuration 指定（= 翻页间隔秒数），
+   翻页/切章时 key 变化自动重置 */
+@keyframes autoReadProgress {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
 /* ── 移动端安全区域适配 ── */
 @supports (padding-bottom: env(safe-area-inset-bottom)) {
   .safe-area-bottom {
@@ -180,6 +201,9 @@
 /* ── 减少动画偏好 ── */
 @media (prefers-reduced-motion: reduce) {
   .chapter-fade-in {
+    animation: none;
+  }
+  .auto-read-page-in {
     animation: none;
   }
 }

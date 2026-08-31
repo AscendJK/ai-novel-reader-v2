@@ -702,7 +702,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
 
         <div
           ref={containerRef}
-          className="flex-1 min-h-0 flex flex-col overflow-hidden"
+          className="relative flex-1 min-h-0 flex flex-col overflow-hidden"
           style={{ touchAction: "none" }}
           onClick={handlePageClick}
           onWheel={handleWheel}
@@ -731,7 +731,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
           </div>
 
           {isDouble ? (
-            <div className="h-full flex justify-center">
+            <div key={`${selectedChapterId}-${spreadIndex}`} className="h-full flex justify-center auto-read-page-in">
               <div className="h-full flex" style={{ width: pageWidth * 2 + SPINE_WIDTH }}>
                 <div className="overflow-hidden flex-1" style={{ padding: `${activePadding}px` }}>
                   <div className="prose prose-neutral dark:prose-invert max-w-none" style={textStyles}>
@@ -747,12 +747,23 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
               </div>
             </div>
           ) : (
-            <div className="flex-1 min-h-0 overflow-hidden" style={{ padding: `${activePadding}px` }}>
+            <div key={`${selectedChapterId}-${safePage}`} className="flex-1 min-h-0 overflow-hidden auto-read-page-in" style={{ padding: `${activePadding}px` }}>
               <div className="mx-auto overflow-hidden" style={{ width: contentWidth || "100%", maxWidth: MAX_SINGLE_WIDTH }}>
                 <div className="prose prose-neutral dark:prose-invert max-w-none" style={textStyles}>
                   {totalPages > 0 ? renderPage(leftPage) : renderPage({ startIndex: 0, endIndex: contentParagraphs.length - 1 })}
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* 自动阅读（分页模式）页内倒计时进度条：随翻页间隔线性填充，翻页/切章时重置 */}
+          {autoReadEnabled && (
+            <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-0.5 bg-primary/10" aria-hidden="true">
+              <div
+                key={`${selectedChapterId}-${safePage}`}
+                className="h-full w-full bg-primary/60 origin-left"
+                style={{ animation: `autoReadProgress ${autoReadInterval}s linear forwards` }}
+              />
             </div>
           )}
         </div>
