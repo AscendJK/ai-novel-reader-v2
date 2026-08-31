@@ -35,6 +35,12 @@ fi
 
 echo "Node.js version: $(node -v) [OK]"
 
+# 清理上次运行残留的 node / python(tts-worker) 进程（防止端口占用与进程堆积）
+echo ""
+echo "Cleaning up leftover processes from previous runs..."
+bash "$(dirname "$0")/scripts/cleanup-processes.sh"
+echo ""
+
 if [ ! -d "node_modules" ]; then
   echo "Installing dependencies..."
   npm install

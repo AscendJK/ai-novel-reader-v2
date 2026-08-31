@@ -258,3 +258,16 @@ process.on("SIGTERM", () => {
   try { checkpointWAL(); } catch { /* ignore */ }
   process.exit(0);
 });
+
+// Windows 终端 Ctrl+Break / 终端窗口关闭时也走优雅退出，
+// 确保 rag.js 的 process.on("exit") 能同步杀掉 Python TTS 推理进程（tts-worker.py），
+// 避免关闭后端后残留 python 进程占用内存/锁模型文件。
+process.on("SIGBREAK", () => {
+  try { checkpointWAL(); } catch { /* ignore */ }
+  process.exit(0);
+});
+
+process.on("SIGHUP", () => {
+  try { checkpointWAL(); } catch { /* ignore */ }
+  process.exit(0);
+});

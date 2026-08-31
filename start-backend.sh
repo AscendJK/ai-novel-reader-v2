@@ -35,6 +35,12 @@ fi
 
 echo "Node.js version: $(node -v) [OK]"
 
+# 清理上次运行残留的 node / python(tts-worker) 进程（防止端口占用与进程堆积）
+echo ""
+echo "Cleaning up leftover processes from previous runs..."
+bash "$(dirname "$0")/scripts/cleanup-processes.sh"
+echo ""
+
 # TTS 服务端推理依赖 Python + sherpa-onnx（可选）：缺失仅影响"服务端推理"引擎，
 # 浏览器推理与 Web Speech 不受影响。探测并提示，不阻塞启动。
 PY_OK=0

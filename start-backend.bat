@@ -32,6 +32,12 @@ if !NODE_VER! gtr 22 (
 
 echo Node.js version: !NODE_VER! [OK]
 
+REM 清理上次运行残留的 node / python(tts-worker) 进程（防止端口占用与进程堆积）
+echo.
+echo Cleaning up leftover processes from previous runs...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\cleanup-processes.ps1"
+echo.
+
 REM TTS server-side inference needs Python + sherpa-onnx - optional dependency.
 REM If missing, only the Server TTS engine is unavailable; browser and Web Speech still work.
 set "PY_OK="

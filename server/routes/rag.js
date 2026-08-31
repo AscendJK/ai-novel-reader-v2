@@ -1144,6 +1144,9 @@ process.on("exit", () => shutdownPyProcess("server-exit"));
 // 防止退出链路被改动后 Python 推理进程残留占内存/锁模型文件）
 process.on("SIGINT", () => shutdownPyProcess("server-sigint"));
 process.on("SIGTERM", () => shutdownPyProcess("server-sigterm"));
+// Windows Ctrl+Break / 终端关闭时同样终止 worker（覆盖用户直接关窗口的退出路径）
+process.on("SIGBREAK", () => shutdownPyProcess("server-sigbreak"));
+process.on("SIGHUP", () => shutdownPyProcess("server-sighup"));
 
 /**
  * 辅助函数：流式发送文件（带错误处理）

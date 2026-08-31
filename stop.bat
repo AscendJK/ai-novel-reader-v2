@@ -1,40 +1,16 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal
 cd /d "%~dp0"
 
-echo Stopping AI Novel Reader...
+echo Stopping AI Novel Reader (server + TTS inference)...
 echo.
 
-REM Helper: kill Node.js process on a specific port using PowerShell
-call :killNodeOnPort 8443 "HTTPS server"
-call :killNodeOnPort 5173 "HTTP server"
-call :killNodeOnPort 5174 "Vite dev server"
+REM 清理残留：本项目 node 进程 + Python TTS 推理进程(tts-worker.py) + 端口兜底
+REM 精确匹配命令行，不误杀其他项目的 node/python。
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\cleanup-processes.ps1"
 
 echo.
 echo Done.
 pause
 endlocal
-exit /b 0
-
-:killNodeOnPort
-set "PORT=%~1"
-set "NAME=%~2"
-set "FOUND="
-REM Use PowerShell for reliable cross-locale port detection
-for /f "tokens=*" %%a in ('powershell -Command "Get-NetTCPConnection -LocalPort %PORT% -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess"') do (
-    if not defined FOUND (
-        REM Verify it's a Node.js process before killing
-        tasklist /FI "PID eq %%a" 2>nul | findstr /I "node.exe" >nul 2>&1
-        if !errorlevel! equ 0 (
-            echo Stopping %NAME% on port %PORT% (PID %%a)
-            taskkill /PID %%a /F >nul 2>&1
-            set "FOUND=1"
-        ) else (
-            echo Skipping non-Node.js process on port %PORT% (PID %%a)
-        )
-    )
-)
-if not defined FOUND (
-    echo No %NAME% running on port %PORT%
-)
 exit /b 0

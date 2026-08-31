@@ -2,24 +2,11 @@
 set -e
 cd "$(dirname "$0")"
 
-echo "Stopping AI Novel Reader..."
+echo "Stopping AI Novel Reader (server + TTS inference)..."
 echo ""
 
-for port in 8443 5173 5174; do
-  PID=$(lsof -ti:"$port" 2>/dev/null || true)
-  if [ -n "$PID" ]; then
-    # Verify it's a Node.js process before killing
-    PROC_NAME=$(ps -p "$PID" -o comm= 2>/dev/null || true)
-    if [[ "$PROC_NAME" == *"node"* ]]; then
-      echo "Stopping port $port (PID $PID, process: $PROC_NAME)..."
-      kill -9 "$PID" 2>/dev/null || true
-    else
-      echo "Skipping non-Node.js process on port $port (PID $PID, process: $PROC_NAME)"
-    fi
-  else
-    echo "No process on port $port"
-  fi
-done
+# 清理残留：本项目 node 进程 + Python TTS 推理进程(tts-worker.py) + 端口兜底
+bash "$(dirname "$0")/scripts/cleanup-processes.sh"
 
 echo ""
 echo "Done"

@@ -65,8 +65,8 @@ CLAUDE.md
 # MiMoCode memory
 .mimocode
 
-# 本地规划/方案文档（不入库，仅本机保留）
-docs/plans/
+# 本地规划/方案/排查文档（不入库，仅本机保留）
+docs/
 .fetch/
 # OpenSquilla runtime workspace
 .opensquilla/

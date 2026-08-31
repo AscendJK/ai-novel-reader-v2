@@ -32,6 +32,12 @@ if !NODE_VER! gtr 22 (
 
 echo Node.js version: !NODE_VER! [OK]
 
+REM 清理上次运行残留的 node / python(tts-worker) 进程（防止端口占用与进程堆积）
+echo.
+echo Cleaning up leftover processes from previous runs...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\cleanup-processes.ps1"
+echo.
+
 if not exist "node_modules\" (
     echo Installing dependencies...
     call npm install
@@ -49,6 +55,12 @@ if %errorlevel% neq 0 (
     pause
     exit /b 1
 )
+
+REM 构建完成后再次清理（构建脚本可能拉起 dev 进程），确保启动时无残留
+echo.
+echo Final cleanup check...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\cleanup-processes.ps1"
+echo.
 
 rem Install SSL certificate to trusted root store
 if exist "server\data\cert.pem" (

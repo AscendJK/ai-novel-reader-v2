@@ -21,6 +21,7 @@ if (Test-Path "ai-novel-reader-v2-backend.zip") { Remove-Item -Force "ai-novel-r
 New-Item -ItemType Directory -Force -Path "backend-pack-tmp/server/routes" | Out-Null
 New-Item -ItemType Directory -Force -Path "backend-pack-tmp/server/middleware" | Out-Null
 New-Item -ItemType Directory -Force -Path "backend-pack-tmp/server/lib" | Out-Null
+New-Item -ItemType Directory -Force -Path "backend-pack-tmp/scripts" | Out-Null
 
 # 复制服务器核心文件
 $serverFiles = @(
@@ -50,6 +51,13 @@ Copy-Item "start-backend.sh" "backend-pack-tmp/start.sh"
 Copy-Item "admin-backend.bat" "backend-pack-tmp/admin.bat"
 Copy-Item "admin-backend.sh" "backend-pack-tmp/admin.sh"
 Copy-Item "README-BACKEND.txt" "backend-pack-tmp/README.txt"
+
+# 停止脚本 + 进程清理脚本：start.bat/start.sh 启动前会自动清理残留，
+# 用户也可运行 stop.bat/stop.sh 手动停止（杀 node + python tts-worker）
+Copy-Item "stop.bat" "backend-pack-tmp/stop.bat"
+Copy-Item "stop.sh" "backend-pack-tmp/stop.sh"
+Copy-Item "scripts/cleanup-processes.ps1" "backend-pack-tmp/scripts/cleanup-processes.ps1"
+Copy-Item "scripts/cleanup-processes.sh" "backend-pack-tmp/scripts/cleanup-processes.sh"
 
 # 压缩
 Compress-Archive -Path "backend-pack-tmp/*" -DestinationPath "ai-novel-reader-v2-backend.zip" -Force
