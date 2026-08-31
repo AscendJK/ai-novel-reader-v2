@@ -45,6 +45,8 @@ const INTERRUPT_KEYS = new Set([
 
 /** 滚动到底容差（px） */
 const SCROLL_END_TOLERANCE = 4;
+/** 单帧间隔上限（秒）：超过视为后台恢复/主线程卡顿，跳过该帧位移防止跳屏 */
+const MAX_FRAME_DT = 0.2;
 
 export function useAutoRead({
   enabled,
@@ -76,6 +78,14 @@ export function useAutoRead({
   // enabled 重新开启时复位停止标记（stop 幂等，防 rAF 停止路径重复触发 onStop）
   useEffect(() => { if (enabled) stoppedRef.current = false; }, [enabled]);
 
+  // 页面可见性：后台时浏览器节流定时器/rAF，恢复时防止跳屏/疯狂翻页
+  const visibleRef = useRef(true);
+  useEffect(() => {
+    const onVisibility = () => { visibleRef.current = document.visibilityState === "visible"; };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+
   const stop = useCallback((reason: "end" | "user") => {
     if (stoppedRef.current) return;
     stoppedRef.current = true;
@@ -106,6 +116,7 @@ export function useAutoRead({
     const tick = () => {
       // TTS 互斥：语音朗读中不自动前进（用户切到听书模式）
       if (useTTSStore.getState().playing) { stop("user"); return; }
+      if (!visibleRef.current) return; // 页面在后台：跳过本次（浏览器节流 setInterval 也会持续触发）
       if (isAtEndRef.current()) { stop("end"); return; }   // 最后一章末页停止
       onNextPageRef.current();
     };
@@ -130,6 +141,12 @@ export function useAutoRead({
       }
       if (lastTs !== null) {
         const dt = (ts - lastTs) / 1000; // 秒
+        if (dt > MAX_FRAME_DT) {
+          // 后台恢复/主线程卡顿：rAF 时间戳跳变，跳过该帧位移并重置基准，避免跳屏
+          lastTs = ts;
+          rafId = requestAnimationFrame(loop);
+          return;
+        }
         if (el) el.scrollTop += speedRef.current * lineHeightRef.current * dt; // 行/秒 × 行高 × 帧间隔
       }
       lastTs = ts;

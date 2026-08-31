@@ -111,25 +111,61 @@ describe("useAutoRead", () => {
     hook.unmount();
   });
 
+  it("分页模式：页面在后台时不翻页（节流 setInterval 持续触发但被跳过）", () => {
+    const { hook, onNextPage } = setup();
+    expect(onNextPage).toHaveBeenCalledTimes(1); // 开启时立即翻一页
+    // 切后台：后续 tick 被跳过，不翻页
+    act(() => {
+      Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    act(() => { vi.advanceTimersByTime(16000); });
+    expect(onNextPage).toHaveBeenCalledTimes(1);
+    // 回前台：恢复翻页
+    act(() => {
+      Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    act(() => { vi.advanceTimersByTime(8000); });
+    expect(onNextPage).toHaveBeenCalledTimes(2);
+    hook.unmount();
+  });
+
   // ── 滚动模式（rAF 持续滚动）──
+  // 用真实浏览器帧间隔（16ms）喂帧序列：单帧间隔超过 MAX_FRAME_DT(0.2s) 会被钳制跳过
+  const ONE_SEC_FRAMES = Array.from({ length: 63 }, (_, i) => i * 16); // 0..992ms ≈ 1 秒
+  // 有效滚动时长 = (帧数-1) × 16ms（首帧仅初始化 lastTs）
+  const EFFECTIVE_SECONDS = ((ONE_SEC_FRAMES.length - 1) * 16) / 1000; // 0.992
+
   it("滚动模式：正文持续匀速滑动（速度 = 行/秒 × 行高）", () => {
     const { hook, scrollEl } = setup({ paginated: false });
-    // 第一帧初始化 lastTs（无位移）；随后 2 行/秒 × 30px × 1s = 60px/秒
-    runFrames([0, 1000, 2000, 3000]);
-    expect(scrollEl.scrollTop).toBe(2 * 30 * 3);
+    runFrames(ONE_SEC_FRAMES);
+    expect(scrollEl.scrollTop).toBeCloseTo(2 * 30 * EFFECTIVE_SECONDS, 1);
     hook.unmount();
   });
 
   it("滚动模式：速度可调（1 行/秒 vs 4 行/秒）", () => {
     const { hook: hook1, scrollEl: el1 } = setup({ paginated: false, speedLinesPerSec: 1 });
-    runFrames([0, 2000]); // 1 行/秒 × 30px × 2s = 60px
-    expect(el1.scrollTop).toBe(60);
+    runFrames(ONE_SEC_FRAMES);
+    expect(el1.scrollTop).toBeCloseTo(1 * 30 * EFFECTIVE_SECONDS, 1);
     hook1.unmount();
 
     const { hook: hook2, scrollEl: el2 } = setup({ paginated: false, speedLinesPerSec: 4 });
-    runFrames([0, 1000]); // 4 行/秒 × 30px × 1s = 120px
-    expect(el2.scrollTop).toBe(120);
+    runFrames(ONE_SEC_FRAMES);
+    expect(el2.scrollTop).toBeCloseTo(4 * 30 * EFFECTIVE_SECONDS, 1);
     hook2.unmount();
+  });
+
+  it("滚动模式：后台恢复不跳屏（帧间隔超过上限时跳过位移）", () => {
+    const { hook, scrollEl } = setup({ paginated: false });
+    runFrames([0, 16, 32]); // 正常滚动约 2 帧
+    const before = scrollEl.scrollTop;
+    expect(before).toBeGreaterThan(0);
+    runFrames([5000]); // 模拟切后台 5 秒后恢复：dt≈5s 超过上限 → 跳过位移
+    expect(scrollEl.scrollTop).toBe(before);
+    runFrames([5016, 5032]); // 恢复后继续正常小位移
+    expect(scrollEl.scrollTop).toBeGreaterThan(before);
+    hook.unmount();
   });
 
   it("滚动模式：滚动到底 → 停止并回调 end，不再滚动", () => {
