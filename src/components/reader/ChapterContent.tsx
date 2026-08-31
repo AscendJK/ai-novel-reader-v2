@@ -7,12 +7,14 @@ import { useTTSStore } from "@/stores/tts-store";
 import { useKeyboardShortcuts, type ShortcutBinding } from "@/hooks/useKeyboardShortcuts";
 import { usePagination, type PageRange } from "@/hooks/usePagination";
 import { useContinuousScroll } from "@/hooks/useContinuousScroll";
+import { useAutoRead } from "@/hooks/useAutoRead";
 import { AudioPlayer } from "@/components/tts/AudioPlayer";
 import type { ScrollControl } from "./ReadingPanel";
 import { TopBar, BottomNav, ChapterParagraphs, type ReadingMode } from "./ReadingChrome";
 import { Loader2 } from "lucide-react";
 import { loadChapters } from "@/db/repositories";
 import { userKey } from "@/lib/user-utils";
+import { showToast } from "@/lib/toast-store";
 
 interface ChapterContentProps {
   summaryOpen: boolean;
@@ -56,6 +58,10 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   const setReadingMode = useUIStore((s) => s.setReadingMode);
   const autoSwitchPageMode = useUIStore((s) => s.autoSwitchPageMode);
   const setAutoSwitchPageMode = useUIStore((s) => s.setAutoSwitchPageMode);
+  // ── 自动阅读状态（开关不持久化，间隔秒数持久化）──
+  const autoReadEnabled = useUIStore((s) => s.autoReadEnabled);
+  const autoReadInterval = useUIStore((s) => s.autoReadInterval);
+  const setAutoReadEnabled = useUIStore((s) => s.setAutoReadEnabled);
   const indexLoadingKeys = useRAGStore((s) => s.indexLoadingKeys);
 
   const [showFontPanel, setShowFontPanel] = useState(false);
@@ -425,6 +431,60 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   useEffect(() => { goNextPageRef.current = goNextPage; }, [goNextPage]);
   useEffect(() => { goPrevPageRef.current = goPrevPage; }, [goPrevPage]);
 
+  // ── 自动阅读 ────────────────────────────────────────────
+  // 自动翻页标记：区分"hook 自动翻页切章"与"用户手动切章"（手动切章需停止自动阅读）
+  const autoAdvancingRef = useRef(false);
+  const handleAutoNextPage = useCallback(() => {
+    autoAdvancingRef.current = true;
+    goNextPageRef.current();
+    requestAnimationFrame(() => { autoAdvancingRef.current = false; });
+  }, []);
+
+  // 分页模式是否已到最后一章末页（滚动模式的"到底"由 hook 内部检测）
+  const isAtEnd = useCallback(
+    () => currentIndex >= chapters.length - 1 && safePage >= totalPages - 1,
+    [currentIndex, chapters.length, safePage, totalPages]
+  );
+
+  const handleAutoReadStop = useCallback((reason: "end" | "user") => {
+    setAutoReadEnabled(false);
+    if (reason === "end") showToast("已阅读到底部，自动阅读已停止");
+  }, [setAutoReadEnabled]);
+
+  // 正文容器：分页模式为翻页容器，滚动模式为滚动容器（两者互斥渲染，同一时刻只存在一个）
+  const autoReadContentRef = isPaginated ? containerRef : scrollContainerRef;
+
+  useAutoRead({
+    enabled: autoReadEnabled,
+    intervalSec: autoReadInterval,
+    paginated: isPaginated,
+    scrollRef: scrollContainerRef,
+    contentRef: autoReadContentRef,
+    onNextPage: handleAutoNextPage,
+    isAtEnd,
+    onStop: handleAutoReadStop,
+  });
+
+  // 自动阅读开启期间，用户打开设置面板 / 切换阅读模式 / 切换沉浸模式 → 视为干扰，停止
+  const autoReadEnabledRef = useRef(autoReadEnabled);
+  useEffect(() => { autoReadEnabledRef.current = autoReadEnabled; });
+  useEffect(() => {
+    if (autoReadEnabledRef.current) setAutoReadEnabled(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showFontPanel, summaryOpen, readingMode, immersive]);
+
+  // TTS 互斥：用户开始语音朗读 → 停止自动阅读（两者都是"自动前进"，不能同时跑）
+  const ttsPlaying = useTTSStore((s) => s.playing);
+  useEffect(() => {
+    if (ttsPlaying && autoReadEnabledRef.current) setAutoReadEnabled(false);
+  }, [ttsPlaying, setAutoReadEnabled]);
+
+  // 分页模式：用户手动切章（目录点击/底部翻章，非自动翻页触发）→ 停止自动阅读
+  useEffect(() => {
+    if (!isPaginated) return;
+    if (autoReadEnabledRef.current && !autoAdvancingRef.current) setAutoReadEnabled(false);
+  }, [selectedChapterId, isPaginated, setAutoReadEnabled]);
+
   // 滚动容器 ref（用于键盘滚动）
   const scrollContainerRefForKeys = scrollContainerRef;
 
@@ -679,7 +739,8 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
             immersive={immersive}
             prevLabel={safePage > 0 ? "上一页" : (prevChapter ? prevChapter.title : "已是第一章")}
             nextLabel={safePage < totalPages - 1 ? "下一页" : (nextChapter ? nextChapter.title : "已是最后一章")}
-            onPrev={goPrevPage} onNext={goNextPage}
+            onPrev={() => { setAutoReadEnabled(false); goPrevPage(); }}
+            onNext={() => { setAutoReadEnabled(false); goNextPage(); }}
             prevDisabled={safePage === 0 && !prevChapter}
             nextDisabled={safePage >= totalPages - 1 && !nextChapter}
             loadingChapter={loadingChapter}

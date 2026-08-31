@@ -50,6 +50,11 @@ function getInitialAutoSwitchPageMode(): boolean {
   return safeGet("novel-reader-auto-switch-page") !== "false";
 }
 
+function getInitialAutoReadInterval(): number {
+  // 自动阅读翻页/滚动间隔（秒），持久化记住用户偏好
+  return safeGetNum("novel-reader-auto-read-interval", 8, (v) => v >= 3 && v <= 60);
+}
+
 interface UIState {
   theme: "light" | "dark";
   fontSize: number;
@@ -62,6 +67,10 @@ interface UIState {
   graphCharacterLimit: number;
   readingMode: "scroll" | "single" | "double";
   autoSwitchPageMode: boolean;
+  /** 自动阅读开关（不持久化：每次进入阅读器默认关闭，避免意外自动滚动） */
+  autoReadEnabled: boolean;
+  /** 自动阅读间隔秒数（3-60，持久化） */
+  autoReadInterval: number;
   setTheme: (theme: "light" | "dark") => void;
   toggleTheme: () => void;
   setFontSize: (size: number) => void;
@@ -74,6 +83,8 @@ interface UIState {
   setGraphCharacterLimit: (v: number) => void;
   setReadingMode: (mode: "scroll" | "single" | "double") => void;
   setAutoSwitchPageMode: (auto: boolean) => void;
+  setAutoReadEnabled: (v: boolean) => void;
+  setAutoReadInterval: (v: number) => void;
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -88,6 +99,8 @@ export const useUIStore = create<UIState>((set) => ({
   graphCharacterLimit: getInitialGraphCharacterLimit(),
   readingMode: getInitialReadingMode(),
   autoSwitchPageMode: getInitialAutoSwitchPageMode(),
+  autoReadEnabled: false,
+  autoReadInterval: getInitialAutoReadInterval(),
 
   setTheme: (theme) => {
     safeSet("novel-reader-theme", theme);
@@ -156,5 +169,13 @@ export const useUIStore = create<UIState>((set) => ({
   setAutoSwitchPageMode: (auto) => {
     safeSet("novel-reader-auto-switch-page", String(auto));
     set({ autoSwitchPageMode: auto });
+  },
+
+  setAutoReadEnabled: (v) => set({ autoReadEnabled: v }),
+
+  setAutoReadInterval: (v) => {
+    const clamped = Math.max(3, Math.min(60, Math.round(v)));
+    safeSet("novel-reader-auto-read-interval", String(clamped));
+    set({ autoReadInterval: clamped });
   },
 }));
