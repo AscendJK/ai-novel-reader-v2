@@ -109,10 +109,14 @@ def main():
     # 也保证 stdin/stdout/stderr 按 UTF-8 读写，避免中文被按 GBK 解码成乱码，
     # 导致 Kokoro 对乱码汉字硬拼音素（音色/语速正常但内容胡话）。
     for _stream in (sys.stdin, sys.stdout, sys.stderr):
-        try:
-            _stream.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
+        # 用 getattr 取 reconfigure（运行时为 io.TextIOWrapper 方法，Python 3.7+ 均可用；
+        # 用 getattr 避免类型桩 TextIO 未声明该属性导致的静态检查误报）
+        _reconfigure = getattr(_stream, "reconfigure", None)
+        if callable(_reconfigure):
+            try:
+                _reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
 
     model_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "data", "tts-cache", "model"
