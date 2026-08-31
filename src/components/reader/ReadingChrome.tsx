@@ -12,7 +12,7 @@ import { useTTSStore } from "@/stores/tts-store";
 import { useUIStore } from "@/stores/ui-store";
 import {
   Sparkles, ChevronLeft, ChevronRight, Type, Loader2, Maximize2, Minimize2, Play,
-  BookOpen, Pause, Minus, Plus,
+  BookOpen, Pause,
 } from "lucide-react";
 import { ReadingToolbar } from "./ReadingToolbar";
 
@@ -37,37 +37,20 @@ function TTSStartButton() {
   );
 }
 
-/** 顶栏"自动阅读"按钮：定时翻页/滚动，开启后可调间隔秒数（3-60） */
+/** 顶栏"自动阅读"按钮：定时翻页/滚动，间隔与滑动窗口在字体面板中设置 */
 function AutoReadButton() {
   const enabled = useUIStore((s) => s.autoReadEnabled);
   const setEnabled = useUIStore((s) => s.setAutoReadEnabled);
-  const interval = useUIStore((s) => s.autoReadInterval);
-  const setIntervalSec = useUIStore((s) => s.setAutoReadInterval);
 
   return (
-    <div className="flex items-center gap-0.5" title="自动阅读（每 X 秒翻页/滚动，用户操作时自动停止）">
-      {enabled && (
-        <>
-          <Button variant="ghost" size="icon" className="h-7 w-7"
-            onClick={() => setIntervalSec(Math.max(3, interval - 1))} title="减慢（延长间隔）">
-            <Minus className="h-3.5 w-3.5" />
-          </Button>
-          <span className="text-[10px] tabular-nums text-muted-foreground w-7 text-center select-none">{interval}s</span>
-          <Button variant="ghost" size="icon" className="h-7 w-7"
-            onClick={() => setIntervalSec(Math.min(60, interval + 1))} title="加快（缩短间隔）">
-            <Plus className="h-3.5 w-3.5" />
-          </Button>
-        </>
-      )}
-      <Button
-        variant={enabled ? "default" : "ghost"} size="icon"
-        className={`h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-7 md:w-7 ${enabled ? "animate-pulse" : ""}`}
-        onClick={() => setEnabled(!enabled)}
-        title={enabled ? "停止自动阅读" : "自动阅读"}
-      >
-        {enabled ? <Pause className="h-4 w-4" /> : <BookOpen className="h-4 w-4" />}
-      </Button>
-    </div>
+    <Button
+      variant={enabled ? "default" : "ghost"} size="icon"
+      className={`h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-7 md:w-7 ${enabled ? "animate-pulse" : ""}`}
+      onClick={() => setEnabled(!enabled)}
+      title={enabled ? "停止自动阅读" : "自动阅读（间隔/滑动窗口在字体面板中设置）"}
+    >
+      {enabled ? <Pause className="h-4 w-4" /> : <BookOpen className="h-4 w-4" />}
+    </Button>
   );
 }
 
@@ -97,6 +80,10 @@ export interface TopBarProps {
   setReadingMode: (m: ReadingMode) => void;
   autoSwitchPageMode: boolean;
   setAutoSwitchPageMode: (v: boolean) => void;
+  autoReadInterval: number;
+  setAutoReadInterval: (v: number) => void;
+  autoReadScrollStep: number;
+  setAutoReadScrollStep: (v: number) => void;
   immersive?: boolean;
   isIndexLoading?: boolean;
   windowWidth?: number;
@@ -110,6 +97,7 @@ const TopBar = React.memo(function TopBar(props: TopBarProps) {
     lineHeight, setLineHeight, paragraphSpacing, setParagraphSpacing,
     fontFamily, setFontFamily,
     readingMode, setReadingMode, autoSwitchPageMode, setAutoSwitchPageMode,
+    autoReadInterval, setAutoReadInterval, autoReadScrollStep, setAutoReadScrollStep,
     immersive,
     isIndexLoading,
     windowWidth,
@@ -195,6 +183,8 @@ const TopBar = React.memo(function TopBar(props: TopBarProps) {
                 fontFamily={fontFamily} setFontFamily={setFontFamily}
                 readingMode={readingMode} setReadingMode={setReadingMode}
                 autoSwitchPageMode={autoSwitchPageMode} setAutoSwitchPageMode={setAutoSwitchPageMode}
+                autoReadInterval={autoReadInterval} setAutoReadInterval={setAutoReadInterval}
+                autoReadScrollStep={autoReadScrollStep} setAutoReadScrollStep={setAutoReadScrollStep}
                 windowWidth={windowWidth ?? 1024}
               />
               </div>

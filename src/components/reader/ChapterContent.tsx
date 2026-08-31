@@ -58,10 +58,13 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   const setReadingMode = useUIStore((s) => s.setReadingMode);
   const autoSwitchPageMode = useUIStore((s) => s.autoSwitchPageMode);
   const setAutoSwitchPageMode = useUIStore((s) => s.setAutoSwitchPageMode);
-  // ── 自动阅读状态（开关不持久化，间隔秒数持久化）──
+  // ── 自动阅读状态（开关不持久化，间隔/滑动窗口持久化）──
   const autoReadEnabled = useUIStore((s) => s.autoReadEnabled);
   const autoReadInterval = useUIStore((s) => s.autoReadInterval);
+  const autoReadScrollStep = useUIStore((s) => s.autoReadScrollStep);
   const setAutoReadEnabled = useUIStore((s) => s.setAutoReadEnabled);
+  const setAutoReadInterval = useUIStore((s) => s.setAutoReadInterval);
+  const setAutoReadScrollStep = useUIStore((s) => s.setAutoReadScrollStep);
   const indexLoadingKeys = useRAGStore((s) => s.indexLoadingKeys);
 
   const [showFontPanel, setShowFontPanel] = useState(false);
@@ -457,6 +460,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   useAutoRead({
     enabled: autoReadEnabled,
     intervalSec: autoReadInterval,
+    scrollStepPercent: autoReadScrollStep,
     paginated: isPaginated,
     scrollRef: scrollContainerRef,
     contentRef: autoReadContentRef,
@@ -671,6 +675,8 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
           fontFamily={fontFamily} setFontFamily={setFontFamily}
           readingMode={readingMode} setReadingMode={setReadingMode}
           autoSwitchPageMode={autoSwitchPageMode} setAutoSwitchPageMode={setAutoSwitchPageMode}
+          autoReadInterval={autoReadInterval} setAutoReadInterval={setAutoReadInterval}
+          autoReadScrollStep={autoReadScrollStep} setAutoReadScrollStep={setAutoReadScrollStep}
           immersive={immersive}
           windowWidth={windowWidth}
           isIndexLoading={isIndexLoading}
@@ -770,6 +776,8 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
                   fontFamily={fontFamily} setFontFamily={setFontFamily}
                   readingMode={readingMode} setReadingMode={setReadingMode}
                   autoSwitchPageMode={autoSwitchPageMode} setAutoSwitchPageMode={setAutoSwitchPageMode}
+                  autoReadInterval={autoReadInterval} setAutoReadInterval={setAutoReadInterval}
+                  autoReadScrollStep={autoReadScrollStep} setAutoReadScrollStep={setAutoReadScrollStep}
                   immersive={immersive}
                   windowWidth={windowWidth}
                   isIndexLoading={isIndexLoading}

@@ -55,6 +55,11 @@ function getInitialAutoReadInterval(): number {
   return safeGetNum("novel-reader-auto-read-interval", 8, (v) => v >= 3 && v <= 60);
 }
 
+function getInitialAutoReadScrollStep(): number {
+  // 自动阅读滚动模式的滑动窗口（视口高度百分比），持久化记住用户偏好
+  return safeGetNum("novel-reader-auto-read-scroll-step", 60, (v) => v >= 10 && v <= 100);
+}
+
 interface UIState {
   theme: "light" | "dark";
   fontSize: number;
@@ -71,6 +76,8 @@ interface UIState {
   autoReadEnabled: boolean;
   /** 自动阅读间隔秒数（3-60，持久化） */
   autoReadInterval: number;
+  /** 自动阅读滚动模式滑动窗口：每次滚动的视口高度百分比（10-100，持久化） */
+  autoReadScrollStep: number;
   setTheme: (theme: "light" | "dark") => void;
   toggleTheme: () => void;
   setFontSize: (size: number) => void;
@@ -85,6 +92,7 @@ interface UIState {
   setAutoSwitchPageMode: (auto: boolean) => void;
   setAutoReadEnabled: (v: boolean) => void;
   setAutoReadInterval: (v: number) => void;
+  setAutoReadScrollStep: (v: number) => void;
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -101,6 +109,7 @@ export const useUIStore = create<UIState>((set) => ({
   autoSwitchPageMode: getInitialAutoSwitchPageMode(),
   autoReadEnabled: false,
   autoReadInterval: getInitialAutoReadInterval(),
+  autoReadScrollStep: getInitialAutoReadScrollStep(),
 
   setTheme: (theme) => {
     safeSet("novel-reader-theme", theme);
@@ -177,5 +186,11 @@ export const useUIStore = create<UIState>((set) => ({
     const clamped = Math.max(3, Math.min(60, Math.round(v)));
     safeSet("novel-reader-auto-read-interval", String(clamped));
     set({ autoReadInterval: clamped });
+  },
+
+  setAutoReadScrollStep: (v) => {
+    const clamped = Math.max(10, Math.min(100, Math.round(v)));
+    safeSet("novel-reader-auto-read-scroll-step", String(clamped));
+    set({ autoReadScrollStep: clamped });
   },
 }));

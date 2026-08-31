@@ -3,7 +3,7 @@
  *
  * 两种模式：
  *  - 分页模式（paginated=true）：每 intervalSec 秒翻一页（章末自动进下一章）
- *  - 滚动模式：每 intervalSec 秒平滑滚动约 60% 视口高度
+ *  - 滚动模式：每 intervalSec 秒平滑滚动 scrollStepPercent% 视口高度
  *
  * 停止条件：
  *  - 读到终点（滚动到底 / 最后一章末页）→ onStop("end")
@@ -18,6 +18,8 @@ export interface UseAutoReadOptions {
   enabled: boolean;
   /** 翻页/滚动间隔（秒） */
   intervalSec: number;
+  /** 滚动模式单步滑动窗口：视口高度百分比（10-100） */
+  scrollStepPercent: number;
   /** true=分页模式（定时翻页）；false=滚动模式（定时滚动） */
   paginated: boolean;
   /** 滚动容器 ref（滚动模式的滚动目标） */
@@ -40,14 +42,11 @@ const INTERRUPT_KEYS = new Set([
 
 /** 滚动到底容差（px） */
 const SCROLL_END_TOLERANCE = 4;
-/** 单步滚动高度下限（px），小视口下不至于几乎不动 */
-const MIN_SCROLL_STEP = 160;
-/** 单步滚动 = 视口高度的比例 */
-const SCROLL_STEP_RATIO = 0.6;
 
 export function useAutoRead({
   enabled,
   intervalSec,
+  scrollStepPercent,
   paginated,
   scrollRef,
   contentRef,
@@ -60,10 +59,12 @@ export function useAutoRead({
   const isAtEndRef = useRef(isAtEnd);
   const onStopRef = useRef(onStop);
   const intervalRef = useRef(intervalSec);
+  const scrollStepRef = useRef(scrollStepPercent);
   useEffect(() => { onNextPageRef.current = onNextPage; });
   useEffect(() => { isAtEndRef.current = isAtEnd; });
   useEffect(() => { onStopRef.current = onStop; });
   useEffect(() => { intervalRef.current = intervalSec; });
+  useEffect(() => { scrollStepRef.current = scrollStepPercent; });
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -113,7 +114,7 @@ export function useAutoRead({
           stop("end"); // 滚动到底 → 停止
           return;
         }
-        const step = Math.max(MIN_SCROLL_STEP, el.clientHeight * SCROLL_STEP_RATIO);
+        const step = el.clientHeight * (scrollStepRef.current / 100);
         el.scrollBy({ top: step, behavior: "smooth" });
         return;
       }

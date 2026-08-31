@@ -42,6 +42,7 @@ function setup(overrides: Partial<UseAutoReadOptions> = {}) {
       initialProps: {
         enabled: true,
         intervalSec: 8,
+        scrollStepPercent: 60,
         paginated: true,
         scrollRef: scrollRef as React.RefObject<HTMLDivElement | null>,
         contentRef: contentRef as React.RefObject<HTMLElement | null>,
@@ -95,6 +96,16 @@ describe("useAutoRead", () => {
     act(() => { vi.advanceTimersByTime(5000); });
     expect(scrollEl.scrollBy).toHaveBeenCalledTimes(2);
     hook.unmount();
+  });
+
+  it("滚动模式：滑动窗口可自定义（30% → 150px，100% → 500px）", () => {
+    const { hook, scrollEl } = setup({ paginated: false, scrollStepPercent: 30 });
+    expect(scrollEl.scrollBy).toHaveBeenLastCalledWith({ top: 500 * 0.3, behavior: "smooth" });
+    hook.unmount();
+
+    const { hook: hook2, scrollEl: el2 } = setup({ paginated: false, scrollStepPercent: 100 });
+    expect(el2.scrollBy).toHaveBeenLastCalledWith({ top: 500, behavior: "smooth" });
+    hook2.unmount();
   });
 
   it("滚动模式：滚动到底 → 停止并回调 end，不再滚动", () => {
@@ -167,6 +178,7 @@ describe("useAutoRead", () => {
     const contentRef = { current: document.createElement("div") } as React.RefObject<HTMLElement | null>;
     const base = {
       intervalSec: 8,
+      scrollStepPercent: 60,
       paginated: true,
       scrollRef,
       contentRef,
