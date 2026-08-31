@@ -271,6 +271,16 @@ export async function enforceIndexedDBQuota() {
 
     // 通知用户
     notifyEviction(evicted);
+
+    if (currentSize > limitBytes) {
+      // 无法完全达标：存在单条索引超过配额，或所有条目都是保护条目（当前小说）
+      // 此时删除任意条目都无济于事，保留现状并提示用户
+      console.warn(
+        `[rag] 索引缓存 ${(currentSize / 1024 / 1024).toFixed(1)}MB 仍超过配额 ` +
+        `${(limitBytes / 1024 / 1024).toFixed(0)}MB：存在单条索引过大或全部为保护条目。` +
+        `可在设置页调大「索引缓存上限」`
+      );
+    }
   } finally {
     release();
   }

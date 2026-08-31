@@ -8,6 +8,7 @@ import { loadChapters } from "@/db/repositories";
 import { useRAGStore } from "@/stores/rag-store";
 import { updateRagCacheSize, updateAccessTime, onCacheEviction, enforceIndexedDBQuota } from "./rag-cache-utils";
 import { normalizeChunks } from "./chunk-utils";
+import { withQuotaRetry } from "@/lib/quota-guard";
 
 export { updateRagCacheSize } from "./rag-cache-utils";
 export { normalizeChunks } from "./chunk-utils";
@@ -212,11 +213,14 @@ export async function buildIndex(
       ragLog(`TF-IDF 索引就绪: ${chunks.length}片段 · ${(Date.now() - t0)}ms`);
 
       // 持久化到 ragCache（下次直接加载，无需重新构建）
+      // 配额不足时自动降级清理并重试
       const { vectorsBuffer, extraData } = retriever.toCache();
-      await db.ragCache.put({
-        id: cacheKey, novelId, engine: "tfidf",
-        vectorsBuffer, chunks, dim: 128, chunkCount: chunks.length,
-        extraData, createdAt: Date.now(), lastAccessed: Date.now(), accessCount: 1,
+      await withQuotaRetry(async () => {
+        await db.ragCache.put({
+          id: cacheKey, novelId, engine: "tfidf",
+          vectorsBuffer, chunks, dim: 128, chunkCount: chunks.length,
+          extraData, createdAt: Date.now(), lastAccessed: Date.now(), accessCount: 1,
+        });
       });
       useRAGStore.getState().addCachedKey(cacheKey);
       useRAGStore.getState().addLruKey(cacheKey);

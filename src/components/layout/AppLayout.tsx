@@ -10,13 +10,14 @@ import { GlobalNotes } from "@/components/notes/GlobalNotes";
 import { LocalErrorBoundary } from "@/components/common/LocalErrorBoundary";
 import { useKeyboardShortcuts, type ShortcutBinding } from "@/hooks/useKeyboardShortcuts";
 import { useRAGStore } from "@/stores/rag-store";
-import { setupModelLoader } from "@/rag/model-loader";
+import { setupModelLoader, verifyDownloadedModels } from "@/rag/model-loader";
 import { broadcast } from "@/lib/broadcast";
 import { setCurrentNovelIdGetter } from "@/rag/rag-cache-utils";
 import { useSyncOrchestration } from "@/hooks/useSyncOrchestration";
 import { checkVersion } from "@/lib/check-version";
 import { getServerUrl } from "@/lib/api-client";
 import { VersionMismatchDialog } from "@/components/common/VersionMismatchDialog";
+import { cleanupDeletedRecords } from "@/db/repositories";
 
 // Configure Transformers.js to load models from local public/models/
 setupModelLoader();
@@ -113,6 +114,38 @@ export function AppLayout() {
       } catch { /* ignore */ }
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── 启动自检：嵌入模型标记校验（失同步修复）+ 软删除记录定期 GC ──
+  useEffect(() => {
+    // 校验 localStorage 的 downloadedModels 标记与 Cache Storage 实际缓存是否一致，
+    // 不一致时自动修正标记（fire-and-forget，不阻塞启动）
+    verifyDownloadedModels().catch(() => {});
+
+    // GC 节流：距上次执行至少 1 小时才再次触发
+    const GC_MIN_INTERVAL = 60 * 60 * 1000;
+    let lastGCRun = 0;
+    const runGC = () => {
+      if (document.hidden) return; // 页面不可见时跳过
+      const now = Date.now();
+      if (now - lastGCRun < GC_MIN_INTERVAL) return;
+      lastGCRun = now;
+      cleanupDeletedRecords().catch(() => {});
+    };
+    // 启动后延迟执行（避开登录/首次同步高峰）；未登录时内部自动跳过
+    const t0 = setTimeout(runGC, 3000);
+    // 每 24 小时执行一次
+    const daily = setInterval(runGC, 24 * 60 * 60 * 1000);
+    // 从后台切回前台时检查
+    const onVis = () => {
+      if (document.visibilityState === "visible") runGC();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clearTimeout(t0);
+      clearInterval(daily);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, []);
 
   useEffect(() => {
     if (currentNovel) {

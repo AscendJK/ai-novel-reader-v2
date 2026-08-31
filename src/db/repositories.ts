@@ -1,9 +1,11 @@
 import { sharedDB, getUserDB, deleteUserDB } from "./database";
+import type { Table } from "dexie";
 import type { Novel, NovelMeta } from "@/parsers/types";
 import type { SummaryItem } from "@/stores/summary-store";
 import type { ChapterRecord, MapRecord, GraphRecord } from "./database";
 import { useRAGStore } from "@/stores/rag-store";
 import { clearCache } from "@/rag/index";
+import { withQuotaRetry } from "@/lib/quota-guard";
 import type { GraphData } from "@/hooks/useSummarizer";
 
 export type { MapRecord, GraphRecord };
@@ -35,9 +37,13 @@ export async function saveNovel(novel: Novel): Promise<void> {
 
       await db.chapters.where("novelId").equals(novel.id).delete();
       // 分批写入以防止 IndexedDB 事务超时（每批 500 条）
+      // 配额不足时自动降级清理并重试（bulkPut 同 id 覆盖，重试安全）
       const BATCH_SIZE = 500;
       for (let i = 0; i < chapterRecords.length; i += BATCH_SIZE) {
-        await db.chapters.bulkPut(chapterRecords.slice(i, i + BATCH_SIZE));
+        const batch = chapterRecords.slice(i, i + BATCH_SIZE);
+        await withQuotaRetry(async () => {
+          await db.chapters.bulkPut(batch);
+        });
       }
     });
   } catch (e) {
@@ -250,6 +256,14 @@ export async function deleteNovel(novelId: string): Promise<void> {
         delete map[novelId];
         localStorage.setItem(openedKey, JSON.stringify(map));
       }
+      // 清理 TTS 朗读断点（若指向被删小说；该键为全局键，仅匹配 novelId 时删除）
+      try {
+        const ttsPosRaw = localStorage.getItem("novel-reader-tts-position");
+        if (ttsPosRaw) {
+          const ttsPos = JSON.parse(ttsPosRaw);
+          if (ttsPos.novelId === novelId) localStorage.removeItem("novel-reader-tts-position");
+        }
+      } catch { /* 忽略损坏数据 */ }
     } catch (e) { console.warn("[deleteNovel] cleanup error:", e); }
   } catch (e) {
     console.error("deleteNovel failed:", e);
@@ -489,34 +503,74 @@ export async function deleteGraph(novelId: string): Promise<void> {
 // ── Garbage collection for soft-deleted records ──
 
 const GC_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const GC_BATCH_SIZE = 100; // 每批删除条数（防止大库一次性全量加载阻塞主线程）
+
+/** 让出主线程（微任务 + 宏任务），避免 GC 长任务卡顿 UI */
+function yieldToMainThread(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/** 分批收集过期软删除记录（游标流式，不一次性加载全表） */
+async function collectExpired<T extends { id: string; deleted?: number }>(
+  table: Table<T, string>,
+  cutoff: number,
+): Promise<T[]> {
+  const expired: T[] = [];
+  await table.each((rec) => {
+    if (rec.deleted && rec.deleted < cutoff) expired.push(rec);
+  });
+  return expired;
+}
 
 export async function cleanupDeletedRecords() {
-  const db = getUserDB();
+  // 多标签页互斥：同一浏览器多个标签页同时 GC 可能重复删除（有事务保护但浪费）
+  // navigator.locks 不可用（旧浏览器）时退化为直接执行
+  if (typeof navigator !== "undefined" && "locks" in navigator) {
+    try {
+      await navigator.locks.request("novel-reader-gc", { ifAvailable: true }, async (lock) => {
+        if (!lock) return; // 其他标签页正在 GC，本页跳过
+        await doCleanupDeletedRecords();
+      });
+      return;
+    } catch { /* 锁不可用时退化为直接执行 */ }
+  }
+  await doCleanupDeletedRecords();
+}
+
+async function doCleanupDeletedRecords() {
+  let db;
+  try {
+    db = getUserDB();
+  } catch { return; } // 未登录时无用户库，跳过
   const cutoff = Date.now() - GC_MAX_AGE_MS;
   try {
-    // deleted field is a timestamp (Date.now()) when soft-deleted, undefined when not deleted
-    // Filter in JS because compound index queries don't work well with undefined values
-    const oldChapters = (await db.chapters.toArray()).filter(c => c.deleted && c.deleted < cutoff);
-    const oldMaps = (await db.maps.toArray()).filter(m => m.deleted && m.deleted < cutoff);
-    const oldGraphs = (await db.graphs.toArray()).filter(g => g.deleted && g.deleted < cutoff);
-    const oldSummaries = (await db.summaries.toArray()).filter(s => s.deleted && s.deleted < cutoff);
-    const oldNotes = (await db.notes.toArray()).filter(n => n.deleted && n.deleted < cutoff);
+    // 分批收集（游标流式，不一次性加载全表到内存）
+    const [oldChapters, oldSummaries, oldNotes, oldGraphs, oldMaps] = await Promise.all([
+      collectExpired(db.chapters, cutoff),
+      collectExpired(db.summaries, cutoff),
+      collectExpired(db.notes, cutoff),
+      collectExpired(db.graphs, cutoff),
+      collectExpired(db.maps, cutoff),
+    ]);
     let cCount = 0, sCount = 0, nCount = 0, gCount = 0, mCount = 0;
-    for (const c of oldChapters) {
-      await db.chapters.delete(c.id); cCount++;
-    }
-    for (const s of oldSummaries) {
-      await db.summaries.delete(s.id); sCount++;
-    }
-    for (const n of oldNotes) {
-      await db.notes.delete(n.id); nCount++;
-    }
-    for (const g of oldGraphs) {
-      await db.graphs.delete(g.id); gCount++;
-    }
-    for (const m of oldMaps) {
-      await db.maps.delete(m.id); mCount++;
-    }
+
+    // 分批删除，每批之间让出主线程
+    const deleteInBatches = async <T extends { id: string }>(records: T[], table: Table<T, string>): Promise<number> => {
+      let count = 0;
+      for (let i = 0; i < records.length; i += GC_BATCH_SIZE) {
+        const batch = records.slice(i, i + GC_BATCH_SIZE);
+        await table.bulkDelete(batch.map((r) => r.id));
+        count += batch.length;
+        await yieldToMainThread();
+      }
+      return count;
+    };
+
+    cCount = await deleteInBatches(oldChapters, db.chapters);
+    sCount = await deleteInBatches(oldSummaries, db.summaries);
+    nCount = await deleteInBatches(oldNotes, db.notes);
+    gCount = await deleteInBatches(oldGraphs, db.graphs);
+    mCount = await deleteInBatches(oldMaps, db.maps);
     if (cCount || sCount || nCount || gCount || mCount) console.log(`[gc] cleaned ${cCount} chapters, ${sCount} summaries, ${nCount} notes, ${gCount} graphs, ${mCount} maps`);
   } catch (e) { console.error("[gc] cleanupDeletedRecords failed:", e); }
 }

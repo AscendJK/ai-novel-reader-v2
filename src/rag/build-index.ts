@@ -7,6 +7,7 @@ import { apiFetch } from "@/lib/api-client";
 import { sharedDB } from "@/db/database";
 import { normalizeChunks } from "./chunk-utils";
 import { enforceIndexedDBQuota } from "./rag-cache-utils";
+import { withQuotaRetry } from "@/lib/quota-guard";
 import { ragLog } from "@/lib/logger";
 
 /** API 错误响应格式 */
@@ -205,18 +206,20 @@ export async function downloadAndCacheIndex(options: DownloadOptions): Promise<D
   // 提取 vectors 二进制数据
   const vectorsBuffer = buffer.slice(12 + chunksJsonLen);
 
-  // 存入 IndexedDB（直接存二进制）
-  await sharedDB.ragCache.put({
-    id: cacheKey,
-    novelId,
-    engine,
-    vectorsBuffer,
-    chunks: normalizeChunks(chunks),
-    dim,
-    chunkCount,
-    createdAt: Date.now(),
-    lastAccessed: Date.now(),
-    accessCount: 0,
+  // 存入 IndexedDB（直接存二进制）；配额不足时自动降级清理并重试
+  await withQuotaRetry(async () => {
+    await sharedDB.ragCache.put({
+      id: cacheKey,
+      novelId,
+      engine,
+      vectorsBuffer,
+      chunks: normalizeChunks(chunks),
+      dim,
+      chunkCount,
+      createdAt: Date.now(),
+      lastAccessed: Date.now(),
+      accessCount: 0,
+    });
   });
 
   // 更新 store

@@ -4,6 +4,7 @@
  */
 
 import { apiFetch } from "@/lib/api-client";
+import { withQuotaRetry } from "@/lib/quota-guard";
 
 const DB_NAME = "tts-cache";
 const DB_VERSION = 1;
@@ -121,13 +122,14 @@ async function dbGet(key: string): Promise<ArrayBuffer | undefined> {
 
 async function dbPut(key: string, value: ArrayBuffer): Promise<void> {
   const db = await openDB();
-  return new Promise((resolve, reject) => {
+  // 配额不足时自动降级清理（RAG 淘汰 → TTS 孤儿 → 非激活嵌入模型）并重试
+  await withQuotaRetry(() => new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readwrite");
     const store = tx.objectStore(STORE_NAME);
     const req = store.put(value, key);
     req.onsuccess = () => resolve();
     req.onerror = () => reject(req.error);
-  });
+  }));
 }
 
 async function dbHas(key: string): Promise<boolean> {
@@ -251,6 +253,9 @@ export function downloadAndCache(
     result.set(file, arrayBuffer);
   }
 
+  // 下载/校验完成后广播，让其他已打开的标签页同步刷新缓存状态
+  broadcastTTSCacheReady();
+
   return result;
   })().finally(() => {
     // 下载完成（成功或失败）后释放锁，允许下次重新触发
@@ -258,6 +263,18 @@ export function downloadAndCache(
   });
 
   return downloadPromise;
+}
+
+/**
+ * 广播 TTS 缓存状态变化（跨标签页同步）
+ * 其他标签页收到后重新执行 isCacheReady()，刷新"已就绪/需下载"显示
+ */
+export function broadcastTTSCacheReady(): void {
+  try {
+    const bc = new BroadcastChannel("novel-reader-tts-sync");
+    bc.postMessage("tts-cache-ready");
+    bc.close();
+  } catch { /* 不支持 BroadcastChannel 时忽略（单标签页场景无影响） */ }
 }
 
 /**
@@ -271,5 +288,61 @@ export async function clearCache(): Promise<void> {
     const req = store.clear();
     req.onsuccess = () => resolve();
     req.onerror = () => reject(req.error);
+  });
+}
+
+/**
+ * 计算 TTS 缓存总大小（字节）
+ * 游标流式累加 ArrayBuffer 的 byteLength，避免一次性加载全部文件
+ */
+export async function computeTTSCacheSize(): Promise<number> {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(STORE_NAME, "readonly");
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.openCursor();
+      let total = 0;
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (cursor) {
+          const val = cursor.value as ArrayBuffer | undefined;
+          if (val && typeof val.byteLength === "number") total += val.byteLength;
+          cursor.continue();
+        } else {
+          resolve(total);
+        }
+      };
+      req.onerror = () => resolve(0);
+    } catch { resolve(0); }
+  });
+}
+
+/**
+ * 清理孤儿文件（下载中断残留 / 已废弃版本前缀）
+ * 保留当前必需清单（CACHE_FILES）内的文件，其余一律删除
+ * @returns 删除的文件数
+ */
+export async function cleanupOrphanFiles(): Promise<number> {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(STORE_NAME, "readwrite");
+      const store = tx.objectStore(STORE_NAME);
+      const keysReq = store.getAllKeys();
+      keysReq.onsuccess = () => {
+        const keys = keysReq.result as IDBValidKey[];
+        let removed = 0;
+        for (const key of keys) {
+          const k = String(key);
+          // 不在当前必需清单内的一律视为孤儿（含 kokoro-v1/v2 旧前缀、下载一半的残缺文件）
+          if (!CACHE_FILES.includes(k)) {
+            try { store.delete(key); removed++; } catch { /* 忽略单条删除失败 */ }
+          }
+        }
+        resolve(removed);
+      };
+      keysReq.onerror = () => resolve(0);
+    } catch { resolve(0); }
   });
 }

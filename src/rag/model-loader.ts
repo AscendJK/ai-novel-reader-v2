@@ -285,3 +285,149 @@ export async function setupModelLoader(): Promise<void> {
     console.error("[model-loader] 初始化失败:", e);
   }
 }
+
+// ── Transformers.js 模型缓存管理（Cache Storage: transformers-cache） ──
+
+const TRANSFORMERS_CACHE_NAME = "transformers-cache";
+
+/** 判断缓存请求 URL 是否属于某模型 */
+function urlMatchesModel(url: string, modelKey: string): boolean {
+  // URL 形如 ".../model-proxy/Xenova/bge-small-zh-v1.5/tokenizer.json" 或
+  // "Xenova/bge-small-zh-v1.5/tokenizer.json"（transformers.js 缓存 key 为完整 URL）
+  const norm = url.split("?")[0].replace(/\/+$/, "");
+  return norm.includes(`/${modelKey}/`) || norm.endsWith(`/${modelKey}`);
+}
+
+async function openTransformersCache(): Promise<Cache | null> {
+  try {
+    if (typeof caches === "undefined") return null;
+    return await caches.open(TRANSFORMERS_CACHE_NAME);
+  } catch { return null; }
+}
+
+export interface TransformersCacheInfo {
+  /** modelKey → { 文件数, 估算字节 } */
+  modelFiles: Map<string, { count: number; bytes: number }>;
+  /** 不属于任何已知模型的孤儿条目 */
+  orphanCount: number;
+  orphanBytes: number;
+}
+
+/**
+ * 检测 transformers-cache 中实际缓存的模型文件
+ * 用于与 localStorage 的 downloadedModels 标记比对（修复失同步）
+ */
+export async function getTransformersCacheInfo(): Promise<TransformersCacheInfo> {
+  const info: TransformersCacheInfo = {
+    modelFiles: new Map(),
+    orphanCount: 0,
+    orphanBytes: 0,
+  };
+  const cache = await openTransformersCache();
+  if (!cache) return info;
+
+  try {
+    const requests = await cache.keys();
+    const knownModels = new Set<string>([
+      ...ALL_ENGINES.map((e) => e.modelKey),
+      ...useRAGStore.getState().savedCustomModels.map((m) => m.key),
+    ]);
+
+    for (const req of requests) {
+      const url = req.url;
+      let matched: string | null = null;
+      for (const key of knownModels) {
+        if (urlMatchesModel(url, key)) { matched = key; break; }
+      }
+      let bytes = 0;
+      const resp = await cache.match(req);
+      if (resp) {
+        const len = parseInt(resp.headers.get("content-length") || "0", 10);
+        bytes = len > 0 ? len : 0;
+      }
+      if (matched) {
+        const cur = info.modelFiles.get(matched) || { count: 0, bytes: 0 };
+        cur.count++;
+        cur.bytes += bytes;
+        info.modelFiles.set(matched, cur);
+      } else {
+        info.orphanCount++;
+        info.orphanBytes += bytes;
+      }
+    }
+  } catch (e) { console.warn("[model-loader] 检测 transformers-cache 失败:", e); }
+  return info;
+}
+
+/**
+ * 删除某模型在 transformers-cache 中的所有缓存文件
+ * @returns 删除的文件数
+ */
+export async function deleteModelCache(modelKey: string): Promise<number> {
+  const cache = await openTransformersCache();
+  if (!cache) return 0;
+  try {
+    const requests = await cache.keys();
+    let removed = 0;
+    for (const req of requests) {
+      if (urlMatchesModel(req.url, modelKey)) {
+        await cache.delete(req);
+        removed++;
+      }
+    }
+    if (removed > 0) {
+      // 同步移除 localStorage 中的下载标记，避免失同步
+      useRAGStore.getState().removeDownloadedModel(modelKey);
+      console.log(`[model-loader] 已删除模型缓存: ${modelKey} (${removed} 个文件)`);
+    }
+    return removed;
+  } catch (e) {
+    console.warn(`[model-loader] 删除模型缓存失败: ${modelKey}`, e);
+    return 0;
+  }
+}
+
+/**
+ * 校验 localStorage 的 downloadedModels 标记与 Cache Storage 实际内容是否一致。
+ * 返回已标记下载但实际缓存丢失的模型 key 列表（自动修正标记）。
+ */
+export async function verifyDownloadedModels(): Promise<string[]> {
+  const store = useRAGStore.getState();
+  const marked = [...store.downloadedModels];
+  if (marked.length === 0) return [];
+
+  const info = await getTransformersCacheInfo();
+  const stale: string[] = [];
+  for (const key of marked) {
+    const files = info.modelFiles.get(key);
+    // 没有任何缓存文件 → 标记失效（模型文件被浏览器清理或从未真正下载）
+    if (!files || files.count === 0) {
+      stale.push(key);
+      store.removeDownloadedModel(key);
+    }
+  }
+  if (stale.length > 0) {
+    console.warn(`[model-loader] 检测到 ${stale.length} 个模型标记与实际缓存不符，已移除标记:`, stale);
+  }
+  return stale;
+}
+
+/** 默认模型 key（降级清理时保留，避免核心功能失效） */
+const DEFAULT_MODEL_KEY = "Xenova/bge-small-zh-v1.5";
+
+/**
+ * 删除所有非当前使用、非默认的嵌入模型缓存（配额不足时的激进降级）。
+ * 保留：当前激活引擎 + 默认引擎（BGE Small ZH）。
+ * @returns 删除的模型数
+ */
+export async function deleteNonActiveEmbeddingModels(): Promise<number> {
+  const store = useRAGStore.getState();
+  const activeKey = store.engine;
+  let removed = 0;
+  for (const key of [...store.downloadedModels]) {
+    if (key === activeKey || key === DEFAULT_MODEL_KEY) continue;
+    const n = await deleteModelCache(key);
+    if (n > 0) removed++;
+  }
+  return removed;
+}

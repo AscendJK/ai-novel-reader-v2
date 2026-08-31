@@ -409,13 +409,22 @@ export function TTSSettings() {
   // 浏览器推理资源就绪状态（IndexedDB 缓存 + 服务器模型）
   // P2-3 fix: 旧逻辑 isModelLoaded() || !!window.indexedDB 恒真（几乎所有浏览器都支持
   // IndexedDB），用户误以为模型就绪。改为真实检测：模型已加载 / 预加载完成 / 缓存齐全。
+  // F1 fix: 刷新后 preloadStatus（模块内存变量）重置为 idle，544 行已纳入 browserCached，
+  // 这里在组件挂载 + 每 30 秒 + 收到跨标签下载完成事件时都重新检测一次，保证状态及时更新。
   const [browserCached, setBrowserCached] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    isCacheReady()
-      .then(ok => { if (!cancelled) setBrowserCached(ok); })
-      .catch(() => { /* IndexedDB 不可用时保持 false */ });
-    return () => { cancelled = true; };
+    const check = () => {
+      isCacheReady()
+        .then(ok => { if (!cancelled) setBrowserCached(ok); })
+        .catch(() => { /* IndexedDB 不可用时保持 false */ });
+    };
+    check();
+    const timer = setInterval(check, 30_000);
+    // 跨标签页同步：其他标签页完成 TTS 下载后刷新本页检测结果
+    const bc = new BroadcastChannel("novel-reader-tts-sync");
+    bc.onmessage = (e) => { if (e.data === "tts-cache-ready") check(); };
+    return () => { cancelled = true; clearInterval(timer); bc.close(); };
   }, []);
   const browserReady = isModelLoaded() || preloadStatus === "ready" || browserCached;
 
@@ -541,7 +550,7 @@ export function TTSSettings() {
       {engine === "zipvoice" && (
         <div className="space-y-2 rounded-lg border p-3">
           <p className="text-xs font-medium">浏览器推理设置</p>
-          {preloadStatus === "ready" || isModelLoaded() ? (
+          {preloadStatus === "ready" || isModelLoaded() || browserCached ? (
             <p className="text-[10px] text-green-600 flex items-center gap-1">
               <CheckCircle2 className="h-3 w-3" /> 语音资源已就绪，可离线使用
             </p>

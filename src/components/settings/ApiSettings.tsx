@@ -16,6 +16,7 @@ import { APP_VERSION } from "@/config/version";
 import { RAGSettings } from "./RAGSettings";
 import { TTSSettings } from "./TTSSettings";
 import { ExportPanel } from "./ExportPanel";
+import { StorageManager } from "./StorageManager";
 
 function newId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -349,6 +350,10 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
           </Button>
         </CardContent>
       </Card>
+
+      <Separator />
+
+      <StorageManager />
 
       <Separator />
 
