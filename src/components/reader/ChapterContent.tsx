@@ -8,6 +8,7 @@ import { useKeyboardShortcuts, type ShortcutBinding } from "@/hooks/useKeyboardS
 import { usePagination, type PageRange } from "@/hooks/usePagination";
 import { useContinuousScroll } from "@/hooks/useContinuousScroll";
 import { useAutoRead } from "@/hooks/useAutoRead";
+import { useScreenWakeLock } from "@/hooks/useScreenWakeLock";
 import { AudioPlayer } from "@/components/tts/AudioPlayer";
 import type { ScrollControl } from "./ReadingPanel";
 import { TopBar, BottomNav, ChapterParagraphs, type ReadingMode } from "./ReadingChrome";
@@ -468,6 +469,9 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     isAtEnd,
     onStop: handleAutoReadStop,
   });
+
+  // 自动阅读期间保持屏幕常亮（防移动端息屏）
+  useScreenWakeLock(autoReadEnabled);
 
   // 自动阅读开启期间，用户打开设置面板 / 切换阅读模式 / 切换沉浸模式 → 视为干扰，停止
   const autoReadEnabledRef = useRef(autoReadEnabled);

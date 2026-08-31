@@ -8,6 +8,7 @@ import { useTTSStore } from "@/stores/tts-store";
 import { TTSManager, type TTSChunk } from "@/tts/tts-manager";
 import { setWorkerPoolSize } from "@/tts/zipvoice-engine";
 import { prepareTextForTTS, buildOrderedParaIndices, findChunkIndexByPara } from "@/tts/text-preprocess";
+import { useScreenWakeLock } from "@/hooks/useScreenWakeLock";
 import { showToast } from "@/lib/toast-store";
 
 const TTS_POS_KEY = "novel-reader-tts-position";
@@ -49,7 +50,7 @@ export function useAudioPlayer({
   const pendingAutoPlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const {
-    playing, paused, speed, playbackRate, pitch, voiceId, engine, autoNextChapter, chunkSize,
+    playing, paused, generating, speed, playbackRate, pitch, voiceId, engine, autoNextChapter, chunkSize,
     prefetchCount, workerCount,
     currentNovelId, currentChapterIndex,
     setPlaying, setPaused, setCurrentChapter,
@@ -68,6 +69,9 @@ export function useAudioPlayer({
       managerRef.current = null;
     };
   }, []);
+
+  // 朗读/生成期间保持屏幕常亮（防移动端息屏；暂停时释放）
+  useScreenWakeLock((playing || generating) && !paused);
 
   // M19+R7: 翻章时清除定时器+停止旧播放
   useEffect(() => {
