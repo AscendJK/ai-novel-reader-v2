@@ -12,7 +12,7 @@
  * 兼容性：Android Chrome 84+、iOS Safari 16.4+、Firefox 126+。
  */
 
-import { useEffect, useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 
 // 不依赖 lib.dom 的 WakeLockSentinel 类型（兼容旧 TS 环境）
 interface WakeLockSentinelLike {
@@ -26,9 +26,11 @@ interface WakeLockLike {
 
 export function useScreenWakeLock(active: boolean): void {
   const activeRef = useRef(active);
-  useEffect(() => { activeRef.current = active; });
+  useLayoutEffect(() => { activeRef.current = active; });
 
-  useEffect(() => {
+  // 用 useLayoutEffect（DOM 变更后同步执行）：iOS Safari 的 Wake Lock 要求
+  // request() 在用户手势（点击）上下文中调用，异步 effect 可能超出手势窗口被拒（NotAllowedError）
+  useLayoutEffect(() => {
     let disposed = false;
     let lock: WakeLockSentinelLike | null = null;
 

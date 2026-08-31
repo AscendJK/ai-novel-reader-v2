@@ -414,10 +414,10 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     if (isDouble) {
       const nextFirst = (spreadIndex + 1) * 2;
       if (nextFirst < totalPages) setCurrentPage(nextFirst);
-      else if (nextChapter) goToChapter(nextChapter.id);
+      else if (nextChapter) { autoAdvanceTargetRef.current = nextChapter.id; goToChapter(nextChapter.id); }
     } else {
       if (safePage < totalPages - 1) setCurrentPage(safePage + 1);
-      else if (nextChapter) goToChapter(nextChapter.id);
+      else if (nextChapter) { autoAdvanceTargetRef.current = nextChapter.id; goToChapter(nextChapter.id); }
     }
   }, [isDouble, spreadIndex, totalPages, safePage, nextChapter, goToChapter]);
 
@@ -438,12 +438,12 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   useEffect(() => { goPrevPageRef.current = goPrevPage; }, [goPrevPage]);
 
   // ── 自动阅读 ────────────────────────────────────────────
-  // 自动翻页标记：区分"hook 自动翻页切章"与"用户手动切章"（手动切章需停止自动阅读）
-  const autoAdvancingRef = useRef(false);
+  // 自动翻页目标章节：区分"hook 自动翻页切章"与"用户手动切章"（手动切章需停止自动阅读）。
+  // 用"目标章节 id"而非布尔标记：startTransition 提交可能延迟到下一帧，
+  // 布尔标记 + rAF 复位会提前失效，导致自动跨章被误判为手动切章而停止。
+  const autoAdvanceTargetRef = useRef<string | null>(null);
   const handleAutoNextPage = useCallback(() => {
-    autoAdvancingRef.current = true;
     goNextPageRef.current();
-    requestAnimationFrame(() => { autoAdvancingRef.current = false; });
   }, []);
 
   // 分页模式是否已到最后一章末页（滚动模式的"到底"由 hook 内部检测）
@@ -491,11 +491,21 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     if (ttsPlaying && autoReadEnabledRef.current) setAutoReadEnabled(false);
   }, [ttsPlaying, setAutoReadEnabled]);
 
-  // 分页模式：用户手动切章（目录点击/底部翻章，非自动翻页触发）→ 停止自动阅读
+  // 分页模式：章节变化时，若并非自动翻页导致 → 停止自动阅读
+  // （消费逻辑放 useCallback 内：与 goNextPage 写入一致，React Compiler 允许
+  //   在 hook 参数内部修改 ref，禁止在 hook 外部修改）
+  const consumeAutoAdvanceTarget = useCallback(() => {
+    const t = autoAdvanceTargetRef.current;
+    // ref 是可变容器，被多个 hook 闭包共享读取/写入是预期用法（React Compiler 静态分析误报）
+    // eslint-disable-next-line react-hooks/immutability
+    autoAdvanceTargetRef.current = null;
+    return t;
+  }, []);
   useEffect(() => {
     if (!isPaginated) return;
-    if (autoReadEnabledRef.current && !autoAdvancingRef.current) setAutoReadEnabled(false);
-  }, [selectedChapterId, isPaginated, setAutoReadEnabled]);
+    const autoAdvanced = consumeAutoAdvanceTarget() === selectedChapterId;
+    if (autoReadEnabledRef.current && !autoAdvanced) setAutoReadEnabled(false);
+  }, [selectedChapterId, isPaginated, setAutoReadEnabled, consumeAutoAdvanceTarget]);
 
   // 滚动容器 ref（用于键盘滚动）
   const scrollContainerRefForKeys = scrollContainerRef;
@@ -880,7 +890,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
       {immersive && autoReadEnabled && (
         <button
           onClick={() => setAutoReadEnabled(false)}
-          className="fixed bottom-8 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 rounded-full border bg-card/95 backdrop-blur px-4 h-10 text-sm shadow-lg"
+          className="fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem)] left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 rounded-full border bg-card/95 backdrop-blur px-4 h-10 text-sm shadow-lg"
           title="停止自动阅读"
         >
           <Pause className="h-4 w-4" />

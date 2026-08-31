@@ -169,6 +169,25 @@ describe("useAutoRead", () => {
     hook.unmount();
   });
 
+  it("滚动模式：滚动期间禁用 scroll-smooth（scrollBehavior=auto），停止/卸载时恢复", () => {
+    const scrollEl = document.createElement("div");
+    scrollEl.style.scrollBehavior = "smooth"; // 模拟容器 scroll-smooth 类
+    Object.defineProperty(scrollEl, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(scrollEl, "clientHeight", { value: 500, configurable: true });
+    const scrollRef = { current: scrollEl };
+    const contentRef = { current: document.createElement("div") };
+    const { unmount } = renderHook(() => useAutoRead({
+      enabled: true, intervalSec: 8, speedLinesPerSec: 2, lineHeightPx: 30, easeInMs: 0,
+      paginated: false,
+      scrollRef: scrollRef as React.RefObject<HTMLDivElement | null>,
+      contentRef: contentRef as React.RefObject<HTMLElement | null>,
+      onNextPage: vi.fn(), isAtEnd: () => false, onStop: vi.fn(),
+    }));
+    expect(scrollEl.style.scrollBehavior).toBe("auto"); // 滚动期间禁用平滑动画，避免与 rAF 逐帧位移冲突
+    unmount();
+    expect(scrollEl.style.scrollBehavior).toBe("smooth"); // 恢复原值
+  });
+
   it("滚动模式：缓启动（开启后 800ms 内速度从 0 渐增，之后满速）", () => {
     const { hook, scrollEl } = setup({ paginated: false, easeInMs: 800 });
     // 0..800ms：50 帧有效，速度线性渐增（平均系数 0.51）

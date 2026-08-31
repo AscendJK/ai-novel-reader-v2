@@ -117,19 +117,24 @@ export function useAutoRead({
     };
   }, [enabled, contentRef, stop]);
 
-  // 分页模式：定时翻页
+  // 分页模式：定时翻页（递归 setTimeout：每次读取最新 intervalRef，运行中改间隔实时生效）
   useEffect(() => {
     if (!enabled || !paginated) return;
-    const tick = () => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    function schedule() {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(tick, intervalRef.current * 1000);
+    }
+    function tick() {
       // TTS 互斥：语音朗读中不自动前进（用户切到听书模式）
       if (useTTSStore.getState().playing) { stop("user"); return; }
-      if (!visibleRef.current) return; // 页面在后台：跳过本次（浏览器节流 setInterval 也会持续触发）
+      if (!visibleRef.current) { schedule(); return; } // 页面在后台：跳过本次，下个周期再试
       if (isAtEndRef.current()) { stop("end"); return; }   // 最后一章末页停止
       onNextPageRef.current();
-    };
+      schedule();
+    }
     tick(); // 立即执行一次（点击开启即有反馈）
-    const timer = setInterval(tick, intervalRef.current * 1000);
-    return () => clearInterval(timer);
+    return () => { if (timer) clearTimeout(timer); };
   }, [enabled, paginated, stop]);
 
   // 滚动模式：rAF 逐帧持续滚动（正文匀速流动，速度可调）
@@ -138,6 +143,13 @@ export function useAutoRead({
     let rafId = 0;
     let lastTs: number | null = null; // null=首帧未初始化（首帧 ts 可能为 0，不能用 0 哨兵）
     let startTs: number | null = null; // 缓启动基准：开启时刻（首帧记录）
+
+    // 滚动期间禁用 CSS scroll-behavior: smooth（scroll-smooth 类）：
+    // 部分浏览器（Firefox）对 scrollTop 赋值也应用平滑动画，与 rAF 逐帧位移冲突导致滞后；
+    // 停止/清理时恢复原值，不影响其他功能（键盘翻页等显式 behavior 滚动）。
+    const scrollEl = scrollRef.current;
+    const prevScrollBehavior = scrollEl ? scrollEl.style.scrollBehavior : "";
+    if (scrollEl) scrollEl.style.scrollBehavior = "auto";
 
     const loop = (ts: number) => {
       // 停止条件（每帧都检查，含首帧：已在底部/朗读中时第一帧就该停）
@@ -166,6 +178,9 @@ export function useAutoRead({
     };
 
     rafId = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(rafId);
+    return () => {
+      cancelAnimationFrame(rafId);
+      if (scrollEl) scrollEl.style.scrollBehavior = prevScrollBehavior; // 恢复原滚动行为
+    };
   }, [enabled, paginated, scrollRef, stop]);
 }
