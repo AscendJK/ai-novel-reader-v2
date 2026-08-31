@@ -50,6 +50,8 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   const fontWeight = useUIStore((s) => s.fontWeight);
   const setFontWeight = useUIStore((s) => s.setFontWeight);
   const lineHeight = useUIStore((s) => s.lineHeight);
+  // 行高（px）= 字号 × 行高倍数：自动阅读滚动速度换算与行高亮条高度共用
+  const lineHeightPx = fontSize * lineHeight;
   const setLineHeight = useUIStore((s) => s.setLineHeight);
   const paragraphSpacing = useUIStore((s) => s.paragraphSpacing);
   const setParagraphSpacing = useUIStore((s) => s.setParagraphSpacing);
@@ -462,7 +464,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     enabled: autoReadEnabled,
     intervalSec: autoReadInterval,
     speedLinesPerSec: autoReadSpeed,
-    lineHeightPx: fontSize * lineHeight, // 行高 = 字号 × 行高倍数（滚动速度换算用）
+    lineHeightPx: lineHeightPx, // 行高 = 字号 × 行高倍数（滚动速度换算用）
     paginated: isPaginated,
     scrollRef: scrollContainerRef,
     contentRef: autoReadContentRef,
@@ -788,7 +790,8 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
                   isIndexLoading={isIndexLoading}
               />
 
-      {/* 连续滚动容器 */}
+      {/* 连续滚动容器 + 自动阅读基准线/行高亮覆盖层 */}
+      <div className="relative flex-1 min-h-0 flex flex-col">
       <div
         ref={scrollContainerRef}
         className="flex-1 overflow-y-auto scroll-smooth chapter-scroll-container"
@@ -858,6 +861,18 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
             </div>
           )}
         </div>
+      </div>
+
+      {/* 自动阅读（滚动模式）覆盖层：视口中线基准线 + 当前行高亮，正文流过即"罩住"正在读的行 */}
+      {autoReadEnabled && (
+        <div className="pointer-events-none absolute inset-0 z-10" aria-hidden="true">
+          <div className="absolute left-0 right-0 border-t border-dashed border-primary/40" style={{ top: "50%" }} />
+          <div
+            className="absolute left-0 right-0 max-w-3xl mx-auto bg-primary/10 rounded-sm"
+            style={{ top: `calc(50% - ${lineHeightPx / 2}px)`, height: `${lineHeightPx}px` }}
+          />
+        </div>
+      )}
       </div>
 
       {/* 底部导航 */}

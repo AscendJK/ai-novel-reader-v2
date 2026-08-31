@@ -23,6 +23,8 @@ export interface UseAutoReadOptions {
   speedLinesPerSec: number;
   /** 滚动模式行高（px）= 字号 × 行高倍数，用于速度换算 */
   lineHeightPx: number;
+  /** 缓启动时长（ms）：开启后速度从 0 线性渐增至目标（默认 800） */
+  easeInMs?: number;
   /** true=分页模式（定时翻页）；false=滚动模式（持续滚动） */
   paginated: boolean;
   /** 滚动容器 ref（滚动模式的滚动目标） */
@@ -47,12 +49,15 @@ const INTERRUPT_KEYS = new Set([
 const SCROLL_END_TOLERANCE = 4;
 /** 单帧间隔上限（秒）：超过视为后台恢复/主线程卡顿，跳过该帧位移防止跳屏 */
 const MAX_FRAME_DT = 0.2;
+/** 缓启动默认时长（ms）：点击开启后速度 0→目标渐变，给眼睛适应窗口 */
+const EASE_IN_MS = 800;
 
 export function useAutoRead({
   enabled,
   intervalSec,
   speedLinesPerSec,
   lineHeightPx,
+  easeInMs = EASE_IN_MS,
   paginated,
   scrollRef,
   contentRef,
@@ -67,12 +72,14 @@ export function useAutoRead({
   const intervalRef = useRef(intervalSec);
   const speedRef = useRef(speedLinesPerSec);
   const lineHeightRef = useRef(lineHeightPx);
+  const easeInRef = useRef(easeInMs);
   useEffect(() => { onNextPageRef.current = onNextPage; });
   useEffect(() => { isAtEndRef.current = isAtEnd; });
   useEffect(() => { onStopRef.current = onStop; });
   useEffect(() => { intervalRef.current = intervalSec; });
   useEffect(() => { speedRef.current = speedLinesPerSec; });
   useEffect(() => { lineHeightRef.current = lineHeightPx; });
+  useEffect(() => { easeInRef.current = easeInMs; });
 
   const stoppedRef = useRef(false);
   // enabled 重新开启时复位停止标记（stop 幂等，防 rAF 停止路径重复触发 onStop）
@@ -130,6 +137,7 @@ export function useAutoRead({
     if (!enabled || paginated) return;
     let rafId = 0;
     let lastTs: number | null = null; // null=首帧未初始化（首帧 ts 可能为 0，不能用 0 哨兵）
+    let startTs: number | null = null; // 缓启动基准：开启时刻（首帧记录）
 
     const loop = (ts: number) => {
       // 停止条件（每帧都检查，含首帧：已在底部/朗读中时第一帧就该停）
@@ -147,8 +155,12 @@ export function useAutoRead({
           rafId = requestAnimationFrame(loop);
           return;
         }
-        if (el) el.scrollTop += speedRef.current * lineHeightRef.current * dt; // 行/秒 × 行高 × 帧间隔
+        // 缓启动：开启后 easeInMs 内速度从 0 线性增至目标
+        const elapsed = startTs !== null ? ts - startTs : 0;
+        const factor = easeInRef.current > 0 ? Math.min(1, elapsed / easeInRef.current) : 1;
+        if (el) el.scrollTop += speedRef.current * lineHeightRef.current * dt * factor; // 行/秒 × 行高 × 帧间隔 × 缓启动系数
       }
+      if (startTs === null) startTs = ts;
       lastTs = ts;
       rafId = requestAnimationFrame(loop);
     };

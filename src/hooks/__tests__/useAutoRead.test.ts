@@ -62,6 +62,7 @@ function setup(overrides: Partial<UseAutoReadOptions> = {}) {
         intervalSec: 8,
         speedLinesPerSec: 2,
         lineHeightPx: 30, // 行高 30px：2 行/秒 = 60px/秒
+        easeInMs: 0, // 测试默认关闭缓启动，现有断言按满速计算
         paginated: true,
         scrollRef: scrollRef as React.RefObject<HTMLDivElement | null>,
         contentRef: contentRef as React.RefObject<HTMLElement | null>,
@@ -168,6 +169,20 @@ describe("useAutoRead", () => {
     hook.unmount();
   });
 
+  it("滚动模式：缓启动（开启后 800ms 内速度从 0 渐增，之后满速）", () => {
+    const { hook, scrollEl } = setup({ paginated: false, easeInMs: 800 });
+    // 0..800ms：50 帧有效，速度线性渐增（平均系数 0.51）
+    //   位移 = 2 行/秒 × 30px × 0.016s × 50 帧 × 0.51 ≈ 24.48px（半速等效 0.4s）
+    runFrames(Array.from({ length: 51 }, (_, i) => i * 16)); // 0,16,...,800
+    const easePhase = 2 * 30 * 0.016 * 50 * 0.51;
+    expect(scrollEl.scrollTop).toBeCloseTo(easePhase, 1);
+    // 816..1600ms：51 帧全部满速（elapsed 已超 800ms）
+    //   位移 = 2 行/秒 × 30px × 0.016s × 51 帧 = 48.96px
+    runFrames(Array.from({ length: 51 }, (_, i) => 816 + i * 16));
+    expect(scrollEl.scrollTop).toBeCloseTo(easePhase + 2 * 30 * 0.016 * 51, 1);
+    hook.unmount();
+  });
+
   it("滚动模式：滚动到底 → 停止并回调 end，不再滚动", () => {
     const { hook, scrollEl, onStop } = setup({ paginated: false });
     scrollEl.scrollTop = 2000 - 500 - 4; // 距底 4px（容差内）
@@ -231,6 +246,7 @@ describe("useAutoRead", () => {
       intervalSec: 8,
       speedLinesPerSec: 2,
       lineHeightPx: 30,
+      easeInMs: 0,
       paginated: true,
       scrollRef,
       contentRef,
