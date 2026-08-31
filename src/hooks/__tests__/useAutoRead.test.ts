@@ -93,13 +93,13 @@ describe("useAutoRead", () => {
   });
 
   // ── 分页模式 ──
-  it("分页模式：开启后立即翻页一次，之后按间隔定时翻页", () => {
+  it("分页模式：开启后从当前页开始，首个完整间隔后才翻第一页", () => {
     const { hook, onNextPage } = setup();
+    expect(onNextPage).not.toHaveBeenCalled(); // 开启不跳页
+    act(() => { vi.advanceTimersByTime(8000); });
     expect(onNextPage).toHaveBeenCalledTimes(1);
     act(() => { vi.advanceTimersByTime(8000); });
     expect(onNextPage).toHaveBeenCalledTimes(2);
-    act(() => { vi.advanceTimersByTime(8000); });
-    expect(onNextPage).toHaveBeenCalledTimes(3);
     hook.unmount();
   });
 
@@ -114,21 +114,21 @@ describe("useAutoRead", () => {
 
   it("分页模式：页面在后台时不翻页（节流 setInterval 持续触发但被跳过）", () => {
     const { hook, onNextPage } = setup();
-    expect(onNextPage).toHaveBeenCalledTimes(1); // 开启时立即翻一页
+    expect(onNextPage).not.toHaveBeenCalled(); // 开启不立即翻页
     // 切后台：后续 tick 被跳过，不翻页
     act(() => {
       Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
       document.dispatchEvent(new Event("visibilitychange"));
     });
     act(() => { vi.advanceTimersByTime(16000); });
-    expect(onNextPage).toHaveBeenCalledTimes(1);
-    // 回前台：恢复翻页
+    expect(onNextPage).not.toHaveBeenCalled();
+    // 回前台：恢复翻页（下一个完整间隔）
     act(() => {
       Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
       document.dispatchEvent(new Event("visibilitychange"));
     });
     act(() => { vi.advanceTimersByTime(8000); });
-    expect(onNextPage).toHaveBeenCalledTimes(2);
+    expect(onNextPage).toHaveBeenCalledTimes(1);
     hook.unmount();
   });
 
@@ -242,7 +242,7 @@ describe("useAutoRead", () => {
     h.state.playing = true;
     act(() => { vi.advanceTimersByTime(8000); });
     expect(onStop).toHaveBeenCalledWith("user");
-    expect(onNextPage).toHaveBeenCalledTimes(1); // 只有开启时那一次
+    expect(onNextPage).not.toHaveBeenCalled(); // 开启后未翻页即被 TTS 抢占停止
     hook.unmount();
   });
 
@@ -277,9 +277,9 @@ describe("useAutoRead", () => {
     expect(onNextPage).not.toHaveBeenCalled();
 
     hook.rerender({ enabled: true, ...base });
-    expect(onNextPage).toHaveBeenCalledTimes(1);
+    expect(onNextPage).not.toHaveBeenCalled(); // 重新开启不立即翻页
     act(() => { vi.advanceTimersByTime(8000); });
-    expect(onNextPage).toHaveBeenCalledTimes(2);
+    expect(onNextPage).toHaveBeenCalledTimes(1);
     hook.unmount();
   });
 

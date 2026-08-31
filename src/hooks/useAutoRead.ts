@@ -120,6 +120,8 @@ export function useAutoRead({
   // 分页模式：定时翻页（递归 setTimeout：每次读取最新 intervalRef，运行中改间隔实时生效）
   useEffect(() => {
     if (!enabled || !paginated) return;
+    // 开启瞬间先检查是否已在终点：在末页时立即停止并提示，不等待首个间隔
+    if (isAtEndRef.current()) { stop("end"); return; }
     let timer: ReturnType<typeof setTimeout> | null = null;
     function schedule() {
       if (timer) clearTimeout(timer);
@@ -133,7 +135,7 @@ export function useAutoRead({
       onNextPageRef.current();
       schedule();
     }
-    tick(); // 立即执行一次（点击开启即有反馈）
+    schedule(); // 从当前页开始计时：首个完整间隔后才翻第一页（开启不跳页，进度条从 0 同步）
     return () => { if (timer) clearTimeout(timer); };
   }, [enabled, paginated, stop]);
 
