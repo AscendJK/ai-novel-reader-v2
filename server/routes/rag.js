@@ -175,6 +175,31 @@ router.post("/tts/synthesize", requireAuth, rateLimit(60), async (req, res) => {
   }
 });
 
+// POST /api/rag/tts/debug — 回显服务端实际收到的文本（验收/定位编码问题）
+// 若客户端发的是正常中文，但此处 repr 显示 \uFFFD 或错位汉字（如 GBK 解码
+// 的 UTF-8 字节），即可确认编码链路损坏（乱读根因）；否则问题在前端发送方。
+router.post("/tts/debug", requireAuth, (req, res) => {
+  try {
+    const rawText = (req.body && typeof req.body.text === "string") ? req.body.text : "";
+    const cleaned = cleanTtsText(rawText);
+    // 逐字符码点序列（\uXXXX），肉眼可辨乱码来源
+    const codePoints = Array.from(rawText).map((ch) => {
+      const cp = ch.codePointAt(0).toString(16).toUpperCase().padStart(4, "0");
+      return `U+${cp}`;
+    });
+    res.json({
+      ok: true,
+      received: rawText,
+      receivedRepr: JSON.stringify(rawText),
+      codePoints,
+      afterClean: cleaned,
+      afterCleanRepr: JSON.stringify(cleaned),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/rag/tts/cancel — 取消当前用户所有排队中的服务端推理请求
 // 前端停止朗读时调用，立即释放队列位置（其他用户无需等待作废请求生成完）。
 router.post("/tts/cancel", requireAuth, (req, res) => {
@@ -968,9 +993,14 @@ async function ensurePyProcess() {
 
     pyReady = false;
     pyBuffer = "";
+    // 显式强制 UTF-8：中文 Windows 默认 ANSI 代码页 936(GBK)，若不注入
+    // PYTHONUTF8，Node 写入的 UTF-8 字节会被 Python 按 GBK 解码成乱码，
+    // Kokoro 对乱码汉字硬拼音素 → 音色/语速正常但内容胡话（乱读）。
+    // 不依赖部署机全局环境变量，一处改动根治。
     pyProc = spawn(pyCmd, [TTS_WORKER_PY, TTS_MODEL_CACHE, String(TTS_PY_THREADS)], {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      env: { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
     });
 
     pyProc.stdout.on("data", (chunk) => {
