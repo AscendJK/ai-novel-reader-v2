@@ -59,8 +59,25 @@ Copy-Item "stop.sh" "backend-pack-tmp/stop.sh"
 Copy-Item "scripts/cleanup-processes.ps1" "backend-pack-tmp/scripts/cleanup-processes.ps1"
 Copy-Item "scripts/cleanup-processes.sh" "backend-pack-tmp/scripts/cleanup-processes.sh"
 
-# 压缩
-Compress-Archive -Path "backend-pack-tmp/*" -DestinationPath "ai-novel-reader-v2-backend.zip" -Force
+# 压缩（手动创建 zip 条目并强制正斜杠分隔，兼容 Linux/macOS 的 unzip）。
+# ⚠️ 不能用 Compress-Archive / .NET Framework 的 CreateFromDirectory：在 Windows 上它们
+#   用反斜杠分隔条目，Linux 解压时会把 "scripts\cleanup-processes.sh" 当单个文件名
+#   （目录结构丢失），start.sh 引用会失败。
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zipPath = Join-Path $root "ai-novel-reader-v2-backend.zip"
+if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+$archive = [System.IO.Compression.ZipFile]::Open($zipPath, [System.IO.Compression.ZipArchiveMode]::Create)
+try {
+  $tmpRoot = (Resolve-Path "backend-pack-tmp").Path.TrimEnd('\') + "\"
+  Get-ChildItem -Path "backend-pack-tmp" -Recurse -File | ForEach-Object {
+    $entryName = $_.FullName.Substring($tmpRoot.Length) -replace '\\', '/'
+    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+      $archive, $_.FullName, $entryName, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+  }
+} finally {
+  $archive.Dispose()
+}
 
 # 清理临时目录
 Remove-Item -Recurse -Force "backend-pack-tmp"

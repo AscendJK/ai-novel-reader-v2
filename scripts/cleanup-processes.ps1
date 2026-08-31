@@ -24,7 +24,9 @@ foreach ($proc in Get-CimInstance Win32_Process -ErrorAction SilentlyContinue) {
   # 排除清理脚本自身（命令行含本项目路径会匹配到自己）
   if ($cmd -match "cleanup-processes") { continue }
   $isNode = $proc.Name -eq "node.exe"
-  $isPy = $proc.Name -eq "python.exe" -or $proc.Name -eq "python3.exe"
+  # 含 py.exe（py launcher）：detectPythonCommand 可能返回 "py"，spawn 出的是 py.exe，
+  # 其 python.exe 子进程会孤儿残留，py.exe 本身也需清理
+  $isPy = $proc.Name -eq "python.exe" -or $proc.Name -eq "python3.exe" -or $proc.Name -eq "py.exe"
   $match = $false
   if ($isNode -and ($cmd -match "server[\\/]index\.js" -or $cmd -match $proj)) { $match = $true }
   elseif ($isPy -and $cmd -match "tts-worker\.py") { $match = $true }

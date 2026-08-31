@@ -21,6 +21,11 @@ macOS/Linux: sh start.sh    （赋予执行权限: chmod +x start.sh）
 - 管理后台: http://localhost:5173/admin
 - 前端页面: https://ascendjk.github.io/ai-novel-reader-v2/
 
+停止:  Windows: 双击 stop.bat
+      macOS/Linux: sh stop.sh
+启动/停止脚本会自动清理服务进程（node 后端 + python 推理进程），
+如遇端口占用或进程残留，先运行停止脚本再启动即可。
+
 三、TTS 朗读引擎（设置页切换）
 ------------------------------
 | 模式         | 推理位置          | 依赖                          |

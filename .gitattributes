@@ -1,0 +1,6 @@
+# 行尾规则（Line endings）
+# Unix 的 shell 脚本必须是 LF：CRLF 会导致 bash 报 $'\r': command not found
+*.sh text eol=lf
+# Windows 原生脚本/配置保持 CRLF
+*.bat text eol=crlf
+*.ps1 text eol=crlf
