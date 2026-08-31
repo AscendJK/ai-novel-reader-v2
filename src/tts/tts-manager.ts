@@ -954,8 +954,15 @@ export class TTSManager {
 
     if (chunks.length === 0) { callbacks.onError?.("没有可朗读的内容"); return; }
 
+    const speakGenId = this.generationId; // 本次朗读代次基准（切章/停止后作废）
+
     if (this.engine === "webspeech") {
       const loadedVoices = await this.webSpeech.waitForVoices();
+      // 防切章竞态：waitForVoices 等待（首次朗读可能 0-10s）期间用户切章/停止，
+      // 旧朗读链 resolve 后必须丢弃——否则会继续 speakNextChunk 造成：
+      //   a) 用户已播新章节 → 同一 chunk 双重朗读（两个 utterance 叠加）
+      //   b) 用户仅切章未播放 → 幽灵朗读（声音在响但 UI 无播放状态、无法停止）
+      if (this.stopped || this.generationId !== speakGenId) return;
       if (loadedVoices.length > 0) callbacks.onVoicesLoaded?.(loadedVoices);
     }
 
@@ -989,6 +996,10 @@ export class TTSManager {
       }
     }
 
+    // 兜底：开始首个 chunk 前再次校验代次（覆盖 fallback 降级路径），
+    // 确保任何来源（waitForVoices / prepareBuffers / 引擎降级）的延迟
+    // 都不会让已作废的朗读链继续出声。
+    if (this.stopped || this.generationId !== speakGenId) return;
     await this.speakNextChunk();
   }
 
