@@ -6,7 +6,7 @@
  * 只通过 props + Zustand store 取数，因此可独立成文件以缩小主文件体积。
  */
 
-import React, { useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { useTTSStore } from "@/stores/tts-store";
 import { useUIStore } from "@/stores/ui-store";
@@ -37,20 +37,76 @@ function TTSStartButton() {
   );
 }
 
-/** 顶栏"自动阅读"按钮：定时翻页/滚动，间隔与滑动窗口在字体面板中设置 */
+/** 自动阅读快捷速度档位（滚动模式，行/秒） */
+const AUTO_READ_SPEED_PRESETS = [0.5, 1, 2, 3, 4];
+
+/** 顶栏"自动阅读"按钮：开关；开启时（滚动模式）附加快捷调速档位，无需进面板 */
 function AutoReadButton() {
   const enabled = useUIStore((s) => s.autoReadEnabled);
   const setEnabled = useUIStore((s) => s.setAutoReadEnabled);
+  const readingMode = useUIStore((s) => s.readingMode);
+  const speed = useUIStore((s) => s.autoReadSpeed);
+  const setSpeed = useUIStore((s) => s.setAutoReadSpeed);
+  const [speedOpen, setSpeedOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  // 点击外部关闭速度档位浮层
+  useEffect(() => {
+    if (!speedOpen) return;
+    const onDown = (e: MouseEvent | TouchEvent) => {
+      const t = e.target;
+      if (t instanceof Node && wrapRef.current?.contains(t)) return;
+      setSpeedOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("touchstart", onDown);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("touchstart", onDown);
+    };
+  }, [speedOpen]);
 
   return (
-    <Button
-      variant={enabled ? "default" : "ghost"} size="icon"
-      className={`h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-7 md:w-7 ${enabled ? "animate-pulse" : ""}`}
-      onClick={() => setEnabled(!enabled)}
-      title={enabled ? "停止自动阅读" : "自动阅读（间隔/滑动窗口在字体面板中设置）"}
-    >
-      {enabled ? <Pause className="h-4 w-4" /> : <BookOpen className="h-4 w-4" />}
-    </Button>
+    <div ref={wrapRef} className="relative flex items-center gap-1">
+      <Button
+        variant={enabled ? "default" : "ghost"} size="icon"
+        className={`h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-7 md:w-7 ${enabled ? "animate-pulse" : ""}`}
+        onClick={() => setEnabled(!enabled)}
+        title={enabled ? "停止自动阅读" : "自动阅读（速度/间隔在字体面板中设置）"}
+      >
+        {enabled ? <Pause className="h-4 w-4" /> : <BookOpen className="h-4 w-4" />}
+      </Button>
+      {enabled && readingMode === "scroll" && (
+        <>
+          <Button
+            variant="outline" size="sm"
+            className="h-8 min-h-[44px] px-2 md:min-h-0 md:h-7 md:px-1.5 text-xs tabular-nums"
+            onClick={() => setSpeedOpen((v) => !v)}
+            title="快捷调速"
+          >
+            {speed} 行/秒
+          </Button>
+          {speedOpen && (
+            <div
+              className="absolute right-0 top-full mt-1 z-30 rounded-lg border bg-card shadow-lg p-1.5 flex flex-col gap-0.5 min-w-[110px]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className="text-[10px] text-muted-foreground px-1.5 pt-0.5">滚动速度</span>
+              {AUTO_READ_SPEED_PRESETS.map((v) => (
+                <Button
+                  key={v}
+                  variant={speed === v ? "default" : "ghost"} size="sm"
+                  className="h-8 min-h-[40px] justify-start text-xs md:min-h-0 md:h-7"
+                  onClick={() => { setSpeed(v); setSpeedOpen(false); }}
+                >
+                  {v} 行/秒
+                </Button>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 

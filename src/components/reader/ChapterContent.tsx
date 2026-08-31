@@ -12,7 +12,7 @@ import { useScreenWakeLock } from "@/hooks/useScreenWakeLock";
 import { AudioPlayer } from "@/components/tts/AudioPlayer";
 import type { ScrollControl } from "./ReadingPanel";
 import { TopBar, BottomNav, ChapterParagraphs, type ReadingMode } from "./ReadingChrome";
-import { Loader2 } from "lucide-react";
+import { Loader2, Pause } from "lucide-react";
 import { loadChapters } from "@/db/repositories";
 import { userKey } from "@/lib/user-utils";
 import { showToast } from "@/lib/toast-store";
@@ -476,13 +476,14 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   // 自动阅读期间保持屏幕常亮（防移动端息屏）
   useScreenWakeLock(autoReadEnabled);
 
-  // 自动阅读开启期间，用户打开设置面板 / 切换阅读模式 / 切换沉浸模式 → 视为干扰，停止
+  // 自动阅读开启期间，用户打开设置面板 / 切换阅读模式 → 视为干扰，停止
+  // （切换沉浸模式不停自动阅读：沉浸时顶栏隐藏，用底部悬浮停止按钮控制）
   const autoReadEnabledRef = useRef(autoReadEnabled);
   useEffect(() => { autoReadEnabledRef.current = autoReadEnabled; });
   useEffect(() => {
     if (autoReadEnabledRef.current) setAutoReadEnabled(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showFontPanel, summaryOpen, readingMode, immersive]);
+  }, [showFontPanel, summaryOpen, readingMode]);
 
   // TTS 互斥：用户开始语音朗读 → 停止自动阅读（两者都是"自动前进"，不能同时跑）
   const ttsPlaying = useTTSStore((s) => s.playing);
@@ -874,6 +875,18 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
         </div>
       )}
       </div>
+
+      {/* 沉浸模式 + 自动阅读：顶栏/底栏隐藏，底部悬浮停止按钮作为控制入口 */}
+      {immersive && autoReadEnabled && (
+        <button
+          onClick={() => setAutoReadEnabled(false)}
+          className="fixed bottom-8 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 rounded-full border bg-card/95 backdrop-blur px-4 h-10 text-sm shadow-lg"
+          title="停止自动阅读"
+        >
+          <Pause className="h-4 w-4" />
+          停止自动阅读
+        </button>
+      )}
 
       {/* 底部导航 */}
       {!immersive && (
