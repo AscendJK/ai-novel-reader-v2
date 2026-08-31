@@ -20,12 +20,12 @@ interface ReadingToolbarProps {
   setReadingMode: (m: ReadingMode) => void;
   autoSwitchPageMode: boolean;
   setAutoSwitchPageMode: (v: boolean) => void;
-  /** 自动阅读间隔秒数（3-60） */
+  /** 自动阅读分页模式翻页间隔秒数（3-60） */
   autoReadInterval: number;
   setAutoReadInterval: (v: number) => void;
-  /** 自动阅读滚动模式滑动窗口（视口高度百分比 10-100） */
-  autoReadScrollStep: number;
-  setAutoReadScrollStep: (v: number) => void;
+  /** 自动阅读滚动模式速度（行/秒 0.5-5） */
+  autoReadSpeed: number;
+  setAutoReadSpeed: (v: number) => void;
   windowWidth: number;
 }
 
@@ -35,7 +35,7 @@ export const ReadingToolbar = React.memo(function ReadingToolbar(props: ReadingT
     lineHeight, setLineHeight, paragraphSpacing, setParagraphSpacing,
     fontFamily, setFontFamily,
     readingMode, setReadingMode, autoSwitchPageMode, setAutoSwitchPageMode,
-    autoReadInterval, setAutoReadInterval, autoReadScrollStep, setAutoReadScrollStep,
+    autoReadInterval, setAutoReadInterval, autoReadSpeed, setAutoReadSpeed,
     windowWidth,
   } = props;
 
@@ -66,23 +66,25 @@ export const ReadingToolbar = React.memo(function ReadingToolbar(props: ReadingT
       )}
       <div className="h-px bg-border" />
       <div className="flex items-center justify-between gap-2">
-        <span className="text-xs text-muted-foreground">自动阅读间隔</span>
+        <span className="text-xs text-muted-foreground">{readingMode === "scroll" ? "滚动速度" : "翻页间隔"}</span>
         <div className="flex items-center gap-1">
-          <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={autoReadInterval <= 3}
-            onClick={() => setAutoReadInterval(Math.max(3, autoReadInterval - 1))} title="每 X 秒翻页/滚动一次"><Minus className="h-3 w-3" /></Button>
-          <span className="text-xs w-9 text-center tabular-nums">{autoReadInterval}s</span>
-          <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={autoReadInterval >= 60}
-            onClick={() => setAutoReadInterval(Math.min(60, autoReadInterval + 1))} title="每 X 秒翻页/滚动一次"><Plus className="h-3 w-3" /></Button>
-        </div>
-      </div>
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs text-muted-foreground">滑动窗口</span>
-        <div className="flex items-center gap-1">
-          <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={autoReadScrollStep <= 10}
-            onClick={() => setAutoReadScrollStep(Math.max(10, autoReadScrollStep - 10))} title="滚动模式：每次自动滚动的视口高度百分比"><Minus className="h-3 w-3" /></Button>
-          <span className="text-xs w-9 text-center tabular-nums">{autoReadScrollStep}%</span>
-          <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={autoReadScrollStep >= 100}
-            onClick={() => setAutoReadScrollStep(Math.min(100, autoReadScrollStep + 10))} title="滚动模式：每次自动滚动的视口高度百分比"><Plus className="h-3 w-3" /></Button>
+          {readingMode === "scroll" ? (
+            <>
+              <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={autoReadSpeed <= 0.5}
+                onClick={() => setAutoReadSpeed(Math.max(0.5, autoReadSpeed - 0.5))} title="滚动模式：正文持续滑动的速度（行/秒）"><Minus className="h-3 w-3" /></Button>
+              <span className="text-xs w-14 text-center tabular-nums">{autoReadSpeed} 行/秒</span>
+              <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={autoReadSpeed >= 5}
+                onClick={() => setAutoReadSpeed(Math.min(5, autoReadSpeed + 0.5))} title="滚动模式：正文持续滑动的速度（行/秒）"><Plus className="h-3 w-3" /></Button>
+            </>
+          ) : (
+            <>
+              <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={autoReadInterval <= 3}
+                onClick={() => setAutoReadInterval(Math.max(3, autoReadInterval - 1))} title="分页模式：每 X 秒自动翻一页"><Minus className="h-3 w-3" /></Button>
+              <span className="text-xs w-14 text-center tabular-nums">{autoReadInterval}s/页</span>
+              <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={autoReadInterval >= 60}
+                onClick={() => setAutoReadInterval(Math.min(60, autoReadInterval + 1))} title="分页模式：每 X 秒自动翻一页"><Plus className="h-3 w-3" /></Button>
+            </>
+          )}
         </div>
       </div>
       <div className="h-px bg-border" />

@@ -59,13 +59,13 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   const setReadingMode = useUIStore((s) => s.setReadingMode);
   const autoSwitchPageMode = useUIStore((s) => s.autoSwitchPageMode);
   const setAutoSwitchPageMode = useUIStore((s) => s.setAutoSwitchPageMode);
-  // ── 自动阅读状态（开关不持久化，间隔/滑动窗口持久化）──
+  // ── 自动阅读状态（开关不持久化，间隔/速度持久化）──
   const autoReadEnabled = useUIStore((s) => s.autoReadEnabled);
   const autoReadInterval = useUIStore((s) => s.autoReadInterval);
-  const autoReadScrollStep = useUIStore((s) => s.autoReadScrollStep);
+  const autoReadSpeed = useUIStore((s) => s.autoReadSpeed);
   const setAutoReadEnabled = useUIStore((s) => s.setAutoReadEnabled);
   const setAutoReadInterval = useUIStore((s) => s.setAutoReadInterval);
-  const setAutoReadScrollStep = useUIStore((s) => s.setAutoReadScrollStep);
+  const setAutoReadSpeed = useUIStore((s) => s.setAutoReadSpeed);
   const indexLoadingKeys = useRAGStore((s) => s.indexLoadingKeys);
 
   const [showFontPanel, setShowFontPanel] = useState(false);
@@ -461,7 +461,8 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   useAutoRead({
     enabled: autoReadEnabled,
     intervalSec: autoReadInterval,
-    scrollStepPercent: autoReadScrollStep,
+    speedLinesPerSec: autoReadSpeed,
+    lineHeightPx: fontSize * lineHeight, // 行高 = 字号 × 行高倍数（滚动速度换算用）
     paginated: isPaginated,
     scrollRef: scrollContainerRef,
     contentRef: autoReadContentRef,
@@ -680,7 +681,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
           readingMode={readingMode} setReadingMode={setReadingMode}
           autoSwitchPageMode={autoSwitchPageMode} setAutoSwitchPageMode={setAutoSwitchPageMode}
           autoReadInterval={autoReadInterval} setAutoReadInterval={setAutoReadInterval}
-          autoReadScrollStep={autoReadScrollStep} setAutoReadScrollStep={setAutoReadScrollStep}
+          autoReadSpeed={autoReadSpeed} setAutoReadSpeed={setAutoReadSpeed}
           immersive={immersive}
           windowWidth={windowWidth}
           isIndexLoading={isIndexLoading}
@@ -781,7 +782,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
                   readingMode={readingMode} setReadingMode={setReadingMode}
                   autoSwitchPageMode={autoSwitchPageMode} setAutoSwitchPageMode={setAutoSwitchPageMode}
                   autoReadInterval={autoReadInterval} setAutoReadInterval={setAutoReadInterval}
-                  autoReadScrollStep={autoReadScrollStep} setAutoReadScrollStep={setAutoReadScrollStep}
+                  autoReadSpeed={autoReadSpeed} setAutoReadSpeed={setAutoReadSpeed}
                   immersive={immersive}
                   windowWidth={windowWidth}
                   isIndexLoading={isIndexLoading}

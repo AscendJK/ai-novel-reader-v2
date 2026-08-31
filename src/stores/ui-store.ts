@@ -51,13 +51,13 @@ function getInitialAutoSwitchPageMode(): boolean {
 }
 
 function getInitialAutoReadInterval(): number {
-  // 自动阅读翻页/滚动间隔（秒），持久化记住用户偏好
+  // 自动阅读分页模式翻页间隔（秒），持久化记住用户偏好
   return safeGetNum("novel-reader-auto-read-interval", 8, (v) => v >= 3 && v <= 60);
 }
 
-function getInitialAutoReadScrollStep(): number {
-  // 自动阅读滚动模式的滑动窗口（视口高度百分比），持久化记住用户偏好
-  return safeGetNum("novel-reader-auto-read-scroll-step", 60, (v) => v >= 10 && v <= 100);
+function getInitialAutoReadSpeed(): number {
+  // 自动阅读滚动模式速度（行/秒），持久化记住用户偏好
+  return safeGetNum("novel-reader-auto-read-speed", 2, (v) => v >= 0.5 && v <= 5);
 }
 
 interface UIState {
@@ -74,10 +74,10 @@ interface UIState {
   autoSwitchPageMode: boolean;
   /** 自动阅读开关（不持久化：每次进入阅读器默认关闭，避免意外自动滚动） */
   autoReadEnabled: boolean;
-  /** 自动阅读间隔秒数（3-60，持久化） */
+  /** 自动阅读分页模式翻页间隔秒数（3-60，持久化） */
   autoReadInterval: number;
-  /** 自动阅读滚动模式滑动窗口：每次滚动的视口高度百分比（10-100，持久化） */
-  autoReadScrollStep: number;
+  /** 自动阅读滚动模式速度：行/秒（0.5-5，持久化） */
+  autoReadSpeed: number;
   setTheme: (theme: "light" | "dark") => void;
   toggleTheme: () => void;
   setFontSize: (size: number) => void;
@@ -92,7 +92,7 @@ interface UIState {
   setAutoSwitchPageMode: (auto: boolean) => void;
   setAutoReadEnabled: (v: boolean) => void;
   setAutoReadInterval: (v: number) => void;
-  setAutoReadScrollStep: (v: number) => void;
+  setAutoReadSpeed: (v: number) => void;
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -109,7 +109,7 @@ export const useUIStore = create<UIState>((set) => ({
   autoSwitchPageMode: getInitialAutoSwitchPageMode(),
   autoReadEnabled: false,
   autoReadInterval: getInitialAutoReadInterval(),
-  autoReadScrollStep: getInitialAutoReadScrollStep(),
+  autoReadSpeed: getInitialAutoReadSpeed(),
 
   setTheme: (theme) => {
     safeSet("novel-reader-theme", theme);
@@ -188,9 +188,9 @@ export const useUIStore = create<UIState>((set) => ({
     set({ autoReadInterval: clamped });
   },
 
-  setAutoReadScrollStep: (v) => {
-    const clamped = Math.max(10, Math.min(100, Math.round(v)));
-    safeSet("novel-reader-auto-read-scroll-step", String(clamped));
-    set({ autoReadScrollStep: clamped });
+  setAutoReadSpeed: (v) => {
+    const clamped = Math.max(0.5, Math.min(5, Math.round(v * 10) / 10));
+    safeSet("novel-reader-auto-read-speed", String(clamped));
+    set({ autoReadSpeed: clamped });
   },
 }));

@@ -82,8 +82,8 @@ export interface TopBarProps {
   setAutoSwitchPageMode: (v: boolean) => void;
   autoReadInterval: number;
   setAutoReadInterval: (v: number) => void;
-  autoReadScrollStep: number;
-  setAutoReadScrollStep: (v: number) => void;
+  autoReadSpeed: number;
+  setAutoReadSpeed: (v: number) => void;
   immersive?: boolean;
   isIndexLoading?: boolean;
   windowWidth?: number;
@@ -97,7 +97,7 @@ const TopBar = React.memo(function TopBar(props: TopBarProps) {
     lineHeight, setLineHeight, paragraphSpacing, setParagraphSpacing,
     fontFamily, setFontFamily,
     readingMode, setReadingMode, autoSwitchPageMode, setAutoSwitchPageMode,
-    autoReadInterval, setAutoReadInterval, autoReadScrollStep, setAutoReadScrollStep,
+    autoReadInterval, setAutoReadInterval, autoReadSpeed, setAutoReadSpeed,
     immersive,
     isIndexLoading,
     windowWidth,
@@ -184,7 +184,7 @@ const TopBar = React.memo(function TopBar(props: TopBarProps) {
                 readingMode={readingMode} setReadingMode={setReadingMode}
                 autoSwitchPageMode={autoSwitchPageMode} setAutoSwitchPageMode={setAutoSwitchPageMode}
                 autoReadInterval={autoReadInterval} setAutoReadInterval={setAutoReadInterval}
-                autoReadScrollStep={autoReadScrollStep} setAutoReadScrollStep={setAutoReadScrollStep}
+                autoReadSpeed={autoReadSpeed} setAutoReadSpeed={setAutoReadSpeed}
                 windowWidth={windowWidth ?? 1024}
               />
               </div>

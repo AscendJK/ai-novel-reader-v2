@@ -1,9 +1,10 @@
 /**
- * useAutoRead — 自动阅读（自动翻页/自动滚动）
+ * useAutoRead — 自动阅读（自动翻页 / 持续自动滚动）
  *
  * 两种模式：
  *  - 分页模式（paginated=true）：每 intervalSec 秒翻一页（章末自动进下一章）
- *  - 滚动模式：每 intervalSec 秒平滑滚动 scrollStepPercent% 视口高度
+ *  - 滚动模式：requestAnimationFrame 逐帧平滑滚动，速度 = speedLinesPerSec
+ *    行/秒 × 行高（px），正文像字幕一样持续匀速向上流动，无停顿感
  *
  * 停止条件：
  *  - 读到终点（滚动到底 / 最后一章末页）→ onStop("end")
@@ -16,11 +17,13 @@ import { useTTSStore } from "@/stores/tts-store";
 
 export interface UseAutoReadOptions {
   enabled: boolean;
-  /** 翻页/滚动间隔（秒） */
+  /** 分页模式翻页间隔（秒） */
   intervalSec: number;
-  /** 滚动模式单步滑动窗口：视口高度百分比（10-100） */
-  scrollStepPercent: number;
-  /** true=分页模式（定时翻页）；false=滚动模式（定时滚动） */
+  /** 滚动模式速度（行/秒） */
+  speedLinesPerSec: number;
+  /** 滚动模式行高（px）= 字号 × 行高倍数，用于速度换算 */
+  lineHeightPx: number;
+  /** true=分页模式（定时翻页）；false=滚动模式（持续滚动） */
   paginated: boolean;
   /** 滚动容器 ref（滚动模式的滚动目标） */
   scrollRef: React.RefObject<HTMLDivElement | null>;
@@ -46,7 +49,8 @@ const SCROLL_END_TOLERANCE = 4;
 export function useAutoRead({
   enabled,
   intervalSec,
-  scrollStepPercent,
+  speedLinesPerSec,
+  lineHeightPx,
   paginated,
   scrollRef,
   contentRef,
@@ -54,29 +58,31 @@ export function useAutoRead({
   isAtEnd,
   onStop,
 }: UseAutoReadOptions) {
-  // 定时器回调用 ref 保持最新（避免 setInterval 闭包过期；refs 在 effect 中更新）
+  // 回调/参数用 ref 保持最新（避免定时器/rAF 闭包过期；refs 在 effect 中更新）
   const onNextPageRef = useRef(onNextPage);
   const isAtEndRef = useRef(isAtEnd);
   const onStopRef = useRef(onStop);
   const intervalRef = useRef(intervalSec);
-  const scrollStepRef = useRef(scrollStepPercent);
+  const speedRef = useRef(speedLinesPerSec);
+  const lineHeightRef = useRef(lineHeightPx);
   useEffect(() => { onNextPageRef.current = onNextPage; });
   useEffect(() => { isAtEndRef.current = isAtEnd; });
   useEffect(() => { onStopRef.current = onStop; });
   useEffect(() => { intervalRef.current = intervalSec; });
-  useEffect(() => { scrollStepRef.current = scrollStepPercent; });
+  useEffect(() => { speedRef.current = speedLinesPerSec; });
+  useEffect(() => { lineHeightRef.current = lineHeightPx; });
 
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const stoppedRef = useRef(false);
+  // enabled 重新开启时复位停止标记（stop 幂等，防 rAF 停止路径重复触发 onStop）
+  useEffect(() => { if (enabled) stoppedRef.current = false; }, [enabled]);
 
   const stop = useCallback((reason: "end" | "user") => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
+    if (stoppedRef.current) return;
+    stoppedRef.current = true;
     onStopRef.current(reason);
   }, []);
 
-  // 用户干扰监听：点击/滑动/触摸正文、翻页类按键 → 立即停止
+  // 用户干扰 → 停止：点击正文 / 滚动正文 / 触摸 / 翻页类按键
   useEffect(() => {
     if (!enabled) return;
     const onInterrupt = () => stop("user");
@@ -84,9 +90,7 @@ export function useAutoRead({
     el?.addEventListener("pointerdown", onInterrupt, { passive: true });
     el?.addEventListener("wheel", onInterrupt, { passive: true });
     el?.addEventListener("touchstart", onInterrupt, { passive: true });
-    const onKey = (e: KeyboardEvent) => {
-      if (INTERRUPT_KEYS.has(e.key)) onInterrupt();
-    };
+    const onKey = (e: KeyboardEvent) => { if (INTERRUPT_KEYS.has(e.key)) onInterrupt(); };
     window.addEventListener("keydown", onKey);
     return () => {
       el?.removeEventListener("pointerdown", onInterrupt);
@@ -96,43 +100,43 @@ export function useAutoRead({
     };
   }, [enabled, contentRef, stop]);
 
-  // 主定时器：间隔前进 + 终点检测 + TTS 互斥
+  // 分页模式：定时翻页
   useEffect(() => {
-    if (!enabled) return;
-
+    if (!enabled || !paginated) return;
     const tick = () => {
-      // TTS 互斥：语音朗读中不自动前进（听书模式与自动阅读二选一）
-      if (useTTSStore.getState().playing) {
-        stop("user");
-        return;
-      }
-      if (!paginated) {
-        const el = scrollRef.current;
-        if (!el) return;
-        const max = el.scrollHeight - el.clientHeight;
-        if (el.scrollTop >= max - SCROLL_END_TOLERANCE) {
-          stop("end"); // 滚动到底 → 停止
-          return;
-        }
-        const step = el.clientHeight * (scrollStepRef.current / 100);
-        el.scrollBy({ top: step, behavior: "smooth" });
-        return;
-      }
-      if (isAtEndRef.current()) {
-        stop("end"); // 最后一章末页 → 停止
-        return;
-      }
+      // TTS 互斥：语音朗读中不自动前进（用户切到听书模式）
+      if (useTTSStore.getState().playing) { stop("user"); return; }
+      if (isAtEndRef.current()) { stop("end"); return; }   // 最后一章末页停止
       onNextPageRef.current();
     };
+    tick(); // 立即执行一次（点击开启即有反馈）
+    const timer = setInterval(tick, intervalRef.current * 1000);
+    return () => clearInterval(timer);
+  }, [enabled, paginated, stop]);
 
-    // 点击开启后立即前进一次（即时反馈），之后按间隔定时
-    tick();
-    timerRef.current = setInterval(tick, intervalRef.current * 1000);
-    return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
+  // 滚动模式：rAF 逐帧持续滚动（正文匀速流动，速度可调）
+  useEffect(() => {
+    if (!enabled || paginated) return;
+    let rafId = 0;
+    let lastTs: number | null = null; // null=首帧未初始化（首帧 ts 可能为 0，不能用 0 哨兵）
+
+    const loop = (ts: number) => {
+      // 停止条件（每帧都检查，含首帧：已在底部/朗读中时第一帧就该停）
+      if (useTTSStore.getState().playing) { cancelAnimationFrame(rafId); stop("user"); return; }
+      const el = scrollRef.current;
+      if (el) {
+        const max = el.scrollHeight - el.clientHeight;
+        if (el.scrollTop >= max - SCROLL_END_TOLERANCE) { cancelAnimationFrame(rafId); stop("end"); return; } // 到底停止
       }
+      if (lastTs !== null) {
+        const dt = (ts - lastTs) / 1000; // 秒
+        if (el) el.scrollTop += speedRef.current * lineHeightRef.current * dt; // 行/秒 × 行高 × 帧间隔
+      }
+      lastTs = ts;
+      rafId = requestAnimationFrame(loop);
     };
+
+    rafId = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(rafId);
   }, [enabled, paginated, scrollRef, stop]);
 }
