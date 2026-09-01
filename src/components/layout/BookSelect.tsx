@@ -539,7 +539,7 @@ export function BookSelect() {
                 type="file"
                 id="novel-file-input" name="novel-file-input"
                 aria-label="选择小说文件"
-                accept={isIOS ? "" : ".txt,.epub"}
+                accept={isIOS ? undefined : ".txt,.epub"}
                 multiple
                 className="hidden"
                 onChange={(e) => {
