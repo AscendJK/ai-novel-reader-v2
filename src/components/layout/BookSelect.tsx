@@ -34,6 +34,16 @@ import { NovelBuildWindow } from "@/components/common/NovelBuildWindow";
 import { NovelCard } from "./NovelCard";
 import type { NovelMeta } from "@/parsers/types";
 
+/**
+ * iOS 检测：iOS Safari / iOS 版 Edge 的文件选择器会严格遵循 accept 属性，
+ * 导致没有关联 App 的 .txt/.epub 被置灰无法选择。
+ * 因此在 iOS 上不设置 accept，让所有文件可选，选入后再由 processFiles 过滤。
+ * 兼容 iPad 桌面模式（UA 不含 iPad，但为 Mac 平台标识 + 支持触摸）。
+ */
+const isIOS =
+  /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
 /** 服务器返回的小说数据类型 */
 interface ServerNovel {
   id: string;
@@ -529,7 +539,7 @@ export function BookSelect() {
                 type="file"
                 id="novel-file-input" name="novel-file-input"
                 aria-label="选择小说文件"
-                accept=".txt,.epub"
+                accept={isIOS ? "" : ".txt,.epub"}
                 multiple
                 className="hidden"
                 onChange={(e) => {
