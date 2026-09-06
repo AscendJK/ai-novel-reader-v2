@@ -3,6 +3,7 @@ import { parseTxt } from "@/parsers/txt";
 import { parseEpub } from "@/parsers/epub";
 import { createNovel } from "@/parsers/utils";
 import { saveNovel } from "@/db/repositories";
+import { isQuotaError } from "@/lib/quota-guard";
 import { useNovelStore } from "@/stores/novel-store";
 import { apiFetch } from "@/lib/api-client";
 import { showToast } from "@/lib/toast-store";
@@ -68,7 +69,19 @@ export function useFileParser() {
       );
 
       setProgress(90);
-      await saveNovel(novel);
+      try {
+        await saveNovel(novel);
+      } catch (e) {
+        // 本地保存失败时中止导入：书不进书架、不上传服务器，
+        // 避免用户看到章节内容缺失、无法打开的"幽灵书"
+        console.error("[useFileParser] saveNovel failed:", e);
+        throw new Error(
+          isQuotaError(e)
+            ? "浏览器存储空间不足，无法保存小说，请在设置 → 存储管理中清理后重试"
+            : `保存小说失败: ${e instanceof Error ? e.message : String(e)}`,
+          { cause: e }
+        );
+      }
 
       // 内容变更后清除旧的 RAG 缓存（重新上传同 ID 小说时避免使用过期索引）
       try {

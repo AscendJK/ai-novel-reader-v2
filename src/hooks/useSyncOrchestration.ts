@@ -66,16 +66,24 @@ export function useSyncOrchestration({ onSyncReady, setLocalUsers }: SyncOrchest
       if (!udb) return;
 
       const localNovels = await udb.novels.toArray().catch(() => []);
-      const serverTitleMap = new Map<string, string>();
+      // 按 title 认亲是为处理"同一本书在两台设备各自导入"（本地 id 不同但内容相同），
+      // 避免重复上传。但仅凭 title 匹配会把同名不同内容的不同书错误合并：本地章节
+      // 改键后与服务器章节同 id 相互覆盖，总结/笔记/图谱全部归并到同一 serverId，
+      // 数据无法找回。totalChars 是文件指纹（同文件双端导入必然一致），加上它把
+      // 误合并概率降到最低；漏认亲的代价只是服务器多一份同名书，远轻于数据丢失。
+      const serverTitleMap = new Map<string, { id: string; totalChars: number }>();
       for (const n of list) {
-        serverTitleMap.set(n.title, n.id);
+        if (!serverTitleMap.has(n.title)) {
+          serverTitleMap.set(n.title, { id: n.id, totalChars: n.totalChars });
+        }
       }
 
       for (const local of localNovels) {
         if (serverNovelIds.has(local.id)) continue;
         try {
-          const serverId = serverTitleMap.get(local.title);
-          if (serverId) {
+          const candidate = serverTitleMap.get(local.title);
+          if (candidate && candidate.totalChars === local.totalChars) {
+            const serverId = candidate.id;
             const oldId = local.id;
             const chapters = await udb.chapters.where("novelId").equals(oldId).toArray();
             const summaries = await udb.summaries.where("novelId").equals(oldId).toArray();

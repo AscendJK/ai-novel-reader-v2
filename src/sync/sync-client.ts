@@ -41,6 +41,17 @@ export class SyncClient {
     return this.username ? `novel-reader-last-sync-time:${this.username}` : "novel-reader-last-sync-time";
   }
 
+  /**
+   * 获取按用户隔离的 last-push-time localStorage key。
+   * 记录"最近一次成功同步的 gather 起点"（本地时钟），GC 据此判断 tombstone
+   * 是否已推送——早于该时刻的变更必然包含在成功推送的载荷中，物理删除不丢
+   * 删除语义。读取方在 repositories.ts 的 GC（key 字符串需与 userKey 保持一致）。
+   * 不用 lastSyncTime 做判断：那是服务器时钟，客户端时钟偏移会造成误判。
+   */
+  private get lastPushTimeKey() {
+    return this.username ? `novel-reader-last-push-time:${this.username}` : "novel-reader-last-push-time";
+  }
+
   constructor() {
     this.username = localStorage.getItem("sync-username");
     this.clientId = localStorage.getItem("sync-clientId");
@@ -242,6 +253,9 @@ export class SyncClient {
       if (Date.now() > syncDeadline) throw new Error("sync timeout");
     };
     try {
+      // 本轮 gather 起点（本地时钟）。推送成功后与 lastSyncTime 同点写入
+      // last-push-time：截至该时刻的变更必然已包含在成功推送的载荷中
+      const gatherStartedAt = Date.now();
       const changes = await this.gatherChanges(this.lastSyncTime);
       checkTimeout();
       const pushS = changes.summaries?.length || 0;
@@ -284,6 +298,7 @@ export class SyncClient {
                   if (r.data.lastSyncAt) {
                     this.lastSyncTime = r.data.lastSyncAt;
                     localStorage.setItem(this.syncTimeKey, String(this.lastSyncTime));
+                    localStorage.setItem(this.lastPushTimeKey, String(gatherStartedAt));
                   }
                 }
                 if (r.orphanedNovelIds?.length && this.onOrphaned) {
@@ -341,6 +356,7 @@ export class SyncClient {
                 if (r.data.lastSyncAt) {
                   this.lastSyncTime = r.data.lastSyncAt;
                   localStorage.setItem(this.syncTimeKey, String(this.lastSyncTime));
+                  localStorage.setItem(this.lastPushTimeKey, String(gatherStartedAt));
                 }
               }
               if (r.orphanedNovelIds?.length && this.onOrphaned) {
@@ -398,6 +414,9 @@ export class SyncClient {
           if (r.data?.lastSyncAt) {
             this.lastSyncTime = r.data.lastSyncAt;
             localStorage.setItem(this.syncTimeKey, String(this.lastSyncTime));
+            // 与水位同条件写入：孤儿记录（服务端未入库）场景必然 hasMore=true，
+            // 走不到这里，不会把未确认的 tombstone 误标为已推送
+            localStorage.setItem(this.lastPushTimeKey, String(gatherStartedAt));
           }
         }
 
@@ -557,6 +576,22 @@ export class SyncClient {
     if (useUIStore.getState().offlineMode) return;
     if (this.isAiRunning()) return;
     if (this.reRegistering) return;
+    // 多标签互斥：每个标签页各自跑 30s 定时器 + pushNow，同一账号多开时会重复
+    // 推送（LWW 幂等保证结果收敛，但带宽与 SQLite 写放大翻倍）。锁按用户隔离，
+    // 拿不到锁说明另一标签正在同步，本页跳过本轮——本轮未推的变更由本页下一轮
+    // 定时（≤30s）补推，最终一致。锁不可用（旧浏览器）退化为直接执行。
+    if (typeof navigator !== "undefined" && "locks" in navigator) {
+      try {
+        await navigator.locks.request(`novel-reader-sync:${this.username}`, { ifAvailable: true }, async (lock) => {
+          if (!lock) {
+            console.log("[sync] another tab is syncing, skip this round");
+            return;
+          }
+          await this.syncOnce();
+        });
+        return;
+      } catch { /* 锁不可用，退化为直接执行 */ }
+    }
     await this.syncOnce();
   }
 

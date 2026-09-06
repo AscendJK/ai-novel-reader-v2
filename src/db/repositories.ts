@@ -6,6 +6,7 @@ import type { ChapterRecord, MapRecord, GraphRecord } from "./database";
 import { useRAGStore } from "@/stores/rag-store";
 import { clearCache } from "@/rag/index";
 import { withQuotaRetry } from "@/lib/quota-guard";
+import { userKey } from "@/lib/user-utils";
 import type { GraphData } from "@/hooks/useSummarizer";
 
 export type { MapRecord, GraphRecord };
@@ -47,7 +48,10 @@ export async function saveNovel(novel: Novel): Promise<void> {
       }
     });
   } catch (e) {
+    // 不能静默吞掉：导入路径（useFileParser）依赖抛错来中止后续的
+    // 服务器上传与进书架，静默失败会让用户看到章节内容缺失的"幽灵书"
     console.error("saveNovel failed:", e);
+    throw e;
   }
 }
 
@@ -145,7 +149,9 @@ export async function loadAllNovelMeta(): Promise<NovelMeta[]> {
     const countMap = new Map<string, number>();
     await db.transaction("r", db.chapters, async (tx) => {
       const counts = await Promise.all(
-        records.map((r) => tx.chapters.where("novelId").equals(r.id).count())
+        // 过滤软删除，与 loadNovel 的 totalCount 口径保持一致，
+        // 否则书架显示的章节数与打开书后的实际章节数不一致
+        records.map((r) => tx.chapters.where("novelId").equals(r.id).filter((ch) => !ch.deleted).count())
       );
       records.forEach((r, i) => countMap.set(r.id, counts[i]));
     });
@@ -256,12 +262,13 @@ export async function deleteNovel(novelId: string): Promise<void> {
         delete map[novelId];
         localStorage.setItem(openedKey, JSON.stringify(map));
       }
-      // 清理 TTS 朗读断点（若指向被删小说；该键为全局键，仅匹配 novelId 时删除）
+      // 清理 TTS 朗读断点（若指向被删小说）：隔离键（当前用户）+ 历史版本全局键
       try {
-        const ttsPosRaw = localStorage.getItem("novel-reader-tts-position");
-        if (ttsPosRaw) {
+        for (const key of [userKey("novel-reader-tts-position"), "novel-reader-tts-position"]) {
+          const ttsPosRaw = localStorage.getItem(key);
+          if (!ttsPosRaw) continue;
           const ttsPos = JSON.parse(ttsPosRaw);
-          if (ttsPos.novelId === novelId) localStorage.removeItem("novel-reader-tts-position");
+          if (ttsPos.novelId === novelId) localStorage.removeItem(key);
         }
       } catch { /* 忽略损坏数据 */ }
     } catch (e) { console.warn("[deleteNovel] cleanup error:", e); }
@@ -510,14 +517,39 @@ function yieldToMainThread(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-/** 分批收集过期软删除记录（游标流式，不一次性加载全表） */
-async function collectExpired<T extends { id: string; deleted?: number }>(
+/**
+ * 读取最近一次成功同步的 gather 起点（本地时钟，由 sync-client 写入）。
+ * tombstone 的 deleted 时间戳一旦超过 GC 年龄，若其 updatedAt 晚于该值，
+ * 说明删除操作还没推送成功——物理删除会让删除语义永久丢失（重新上线后
+ * gather 查不到这条 tombstone，服务器与其他设备上的记录无法被删除）。
+ */
+function getLastPushTime(): number {
+  try {
+    return parseInt(localStorage.getItem(userKey("novel-reader-last-push-time")) || "0", 10) || 0;
+  } catch { return 0; }
+}
+
+/**
+ * 分批收集过期软删除记录（游标流式，不一次性加载全表）。
+ * @param syncedBefore 传入 lastPushTime 时额外要求 updatedAt < syncedBefore
+ *   （仅用于参与同步的 summaries/notes/graphs/maps）；未同步的 tombstone
+ *   保留到推送成功后的下一轮 GC。updatedAt 缺失的记录同样保留——增量同步
+ *   用 where("updatedAt") 查询，缺失字段从未被收集推送过。
+ *   chapters 不参与同步（无 updatedAt 字段），不做此校验。
+ */
+async function collectExpired<T extends { id: string; deleted?: number; updatedAt?: number }>(
   table: Table<T, string>,
   cutoff: number,
+  syncedBefore?: number,
 ): Promise<T[]> {
   const expired: T[] = [];
   await table.each((rec) => {
-    if (rec.deleted && rec.deleted < cutoff) expired.push(rec);
+    if (!rec.deleted || rec.deleted >= cutoff) return;
+    if (syncedBefore !== undefined) {
+      if (typeof rec.updatedAt !== "number") return;
+      if (rec.updatedAt >= syncedBefore) return;
+    }
+    expired.push(rec);
   });
   return expired;
 }
@@ -543,14 +575,17 @@ async function doCleanupDeletedRecords() {
     db = getUserDB();
   } catch { return; } // 未登录时无用户库，跳过
   const cutoff = Date.now() - GC_MAX_AGE_MS;
+  const lastPushTime = getLastPushTime();
   try {
     // 分批收集（游标流式，不一次性加载全表到内存）
+    // chapters 不参与同步、无同步水位语义，直接按年龄清理；
+    // 其余四表要求 tombstone 已推送（updatedAt < lastPushTime）才物理删除
     const [oldChapters, oldSummaries, oldNotes, oldGraphs, oldMaps] = await Promise.all([
       collectExpired(db.chapters, cutoff),
-      collectExpired(db.summaries, cutoff),
-      collectExpired(db.notes, cutoff),
-      collectExpired(db.graphs, cutoff),
-      collectExpired(db.maps, cutoff),
+      collectExpired(db.summaries, cutoff, lastPushTime),
+      collectExpired(db.notes, cutoff, lastPushTime),
+      collectExpired(db.graphs, cutoff, lastPushTime),
+      collectExpired(db.maps, cutoff, lastPushTime),
     ]);
     let cCount = 0, sCount = 0, nCount = 0, gCount = 0, mCount = 0;
 
@@ -604,24 +639,48 @@ export function removeLocalUser(username: string) {
   localStorage.setItem(LOCAL_USERS_KEY, JSON.stringify(users));
 }
 
+/**
+ * 读取某用户库中的全部小说记录（id）。
+ * 注意：indexedDB.open 对不存在的库会静默创建一个空库（无任何 objectStore），
+ * 随后的事务必然失败且留下孤儿空库——检测到空库立即 deleteDatabase 清理，
+ * 并按"无小说"处理。任何错误都 resolve 空数组而不 reject（删除用户数据的
+ * 流程不应因此中断）。
+ */
+function readUserNovelIds(dbName: string): Promise<{ id: string }[]> {
+  return new Promise((resolve) => {
+    try {
+      const req = indexedDB.open(dbName);
+      req.onsuccess = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains("novels")) {
+          db.close();
+          try { indexedDB.deleteDatabase(dbName); } catch { /* 忽略 */ }
+          resolve([]);
+          return;
+        }
+        try {
+          const tx = db.transaction("novels", "readonly");
+          const store = tx.objectStore("novels");
+          const getAll = store.getAll();
+          getAll.onsuccess = () => { resolve(getAll.result || []); db.close(); };
+          getAll.onerror = () => { resolve([]); db.close(); };
+        } catch {
+          try { db.close(); } catch { /* 忽略 */ }
+          resolve([]);
+        }
+      };
+      req.onerror = () => resolve([]);
+    } catch { resolve([]); }
+  });
+}
+
 /** Delete a user's entire database and remove from local users list */
 export async function deleteUserData(username: string) {
   // 1. 删除前先获取用户的 novelId 列表
   const deletedUserNovelIds: string[] = [];
   try {
     const dbName = `ai-novel-reader-${username}`;
-    const req = indexedDB.open(dbName);
-    const novels: { id: string }[] = await new Promise((resolve, reject) => {
-      req.onsuccess = () => {
-        const db = req.result;
-        const tx = db.transaction("novels", "readonly");
-        const store = tx.objectStore("novels");
-        const getAll = store.getAll();
-        getAll.onsuccess = () => { resolve(getAll.result || []); db.close(); };
-        getAll.onerror = () => { reject(getAll.error); db.close(); };
-      };
-      req.onerror = () => reject(req.error);
-    });
+    const novels = await readUserNovelIds(dbName);
     for (const novel of novels) {
       if (novel.id) {
         deletedUserNovelIds.push(novel.id);
@@ -633,26 +692,8 @@ export async function deleteUserData(username: string) {
   // 2. 并行收集其他本地用户的 novelId，用于判断哪些 RAG 缓存可以安全删除
   const otherUsersNovelIds = new Set<string>();
   const otherUsers = getLocalUsers().filter((u) => u !== username);
-  const readNovelIds = (dbName: string): Promise<string[]> =>
-    new Promise((resolve) => {
-      try {
-        const req = indexedDB.open(dbName);
-        req.onsuccess = () => {
-          const db = req.result;
-          const tx = db.transaction("novels", "readonly");
-          const store = tx.objectStore("novels");
-          const getAll = store.getAll();
-          getAll.onsuccess = () => {
-            resolve((getAll.result || []).map((n: { id: string }) => n.id).filter(Boolean));
-            db.close();
-          };
-          getAll.onerror = () => { resolve([]); db.close(); };
-        };
-        req.onerror = () => resolve([]);
-      } catch { resolve([]); }
-    });
   const otherNovelIdArrays = await Promise.all(
-    otherUsers.map((u) => readNovelIds(`ai-novel-reader-${u}`))
+    otherUsers.map(async (u) => (await readUserNovelIds(`ai-novel-reader-${u}`)).map((n) => n.id))
   );
   for (const ids of otherNovelIdArrays) {
     for (const id of ids) otherUsersNovelIds.add(id);
@@ -676,6 +717,8 @@ export async function deleteUserData(username: string) {
     `novel-reader-positions:${username}`,
     `novel-reader-last-opened:${username}`,
     `novel-reader-last-sync-time:${username}`,
+    `novel-reader-last-push-time:${username}`, // GC 同步水位（sync-client 写入）
+    `novel-reader-tts-position:${username}`, // TTS 朗读断点（按用户隔离）
   ];
   for (const key of userKeys) {
     localStorage.removeItem(key);
