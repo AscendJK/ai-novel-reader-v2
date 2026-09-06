@@ -10,8 +10,13 @@ import { setWorkerPoolSize } from "@/tts/zipvoice-engine";
 import { prepareTextForTTS, buildOrderedParaIndices, findChunkIndexByPara } from "@/tts/text-preprocess";
 import { useScreenWakeLock } from "@/hooks/useScreenWakeLock";
 import { showToast } from "@/lib/toast-store";
+import { userKey } from "@/lib/user-utils";
 
-const TTS_POS_KEY = "novel-reader-tts-position";
+// TTS 断点按用户隔离（多账号同设备互不覆盖，与阅读进度同模式）。
+// 历史版本把断点存在无后缀的全局键里，读取时回退一次兼容旧数据，写入只写新键
+const TTS_POS_BASE_KEY = "novel-reader-tts-position";
+const LEGACY_TTS_POS_KEY = TTS_POS_BASE_KEY;
+const ttsPosKey = () => userKey(TTS_POS_BASE_KEY);
 
 interface UseAudioPlayerOptions {
   /** 当前章节内容 */
@@ -48,6 +53,10 @@ export function useAudioPlayer({
   const pendingAutoPlayIndexRef = useRef<number | null>(null);
   // 自动播放延迟定时器（stop/卸载时清理；调度建立后不随重渲染取消，避免竞态丢失播放）
   const pendingAutoPlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 断点恢复时 play() 会把 chunks 从起始位置切片后交给 manager，manager 内部的
+  // chunk 索引是相对切片数组的；seekToParagraph 用全量 chunksRef 算出的是绝对索引，
+  // 调 manager.seekToChunk 前必须减去该偏移，否则 seek 目标会向后跳过起始的若干 chunk
+  const startChunkOffsetRef = useRef(0);
 
   const {
     playing, paused, generating, speed, playbackRate, pitch, voiceId, engine, autoNextChapter, chunkSize,
@@ -159,7 +168,8 @@ export function useAudioPlayer({
   // F10: 恢复上次朗读位置（基于原始段落索引）
   const loadPosition = useCallback((): number | null => {
     try {
-      const raw = localStorage.getItem(TTS_POS_KEY);
+      // 新键（按用户隔离）优先，miss 时回退历史全局键（老断点迁移前的一次兼容）
+      const raw = localStorage.getItem(ttsPosKey()) ?? localStorage.getItem(LEGACY_TTS_POS_KEY);
       if (!raw) return null;
       const pos = JSON.parse(raw);
       if (pos.novelId === novelId && pos.chapterIndex === chapterIndex) return pos.paragraph;
@@ -225,6 +235,7 @@ export function useAudioPlayer({
     setParagraphProgress(chunks[startChunkIdx]?.paragraphIndex ?? 0, totalParaCount);
 
     const startChunks = startChunkIdx > 0 ? chunks.slice(startChunkIdx) : chunks;
+    startChunkOffsetRef.current = startChunkIdx;
     await manager.speak(startChunks, {
       onPlay: () => {
         setGenerating(false);
@@ -342,12 +353,13 @@ export function useAudioPlayer({
       // 精确定位所在 chunk（组内任意段），找不到时回退到最近的后续 chunk
       const chunkIdx = findChunkIndexByPara(chunks, paraIndex);
       if (chunkIdx >= 0) {
-        manager.seekToChunk(chunkIdx);
+        // 全量数组的绝对索引 → manager 切片数组的相对索引（未切片时偏移为 0）
+        manager.seekToChunk(Math.max(0, chunkIdx - startChunkOffsetRef.current));
         // C: seek 后立即上报目标段落（而非等 chunk 播放到该段），高亮即时到位不经过组内第一段
         setParagraphProgress(paraIndex, useTTSStore.getState().totalParagraphs || 0);
       }
     } else {
-      try { localStorage.setItem(TTS_POS_KEY, JSON.stringify({ novelId, chapterIndex, paragraph: paraIndex })); } catch { /* localStorage 不可用时忽略 */ }
+      try { localStorage.setItem(ttsPosKey(), JSON.stringify({ novelId, chapterIndex, paragraph: paraIndex })); } catch { /* localStorage 不可用时忽略 */ }
       play();
     }
   }, [getManager, play, novelId, chapterIndex, setParagraphProgress]);
@@ -356,13 +368,14 @@ export function useAudioPlayer({
   const savePosition = useCallback(() => {
     const s = useTTSStore.getState();
     if (s.currentNovelId && s.currentChapterIndex != null) {
-      try { localStorage.setItem(TTS_POS_KEY, JSON.stringify({ novelId: s.currentNovelId, chapterIndex: s.currentChapterIndex, paragraph: s.currentParagraph })); } catch { /* localStorage 不可用时忽略 */ }
+      try { localStorage.setItem(ttsPosKey(), JSON.stringify({ novelId: s.currentNovelId, chapterIndex: s.currentChapterIndex, paragraph: s.currentParagraph })); } catch { /* localStorage 不可用时忽略 */ }
     }
   }, []);
 
   // 停止时保存位置
   const stop = useCallback(() => {
     savePosition();
+    startChunkOffsetRef.current = 0;
     pendingAutoPlayRef.current = false;
     pendingAutoPlayIndexRef.current = null;
     if (pendingAutoPlayTimerRef.current) {
