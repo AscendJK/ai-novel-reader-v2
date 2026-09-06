@@ -35,6 +35,9 @@ export interface UseAutoReadOptions {
   onNextPage: () => void;
   /** 分页模式是否已到最后一章末页 */
   isAtEnd: () => boolean;
+  /** 滚动模式：是否还有未加载的后续章节。底部哨兵的前向懒加载是异步的，
+   *  返回 true 时"滚到底"不算读完（等待加载），避免在已加载内容底部误停 */
+  hasMoreContent?: () => boolean;
   /** 停止回调：end=读到终点；user=被用户干扰 */
   onStop: (reason: "end" | "user") => void;
 }
@@ -63,11 +66,13 @@ export function useAutoRead({
   contentRef,
   onNextPage,
   isAtEnd,
+  hasMoreContent,
   onStop,
 }: UseAutoReadOptions) {
   // 回调/参数用 ref 保持最新（避免定时器/rAF 闭包过期；refs 在 effect 中更新）
   const onNextPageRef = useRef(onNextPage);
   const isAtEndRef = useRef(isAtEnd);
+  const hasMoreContentRef = useRef(hasMoreContent);
   const onStopRef = useRef(onStop);
   const intervalRef = useRef(intervalSec);
   const speedRef = useRef(speedLinesPerSec);
@@ -75,6 +80,7 @@ export function useAutoRead({
   const easeInRef = useRef(easeInMs);
   useEffect(() => { onNextPageRef.current = onNextPage; });
   useEffect(() => { isAtEndRef.current = isAtEnd; });
+  useEffect(() => { hasMoreContentRef.current = hasMoreContent; });
   useEffect(() => { onStopRef.current = onStop; });
   useEffect(() => { intervalRef.current = intervalSec; });
   useEffect(() => { speedRef.current = speedLinesPerSec; });
@@ -107,7 +113,13 @@ export function useAutoRead({
     el?.addEventListener("pointerdown", onInterrupt, { passive: true });
     el?.addEventListener("wheel", onInterrupt, { passive: true });
     el?.addEventListener("touchstart", onInterrupt, { passive: true });
-    const onKey = (e: KeyboardEvent) => { if (INTERRUPT_KEYS.has(e.key)) onInterrupt(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (!INTERRUPT_KEYS.has(e.key)) return;
+      // 输入框中的方向键/空格是编辑操作，聚焦按钮时空格是点击，均不应打断自动阅读
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      onInterrupt();
+    };
     window.addEventListener("keydown", onKey);
     return () => {
       el?.removeEventListener("pointerdown", onInterrupt);
@@ -159,7 +171,17 @@ export function useAutoRead({
       const el = scrollRef.current;
       if (el) {
         const max = el.scrollHeight - el.clientHeight;
-        if (el.scrollTop >= max - SCROLL_END_TOLERANCE) { cancelAnimationFrame(rafId); stop("end"); return; } // 到底停止
+        if (el.scrollTop >= max - SCROLL_END_TOLERANCE) {
+          // 还有未加载章节时"到底"只是懒加载没跟上（哨兵触发的加载是异步的）：
+          // 本帧不位移也不停止，等 scrollHeight 增长后自然继续；只有最后一章
+          // 也加载完毕才真正读到终点
+          if (hasMoreContentRef.current?.()) {
+            lastTs = ts; // 等待期不推进缓启动基准（startTs 仍为 null 时保持未启动）
+            rafId = requestAnimationFrame(loop);
+            return;
+          }
+          cancelAnimationFrame(rafId); stop("end"); return; // 到底停止
+        }
       }
       if (lastTs !== null) {
         const dt = (ts - lastTs) / 1000; // 秒

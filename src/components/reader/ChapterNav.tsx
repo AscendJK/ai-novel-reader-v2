@@ -4,6 +4,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { ChevronRight, PanelLeftOpen, PanelLeftClose, Loader2 } from "lucide-react";
 import { loadChapters } from "@/db/repositories";
+import { SUPPRESS_RELEASE_MS } from "@/hooks/useContinuousScroll";
 
 const TOGGLE_W = "w-8";
 
@@ -49,7 +50,7 @@ export const ChapterNav = memo(function ChapterNav({ scrollControlRef, immersive
       if (scrollControlRef?.current) {
         const release = scrollControlRef.current.suppressIO(chapterId);
         scrollControlRef.current.scrollToChapter(chapterId);
-        setTimeout(release, 500);
+        setTimeout(release, SUPPRESS_RELEASE_MS);
       } else {
         const el = document.querySelector(`.chapter-section[data-chapter-id="${chapterId}"]`);
         if (el) el.scrollIntoView({ behavior: "instant", block: "start" });
@@ -74,7 +75,7 @@ export const ChapterNav = memo(function ChapterNav({ scrollControlRef, immersive
             });
           });
         }
-        if (release) setTimeout(release, 500);
+        if (release) setTimeout(release, SUPPRESS_RELEASE_MS);
       } catch (err) {
         console.error("[ChapterNav] Failed to load chapters:", err);
       } finally {

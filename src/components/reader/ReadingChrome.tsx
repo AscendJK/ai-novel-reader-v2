@@ -302,7 +302,10 @@ const BottomNav = React.memo(function BottomNav(props: BottomNavProps) {
   );
 });
 
-/** Memoized chapter paragraphs - avoids re-splitting content on every render */
+/** Memoized chapter paragraphs - avoids re-splitting content on every render.
+ *  自定义比较：段落高亮只可能出现在"当前朗读章节"（见渲染处高亮条件），
+ *  TTS 逐段推进时其余已加载章节的渲染输出不变，直接跳过——否则每段一次的
+ *  ttsParagraph 变化会让全部已载章节的段落列表重新 map + reconcile。 */
 const ChapterParagraphs = React.memo(function ChapterParagraphs({
   content, paragraphSpacing, ttsActive, ttsParagraph, chapterId, selectedChapterId,
 }: {
@@ -327,6 +330,20 @@ const ChapterParagraphs = React.memo(function ChapterParagraphs({
         );
       })}
     </>
+  );
+}, (prev, next) => {
+  // 排版输入变化必须重渲染
+  if (prev.content !== next.content || prev.paragraphSpacing !== next.paragraphSpacing) return false;
+  // 高亮条件：ttsActive && chapterId === selectedChapterId && ttsParagraph === i
+  const wasHighlightable = prev.ttsActive && prev.chapterId === prev.selectedChapterId;
+  const isHighlightable = next.ttsActive && next.chapterId === next.selectedChapterId;
+  // 本章节现在不是、之前也不是高亮候选 → 输出与 TTS props 无关，跳过渲染
+  if (!wasHighlightable && !isHighlightable) return true;
+  // 可能带高亮（含"刚失去高亮需清除"）：高亮相关 props 有变化才重渲染
+  return (
+    prev.ttsActive === next.ttsActive &&
+    prev.ttsParagraph === next.ttsParagraph &&
+    prev.selectedChapterId === next.selectedChapterId
   );
 });
 

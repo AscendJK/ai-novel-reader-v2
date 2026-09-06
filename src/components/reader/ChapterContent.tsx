@@ -6,7 +6,7 @@ import { useRAGStore } from "@/stores/rag-store";
 import { useTTSStore } from "@/stores/tts-store";
 import { useKeyboardShortcuts, type ShortcutBinding } from "@/hooks/useKeyboardShortcuts";
 import { usePagination, type PageRange } from "@/hooks/usePagination";
-import { useContinuousScroll } from "@/hooks/useContinuousScroll";
+import { useContinuousScroll, SUPPRESS_RELEASE_MS } from "@/hooks/useContinuousScroll";
 import { useAutoRead } from "@/hooks/useAutoRead";
 import { useScreenWakeLock } from "@/hooks/useScreenWakeLock";
 import { AudioPlayer } from "@/components/tts/AudioPlayer";
@@ -144,6 +144,14 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     initialChapterId: selectedChapterId,
     initialChapterOffset: savedChapterOffset,
   });
+
+  // 滚动模式是否还有未加载的后续章节：自动阅读"到底"判定用——
+  // 前向懒加载是异步的，加载没跟上时不能算读完
+  const hasMoreScrollContent = useCallback(() => {
+    if (!currentNovel || loadedChapters.length === 0) return false;
+    const lastLoadedIndex = loadedChapters[loadedChapters.length - 1].index;
+    return lastLoadedIndex < currentNovel.chapters.length - 1;
+  }, [currentNovel, loadedChapters]);
 
   // 暴露 scrollToChapter 和 suppressIO 给 ChapterNav（effect 中更新，供事件处理器读取）
   useEffect(() => {
@@ -289,7 +297,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
         if (pos?.chapterId) {
           const release = suppressIORef.current(pos.chapterId);
           scrollToChapterRef.current(pos.chapterId, pos.chapterOffset);
-          visibilityTimeoutRef.current = setTimeout(release, 500);
+          visibilityTimeoutRef.current = setTimeout(release, SUPPRESS_RELEASE_MS);
         }
       }
     };
@@ -447,8 +455,10 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   }, []);
 
   // 分页模式是否已到最后一章末页（滚动模式的"到底"由 hook 内部检测）
+  // totalPages > 0 前置：分页尚未算出（或空章节）时 safePage 恒为 0，
+  // 不加此条件会在末章开启自动阅读的瞬间误判"已到末页"而误报停止
   const isAtEnd = useCallback(
-    () => currentIndex >= chapters.length - 1 && safePage >= totalPages - 1,
+    () => totalPages > 0 && currentIndex >= chapters.length - 1 && safePage >= totalPages - 1,
     [currentIndex, chapters.length, safePage, totalPages]
   );
 
@@ -470,6 +480,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     contentRef: autoReadContentRef,
     onNextPage: handleAutoNextPage,
     isAtEnd,
+    hasMoreContent: hasMoreScrollContent,
     onStop: handleAutoReadStop,
   });
 
@@ -633,6 +644,9 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     return items;
   };
 
+  // 空章节/分页未就绪时 totalPages 为 0，页码显示 "1 / 0" 会造成困惑；
+  // 渲染层此时整章兜底为一页，页码同步显示为 "1 / 1"
+  const displayTotalPages = Math.max(totalPages, 1);
   const pageLabel = isDouble
     ? `${spreadIndex * 2 + 1}${spreadIndex * 2 + 2 < totalPages ? `-${spreadIndex * 2 + 2}` : ""}`
     : `${safePage + 1}`;
@@ -652,7 +666,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
           const release = suppressIO(prevId);
           setSelectedChapter(prevId);
           scrollToChapter(prevId);
-          setTimeout(release, 500);
+          setTimeout(release, SUPPRESS_RELEASE_MS);
         }
       } : undefined}
       onNextChapter={currentIndex < chapters.length - 1 ? () => {
@@ -662,7 +676,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
           const release = suppressIO(nextId);
           setSelectedChapter(nextId);
           scrollToChapter(nextId);
-          setTimeout(release, 500);
+          setTimeout(release, SUPPRESS_RELEASE_MS);
         }
       } : undefined}
     />
@@ -779,7 +793,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
             prevDisabled={safePage === 0 && !prevChapter}
             nextDisabled={safePage >= totalPages - 1 && !nextChapter}
             loadingChapter={loadingChapter}
-            pageLabel={`${pageLabel} / ${totalPages}`}
+            pageLabel={`${pageLabel} / ${displayTotalPages}`}
           />
         )}
 
@@ -921,7 +935,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
               const release = suppressIO(prevChapter.id);
               setSelectedChapter(prevChapter.id);
               scrollToChapter(prevChapter.id);
-              setTimeout(release, 500);
+              setTimeout(release, SUPPRESS_RELEASE_MS);
             }
           }}
           onNext={() => {
@@ -929,7 +943,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
               const release = suppressIO(nextChapter.id);
               setSelectedChapter(nextChapter.id);
               scrollToChapter(nextChapter.id);
-              setTimeout(release, 500);
+              setTimeout(release, SUPPRESS_RELEASE_MS);
             }
           }}
           prevDisabled={!prevChapter}

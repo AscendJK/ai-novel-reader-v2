@@ -32,6 +32,14 @@ interface UseContinuousScrollReturn {
 const LOAD_BATCH = 10;
 
 /**
+ * suppressIO 临时抑制窗口（毫秒）。跳章（目录点击/进度恢复/TTS 跟随）需要
+ * 懒加载 + 布局 + 滚动校正，通常数百毫秒内完成：太短则章节检测提前恢复可能
+ * 瞬时误判，太长则当前章节高亮/进度更新延迟。若慢设备上出现跳章后章节检测
+ * 抖动，优先考虑事件驱动的 release 而非加大此值。
+ */
+export const SUPPRESS_RELEASE_MS = 500;
+
+/**
  * 从章节 rect 列表中选出第一个与视口检测区相交的章节。
  * rects 按 DOM 顺序（章节 index 升序）；zoneTop/zoneBottom 为检测区上下界。
  * 用"相交"而非"顶部在区内"：用户读到章节中部时章节顶部在视口上方，
@@ -167,11 +175,19 @@ export function useContinuousScroll({
           // 双 rAF 等待目标章节渲染、布局更新后校正位置，再加章节内偏移
           requestAnimationFrame(() => {
             requestAnimationFrame(() => {
-              const rect = el.getBoundingClientRect();
-              const cRect = container.getBoundingClientRect();
-              // 校正：把章节顶部精确对齐到视口顶部
-              container.scrollTop += rect.top - cRect.top;
-              container.scrollTop += chapterOffset;
+              // 容器带 scroll-smooth class，程序化 scrollTop 赋值也会走平滑动画，
+              // 校正必须瞬移落地，否则动画期间的高度变化/用户滚动会放大偏差
+              const prevBehavior = container.style.scrollBehavior;
+              container.style.scrollBehavior = "auto";
+              try {
+                const rect = el.getBoundingClientRect();
+                const cRect = container.getBoundingClientRect();
+                // 校正：把章节顶部精确对齐到视口顶部
+                container.scrollTop += rect.top - cRect.top;
+                container.scrollTop += chapterOffset;
+              } finally {
+                container.style.scrollBehavior = prevBehavior;
+              }
             });
           });
         } else {
@@ -229,6 +245,9 @@ export function useContinuousScroll({
   const hasRestoredRef = useRef(false);
   // 用 ref 锁定恢复目标，防止 IO 改变 selectedChapterId 后 effect 重新计算目标
   const restoreTargetRef = useRef<{ chapterId: string; offset?: number } | null>(null);
+  // 从翻页切回滚动（modeChanged）时像素偏移已失效：翻页模式不产生/不更新
+  // chapterOffset，此时残留的是打开小说时的旧值，恢复到当前章顶部才符合直觉
+  const invalidateOffsetRef = useRef(false);
   // 用 ref 存储 scrollToChapter，避免 effect 依赖它（否则 addChapters 会重建它导致 effect 重运行清除定时器）
   const scrollToChapterRef = useRef(scrollToChapter);
   useEffect(() => { scrollToChapterRef.current = scrollToChapter; }, [scrollToChapter]);
@@ -259,6 +278,7 @@ export function useContinuousScroll({
     if (novelChanged || modeChanged || justEntered) {
       hasRestoredRef.current = false;
       restoreTargetRef.current = null;
+      invalidateOffsetRef.current = modeChanged;
     }
 
     // 已恢复或无章节可恢复
@@ -270,7 +290,11 @@ export function useContinuousScroll({
         ? initialChapterId
         : chapters[0]?.id;
       if (!targetChapterId) return;
-      restoreTargetRef.current = { chapterId: targetChapterId, offset: initialChapterOffset };
+      restoreTargetRef.current = {
+        chapterId: targetChapterId,
+        offset: invalidateOffsetRef.current ? 0 : initialChapterOffset,
+      };
+      invalidateOffsetRef.current = false;
     }
 
     const { chapterId: targetChapterId, offset: targetOffset } = restoreTargetRef.current;
@@ -323,7 +347,10 @@ export function useContinuousScroll({
 
     const detectCurrentChapter = () => {
       if (suppressChapterDetectionRef.current) return;
-      if (container.childElementCount !== markerCount) {
+      // 缓存失效检测不能拿容器 childElementCount 对比 marker 数量：
+      // 容器直接子元素只有 1 个包装 div，两者恒不相等，会导致每帧全量
+      // querySelectorAll，缓存永不生效。改用首尾 marker 的 isConnected 判断。
+      if (markerCount === 0 || !cachedMarkers[0].isConnected || !cachedMarkers[markerCount - 1].isConnected) {
         refreshMarkers();
       }
       if (markerCount === 0) return;
