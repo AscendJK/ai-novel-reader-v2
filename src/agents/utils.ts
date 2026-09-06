@@ -64,8 +64,11 @@ export async function prepareAgentContext(
   | { success: true; novel: Novel; provider: AIProvider; budget: TokenBudget; modelName: string }
   | { success: false; error: string }
 > {
-  // 加载小说
-  const novel = await loadNovelData(context.novelId, context.onStatus, options);
+  // 加载小说。调用方已预加载全量数据且 id 匹配时直接复用，
+  // 避免批量总结逐章触发重复的全书 IndexedDB 加载
+  const novel = context.preloadedNovel && context.preloadedNovel.id === context.novelId
+    ? context.preloadedNovel
+    : await loadNovelData(context.novelId, context.onStatus, options);
   if (!novel) {
     return { success: false, error: "小说数据未找到" };
   }

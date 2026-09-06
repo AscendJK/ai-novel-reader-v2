@@ -23,8 +23,10 @@ export function extractJSON<T = unknown>(
   // 移除 markdown 代码块包裹（```json ... ``` 或 ``` ... ```）
   raw = raw.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```[\s\S]*$/i, "");
 
-  // 移除单行注释（// ...）
-  raw = raw.replace(/\/\/.*$/gm, "");
+  // 移除字符串之外的单行注释（// ...）。
+  // 不能用全局正则 /\/\/.*$/gm：无字符串感知的删除会把字符串值里的
+  // "https://..." 截断成 "https:"，导致本可解析的响应解析失败
+  raw = stripLineCommentsOutsideStrings(raw);
 
   // 移除尾逗号（,} 或 ,]）
   raw = raw.replace(/,\s*([}\]])/g, "$1");
@@ -53,6 +55,49 @@ export function extractJSON<T = unknown>(
   }
 
   return null;
+}
+
+/**
+ * 移除字符串字面量之外的单行注释（// ... 到行尾）
+ * 字符串感知状态机：跟踪 in-string / escape，注释只在 JSON 结构层生效，
+ * 字符串值内的 "//"（如 URL）原样保留
+ *
+ * @param text 原始文本
+ * @returns 删除注释后的文本
+ */
+function stripLineCommentsOutsideStrings(text: string): string {
+  let result = "";
+  let inString = false;
+  let escapeNext = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+
+    if (escapeNext) {
+      result += char;
+      escapeNext = false;
+      continue;
+    }
+    if (inString) {
+      result += char;
+      if (char === "\\") escapeNext = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      result += char;
+      continue;
+    }
+    if (char === "/" && text[i + 1] === "/") {
+      // 跳过注释内容（行尾换行由外层循环自然保留）
+      while (i < text.length && text[i] !== "\n") i++;
+      continue;
+    }
+    result += char;
+  }
+
+  return result;
 }
 
 /**

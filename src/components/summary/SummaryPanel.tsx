@@ -64,8 +64,15 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
     regenerateCharacters, regenerateTimeline,
     generateMap, regenerateMap,
     generateRangeSummary, askCustomQuestion, clearQaCache,
-    clearError, ragEngineUsed,
+    clearError, ragEngineUsed, abortAll,
   } = useSummarizer();
+
+  // 面板卸载（关闭/切书）时中断进行中的 AI 任务：后台任务继续生成会白白消耗
+  // API 额度，且重开面板得到全新 hook 实例（isRunning=false），可再触发任务
+  // 形成双任务并发；落库由保存函数按任务锚定的 novelId 写入，中断不影响一致性
+  useEffect(() => {
+    return () => { abortAll(); };
+  }, [abortAll]);
 
   // 使用 hooks
   const notesHook = useNotes({
@@ -268,7 +275,15 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
       {loading && (
         <div className="mx-2.5 mt-2 p-1.5 rounded bg-primary/10 border border-primary/20 flex items-center gap-2 text-xs text-primary shrink-0">
           <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-          <span>AI 正在执行：{currentTask || qaHook.qaLoading ? "问答中..." : "分析任务"}...</span>
+          <span className="flex-1 min-w-0 truncate">AI 正在执行：{currentTask || qaHook.qaLoading ? "问答中..." : "分析任务"}...</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-5 text-[10px] px-1.5 shrink-0"
+            onClick={() => abortAll()}
+          >
+            停止
+          </Button>
         </div>
       )}
 

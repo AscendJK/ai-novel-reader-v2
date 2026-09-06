@@ -1,3 +1,5 @@
+import type { Novel } from "@/parsers/types";
+
 export interface AgentContext {
   novelId: string;
   chapterIds?: string[];
@@ -5,6 +7,9 @@ export interface AgentContext {
   signal?: AbortSignal;
   /** Pre-retrieved relevant text from RAG — if provided, agents skip random sampling */
   preRetrieved?: string;
+  /** 调用方预加载的全量小说数据（如批量总结循环复用），提供且 id 与 novelId 一致时
+   *  跳过逐次任务重复的全书 IndexedDB 加载 */
+  preloadedNovel?: Novel;
   /** Callback to report current status/phase to the UI */
   onStatus?: (msg: string) => void;
 }

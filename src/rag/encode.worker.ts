@@ -5,7 +5,7 @@
  * 主线程只负责通过代理接收编码结果，避免长文章离线检索时阻塞 UI。
  *
  * 消息协议：
- *   → { type: "encode", id, text, engine, serverUrl }
+ *   → { type: "main", id, text, engine, serverUrl }
  *   ← { type: "encode-result", id, ok: true, data: Float32Array }
  *   ← { type: "encode-result", id, ok: false, error: string }
  * serverUrl 由主线程从 localStorage 读取后传入（Worker 无法访问 localStorage）。

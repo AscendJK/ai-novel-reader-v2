@@ -139,17 +139,30 @@ const discoveredContextWindows = new Map<string, number>();
  * 从 API 错误信息中提取真实上下文长度
  * 兼容 "maximum context length is 32768 tokens" / "context_length: 8192" 等模式
  */
+/** 合理的上下文长度范围：范围外的数字（请求 ID、时间戳等）不可信 */
+const CONTEXT_LENGTH_MIN = 2048;
+const CONTEXT_LENGTH_MAX = 2_000_000;
+
+function isValidContextLength(n: number): boolean {
+  return Number.isFinite(n) && n >= CONTEXT_LENGTH_MIN && n <= CONTEXT_LENGTH_MAX;
+}
+
 export function extractContextLength(text: string): number | null {
   if (!text) return null;
   // 优先匹配带单位的形式：32768 tokens / 8192 tokens
   const withUnit = text.match(/(\d{4,8})\s*(?:token|tokens)/i);
-  if (withUnit) return parseInt(withUnit[1], 10);
-  // 其次匹配 content length / context length 附近的数字（含中文"长度/限制"场景拆解后的纯数字兜底）
+  if (withUnit) {
+    const n = parseInt(withUnit[1], 10);
+    if (isValidContextLength(n)) return n;
+  }
+  // 其次匹配 content length / context length 附近的数字（含中文"长度/限制"场景）
   const nearLength = text.match(/(?:context|content|length|limit|window|上下文|长度|限制)[^0-9]{0,20}(\d{4,8})/i);
-  if (nearLength) return parseInt(nearLength[1], 10);
-  // 兜底：独立的 4-8 位数字（token 上限普遍在 2000~100 万之间）
-  const plain = text.match(/(?<!\d)(\d{4,8})(?!\d)/);
-  if (plain) return parseInt(plain[1], 10);
+  if (nearLength) {
+    const n = parseInt(nearLength[1], 10);
+    if (isValidContextLength(n)) return n;
+  }
+  // 不做"任意 4-8 位数字"兜底：错误体中的请求 ID、时间戳会被误当上下文长度
+  // 写入 discoveredContextWindows 且无失效机制，会污染整个会话的 token 预算
   return null;
 }
 

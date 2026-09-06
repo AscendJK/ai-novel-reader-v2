@@ -100,6 +100,17 @@ describe("extractContextLength", () => {
     expect(extractContextLength("请求超过上下文长度限制 16384")).toBe(16384);
   });
 
+  it("不应把独立的数字（请求 ID/时间戳）当作上下文长度", () => {
+    // 错误体中的随机数字曾被兜底正则误判，污染整个会话的 token 预算
+    expect(extractContextLength("request id: 1735829475628 failed")).toBe(null);
+    expect(extractContextLength("error code 12345 at host")).toBe(null);
+  });
+
+  it("范围外的数字返回 null（过小或过大）", () => {
+    expect(extractContextLength("1234 tokens")).toBe(null);
+    expect(extractContextLength("99999999 tokens")).toBe(null);
+  });
+
   it("无数字时返回 null", () => {
     expect(extractContextLength("请求内容超过模型上下文长度限制")).toBe(null);
     expect(extractContextLength("")).toBe(null);

@@ -49,7 +49,9 @@ class MapAgent extends BaseAgent {
                 { role: "system", content: "你是一个 JSON 数据生成器。只输出 JSON，不要任何解释文字。" },
                 { role: "user", content: this.buildPrompt(novel, chapterList, lastError) },
               ],
-              max_tokens: Math.max(b.maxOutputTokens, 16384),
+              // 大 JSON 需要尽量多的输出空间，但不得超过模型自身的输出上限，
+              // 否则上限低于 16384 的模型（如 4096 档）会直接 400
+              max_tokens: Math.min(b.maxOutputTokens, 16384),
               temperature: 0.3,
               signal: context.signal,
             });

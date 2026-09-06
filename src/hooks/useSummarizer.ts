@@ -10,7 +10,7 @@ import type { Agent, AgentContext, AgentResult, MapData, TaskTypeValue } from "@
 import { TaskType } from "@/agents/types";
 import { runAgentTask as runAgentTaskPure, formatAPIError } from "@/agents/runTask";
 import { getProvider } from "@/api/registry";
-import { saveSummary, saveMap, deleteMap, loadChapters } from "@/db/repositories";
+import { saveSummary, saveMap, deleteMap, loadChapters, loadNovel } from "@/db/repositories";
 import { getUserDB } from "@/db/database";
 import { APIError } from "@/api/error-handler";
 import { getTokenBudget, computeAvailableInput } from "@/api/token-manager";
@@ -65,6 +65,9 @@ export function useSummarizer() {
   const addSummary = useSummaryStore((s) => s.addSummary);
   const setProgress = useSummaryStore((s) => s.setProgress);
   const abortRef = useRef<AbortController | null>(null);
+  // 任务代次：每次启动新任务自增。被 abort 的旧任务在 finally 中回到这里时，
+  // 代次已不匹配，跳过状态清理/错误写入，避免覆盖正在运行的新任务的状态
+  const taskGenRef = useRef(0);
   // Cached RAG context for Q&A session (cleared on new session or every 3 follow-ups)
   const qaRagCacheRef = useRef<{ question: string; text: string; followUps: number } | null>(null);
 
@@ -187,16 +190,17 @@ export function useSummarizer() {
     setError(formatAPIError(err));
   }, []);
 
+  // novelId 由调用方显式传入（任务启动时锚定的 id），不读 currentNovel：
+  // 任务运行中用户可能切换小说，读 store 会把旧书生成的总结写进新书的 novelId 下
   const saveChapterSummary = useCallback(
-    async (chapterId: string, result: { success: boolean; data?: unknown; error?: string; tokensUsed?: number }) => {
-      const novel = useNovelStore.getState().currentNovel;
-      if (!novel || !result.success || !result.data) return;
+    async (novelId: string, chapterId: string, result: { success: boolean; data?: unknown; error?: string; tokensUsed?: number }) => {
+      if (!result.success || !result.data) return;
       const data = result.data as { summaries: { chapterTitle: string; content: string; tokens: number }[] };
       for (const s of data.summaries) {
         // Reuse existing ID for same (novelId, chapterId, type) — server upserts by ID, can't signal deletes
-        const existing = await getUserDB().summaries.where({ novelId: novel.id, chapterId, type: "chapter" }).first();
+        const existing = await getUserDB().summaries.where({ novelId, chapterId, type: "chapter" }).first();
         const summary: SummaryItem = {
-          id: existing?.id || uuid(), novelId: novel.id, chapterId,
+          id: existing?.id || uuid(), novelId, chapterId,
           chapterTitle: s.chapterTitle, content: s.content,
           tokensUsed: s.tokens, createdAt: existing?.createdAt || Date.now(), updatedAt: Date.now(), type: "chapter",
         };
@@ -208,14 +212,13 @@ export function useSummarizer() {
   );
 
   const saveGlobalSummary = useCallback(
-    async (result: { success: boolean; data?: unknown; error?: string; tokensUsed?: number }, type: SummaryItem["type"], title: string, chapterId: string) => {
-      const novel = useNovelStore.getState().currentNovel;
-      if (!novel || !result.success || !result.data) return;
+    async (novelId: string, result: { success: boolean; data?: unknown; error?: string; tokensUsed?: number }, type: SummaryItem["type"], title: string, chapterId: string) => {
+      if (!result.success || !result.data) return;
       const data = result.data as { content: string; usedFallback?: boolean };
       // Reuse existing ID for same (novelId, chapterId, type) — server upserts by ID, can't signal deletes
-      const existing = await getUserDB().summaries.where({ novelId: novel.id, chapterId, type }).first();
+      const existing = await getUserDB().summaries.where({ novelId, chapterId, type }).first();
       const summary: SummaryItem = {
-        id: existing?.id || uuid(), novelId: novel.id, chapterId,
+        id: existing?.id || uuid(), novelId, chapterId,
         chapterTitle: title + (data.usedFallback ? "（精简版）" : ""),
         content: data.content, tokensUsed: result.tokensUsed || 0, createdAt: existing?.createdAt || Date.now(), updatedAt: Date.now(), type,
         usedFallback: data.usedFallback,
@@ -237,13 +240,25 @@ export function useSummarizer() {
     /** 任务类型标识，优先使用，其次使用 agent.taskType，最后回退到 taskName */
     taskType?: TaskTypeValue;
   }): Promise<unknown> => {
+    const gen = ++taskGenRef.current;
+    // context.onStatus 也要代次保护：旧任务被 abort 后的尾部回调不得覆盖新任务文案
+    const guardedContext: AgentContext = {
+      ...options.context,
+      onStatus: (msg: string) => {
+        if (gen === taskGenRef.current) options.context.onStatus?.(msg);
+      },
+    };
     return runAgentTaskPure({
       onStart: (name, type) => startTask(name, type || ""),
-      onStatus: setCurrentTask,
-      onError: (msg) => setError(msg),
-      onDone: endTask,
+      onStatus: (msg) => { if (gen === taskGenRef.current) setCurrentTask(msg); },
+      onError: (msg) => {
+        // 用户主动取消（停止按钮触发 abort）不是错误：lib/error-handler 对
+        // ABORTED 的固定文案，此处跳过以免取消后弹出红色错误条
+        if (gen === taskGenRef.current && msg !== "操作已取消") setError(msg);
+      },
+      onDone: () => { if (gen === taskGenRef.current) endTask(); },
       onPush: () => syncClient.pushNow(),
-    }, options);
+    }, { ...options, context: guardedContext });
   }, [startTask, setCurrentTask, setError, endTask]);
 
   // --- Chapter summary ---
@@ -254,7 +269,7 @@ export function useSummarizer() {
       agent: summarizerAgent,
       context: { novelId: currentNovel.id, chapterIds: [chapterId], signal: createSignal(), onStatus: setCurrentTask },
       errorMessage: "总结生成失败",
-      onSuccess: (result) => saveChapterSummary(chapterId, result),
+      onSuccess: (result) => saveChapterSummary(currentNovel.id, chapterId, result),
     });
   }, [currentNovel, checkProvider, runAgentTask, saveChapterSummary, createSignal]);
 
@@ -265,7 +280,7 @@ export function useSummarizer() {
       agent: summarizerAgent,
       context: { novelId: currentNovel.id, chapterIds: [chapterId], signal: createSignal(), onStatus: setCurrentTask },
       errorMessage: "重新生成失败",
-      onSuccess: (result) => saveChapterSummary(chapterId, result),
+      onSuccess: (result) => saveChapterSummary(currentNovel.id, chapterId, result),
     });
   }, [currentNovel, checkProvider, runAgentTask, saveChapterSummary, createSignal]);
 
@@ -277,6 +292,7 @@ export function useSummarizer() {
     const { skipExisting = true } = options || {};
 
     batchStopRef.current = false;
+    const gen = ++taskGenRef.current;
     startTask("批量总结所有章节", TaskType.CHAPTER);
     const chapters = currentNovel.chapters;
 
@@ -292,14 +308,22 @@ export function useSummarizer() {
       : chapters;
 
     if (chaptersToSummarize.length === 0) {
-      setCurrentTask("所有章节已有总结");
-      endTask();
+      if (gen === taskGenRef.current) {
+        setCurrentTask("所有章节已有总结");
+        endTask();
+      }
       return;
     }
 
     const signal = createSignal();
     setProgress({ current: 0, total: chaptersToSummarize.length });
     try {
+      // 一次性预加载全书内容，循环内逐章复用：
+      // 原实现每章 agent.run 都会触发一次全书 IndexedDB 加载（N 章 = N 次全量 IO）
+      setCurrentTask("正在加载小说数据...");
+      const fullNovel = await loadNovel(currentNovel.id, undefined, true);
+      if (!fullNovel) throw new Error("小说数据未找到");
+
       let failedCount = 0;
       for (let i = 0; i < chaptersToSummarize.length; i++) {
         // 检查停止标志
@@ -308,25 +332,33 @@ export function useSummarizer() {
           break;
         }
         if (signal.aborted) break;
+        // 被新任务取代（createSignal abort 了本任务）时退出循环，
+        // 任务状态由新任务接管，此处不得再写任何任务状态
+        if (gen !== taskGenRef.current) break;
 
         setCurrentTask(`正在总结第 ${i + 1}/${chaptersToSummarize.length} 章...`);
-        const result = await summarizerAgent.run({ novelId: currentNovel.id, chapterIds: [chaptersToSummarize[i].id], signal, onStatus: setCurrentTask });
+        const result = await summarizerAgent.run({ novelId: currentNovel.id, chapterIds: [chaptersToSummarize[i].id], signal, onStatus: setCurrentTask, preloadedNovel: fullNovel });
         if (signal.aborted) break;
         if (result.success) {
           setCurrentTask("正在保存结果...");
-          await saveChapterSummary(chaptersToSummarize[i].id, result);
+          await saveChapterSummary(currentNovel.id, chaptersToSummarize[i].id, result);
         } else {
           failedCount++;
         }
         setProgress({ current: i + 1, total: chaptersToSummarize.length });
       }
-      if (failedCount > 0) {
+      if (failedCount > 0 && gen === taskGenRef.current) {
         setError(`批量总结完成，${failedCount} 章失败`);
       }
-    } catch (err) { handleError(err); }
+    } catch (err) {
+      // 被新任务取代后的异常不再写入错误状态（会覆盖新任务的运行状态）
+      if (gen === taskGenRef.current) handleError(err);
+    }
     finally {
-      endTask();
-      setProgress(null);
+      if (gen === taskGenRef.current) {
+        endTask();
+        setProgress(null);
+      }
       // 推送数据到服务器
       syncClient.pushNow();
     }
@@ -344,7 +376,7 @@ export function useSummarizer() {
       agent: globalSummarizerAgent,
       context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await getRelevantText("小说的核心主线、主题思想、故事梗概，关键情节的发展脉络"), onStatus: setCurrentTask },
       errorMessage: "全局总结生成失败",
-      onSuccess: (result) => saveGlobalSummary(result, "global", "全书总结", "__global__"),
+      onSuccess: (result) => saveGlobalSummary(currentNovel.id, result, "global", "全书总结", "__global__"),
     });
   }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, getRelevantText]);
 
@@ -355,7 +387,7 @@ export function useSummarizer() {
       agent: globalSummarizerAgent,
       context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await getRelevantText("小说的核心主线、主题思想、故事梗概，关键情节的发展脉络"), onStatus: setCurrentTask },
       errorMessage: "重新生成失败",
-      onSuccess: (result) => saveGlobalSummary(result, "global", "全书总结", "__global__"),
+      onSuccess: (result) => saveGlobalSummary(currentNovel.id, result, "global", "全书总结", "__global__"),
     });
   }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, getRelevantText]);
 
@@ -367,7 +399,7 @@ export function useSummarizer() {
       agent: characterAnalysisAgent,
       context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await getRelevantText("小说中各主要角色的关系网络、互动、性格特征与情感变化"), onStatus: setCurrentTask },
       errorMessage: "人物分析失败",
-      onSuccess: (result) => saveGlobalSummary(result, "characters", "人物关系分析", "__characters__"),
+      onSuccess: (result) => saveGlobalSummary(currentNovel.id, result, "characters", "人物关系分析", "__characters__"),
     });
   }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, getRelevantText]);
 
@@ -378,7 +410,7 @@ export function useSummarizer() {
       agent: characterAnalysisAgent,
       context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await getRelevantText("小说中各主要角色的关系网络、互动、性格特征与情感变化"), onStatus: setCurrentTask },
       errorMessage: "重新生成失败",
-      onSuccess: (result) => saveGlobalSummary(result, "characters", "人物关系分析", "__characters__"),
+      onSuccess: (result) => saveGlobalSummary(currentNovel.id, result, "characters", "人物关系分析", "__characters__"),
     });
   }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, getRelevantText]);
 
@@ -423,7 +455,7 @@ export function useSummarizer() {
       agent: timelineAgent,
       context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await getRelevantText("小说剧情的时间线、关键事件、转折点、伏笔与高潮结局"), onStatus: setCurrentTask },
       errorMessage: "时间线生成失败",
-      onSuccess: (result) => saveGlobalSummary(result, "timeline", "剧情时间线", "__timeline__"),
+      onSuccess: (result) => saveGlobalSummary(currentNovel.id, result, "timeline", "剧情时间线", "__timeline__"),
     });
   }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, getRelevantText]);
 
@@ -434,7 +466,7 @@ export function useSummarizer() {
       agent: timelineAgent,
       context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await getRelevantText("小说剧情的时间线、关键事件、转折点、伏笔与高潮结局"), onStatus: setCurrentTask },
       errorMessage: "重新生成失败",
-      onSuccess: (result) => saveGlobalSummary(result, "timeline", "剧情时间线", "__timeline__"),
+      onSuccess: (result) => saveGlobalSummary(currentNovel.id, result, "timeline", "剧情时间线", "__timeline__"),
     });
   }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, getRelevantText]);
 
@@ -507,7 +539,7 @@ export function useSummarizer() {
 
 请用简洁清晰的中文回答。
 
-以下是通过语义检索找到的该范围内最相关的段落：
+以下是该范围内的章节原文（已按顺序拼接，超出的部分被截断）：
 
 ${combinedText}`;
 
@@ -608,6 +640,8 @@ ${relevantText || "（无额外参考信息，请基于章节目录回答）"}
 
         return { answer: response.content, tokensUsed: response.content.length };
       } catch (err) {
+        // 用户主动取消（停止按钮触发 abort）不是错误
+        if (err instanceof Error && err.name === "AbortError") return null;
         handleError(err);
         return null;
       } finally {
