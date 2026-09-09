@@ -237,6 +237,11 @@ export function useContinuousScroll({
   const suppressChapterDetectionRef = useRef(false);
   // 抑制解除后的主动检测回调（由章节检测 effect 设置，恢复/suppressIO 调用）
   const triggerDetectionRef = useRef<(() => void) | null>(null);
+  // 最新已加载（有内容）章节数。检测 effect 依赖的是 chapters.length（总章数，
+  // 懒加载只补内容不增数量，effect 不会重建），marker 缓存必须靠这个数量比对
+  // 才能发现新章节——见 detectCurrentChapter 内的缓存失效判断
+  const loadedCountRef = useRef(0);
+  useEffect(() => { loadedCountRef.current = loadedChapters.length; }, [loadedChapters.length]);
 
   // ── 位置恢复：当小说变化或 chapters 从空到非空时恢复阅读位置 ─────────
   const prevNovelIdRef = useRef(novelId);
@@ -347,10 +352,12 @@ export function useContinuousScroll({
 
     const detectCurrentChapter = () => {
       if (suppressChapterDetectionRef.current) return;
-      // 缓存失效检测不能拿容器 childElementCount 对比 marker 数量：
-      // 容器直接子元素只有 1 个包装 div，两者恒不相等，会导致每帧全量
-      // querySelectorAll，缓存永不生效。改用首尾 marker 的 isConnected 判断。
-      if (markerCount === 0 || !cachedMarkers[0].isConnected || !cachedMarkers[markerCount - 1].isConnected) {
+      // marker 缓存失效判断必须用数量比对：懒加载只补章节内容、不增总章数，
+      // 检测 effect 不会重建；React 又会复用 DOM 节点（旧 marker 永远 isConnected），
+      // 新章节的 marker 只能靠 DOM 数量与 loadedChapters.length 的差异发现。
+      // 此前的 isConnected 判断会让缓存冻结在挂载时的章节窗口上——滚出窗口后
+      // 章节检测永久卡住（当前章标题/进度/目录高亮全部不再更新）。
+      if (markerCount !== loadedCountRef.current) {
         refreshMarkers();
       }
       if (markerCount === 0) return;
