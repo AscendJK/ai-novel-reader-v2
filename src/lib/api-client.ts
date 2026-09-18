@@ -100,6 +100,48 @@ export async function apiFetch(path: string, init?: RequestInit, skipAuth?: bool
 }
 
 /**
+ * 智能解析并保存服务器地址：
+ * - 输入含显式协议（http:// 或 https://）→ 直接按现有规则规范化保存（不探测）；
+ *   其中无端口的 https 显式补 :8443、无端口 http 显式补 :5173
+ * - 裸 IP/域名（无协议无端口）→ 依次探测 https://<host>:8443 与 http://<host>:5173，
+ *   第一个连通者胜出并保存（双端口在线时优先 HTTPS）；全部不通时保存 http://…:5173
+ *   （让后续连接失败的错误提示有明确指向）。
+ *
+ * @param input 用户输入的地址
+ * @returns 最终保存的地址（已规范化）
+ */
+export async function detectAndSetServerUrl(input: string): Promise<string> {
+  const trimmed = input.trim().replace(/[/:]+$/, "");
+  if (!trimmed) {
+    throw new Error("服务器地址不能为空");
+  }
+
+  const hasProtocol = /^https?:\/\//i.test(trimmed);
+  const hasPort = /:\d+$/.test(trimmed);
+  if (hasProtocol || hasPort) {
+    // 显式协议或端口：尊重用户选择，直接规范化保存
+    const normalized = normalizeServerUrl(trimmed);
+    setServerUrl(normalized);
+    return normalized;
+  }
+
+  // 裸 IP/域名：双端口探测，HTTPS 优先
+  const candidates = ["https://" + trimmed + ":8443", "http://" + trimmed + ":5173"];
+  for (const candidate of candidates) {
+    const ok = await checkServerReachable(candidate);
+    if (ok) {
+      setServerUrl(candidate);
+      return candidate;
+    }
+  }
+
+  // 全部不可达：保存 HTTP 默认值，交由后续连接流程给出明确错误
+  const fallback = "http://" + trimmed + ":5173";
+  setServerUrl(fallback);
+  return fallback;
+}
+
+/**
  * 检查服务器是否可达
  * @param url 服务器地址
  * @returns Promise<boolean>

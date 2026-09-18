@@ -11,6 +11,7 @@ import {
   hasServerUrl,
   apiFetch,
   checkServerReachable,
+  detectAndSetServerUrl,
 } from "../api-client";
 
 // 模拟 authHeaders
@@ -117,6 +118,74 @@ describe("setServerUrl / checkServerReachable 无端口按协议补端口", () =
       "https://192.168.1.100:8443/api/sync/check-user/test",
       expect.anything()
     );
+  });
+});
+
+
+// ── detectAndSetServerUrl 裸 IP 智能探测 ──
+
+describe("detectAndSetServerUrl 裸 IP 智能探测", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    globalThis.fetch = vi.fn();
+  });
+
+  it("双端口在线时优先 HTTPS", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response(null, { status: 200 }));
+
+    const saved = await detectAndSetServerUrl("192.168.1.100");
+
+    expect(saved).toBe("https://192.168.1.100:8443");
+    expect(getServerUrl()).toBe("https://192.168.1.100:8443");
+    // 探测顺序：先 https 后 http，https 通则只探测一次
+    const calls = vi.mocked(globalThis.fetch).mock.calls.map((c) => c[0]);
+    expect(String(calls[0])).toContain("https://192.168.1.100:8443");
+    expect(calls.length).toBe(1);
+  });
+
+  it("仅 HTTP 在线时回落 5173", async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(async (input: unknown) => {
+      const url = typeof input === "string" ? input : input.url;
+      if (String(url).includes("https://")) throw new TypeError("fetch failed");
+      return new Response(null, { status: 200 });
+    });
+
+    const saved = await detectAndSetServerUrl("192.168.1.100");
+
+    expect(saved).toBe("http://192.168.1.100:5173");
+    expect(getServerUrl()).toBe("http://192.168.1.100:5173");
+  });
+
+  it("全部不可达时保存 http 默认值", async () => {
+    vi.mocked(globalThis.fetch).mockRejectedValue(new TypeError("fetch failed"));
+
+    const saved = await detectAndSetServerUrl("192.168.1.100");
+
+    expect(saved).toBe("http://192.168.1.100:5173");
+    expect(getServerUrl()).toBe("http://192.168.1.100:5173");
+  });
+
+  it("显式协议不探测直接规范化", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response(null, { status: 200 }));
+
+    const saved = await detectAndSetServerUrl("https://192.168.1.100");
+
+    expect(saved).toBe("https://192.168.1.100:8443");
+    expect(getServerUrl()).toBe("https://192.168.1.100:8443");
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("显式端口不探测直接规范化", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response(null, { status: 200 }));
+
+    const saved = await detectAndSetServerUrl("192.168.1.100:9000");
+
+    expect(saved).toBe("http://192.168.1.100:9000");
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("空输入抛错", async () => {
+    await expect(detectAndSetServerUrl("  ")).rejects.toThrow("服务器地址不能为空");
   });
 });
 
