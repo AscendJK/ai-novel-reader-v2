@@ -76,8 +76,30 @@ app.get("/admin", (_req, res) => {
   res.sendFile(path.join(__dirname, "admin.html"));
 });
 
+// ── Static serving (full mode only) ────────────────────────
+// --full 且 dist 存在时伺服前端构建产物。根路径 302 到 base 子路径，
+// 保持与 GitHub Pages 相同的子路径结构（SW 作用域 / COI / manifest 依赖它）。
+// dist 缺失（如后端精简包）时跳过，仅 API 模式运行。
+if (isFullMode) {
+  const distPath = path.join(__dirname, "..", "dist");
+  if (fs.existsSync(distPath)) {
+    const BASE = "/ai-novel-reader-v2";
+    const baseRe = new RegExp("^" + BASE + "/.*$");
+    app.get("/", (_req, res) => res.redirect(BASE + "/"));
+    app.use(BASE, express.static(distPath));
+    // base 路径下非静态文件的 GET 导航回退到 index.html（Express 5：用 RegExp 通配）
+    app.get(baseRe, (req, res, next) => {
+      if (req.method !== "GET" || path.extname(req.path)) return next();
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+    console.log("[static] serving " + distPath + " at " + BASE + "/ (full mode)");
+  } else {
+    console.warn("[static] --full 模式未找到 dist/，跳过前端伺服（仅 API 模式）");
+  }
+}
+
 // ── Note: 前后端分离模式下，前端由 GitHub Pages 托管 ───────
-// 后端只提供 API 服务，不再需要静态文件服务
+// 后端只提供 API 服务；--full 且存在 dist 时上方静态块生效
 
 // ── Global error handler ────────────────────────────────────
 

@@ -75,7 +75,7 @@ if exist "server\data\cert.pem" (
 
 echo.
 echo Starting server...
-echo Prod running: https://localhost:8443 or http://localhost:5173
+echo Prod running: http://localhost:5173/ai-novel-reader-v2/ (same-origin, works on iOS)
 echo Press Ctrl+C to stop the server.
 echo.
 node server/index.js --full
