@@ -1,8 +1,13 @@
-# 后端精简包打包脚本（跨平台：Windows PowerShell / macOS / Linux pwsh）
+# 后端包打包脚本（跨平台：Windows PowerShell / macOS / Linux pwsh）
 # 用法:
 #   Windows:  powershell -NoProfile -ExecutionPolicy Bypass -File pack-backend.ps1
 #   跨平台:   pwsh -File pack-backend.ps1
 #   或:       npm run pack:backend
+#   附带前端: pwsh -File pack-backend.ps1 -IncludeDist  （额外产出前后端全包，需先 npm run build）
+
+param(
+    [switch]$IncludeDist
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -59,13 +64,25 @@ Copy-Item "stop.sh" "backend-pack-tmp/stop.sh"
 Copy-Item "scripts/cleanup-processes.ps1" "backend-pack-tmp/scripts/cleanup-processes.ps1"
 Copy-Item "scripts/cleanup-processes.sh" "backend-pack-tmp/scripts/cleanup-processes.sh"
 
+# 全包（-IncludeDist）：复制预构建 dist 并换用带 --full 的启动脚本
+# 前提：已运行 npm run build（dist/ 存在）。轻包不受影响。
+if ($IncludeDist) {
+    if (-not (Test-Path "dist/index.html")) {
+        Write-Error "-IncludeDist 需要 dist/，请先运行 npm run build"
+    }
+    Copy-Item -Recurse -Path "dist" -Destination "backend-pack-tmp/dist"
+    Copy-Item "start-full-backend.bat" "backend-pack-tmp/start.bat" -Force
+    Copy-Item "start-full-backend.sh" "backend-pack-tmp/start.sh" -Force
+}
+
 # 压缩（手动创建 zip 条目并强制正斜杠分隔，兼容 Linux/macOS 的 unzip）。
 # ⚠️ 不能用 Compress-Archive / .NET Framework 的 CreateFromDirectory：在 Windows 上它们
 #   用反斜杠分隔条目，Linux 解压时会把 "scripts\cleanup-processes.sh" 当单个文件名
 #   （目录结构丢失），start.sh 引用会失败。
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$zipPath = Join-Path $root "ai-novel-reader-v2-backend.zip"
+$zipName = if ($IncludeDist) { "ai-novel-reader-v2-full.zip" } else { "ai-novel-reader-v2-backend.zip" }
+$zipPath = Join-Path $root $zipName
 if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
 $archive = [System.IO.Compression.ZipFile]::Open($zipPath, [System.IO.Compression.ZipArchiveMode]::Create)
 try {
@@ -83,5 +100,5 @@ try {
 Remove-Item -Recurse -Force "backend-pack-tmp"
 
 # 显示结果
-$file = Get-Item "ai-novel-reader-v2-backend.zip"
-Write-Host "打包完成: ai-novel-reader-v2-backend.zip ($([math]::Round($file.Length / 1KB))KB)" -ForegroundColor Green
+$file = Get-Item $zipPath
+Write-Host "打包完成: $zipName ($([math]::Round($file.Length / 1KB))KB)" -ForegroundColor Green
