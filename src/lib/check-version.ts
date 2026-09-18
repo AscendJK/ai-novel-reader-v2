@@ -4,7 +4,7 @@
  */
 
 import { APP_VERSION } from "@/config/version";
-import { getServerUrl, apiFetch } from "./api-client";
+import { getEffectiveServerUrl, apiFetch } from "./api-client";
 
 export interface VersionCheckResult {
   /** 版本是否一致（后端不可达时视为一致） */
@@ -22,7 +22,7 @@ export interface VersionCheckResult {
  * 后端不可达时不报错，视为版本一致（离线模式不阻塞使用）
  */
 export async function checkVersion(): Promise<VersionCheckResult> {
-  const base = getServerUrl();
+  const base = getEffectiveServerUrl();
   if (!base) {
     return { match: true, frontend: APP_VERSION, backend: null };
   }

@@ -129,8 +129,28 @@ describe("apiFetch", () => {
     globalThis.fetch = vi.fn();
   });
 
-  it("未配置 URL 时抛出错误", async () => {
-    await expect(apiFetch("/api/test")).rejects.toThrow("未配置服务器地址");
+  it("未配置 URL 且页面托管于 GitHub Pages 时抛出错误（不回退）", async () => {
+    // jsdom 默认 hostname 为 localhost，此处模拟 github.io 托管环境
+    const original = window.location;
+    vi.stubGlobal("window", { ...window, location: { ...original, hostname: "ascendjk.github.io", origin: "https://ascendjk.github.io" } });
+    try {
+      await expect(apiFetch("/api/test")).rejects.toThrow("未配置服务器地址");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("未配置 URL 且页面为同源部署（localhost）时回退当前源", async () => {
+    // jsdom 默认 hostname 为 localhost，走同源回退
+    const mockRes = new Response('{"ok":true}', { status: 200 });
+    vi.mocked(globalThis.fetch).mockResolvedValue(mockRes);
+
+    await apiFetch("/api/test");
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringMatching(/^http:\/\/localhost(:\d+)?\/api\/test$/),
+      expect.anything()
+    );
   });
 
   it("拼接 URL 正确", async () => {

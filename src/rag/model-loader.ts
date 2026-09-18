@@ -7,14 +7,14 @@
 
 import { useRAGStore } from "@/stores/rag-store";
 import { broadcast } from "@/lib/broadcast";
-import { getServerUrl } from "@/lib/api-client";
+import { getEffectiveServerUrl } from "@/lib/api-client";
 
 /**
  * 获取后端模型代理地址。仅支持后端代理一种来源。
  * 未配置服务器地址时返回空串（调用方应直接失败，不再回退直连镜像）。
  */
 export function getRemoteHost(): string {
-  const serverUrl = getServerUrl();
+  const serverUrl = getEffectiveServerUrl();
   return serverUrl ? `${serverUrl}/api/rag/model-proxy/` : "";
 }
 
@@ -23,7 +23,7 @@ export function getRemoteHost(): string {
  * 模型统一通过后端 /api/rag/model-proxy 拉取，后端负责缓存与镜像回源。
  */
 export function getMirrorOptions(): { id: string; name: string; url: string }[] {
-  const serverUrl = getServerUrl();
+  const serverUrl = getEffectiveServerUrl();
   if (serverUrl) {
     return [{ id: "backend-proxy", name: "后端代理", url: `${serverUrl}/api/rag/model-proxy/` }];
   }
@@ -141,8 +141,8 @@ export async function downloadModel(modelKey: string): Promise<boolean> {
       env.allowRemoteModels = true;
       env.useBrowserCache = typeof caches !== 'undefined' && typeof caches.open === 'function';
 
-      // 模型统一从后端代理拉取；未配置服务器地址时直接失败
-      const serverUrl = getServerUrl();
+      // 模型统一从后端代理拉取；无生效服务器地址时直接失败
+      const serverUrl = getEffectiveServerUrl();
       if (!serverUrl) {
         throw new Error("未配置服务器地址，无法从后端下载模型。请在设置中配置服务器地址。");
       }
@@ -276,7 +276,7 @@ export async function setupModelLoader(): Promise<void> {
     env.useBrowserCache = typeof caches !== 'undefined' && typeof caches.open === 'function';
     env.allowLocalModels = false; // public/models 为空，不检查本地路径
     // 有 serverUrl 时设置 remoteHost，让 transformers.js 请求后端代理
-    const serverUrl = getServerUrl();
+    const serverUrl = getEffectiveServerUrl();
     if (serverUrl) {
       env.remoteHost = `${serverUrl}/api/rag/model-proxy`;
     }

@@ -57,6 +57,21 @@ export function hasServerUrl(): boolean {
 }
 
 /**
+ * 生效的服务器地址：显式配置优先；未配置且页面本身由后端伺服（非 GitHub Pages 托管）时，
+ * 回退到当前页面源（同源模式）。GitHub Pages 前端未配置服务器时返回空串（离线模式，与既有行为一致）。
+ */
+export function getEffectiveServerUrl(): string {
+  const configured = localStorage.getItem(SERVER_URL_KEY) || "";
+  if (configured) return configured;
+  if (typeof window !== "undefined" &&
+      !window.location.hostname.endsWith(".github.io") &&
+      !window.location.hostname.endsWith(".github.com")) {
+    return window.location.origin;
+  }
+  return "";
+}
+
+/**
  * 统一的 API fetch 封装
  * 自动拼接服务器地址和认证头
  *
@@ -66,7 +81,7 @@ export function hasServerUrl(): boolean {
  * @throws Error 未配置服务器地址时抛出
  */
 export async function apiFetch(path: string, init?: RequestInit, skipAuth?: boolean): Promise<Response> {
-  const base = getServerUrl();
+  const base = getEffectiveServerUrl();
   if (!base) {
     throw new Error("未配置服务器地址，请在登录页面配置后端地址");
   }

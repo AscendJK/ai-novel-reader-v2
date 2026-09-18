@@ -1,15 +1,15 @@
 /**
  * check-version 测试
- * 依赖 apiFetch 和 getServerUrl
+ * 依赖 apiFetch 和 getEffectiveServerUrl
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { checkVersion } from "../check-version";
 
 // 使用 vi.hoisted 确保 mock 函数在 vi.mock 工厂前可用
-const { mockApiFetch, mockGetServerUrl } = vi.hoisted(() => ({
+const { mockApiFetch, mockGetEffectiveServerUrl } = vi.hoisted(() => ({
   mockApiFetch: vi.fn(),
-  mockGetServerUrl: vi.fn(),
+  mockGetEffectiveServerUrl: vi.fn(),
 }));
 
 // 模拟 APP_VERSION
@@ -20,7 +20,7 @@ vi.mock("@/config/version", () => ({
 // 模拟 apiFetch 和 getServerUrl
 vi.mock("@/lib/api-client", () => ({
   apiFetch: mockApiFetch,
-  getServerUrl: mockGetServerUrl,
+  getEffectiveServerUrl: mockGetEffectiveServerUrl,
 }));
 
 describe("checkVersion", () => {
@@ -29,7 +29,7 @@ describe("checkVersion", () => {
   });
 
   it("无 URL 时返回 match: true, backend: null", async () => {
-    mockGetServerUrl.mockReturnValue("");
+    mockGetEffectiveServerUrl.mockReturnValue("");
 
     const result = await checkVersion();
 
@@ -42,7 +42,7 @@ describe("checkVersion", () => {
   });
 
   it("后端返回相同版本时 match: true", async () => {
-    mockGetServerUrl.mockReturnValue("http://192.168.1.100:5173");
+    mockGetEffectiveServerUrl.mockReturnValue("http://192.168.1.100:5173");
     mockApiFetch.mockResolvedValue(
       new Response(JSON.stringify({ version: "2.1.8" }), { status: 200 })
     );
@@ -55,7 +55,7 @@ describe("checkVersion", () => {
   });
 
   it("后端返回不同版本时 match: false", async () => {
-    mockGetServerUrl.mockReturnValue("http://192.168.1.100:5173");
+    mockGetEffectiveServerUrl.mockReturnValue("http://192.168.1.100:5173");
     mockApiFetch.mockResolvedValue(
       new Response(JSON.stringify({ version: "2.1.7" }), { status: 200 })
     );
@@ -68,7 +68,7 @@ describe("checkVersion", () => {
   });
 
   it("后端返回非 200 时返回错误信息", async () => {
-    mockGetServerUrl.mockReturnValue("http://192.168.1.100:5173");
+    mockGetEffectiveServerUrl.mockReturnValue("http://192.168.1.100:5173");
     mockApiFetch.mockResolvedValue(
       new Response(null, { status: 500 })
     );
@@ -81,7 +81,7 @@ describe("checkVersion", () => {
   });
 
   it("网络错误时返回 match: true（不阻塞使用）", async () => {
-    mockGetServerUrl.mockReturnValue("http://192.168.1.100:5173");
+    mockGetEffectiveServerUrl.mockReturnValue("http://192.168.1.100:5173");
     mockApiFetch.mockRejectedValue(new TypeError("fetch failed"));
 
     const result = await checkVersion();
@@ -91,7 +91,7 @@ describe("checkVersion", () => {
   });
 
   it("调用 apiFetch 时传入 skipAuth=true", async () => {
-    mockGetServerUrl.mockReturnValue("http://192.168.1.100:5173");
+    mockGetEffectiveServerUrl.mockReturnValue("http://192.168.1.100:5173");
     mockApiFetch.mockResolvedValue(
       new Response(JSON.stringify({ version: "2.1.8" }), { status: 200 })
     );

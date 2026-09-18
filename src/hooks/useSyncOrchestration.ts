@@ -9,7 +9,7 @@ import { shouldDownloadNovel, shouldDeleteLocalNovel } from "@/sync/novel-reconc
 import { syncClient } from "@/sync/sync-client";
 import { gatherChanges, applyServerData } from "@/sync/sync-bridge";
 import type { SyncData } from "@/sync/types";
-import { apiFetch, getServerUrl } from "@/lib/api-client";
+import { apiFetch, getEffectiveServerUrl } from "@/lib/api-client";
 import { getAiRunning } from "@/lib/ai-state";
 import { dedupSummaries } from "@/lib/dedup-utils";
 import { downloadModel } from "@/rag/model-loader";
@@ -471,7 +471,7 @@ const applySyncData = useCallback(async (data: SyncData) => {
 
     const store = useRAGStore.getState();
     const defaultModelKey = "Xenova/bge-small-zh-v1.5";
-    const hasServer = !!getServerUrl();
+    const hasServer = !!getEffectiveServerUrl();
     if (hasServer && !store.isModelDownloaded(defaultModelKey) && !store.currentDownload) {
       downloadModel(defaultModelKey).catch(() => {});
     }

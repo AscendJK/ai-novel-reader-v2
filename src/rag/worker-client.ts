@@ -8,7 +8,7 @@
  * - Worker/浏览器不支持时自动回退：调用方应 catch 后走主线程 encodeQuery。
  */
 
-import { getServerUrl } from "@/lib/api-client";
+import { getEffectiveServerUrl } from "@/lib/api-client";
 import { ragLog } from "@/lib/logger";
 import { encodeQuery } from "./client-encoder";
 
@@ -70,7 +70,7 @@ export async function encodeQueryWithWorker(text: string, engine: string, opts?:
         };
         signal?.addEventListener("abort", onAbort, { once: true });
         pending.set(id, { resolve, reject, signal });
-        const serverUrl = getServerUrl();
+        const serverUrl = getEffectiveServerUrl();
         try {
           w.postMessage({ type: "main", id, text, engine, serverUrl });
         } catch (err) {

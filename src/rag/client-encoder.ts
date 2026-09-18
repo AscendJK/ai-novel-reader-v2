@@ -5,9 +5,9 @@
  */
 
 import { encodeQueryCore } from "./encode-core";
-import { getServerUrl } from "@/lib/api-client";
+import { getEffectiveServerUrl } from "@/lib/api-client";
 
-/** 在主线程执行编码（使用 localStorage 中的 serverUrl） */
+/** 在主线程执行编码（使用生效的 serverUrl：显式配置优先，同源模式回退当前源） */
 export async function encodeQuery(text: string, engine: string): Promise<Float32Array | null> {
-  return encodeQueryCore(text, engine, getServerUrl());
+  return encodeQueryCore(text, engine, getEffectiveServerUrl());
 }
