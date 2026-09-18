@@ -6,7 +6,7 @@
 
 ## 快速开始
 
-项目采用**前后端分离架构**：前端部署在 GitHub Pages，后端运行在本地电脑。
+项目采用**前后端分离架构**：前端部署在 GitHub Pages，后端运行在本地电脑。后端支持 HTTP / HTTPS 双端口同时监听（HTTPS 需安装 mkcert，见下文）。
 
 ### 前端（GitHub Pages）
 
@@ -22,21 +22,26 @@
 
 **前置条件**：
 - [Node.js](https://nodejs.org) v18~22 LTS（推荐 22）
+- [mkcert](https://github.com/FiloSottile/mkcert)（**可选**，用于 HTTPS；iOS 用户强烈推荐，见「HTTPS 与 mkcert」章节）
 - Python 3.9+（**可选**，仅"服务端推理"朗读引擎需要：`pip install sherpa-onnx`；不安装不影响其他功能）
 
 > **Node.js 24+ 用户注意**：`better-sqlite3` 在 Node 24 上缺少预编译二进制，需要 Python 3.x 和 C++ 构建工具。建议使用 **Node.js 22 LTS**。
 
 **方式一：下载后端包（推荐）**
 
-从 [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases) 下载 `ai-novel-reader-backend-v2.x.x.zip`（约 60 KB），解压后：
+从 [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases) 下载（二选一）：
 
+| 包 | 体积 | 适用 |
+|---|---|---|
+| `ai-novel-reader-v2-backend.zip` | ~68 KB | **后端包**：配合 GitHub Pages 前端使用 |
+| `ai-novel-reader-v2-full.zip` | ~1 MB | **前后端全包**：内含预构建前端，iPhone 同源免证书访问 |
+
+解压后：
 - **Windows**：双击 `start.bat`
 - **macOS / Linux**：`chmod +x start.sh && ./start.sh`
 
-脚本会自动安装依赖并启动后端（仅安装服务端依赖，不构建前端）。首次构建索引时会自动从镜像下载模型（需要网络）。
+两个包的启动脚本都只执行 `npm install`（仅 5 个后端依赖）+ `node server/index.js`；区别是全包的脚本自带 `--full` 参数并伺服 `dist/`（**无需任何构建步骤**）。
 
-> **精简包内容**：仅包含 `server/` 源码（含 `tts-worker.py` 服务端推理脚本）、`package.json`（5 个后端依赖）、启动脚本和 `README.txt`（部署说明）。启动脚本只执行 `npm install` + `node server/index.js`，不构建前端。运行时数据（数据库、模型缓存、证书）由服务器启动后自动创建。
->
 > **如何更新后端包**：下载新版 zip，直接解压到旧版目录覆盖即可。
 > 后端包不包含 `server/data/` 目录，你的数据库（小说、笔记、阅读进度等）不会丢失。
 > 如果之前修改过 `start.bat`（如自定义端口号），覆盖后需重新修改。
@@ -48,10 +53,11 @@
 本地打包（跨平台，PowerShell 7 或 Windows PowerShell 均可）：
 
 ```bash
-npm run pack:backend
+npm run pack:backend                      # 只打后端包
+pwsh -File pack-backend.ps1 -IncludeDist  # 额外打前后端全包（需先 npm run build）
 ```
 
-生成 `ai-novel-reader-v2-backend.zip`（约 60 KB）。
+分别生成 `ai-novel-reader-v2-backend.zip`（约 68 KB）和 `ai-novel-reader-v2-full.zip`（约 1 MB）。
 
 **自动发布 Release**：推送到 `main` 分支只触发前端部署，不会打包后端。需要发布新版本时打 tag：
 
@@ -60,7 +66,7 @@ git tag v2.1.8
 git push origin v2.1.8
 ```
 
-GitHub Actions（`.github/workflows/release-backend.yml`）会自动运行 `pack-backend.ps1`、校验产物（检查 `tts-worker.py`、`rag.js` 等关键文件是否在包内，缺失即失败）、并创建 Release、上传 zip。也可以在 Actions 页面手动触发（workflow_dispatch）。
+GitHub Actions（`.github/workflows/release-backend.yml`）会自动构建前端、分别打包两个 zip、校验产物（检查 `tts-worker.py`、`rag.js`、全包的 `dist/index.html` 等关键文件，缺失即失败）、并创建 Release 上传。也可以在 Actions 页面手动触发（workflow_dispatch）。
 
 **方式二：Clone 整个仓库**
 
@@ -72,28 +78,39 @@ cd ai-novel-reader-v2
 - **Windows**：双击 `start.bat`
 - **macOS / Linux**：`chmod +x start.sh && ./start.sh`
 
-脚本会自动安装依赖、构建前端、启动服务器（完整模式，含前端）。
+脚本会自动安装依赖、构建前端、启动服务器（完整模式，含前端静态伺服）。
 
 启动后终端会显示地址：
 ```
-[sync] http://0.0.0.0:5173 (api-only)
+[static] serving ...dist at /ai-novel-reader-v2/ (full mode)
+[sync] https://0.0.0.0:8443 (full)   <- 已安装 mkcert 时
+[sync] http://0.0.0.0:5173 (full)
 ```
 
-**配置前端连接**：
+### 连接方式总览（前端 ↔ 后端）
+
+一个后端实例可同时支持以下所有连接方式，按场景选用：
+
+| 方式 | 前端页面来自 | 服务器地址填什么 | iOS Safari | 证书 | SW 离线壳 |
+|---|---|---|---|---|---|
+| ① Pages + HTTP 后端 | GitHub Pages | `http://IP:5173` | ❌ 平台拦截 | 不需要 | Pages 侧可用 |
+| ② Pages + HTTPS 后端（**iOS 推荐**） | GitHub Pages | `https://IP:8443` | ✅ | 需要（mkcert） | Pages 侧可用 |
+| ③ 同源 HTTP | 后端伺服 | 不用填（自动同源） | ✅ | 不需要 | 不可用¹ |
+| ④ 同源 HTTPS | 后端伺服 | 不用填（自动同源） | ✅ | 需要（mkcert） | 可用 |
+
+¹ 安全上下文限制：局域网 IP 走 HTTP 时浏览器不注册 Service Worker（详见「HTTPS 与 mkcert」）。
+
+- **方式①**：桌面浏览器完全可用（控制台有黄色警告，不影响功能）；仅 iOS 不可用。
+- **方式②**：功能最完整——Pages 页面壳常驻公网（关掉电脑也能打开应用），服务器开着时全功能同步。
+- **方式③④**：直接访问 `http://IP:5173/ai-novel-reader-v2/`（或 https 8443），页面与 API 同源，**无需配置服务器地址**，自动连接本机后端。
+
+**配置前端连接**（方式①②）：
 
 1. 打开前端页面
-2. 在登录界面输入后端服务器地址（如 `http://192.168.1.100:5173`）
+2. 在登录界面点击「配置」，输入后端服务器地址
 3. 点击「保存并连接」，显示「连接成功」即可
 
-### 同源模式（推荐 iOS 用户 / 免配置）
-
-完整模式（Clone 仓库或全包）启动后，直接用浏览器访问：
-
-```
-http://<服务器IP>:5173/ai-novel-reader-v2/
-```
-
-页面与 API 同源，**无需配置服务器地址**，自动连接本机后端。iOS（iPhone/iPad）上 GitHub Pages 前端无法访问 HTTP 后端（WebKit 混合内容限制），同源模式是免证书的替代方案；也可安装 mkcert 根证书后使用 `https://<IP>:8443`。
+> **智能补全**：地址输入支持简写——`192.168.1.100` 自动补全为 `http://192.168.1.100:5173`；`https://192.168.1.100` 自动补全为 `https://192.168.1.100:8443`。已带端口的地址原样保留。
 
 > **如何查看服务器 IP**：Windows 运行 `ipconfig`，macOS/Linux 运行 `ifconfig` 或 `ip addr`，查找局域网 IPv4 地址。
 
@@ -113,58 +130,77 @@ npm run dev
 
 ---
 
-## HTTPS 与证书（可选）
+## iOS / iPadOS 连接指南
 
-**不安装 mkcert 也能正常使用**，后端会以 HTTP 模式运行。前端（GitHub Pages，HTTPS）向后端（HTTP）发请求时，如果后端运行在 localhost 上，浏览器通常允许通过；如果后端在局域网 IP（如 192.168.x.x）上，部分浏览器可能阻止 mixed content 请求。安装 mkcert 启用 HTTPS 可完全消除此问题。
+iOS 上**所有浏览器**（含 Chrome/Firefox 等第三方，均基于 WebKit 内核）存在两条平台级限制：
 
-安装 mkcert 只是消除这个警告，不是必须的。
+1. **混合内容拦截**：HTTPS 页面（GitHub Pages）无法请求 HTTP 后端。与 Chrome/Edge 不同，Safari 无"不安全内容放行"选项，且 `http://127.0.0.1`、`http://localhost` 也不豁免（WebKit Bug 171934，多年未改）。
+2. **Service Worker 仅限安全上下文**：HTTP 局域网页面无法注册 SW——意味着离线壳、PWA 缓存在 HTTP 页面上不可用。
 
-### 前端
+因此 iOS 用户有两条可用路径，按是否愿意装一次证书选择：
 
-GitHub Pages 自动提供 HTTPS，无需额外配置。
+### 路径 A：同源 HTTP（免证书，最简单）
 
-### 后端
+服务器以完整模式运行后，iPhone Safari 直接访问：
 
-后端默认监听 HTTP（端口 5173）。如果系统安装了 [mkcert](https://github.com/FiloSottile/mkcert)，服务器会自动额外启动 HTTPS（端口 8443），消除浏览器的 mixed content 警告。
+```
+http://<电脑IP>:5173/ai-novel-reader-v2/
+```
 
-**安装 mkcert**（可选）：
+- ✅ 零证书、零安装，打开即用，登录后自动连接本机后端
+- ❌ 电脑/服务器关闭时页面不可访问（无 SW 离线壳）
+- 首次访问系统可能弹"本地网络"权限，点允许
 
-```bash
-# Windows (winget) - 需要管理员权限
-winget install mkcert
+### 路径 B：mkcert HTTPS（推荐，功能完整）
+
+装一次 mkcert 证书后，获得 `https://<电脑IP>:8443` 受信入口：
+
+- ✅ GitHub Pages 前端正常连接（方式②）
+- ✅ 同源 HTTPS（方式④），SW 离线壳可用——服务器关闭后仍能打开应用离线阅读
+- 成本：每台 iOS 设备一次性 5 分钟
+
+**电脑端安装 mkcert**（一次性）：
+
+```powershell
+# Windows（winget；如提示"已安装"但 mkcert 命令不存在，见下方 FAQ）
+winget install FiloSottile.mkcert
 
 # macOS
 brew install mkcert
 
-# Linux
+# Linux（Debian/Ubuntu）
 sudo apt install mkcert
 ```
 
-安装后初始化：
+安装后初始化本地 CA（**需要管理员/sudo 权限**，只需一次）：
 
-```bash
-mkcert -install    # 安装本地 CA（只需一次，需管理员权限）
+```powershell
+mkcert -install
 ```
 
-**局域网设备信任证书**：
+重启后端（`start.bat`），启动日志确认出现 `https://0.0.0.0:8443`。
 
-如果使用 HTTPS 访问后端，其他设备需要安装 CA 根证书：
+**证书 IP 变更**：mkcert 证书按生成时机器的 IP 签发。换了 Wi-Fi / IP 变化后，删除 `server/data/cert.pem` 和 `server/data/key.pem` 再重启后端，会自动按新 IP 重新签发（`rootCA.pem` 与手机端安装不受影响）。
 
-```bash
-mkcert -CAROOT     # 获取 CA 根证书路径
-```
+**iPhone 安装根证书**（每台设备一次性）：
 
-将 `rootCA.pem` 发送到其他设备并安装：
-- **Windows**：双击 → 安装证书 → 受信任的根证书颁发机构
-- **macOS**：`sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain rootCA.pem`
-- **Android**：设置 → 安全 → 加密与凭据 → 安装证书 → CA 证书
-- **iOS**：设置 → 通用 → 描述文件 → 安装 → 设置 → 通用 → 关于 → 证书信任设置 → 启用
+1. 把后端电脑上的 `server/data/rootCA.pem` 传到 iPhone（隔空投送不可用于证书，用微信/QQ/邮件均可，**传完建议删除文件与聊天记录**——根证书是敏感物）
+2. iPhone 上点开该文件 → 设置自动跳转「已下载描述文件」→ 设置 → 通用 → VPN 与设备管理 → 安装
+3. ⚠️ **关键步骤，漏掉等于白装**：设置 → 通用 → 关于本机 → **证书信任设置** → 把 mkcert 相关项的开关打开（开启"完全信任"）
 
-| 访问方式 | 无 mkcert | 有 mkcert |
-|---------|----------|----------|
-| `http://局域网IP:5173` 前端 + 后端 | ✅ 正常 | ✅ 正常 |
-| `https://ascendjk.github.io` 前端 + HTTP 后端 | ✅ 正常（控制台有黄色警告） | ✅ 正常（无警告） |
-| `https://ascendjk.github.io` 前端 + HTTPS 后端 | — | ✅ 正常（无警告） |
+**验证**：Safari 访问 GitHub Pages 前端 → 配置服务器地址 `https://<电脑IP>:8443` → 显示"连接成功"且无证书警告；或直接访问 `https://<电脑IP>:8443/ai-novel-reader-v2/`（同源 HTTPS）。
+
+### 数据线连接（无 Wi-Fi 场景的备用方案）
+
+iPhone 用数据线连电脑后，开启 **个人热点**（设置 → 个人热点 → 允许其他人加入），Windows 会识别出 USB 网络共享，手机与电脑处于 `172.20.10.x` 网段——手机 Safari 访问 `http://172.20.10.2:5173/ai-novel-reader-v2/` 即走数据线（不经路由器、不耗蜂窝流量）。
+
+注意事项：
+- Windows 防火墙可能将 USB 网卡识别为"公用网络"，需放行 Node.js 的公用网络入站
+- 走 HTTPS（8443）时需先插线重启后端，让证书把 `172.20.10.2` 签进去
+- iOS 不支持反向共享（电脑网 → 手机），无需尝试
+- 该方案不改变浏览器安全规则：SW、混合内容限制与 Wi-Fi 场景完全一致
+
+> **为什么没有纯 HTTP 的离线方案？** Service Worker 是离线能力的载体，而浏览器规定 SW 只能在安全上下文（HTTPS / localhost）注册，HTTP 局域网页面无法绕过。因此"不装证书"与"SW 离线壳"二选一，装 mkcert 是同时拿到两者的唯一途径。
 
 ---
 
@@ -198,6 +234,8 @@ mkcert -CAROOT     # 获取 CA 根证书路径
 
 服务器不可达时可离线登录，阅读、笔记、AI 分析（直连 API）不受影响。服务器恢复后自动重连并同步数据。离线期间无法跨设备同步。AI 问答和范围总结的结果按小说独立保存，切换小说不丢失。
 
+未配置服务器地址且页面由后端伺服（同源模式）时，自动以当前源作为服务器地址；GitHub Pages 前端未配置时保持离线模式。
+
 ---
 
 ## 使用教程
@@ -207,7 +245,7 @@ mkcert -CAROOT     # 获取 CA 根证书路径
 首次访问弹出登录框：
 
 1. **输入用户名**（2-30 字符），选择「创建并进入」或选择已有用户
-2. **配置服务器地址**（可选）：点击「配置」输入后端地址（如 `http://192.168.1.100:5173`），不配置则为离线模式
+2. **配置服务器地址**（可选）：点击「配置」输入后端地址——`192.168.1.100` 自动补全 `http://…:5173`；`https://192.168.1.100` 自动补全 `:8443`（mkcert）。不配置则为离线模式（同源模式下无需配置）
 
 > 数据始终以浏览器本地为主，服务器仅用于备份和跨设备同步。服务器不可达时，「创建新用户」可正常创建本地账户，「加入已有」需服务器在线才能拉取数据。
 >
@@ -405,8 +443,10 @@ admin.bat        # Windows 双击
 
 ```
 前端：GitHub Pages（React 19 + TypeScript + Vite + Tailwind CSS + Zustand）
-后端：本地服务器（Express + better-sqlite3）
-├─ 前后端分离：前端通过用户配置的服务器地址连接后端
+后端：本地服务器（Express + better-sqlite3），HTTP :5173 / HTTPS :8443（mkcert）双端口并存
+├─ 前后端分离：前端通过用户配置的服务器地址连接后端；同源部署时自动回退当前源
+├─ 同源模式：--full 且存在 dist 时后端伺服前端（/ 302 → /ai-novel-reader-v2/），
+│  子路径结构与 GitHub Pages 完全一致（SW 作用域 / COI / manifest 依赖它）
 ├─ 多 Agent 引擎：总结 / 人物 / 时间线 / 图谱 / 地图（实时状态反馈）
 ├─ 多引擎语义检索：BGE / E5 / MiniLM / GTE 等 ONNX 模型（Worker Thread 编码）
 ├─ d3-force 人物关系图谱（鼠标滚轮 + 移动端双指缩放）
@@ -419,7 +459,7 @@ admin.bat        # Windows 双击
 ├─ 用户名系统 + Session Token 认证 + 服务端中心化同步（自动重注册）
 ├─ 三级 RAG 缓存：内存 LRU（100MB）→ IndexedDB（100-500MB）→ 服务端 SQLite
 ├─ 定时 WAL checkpoint + 自动数据库备份（24h）
-└─ 单元测试覆盖：152 个测试用例（Vitest + Testing Library）
+└─ 单元测试覆盖：578 个测试用例（Vitest + Testing Library）
 ```
 
 ---
@@ -439,7 +479,7 @@ admin.bat        # Windows 双击
 - **自动重注册**：服务器重启或 Token 失效时，客户端自动以已有用户名重新加入，获取新 Token 并拉取全量数据
 - **单设备在线**：同一用户名新设备登录时旧设备自动下线
 - **API Key 本地隔离**：按用户名存储在 IndexedDB，不上传服务器，不同步，被踢下线时自动保留
-- **CORS 白名单**：仅允许 localhost、局域网 IP 和 `*.github.io` 域名访问
+- **CORS 白名单**：仅允许 localhost、局域网 IP（http/https）和 `*.github.io` 域名访问
 - **CSP 安全策略**：限制 `connect-src` 仅允许 HTTP/HTTPS 协议请求
 - **请求限流**：RAG 构建、编码等高开销接口按 IP 限频
 - **输入校验**：用户名长度限制、请求体大小限制（50MB）、文本长度限制
@@ -452,6 +492,7 @@ admin.bat        # Windows 双击
 ## 注意事项
 
 - **后端仅限局域网 / 本地使用，不要暴露到公网**。项目无密码认证、SQLite 不适合公网并发，暴露后存在 API Key 泄露、会话劫持、数据损坏等风险。前端部署在 GitHub Pages 是安全的，敏感数据（API Key）仅存储在浏览器本地
+- **mkcert 根证书（rootCA.pem）是敏感文件**：它能为任意域名签发受信证书。传给家人/自己的设备后请删除中转记录，不要公网传播
 - 大长篇（5000+ 章）BGE 首次构建可能需要 5-30 分钟，构建期间不影响正常阅读
 - 服务端模型加载需要 ~2GB 内存峰值
 - 同一台服务器多用户同时构建时自动排队，最多 10 个任务
@@ -466,7 +507,7 @@ admin.bat        # Windows 双击
 |--------|------|
 | Chrome / Edge 86+ | 完全支持 |
 | Firefox 120+ | 文件夹导入需手动选择文件 |
-| Safari 15+ | 基本功能 |
+| Safari 15+ | 基本功能（iOS 连接后端见「iOS / iPadOS 连接指南」） |
 | 移动端 Chrome / Safari | 响应式适配 |
 
 ---
@@ -547,30 +588,50 @@ MIT License
    - 卸载当前 Node.js
    - 从 https://nodejs.org 下载 22.x.x LTS 版本安装
 
-### mkcert 安装失败
+### mkcert 安装问题
 
-**原因**：需要管理员权限。
+**安装命令**（需管理员权限）：
 
-**解决方案**：
-- Windows：以管理员身份运行终端（右键 PowerShell → 以管理员身份运行）
-- macOS/Linux：使用 `sudo`
+```powershell
+winget install FiloSottile.mkcert    # Windows
+brew install mkcert                  # macOS
+sudo apt install mkcert              # Linux
+```
+
+**"已安装的现有包，找不到可用的升级"，但 mkcert 命令不存在？**
+
+winget 注册信息残留（安装记录在、可执行文件已丢）。用**普通（非管理员）权限**清理后重装：
+
+```powershell
+winget uninstall FiloSottile.mkcert   # 普通权限执行；管理员权限会报"user scope cannot be uninstalled"
+winget install FiloSottile.mkcert
+```
+
+**装好后命令找不到？** 关掉终端重开一个（PATH 重载），再试 `mkcert --version`。
+
+**`mkcert -install` 失败？** 需要管理员权限：Windows 右键 PowerShell"以管理员身份运行"；macOS/Linux 用 `sudo`。
+
+### 升级版本后页面行为异常（旧缓存）
+
+前端带 PWA Service Worker 缓存。服务器更新后，浏览器可能仍在跑旧版缓存代码（典型症状：控制台请求不存在的旧路径 404）。
+
+**解决**：硬刷新（Ctrl+Shift+R），或在 DevTools → Application → Storage → Clear site data。iOS：设置 → Safari → 清除历史记录与网站数据。项目自身也有两道兜底：SW 更新时自动清理过期缓存（`cleanupOutdatedCaches`）、前后端版本不一致时弹提示对话框。
 
 ### 浏览器控制台显示 mixed content 警告
 
-**原因**：GitHub Pages（HTTPS）前端向 HTTP 后端发请求，浏览器会显示黄色警告。
+**原因**：GitHub Pages（HTTPS）前端向 HTTP 后端发请求，浏览器显示黄色警告。
 
-**影响**：仅是警告，**不会阻止请求**，所有功能正常工作。
-
-**消除警告**：安装 mkcert 后服务器会自动启用 HTTPS，警告消失。不安装也完全不影响使用。
+**影响**：桌面浏览器仅是警告，**不会阻止请求**，所有功能正常工作。**iOS Safari 会直接阻断请求**（无放行选项），必须改用 HTTPS 后端或同源模式，见「iOS / iPadOS 连接指南」。
 
 ### 前端无法连接后端
 
 **检查清单**：
 1. 后端是否已启动（终端显示 `[sync] http://0.0.0.0:5173`）
-2. 服务器地址是否正确（包含协议和端口，如 `http://192.168.1.100:5173`）
-3. 前端和后端是否在同一局域网
-4. 防火墙是否放行了 5173 端口
-5. 浏览器控制台的 mixed content 黄色警告不影响连接，忽略即可
+2. 服务器地址协议与端口是否匹配：`http://` 对应 `:5173`，`https://` 对应 `:8443`（两种端口同时监听）
+3. **iOS 设备**：HTTP 后端 + GitHub Pages 前端的组合会被平台阻断，改用同源模式或 mkcert HTTPS
+4. 换过 Wi-Fi / IP 变化后连不上 HTTPS？删除 `server/data/cert.pem`、`key.pem` 重启后端重新签证书
+5. 前端和后端是否在同一局域网；防火墙是否放行 5173/8443 端口
+6. HTTPS 报证书错误且手机已装 rootCA？检查「证书信任设置」是否开启完全信任
 
 ### 如何重新安装依赖
 
