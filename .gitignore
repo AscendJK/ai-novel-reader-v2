@@ -46,6 +46,7 @@ public/models/custom/Xenova/*/tokenizer_config.json
 
 # Build artifacts
 ai-novel-reader-v2-backend.zip
+ai-novel-reader-v2-full.zip
 
 # Promotional post (not part of the project)
 POST.md
