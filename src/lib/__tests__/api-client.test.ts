@@ -79,6 +79,48 @@ describe("getServerUrl / setServerUrl / clearServerUrl / hasServerUrl", () => {
   });
 });
 
+// ── 无端口 URL 按协议补默认端口 ──
+
+describe("setServerUrl / checkServerReachable 无端口按协议补端口", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("https 无端口补 8443", () => {
+    setServerUrl("https://192.168.1.100");
+    expect(getServerUrl()).toBe("https://192.168.1.100:8443");
+  });
+
+  it("http 无端口补 5173", () => {
+    setServerUrl("http://192.168.1.100");
+    expect(getServerUrl()).toBe("http://192.168.1.100:5173");
+  });
+
+  it("裸域名补 http 协议 + 5173", () => {
+    setServerUrl("192.168.1.100");
+    expect(getServerUrl()).toBe("http://192.168.1.100:5173");
+  });
+
+  it("https 已有端口保留", () => {
+    setServerUrl("https://192.168.1.100:9000");
+    expect(getServerUrl()).toBe("https://192.168.1.100:9000");
+  });
+
+  it("checkServerReachable 对 https 无端口输入探测 8443", async () => {
+    globalThis.fetch = vi.fn();
+    const mockRes = new Response(null, { status: 200 });
+    vi.mocked(globalThis.fetch).mockResolvedValue(mockRes);
+
+    await checkServerReachable("https://192.168.1.100");
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "https://192.168.1.100:8443/api/sync/check-user/test",
+      expect.anything()
+    );
+  });
+});
+
+
 // ── apiFetch ──
 
 describe("apiFetch", () => {

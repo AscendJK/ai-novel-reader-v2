@@ -16,21 +16,30 @@ export function getServerUrl(): string {
 }
 
 /**
- * 设置后端服务器地址
- * @param url 服务器地址（如 "http://192.168.1.100:8443"）
+ * 规范化服务器地址：补协议头、移除末尾斜杠/冒号、无端口时按协议补默认端口。
+ * https 默认 8443（mkcert HTTPS），其余默认 5173（HTTP）。
  */
-export function setServerUrl(url: string): void {
+export function normalizeServerUrl(input: string): string {
+  let url = input;
   // 确保 URL 有协议头
   if (!/^https?:\/\//i.test(url)) {
     url = "http://" + url;
   }
   // 移除末尾斜杠和多余的冒号
   url = url.replace(/[/:]+$/, "");
-  // 如果没有端口号，自动补全 :5173
+  // 无端口时按协议补默认端口：https → 8443，http → 5173
   if (!/:\d+$/.test(url)) {
-    url += ":5173";
+    url += /^https:\/\//i.test(url) ? ":8443" : ":5173";
   }
-  localStorage.setItem(SERVER_URL_KEY, url);
+  return url;
+}
+
+/**
+ * 设置后端服务器地址
+ * @param url 服务器地址（如 "https://192.168.1.100:8443"）
+ */
+export function setServerUrl(url: string): void {
+  localStorage.setItem(SERVER_URL_KEY, normalizeServerUrl(url));
 }
 
 /**
@@ -82,15 +91,8 @@ export async function apiFetch(path: string, init?: RequestInit, skipAuth?: bool
  */
 export async function checkServerReachable(url: string): Promise<boolean> {
   try {
-    // 确保 URL 有协议头
-    if (!/^https?:\/\//i.test(url)) {
-      url = "http://" + url;
-    }
-    // 移除末尾多余冒号，自动补全端口
-    url = url.replace(/[/:]+$/, "");
-    if (!/:\d+$/.test(url)) {
-      url += ":5173";
-    }
+    // 规范化：补协议头 + 按协议补默认端口（https → 8443，http → 5173）
+    url = normalizeServerUrl(url);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000); // 5秒超时
 

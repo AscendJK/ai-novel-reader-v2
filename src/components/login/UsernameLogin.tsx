@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2 } from "lucide-react";
-import { getServerUrl, setServerUrl, checkServerReachable } from "@/lib/api-client";
+import { getServerUrl, setServerUrl, checkServerReachable, normalizeServerUrl } from "@/lib/api-client";
 import { APP_VERSION } from "@/config/version";
 
 const RECENT_URLS_KEY = "novel-reader-recent-urls";
@@ -57,12 +57,10 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
 
   // 保存服务器地址
   const handleSaveServerUrl = async () => {
-    let url = serverUrl.trim().replace(/\/+$/, "");
-    if (!url) return;
-    // 自动补全协议头
-    if (!/^https?:\/\//i.test(url)) {
-      url = "http://" + url;
-    }
+    const raw = serverUrl.trim().replace(/\/+$/, "");
+    if (!raw) return;
+    // 规范化统一收敛到 api-client 的 normalizeServerUrl（协议头 + 按协议补默认端口）
+    const url = normalizeServerUrl(raw);
     setServerUrlState(url);
     setServerUrl(url);
     addRecentUrl(url);
@@ -181,7 +179,7 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
                 )}
               </div>
               <p className="text-[10px] text-muted-foreground">
-                输入运行后端服务的电脑 IP 地址（端口 5173 自动补全）
+                输入后端地址：IP 自动补全 http://…:5173；https 开头自动补全 :8443（mkcert）
               </p>
               <div className="flex gap-2">
                 <Button
