@@ -16,6 +16,7 @@ vi.mock("../tts-cache", () => ({
 vi.mock("../zipvoice-engine", () => ({
   prepareTTS: vi.fn(),
   checkTTSCache: vi.fn(),
+  isIOSDevice: vi.fn(() => false),
 }));
 
 // mock user-utils

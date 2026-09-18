@@ -219,8 +219,6 @@ function scheduleRebuild(): void {
     console.warn("[TTS] 所有 worker 已崩溃，尝试自动重建...");
     void (async () => {
       try {
-        const files = await getCachedFiles();
-        if (files.size === 0) throw new Error("模型缓存缺失，无法重建 worker");
         if (disposed) return;
         // 重建整个池（沿用上次池大小）
         const targetSize = Math.max(1, activePoolSize || workerPoolSize);
@@ -324,6 +322,69 @@ function dispatchTask(task: Task): void {
  * files 会被 slice 拷贝后 transfer（零拷贝传输，原 buffer 保留可复用）。
  * 串行调用（一次一个），避免多 worker 同时加载造成内存峰值叠加。
  */
+/** iOS 设备检测：内存受限，Worker 池默认 1，UI 引导服务端推理 */
+export function isIOSDevice(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  const isIOSUA = /iPad|iPhone|iPod/.test(ua);
+  // iPadOS 13+ 桌面 UA 伪装为 Macintosh，用多点触控辅助识别
+  const isIPadOS = /Macintosh/.test(ua) && typeof navigator.maxTouchPoints === "number" && navigator.maxTouchPoints > 1;
+  return isIOSUA || isIPadOS;
+}
+
+/**
+ * 从 IndexedDB 逐文件读取并零拷贝 transfer 给单个 Worker（现读现传）。
+ * 对比旧路径"一次性读出 380MB Map → 每个 Worker slice(0) 全量拷贝"：
+ * - 主线程不长期持有全量副本；
+ * - transfer 后主线程 buffer 立即 detach 释放；
+ * - 多 Worker 串行初始化时每次现读，内存峰值 = 最大单文件。
+ */
+async function transferFilesToWorker(index: number): Promise<void> {
+  const w = ttsWorkers[index];
+  if (!w) throw new Error(`Worker #${index} 不存在`);
+  const { getCachedFiles } = await import("./tts-cache");
+  const files = await getCachedFiles();
+  if (files.size === 0) throw new Error("模型缓存缺失（IndexedDB 为空）");
+
+  const filesObj: Record<string, ArrayBuffer> = {};
+  const transferList: ArrayBuffer[] = [];
+  for (const [key, buf] of files) {
+    // 缓存 key 带 kokoro-v3/ 前缀，worker 端按短文件名取用
+    const shortKey = key.includes("/") ? key.slice(key.indexOf("/") + 1) : key;
+    filesObj[shortKey] = buf;
+    transferList.push(buf);
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      readyWaiter = null;
+      w.removeEventListener("message", handler);
+      reject(new Error("模型加载超时（10分钟）"));
+    }, 600000);
+    const handler = (e: MessageEvent) => {
+      if (e.data.type === "sherpa-onnx-tts-ready") {
+        clearTimeout(timeout);
+        w.removeEventListener("message", handler);
+        readyWaiter = null;
+        modelLoaded = true;
+        resolve();
+      } else if (e.data.type === "error") {
+        clearTimeout(timeout);
+        w.removeEventListener("message", handler);
+        readyWaiter = null;
+        reject(new Error(e.data.message));
+      }
+    };
+    readyWaiter = { resolve, reject };
+    w.addEventListener("message", handler);
+
+    w.postMessage(
+      { type: "init", files: filesObj, pageOrigin: typeof location !== "undefined" ? location.origin : "" },
+      transferList
+    );
+  });
+}
+
 async function initWorker(files: Map<string, ArrayBuffer>, index: number): Promise<void> {
   const w = await createWorker(index);
   await new Promise<void>((resolve, reject) => {
@@ -535,13 +596,12 @@ export async function loadModel(
         options?.onProgress?.(80);
       }
 
-      // 4. 从 IndexedDB 读取文件数据
-      const files = await getCachedFiles();
-      console.log("[TTS] 从 IndexedDB 加载", files.size, "个文件");
-
-      // 5. 创建 Worker 池（串行 init，避免多 worker 同时加载造成内存峰值叠加）并发送文件数据
+      // 4-5. 创建 Worker 池（串行 init；现读现传：每个 worker 初始化时从 IndexedDB
+      // 逐文件读取并 transfer，主线程不持有全量副本——iOS 内存优化）
       options?.onProgress?.(85);
-      const targetSize = Math.max(1, Math.min(workerPoolSize, 3));
+      // iOS（WebKit）内存受限：池强制 1，多 worker 1.2GB+ 必被 jetsam 击杀
+      const effectivePool = isIOSDevice() ? 1 : workerPoolSize;
+      const targetSize = Math.max(1, Math.min(effectivePool, 3));
       ttsWorkers = new Array(targetSize) as Worker[];
       workerBusy = new Array(targetSize).fill(false);
       taskQueue = [];
@@ -550,7 +610,7 @@ export async function loadModel(
         let ok = false;
         for (let attempt = 1; attempt <= 2 && !ok; attempt++) {
           try {
-            await initWorker(files, idx);
+            await transferFilesToWorker(idx);
             initError = null;
             ok = true;
           } catch (err) {

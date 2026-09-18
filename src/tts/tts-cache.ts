@@ -177,8 +177,11 @@ export async function getCachedFiles(): Promise<Map<string, ArrayBuffer>> {
 let downloadPromise: Promise<Map<string, ArrayBuffer>> | null = null;
 
 /**
- * 从服务器代理下载文件并存入 IndexedDB
+ * 从服务器代理下载文件并存入 IndexedDB（内存优化版）
+ * 逐文件"下载即入库、入库即释放"，合并时逐块释放 chunks 引用，
+ * 主线程不持有全量文件副本（iOS 内存优化）。
  * @param onProgress - 进度回调 (文件名, 已下载字节, 总字节)
+ * @returns 空 Map（兼容旧签名；数据经 IndexedDB 供 transferFilesToWorker 现读现传）
  */
 export function downloadAndCache(
   onProgress?: (filename: string, loaded: number, total: number) => void
@@ -187,16 +190,17 @@ export function downloadAndCache(
   if (downloadPromise) return downloadPromise;
 
   downloadPromise = (async (): Promise<Map<string, ArrayBuffer>> => {
-    const result = new Map<string, ArrayBuffer>();
+    let cachedCount = 0;
+    let downloadedCount = 0;
 
     for (const file of CACHE_FILES) {
-      // 检查是否已缓存
+      // 检查是否已缓存（命中则不读入内存，只计进度——避免全量 Map 长期持有 380MB）
       const cached = await dbGet(file);
-    if (cached) {
-      result.set(file, cached);
-      onProgress?.(file, cached.byteLength, cached.byteLength);
-      continue;
-    }
+      if (cached) {
+        cachedCount++;
+        onProgress?.(file, cached.byteLength, cached.byteLength);
+        continue;
+      }
 
     // 下载（使用 apiFetch 带上认证头）
     onProgress?.(file, 0, 0);
@@ -233,30 +237,39 @@ export function downloadAndCache(
       onProgress?.(file, received, contentLength);
     }
 
-    // 合并为 ArrayBuffer
+    // 内存优化：合并时逐块释放 chunks 引用。大文件（model.onnx 310MB）合并时
+    // chunks 与 buffer 同时存在会产生约 2 倍文件体积的瞬时峰值，是 iOS jetsam
+    // 崩溃的主因；每块 set 完立即置空，让 GC 在合并过程中持续回收。
     const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
     const buffer = new Uint8Array(totalLength);
     let offset = 0;
-    for (const chunk of chunks) {
-      buffer.set(chunk, offset);
-      offset += chunk.length;
+    for (let i = 0; i < chunks.length; i++) {
+      buffer.set(chunks[i], offset);
+      offset += chunks[i].length;
+      chunks[i] = undefined as unknown as Uint8Array; // 已合并的 chunk 交还 GC
     }
     const arrayBuffer = buffer.buffer;
 
-    // 存入 IndexedDB
+    // 立即存入 IndexedDB（下载即入库，不在内存中长期持有）
     try {
       await dbPut(file, arrayBuffer);
     } catch (e) {
       // M12 fix: 私有浏览模式下 QuotaExceededError 降级处理
       console.warn(`[TTS] 缓存 ${file} 失败（可能处于私有浏览模式）:`, e);
     }
-    result.set(file, arrayBuffer);
+    downloadedCount++;
+    onProgress?.(file, arrayBuffer.byteLength, arrayBuffer.byteLength);
+    // arrayBuffer 出循环即失去引用；不再累积到 result Map（内存优化核心）
   }
+
+  console.log(`[TTS] 资源就绪：${cachedCount} 个已缓存 + ${downloadedCount} 个新下载`);
 
   // 下载/校验完成后广播，让其他已打开的标签页同步刷新缓存状态
   broadcastTTSCacheReady();
 
-  return result;
+  // 返回空 Map：调用方（loadModel/重建路径）已改为经 transferFilesToWorker
+  // 从 IndexedDB 现读现传，不再依赖此返回值，避免主线程长期持有 380MB。
+  return new Map<string, ArrayBuffer>();
   })().finally(() => {
     // 下载完成（成功或失败）后释放锁，允许下次重新触发
     downloadPromise = null;

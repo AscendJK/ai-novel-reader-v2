@@ -17,6 +17,7 @@ import { ZH_VOICES, generateAudioFull, loadModel, isModelLoaded } from "@/tts/zi
 import { checkServerInference, synthesizeServer } from "@/tts/server-engine";
 import { getActiveTTSManager } from "@/tts/tts-manager";
 import { getTTSPreloadStatus, preloadZipVoice } from "@/tts/tts-preload";
+import { isIOSDevice } from "@/tts/zipvoice-engine";
 import { isCacheReady } from "@/tts/tts-cache";
 import { apiFetch } from "@/lib/api-client";
 
@@ -556,6 +557,12 @@ export function TTSSettings() {
             </p>
           ) : (
             <div className="space-y-2">
+              {isIOSDevice() && (
+                <p className="text-[10px] text-red-500">
+                  检测到 iOS 设备：浏览器推理内存占用高（加载后约 400-500MB），部分机型可能下载失败或被系统终止。
+                  强烈推荐改用「服务端推理」——模型在电脑上运行，手机零下载、速度更快、更省电。
+                </p>
+              )}
               <p className="text-[10px] text-amber-500">需先下载语音模型到浏览器（约 380MB，仅一次，之后完全离线）。</p>
               <Button variant="outline" size="sm" className="h-7 text-[10px]"
                 onClick={() => preloadZipVoice()} disabled={preloadStatus === "downloading"}>
@@ -565,9 +572,11 @@ export function TTSSettings() {
               {preloadStatus === "downloading" && (
                 <p className="text-[10px] text-amber-500">正在后台下载语音资源，完成后即可离线使用</p>
               )}
-              {preloadStatus === "failed" && (
+              {preloadStatus === "failed" && (isIOSDevice() ? (
+                <p className="text-[10px] text-red-500">此设备存储配额不足或内存受限，下载大概率失败。建议改用「服务端推理」（模型在电脑上运行，手机零下载）。</p>
+              ) : (
                 <p className="text-[10px] text-red-500">下载失败，请重试（网络中断时也可稍后再试）</p>
-              )}
+              ))}
               {preloadStatus === "skipped" && (
                 <p className="text-[10px] text-muted-foreground">服务器资源未就绪，可能需要在服务器端先下载模型</p>
               )}

@@ -13,6 +13,7 @@
  */
 
 import { isCacheReady, downloadAndCache } from "./tts-cache";
+import { isIOSDevice } from "./zipvoice-engine";
 import { prepareTTS, checkTTSCache } from "./zipvoice-engine";
 import { isLoggedIn } from "@/lib/user-utils";
 
@@ -52,6 +53,7 @@ export function preloadZipVoice(): Promise<TTSPreloadStatus> {
     }
 
     // 2. 已缓存完整：直接返回
+
     setStatus("checking");
     try {
       const cached = await isCacheReady();
@@ -66,6 +68,18 @@ export function preloadZipVoice(): Promise<TTSPreloadStatus> {
       return "skipped";
     }
 
+
+    // 2.5 iOS 预检：仅在需要下载时检查配额（已缓存用户不受影响）；
+    // 配额不足直接标记失败，避免 380MB 下载到一半崩溃。
+    if (isIOSDevice()) {
+      try {
+        const est = await navigator.storage?.estimate?.();
+        if (est && typeof est.quota === "number" && est.quota - (est.usage || 0) < 500 * 1024 * 1024) {
+          setStatus("failed");
+          return "failed";
+        }
+      } catch { /* estimate 不可用时跳过配额检查，继续尝试 */ }
+    }
     // 3. 检查服务器资源状态
     try {
       const status = await checkTTSCache();
