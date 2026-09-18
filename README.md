@@ -85,6 +85,16 @@ cd ai-novel-reader-v2
 2. 在登录界面输入后端服务器地址（如 `http://192.168.1.100:5173`）
 3. 点击「保存并连接」，显示「连接成功」即可
 
+### 同源模式（推荐 iOS 用户 / 免配置）
+
+完整模式（Clone 仓库或全包）启动后，直接用浏览器访问：
+
+```
+http://<服务器IP>:5173/ai-novel-reader-v2/
+```
+
+页面与 API 同源，**无需配置服务器地址**，自动连接本机后端。iOS（iPhone/iPad）上 GitHub Pages 前端无法访问 HTTP 后端（WebKit 混合内容限制），同源模式是免证书的替代方案；也可安装 mkcert 根证书后使用 `https://<IP>:8443`。
+
 > **如何查看服务器 IP**：Windows 运行 `ipconfig`，macOS/Linux 运行 `ifconfig` 或 `ip addr`，查找局域网 IPv4 地址。
 
 ### 开发模式（可选）
