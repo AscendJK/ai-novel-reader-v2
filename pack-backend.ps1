@@ -18,9 +18,11 @@ Set-Location $root
 
 # 清理旧的临时目录和压缩包
 if (Test-Path "backend-pack-tmp") { Remove-Item -Recurse -Force "backend-pack-tmp" }
-# 清理历史遗留的旧文件名和当前实际输出文件
+# 清理历史遗留的旧文件名和本次输出的目标文件（只删本次将产出的那个，
+# 避免 CI 上两遍连续打包时第二遍误删第一遍的产物）
 if (Test-Path "release-backend.zip") { Remove-Item -Force "release-backend.zip" }
-if (Test-Path "ai-novel-reader-v2-backend.zip") { Remove-Item -Force "ai-novel-reader-v2-backend.zip" }
+$targetZip = if ($IncludeDist) { "ai-novel-reader-v2-full.zip" } else { "ai-novel-reader-v2-backend.zip" }
+if (Test-Path $targetZip) { Remove-Item -Force $targetZip }
 
 # 创建目录结构
 New-Item -ItemType Directory -Force -Path "backend-pack-tmp/server/routes" | Out-Null
