@@ -19,52 +19,61 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Package backend (pwsh, cross-platform)
+      - name: Setup Node for frontend build
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build frontend
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+
+      - name: Package backend (light)
         shell: pwsh
         run: ./pack-backend.ps1
+
+      - name: Package full (frontend + backend)
+        shell: pwsh
+        run: ./pack-backend.ps1 -IncludeDist
 
       - name: Verify package contents
         shell: pwsh
         run: |
-          $zip = Get-Item "ai-novel-reader-v2-backend.zip"
-          if (-not $zip -or $zip.Length -lt 10000) {
-            Write-Error "Package missing or too small: $($zip.Length) bytes"
-          }
-          # 关键文件存在性检查（直接读 zip 条目，backend-pack-tmp 已被脚本清理）：
-          # 服务端 TTS 推理依赖 tts-worker.py，缺失会导致引擎不可用。
-          # 条目分隔符统一为 '/'（Windows 上 Compress-Archive 可能用 '\'）。
           Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path "ai-novel-reader-v2-backend.zip"))
-          $names = $archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') }
-          $required = @("server/tts-worker.py", "server/routes/rag.js", "package.json", "start.bat", "start.sh")
-          $missing = @($required | Where-Object { $_ -notin $names })
-          if ($missing.Count -gt 0) {
-            $archive.Dispose()
-            Write-Error "Package missing critical files: $($missing -join ', ')"
-          }
-          # 版本一致性校验：tag 触发时，打包产物内 package.json 版本必须与 tag 一致
-          # （手动触发 workflow_dispatch 时 GITHUB_REF_NAME 是分支名，跳过此校验）
-          if ($env:GITHUB_REF_TYPE -eq "tag") {
-            $tag = $env:GITHUB_REF_NAME -replace '^v', ''
-            $entry = $archive.Entries | Where-Object { $_.FullName.Replace('\', '/') -eq "package.json" } | Select-Object -First 1
-            $reader = New-Object System.IO.StreamReader($entry.Open())
+          function Check-Zip {
+            param($Path, [string[]]$Required, $ExpectedVersion)
+            if (-not (Test-Path $Path)) { Write-Error "Package missing: $Path" }
+            $archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $Path))
             try {
-              $zipPkg = $reader.ReadToEnd() | ConvertFrom-Json
+              $names = $archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') }
+              $missing = @($Required | Where-Object { $_ -notin $names })
+              if ($missing.Count -gt 0) {
+                Write-Error "$Path missing critical files: $($missing -join ', ')"
+              }
+              if ($ExpectedVersion) {
+                $entry = $archive.Entries | Where-Object { $_.FullName.Replace('\', '/') -eq "package.json" } | Select-Object -First 1
+                $reader = New-Object System.IO.StreamReader($entry.Open())
+                try { $zipPkg = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
+                if ($zipPkg.version -ne $ExpectedVersion) {
+                  Write-Error "$Path version mismatch: zip=$($zipPkg.version), tag=$ExpectedVersion"
+                }
+              }
+              Write-Host "$Path OK: entries $($names.Count)"
             } finally {
-              $reader.Dispose()
+              $archive.Dispose()
             }
-            $archive.Dispose()
-            if ($zipPkg.version -ne $tag) {
-              Write-Error "Version mismatch: zip package.json=$($zipPkg.version), tag=$tag"
-            }
-            Write-Host "Package OK: $($zip.Length) bytes, entries: $($names.Count), version $($zipPkg.version) matches tag $tag"
-          } else {
-            $archive.Dispose()
-            Write-Host "Package OK: $($zip.Length) bytes, entries: $($names.Count) (manual trigger, skip tag check)"
           }
+          $tagVersion = $null
+          if ($env:GITHUB_REF_TYPE -eq "tag") { $tagVersion = $env:GITHUB_REF_NAME -replace '^v', '' }
+          Check-Zip "ai-novel-reader-v2-backend.zip" @("server/tts-worker.py", "server/routes/rag.js", "package.json", "start.bat", "start.sh") $tagVersion
+          Check-Zip "ai-novel-reader-v2-full.zip" @("server/tts-worker.py", "server/routes/rag.js", "package.json", "start.bat", "start.sh", "dist/index.html", "dist/sw.js") $tagVersion
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ai-novel-reader-v2-backend.zip
+          files: |
+            ai-novel-reader-v2-backend.zip
+            ai-novel-reader-v2-full.zip
           generate_release_notes: true
