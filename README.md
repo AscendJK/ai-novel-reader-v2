@@ -182,9 +182,47 @@ mkcert -install
 
 **证书 IP 变更**：mkcert 证书按生成时机器的 IP 签发。换了 Wi-Fi / IP 变化后，删除 `server/data/cert.pem` 和 `server/data/key.pem` 再重启后端，会自动按新 IP 重新签发（`rootCA.pem` 与手机端安装不受影响）。
 
+**根证书与文件位置速查**：
+
+| 文件 | 位置 | 用途 |
+|---|---|---|
+| `rootCA.pem` | `mkcert -CAROOT` 输出目录（Windows 默认 `%LOCALAPPDATA%\mkcert`） | **发给手机/其他设备安装的**根证书 |
+| `rootCA-key.pem` | 同上 | 根证书私钥，**绝对不要外传** |
+| `cert.pem` / `key.pem` | `server/data/` | 服务器 HTTPS 证书（后端启动时自动按当前 IP 生成） |
+| `rootCA.pem`（副本） | `server/data/`（首次生成证书时自动复制） | 同 CAROOT 的 rootCA，方便取用 |
+
+**mkcert 完整卸载**（不再使用 HTTPS 时）：
+
+```powershell
+# 1. 从系统信任存储移除本地 CA（需管理员权限；做了这步手机端证书即失效）
+mkcert -uninstall
+
+# 2. 卸载程序本体
+winget uninstall FiloSottile.mkcert      # Windows（普通权限即可）
+brew uninstall mkcert                    # macOS
+sudo apt remove mkcert                   # Linux
+
+# 3. 删除根证书文件（CAROOT 目录，含 rootCA.pem 与 rootCA-key.pem）
+mkcert -CAROOT                           # 先查路径，再手动删除整个目录
+
+# 4.（可选）清理项目侧生成的服务器证书与副本
+#    删除 server/data/ 下的 cert.pem、key.pem、rootCA.pem
+#    之后重启后端会回到纯 HTTP 模式
+```
+
+> 卸载后各端影响：电脑端 Windows 信任存储里的 CA 随 `mkcert -uninstall` 移除；**已装证书的 iPhone 需手动删除描述文件**（设置 → 通用 → VPN 与设备管理 → mkcert → 删除描述文件，再到「证书信任设置」确认已消失），否则手机上仍显示已信任但服务器已无法出 HTTPS。
+
 **iPhone 安装根证书**（每台设备一次性）：
 
-1. 把后端电脑上的 `server/data/rootCA.pem` 传到 iPhone（隔空投送不可用于证书，用微信/QQ/邮件均可，**传完建议删除文件与聊天记录**——根证书是敏感物）
+1. 找到根证书 `rootCA.pem` 并传到 iPhone（隔空投送不可用于证书，用微信/QQ/邮件均可，**传完建议删除文件与聊天记录**——根证书是敏感物）。
+
+   **rootCA.pem 的位置**：mkcert 生成的服务器证书（cert.pem/key.pem）在 `server/data/`，但**根证书固定存在 mkcert 的 CAROOT 目录**，不随项目走：
+
+   ```powershell
+   mkcert -CAROOT    # 输出根证书所在目录，Windows 默认: %LOCALAPPDATA%\mkcert
+   ```
+
+   打开该目录取 `rootCA.pem`。服务器首次生成证书时也会把根证书复制一份到 `server/data/rootCA.pem`（存在即可直接用）；两种来源等价。
 2. iPhone 上点开该文件 → 设置自动跳转「已下载描述文件」→ 设置 → 通用 → VPN 与设备管理 → 安装
 3. ⚠️ **关键步骤，漏掉等于白装**：设置 → 通用 → 关于本机 → **证书信任设置** → 把 mkcert 相关项的开关打开（开启"完全信任"）
 
@@ -610,6 +648,8 @@ winget install FiloSottile.mkcert
 **装好后命令找不到？** 关掉终端重开一个（PATH 重载），再试 `mkcert --version`。
 
 **`mkcert -install` 失败？** 需要管理员权限：Windows 右键 PowerShell"以管理员身份运行"；macOS/Linux 用 `sudo`。
+
+**`server/data/` 里只有 cert.pem/key.pem，没有 rootCA.pem？** 正常现象——根证书固定在 mkcert 的 CAROOT 目录，不在项目里。运行 `mkcert -CAROOT` 查看位置（Windows 默认 `%LOCALAPPDATA%\mkcert`），取该目录下的 `rootCA.pem`。服务器首次生成证书时会把根证书复制一份到 `server/data/rootCA.pem`，若没有可手动复制。
 
 ### 升级版本后页面行为异常（旧缓存）
 
