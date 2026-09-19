@@ -19,11 +19,15 @@ export const VALID_ENGINES = new Set(Object.keys(ENGINE_MODEL_MAP));
 /**
  * Resolve engine ID to Transformers.js model key.
  * Only accepts engines in the whitelist; unknown engines fall back to default.
+ *
+ * 必须走 Set 而不是 `ENGINE_MODEL_MAP[engine]`：对象取值会顺着原型链找到
+ * `constructor`/`toString` 这些真值，于是 modelKey 变成一个函数而不是字符串
+ * （round 3 R-81，写用例时撞出来的）。
  * @param {string} engine - Engine ID (e.g. "Xenova/bge-small-zh-v1.5")
  * @returns {string} Model key for Transformers.js
  */
 export function resolveModelKey(engine) {
-  if (ENGINE_MODEL_MAP[engine]) return ENGINE_MODEL_MAP[engine];
+  if (typeof engine === "string" && VALID_ENGINES.has(engine)) return ENGINE_MODEL_MAP[engine];
   return DEFAULT_ENGINE;
 }
 
