@@ -7,7 +7,7 @@ import { TaskType } from "./types";
 import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
 import { buildChapterSummaryPrompt } from "@/lib/prompt-templates";
-import { sampleChapterContent, prepareAgentContext, chatWithContextRetry } from "./utils";
+import { sampleChapterContent, prepareAgentContext, chatWithContextRetry, isAbortError } from "./utils";
 import { estimateTokens, computeAvailableInput, requireUsableInput } from "@/api/token-manager";
 import { APIError } from "@/api/error-handler";
 
@@ -48,6 +48,7 @@ class SummarizerAgent extends BaseAgent {
     let usedFallback = false;
     let truncated = false;
     let consecutiveFailures = 0;
+    let cancelled = false;
     const MAX_CONSECUTIVE_FAILURES = 3;
 
     for (const chapter of chapters) {
@@ -100,6 +101,12 @@ class SummarizerAgent extends BaseAgent {
         totalChars += response.content.length;
         consecutiveFailures = 0; // 重置连续失败计数
       } catch (err) {
+        // 用户取消：停止后续章节，已生成的部分照常返回入库。不把
+        // "总结生成失败: aborted" 当成正文写进数据库（round 1 遗留）
+        if (isAbortError(err, context.signal)) {
+          cancelled = true;
+          break;
+        }
         results.push({
           chapterTitle: chapter.title,
           content: `总结生成失败: ${this.formatError(err)}`,
@@ -124,6 +131,7 @@ class SummarizerAgent extends BaseAgent {
       data: { summaries: results, totalChars },
       tokensUsed: results.reduce((sum, r) => sum + r.tokens, 0),
       metadata,
+      cancelled,
     };
   }
 

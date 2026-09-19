@@ -8,6 +8,7 @@
 
 import type { Agent, AgentContext, AgentResult, TaskTypeValue } from "./types";
 import { APIError } from "@/api/error-handler";
+import { isAbortError } from "./utils";
 
 /** UI 状态更新回调集合（由 React hook 注入） */
 export interface TaskStatusHooks {
@@ -70,12 +71,20 @@ export async function runAgentTask(
         hooks.onStatus("正在保存结果...");
         await onSuccess(result);
       }
+      // 用户取消但带回了部分成果：上面的保存已经做完，不再报任何错误
       return returnData ? result.data : undefined;
+    } else if (result.cancelled || isAbortError(result.error, context.signal)) {
+      // 取消不是失败：静默收尾（此前会被 onError 打成红色错误提示）
+      return returnData ? null : undefined;
     } else {
       hooks.onError(result.error || errorMessage);
       return returnData ? null : undefined;
     }
   } catch (err) {
+    if (isAbortError(err, context.signal)) {
+      console.log(`[task] ${taskName} 已被用户取消`);
+      return returnData ? null : undefined;
+    }
     hooks.onError(formatAPIError(err));
     return returnData ? null : undefined;
   } finally {

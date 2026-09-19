@@ -3,9 +3,10 @@ import { APIError, handleFetchError } from "../error-handler";
 import { apiFetch } from "@/lib/api-client";
 import { useUIStore } from "@/stores/ui-store";
 import { readSSEData } from "./stream";
+import { normalizeBaseUrl } from "./base-url";
 
 export function createAnthropicProvider(config: ProviderConfig): AIProvider {
-  const baseUrl = config.baseUrl || "https://api.anthropic.com/v1";
+  const baseUrl = normalizeBaseUrl(config.baseUrl, "/messages") || "https://api.anthropic.com/v1";
 
   // 请求头超时（同 openai.ts：直连挂起时中断，超时错误区别于用户取消）
   const REQUEST_TIMEOUT_MS = 120_000;

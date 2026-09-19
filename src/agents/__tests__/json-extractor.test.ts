@@ -59,4 +59,27 @@ describe("extractJSON", () => {
   it("完全无法解析时返回 null", () => {
     expect(extractJSON("这不是 JSON")).toBeNull();
   });
+
+  // ── 围栏剥离（round 2 R-38）───────────────────────────────
+  it("前缀说明文字 + ```json 围栏仍能提取", () => {
+    const r = extractJSON<{ nodes: number[] }>(
+      '以下是 JSON：\n```json\n{"nodes": [1,2]}\n```\n希望有帮助'
+    );
+    expect(r).toEqual({ nodes: [1, 2] });
+  });
+
+  it("只有开头围栏没有闭合（输出被截断）不导致整体失败", () => {
+    const r = extractJSON<{ a: number }>('说明：\n```json\n{"a": 1}');
+    expect(r).toEqual({ a: 1 });
+  });
+
+  it("围栏内带尾逗号也能解析", () => {
+    const r = extractJSON<{ list: number[] }>('```json\n{"list": [1,2,],}\n```');
+    expect(r).toEqual({ list: [1, 2] });
+  });
+
+  it("JSON 字符串值里的三反引号不被当成围栏", () => {
+    const r = extractJSON<{ code: string }>('{"code": "``` 不是围栏 ```"}');
+    expect(r).toEqual({ code: "``` 不是围栏 ```" });
+  });
 });

@@ -35,6 +35,9 @@ export interface AgentResult {
   tokensUsed?: number;
   /** 分析元数据 */
   metadata?: AnalysisMetadata;
+  /** 用户中途取消：已生成的部分照常返回入库，但不算失败——既不该把
+   *  "总结生成失败: aborted" 当正文写库，也不该给用户弹错误提示 */
+  cancelled?: boolean;
 }
 
 /**

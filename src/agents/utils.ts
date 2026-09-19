@@ -128,6 +128,30 @@ export function getRelevantContent(
 }
 
 /**
+ * 判定"这是用户取消而不是失败"。
+ *
+ * 三处各自散写 `err.name === "AbortError"` 字符串比较，漏掉了两种真实形态：
+ * APIError 包装后的取消（name 变成 APIError，只在 message 里留着 aborted），
+ * 以及 signal 已 aborted 但抛出的仍是普通 Error。取消被误判为失败会让用户
+ * 看到"总结生成失败"，甚至把这句文案当成正文写进数据库。
+ */
+export function isAbortError(err: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true;
+  if (err instanceof APIError) {
+    // "aborted" 不在 APIErrorCode 联合里（取消不经代码分类），只可能出现在
+    // message 或被上层包装时保留的 name 上——这里做字符串级兜底
+    const code = String(err.apiCode || err.code || "").toLowerCase();
+    if (code === "aborted") return true;
+  }
+  if (err instanceof Error && err.name === "AbortError") return true;
+  const message = typeof err === "string"
+    ? err
+    : err instanceof Error ? err.message : "";
+  // 只认开头的明确取消措辞：宽松匹配会把含"取消"字样的普通失败误判为取消
+  return /^(aborted|operation aborted|operation canceled|request aborted|已取消|请求已取消)/i.test(message.trim());
+}
+
+/**
  * 格式化 Agent 错误
  *
  * @param err 错误对象

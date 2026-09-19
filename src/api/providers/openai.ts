@@ -3,9 +3,10 @@ import { APIError, handleFetchError } from "../error-handler";
 import { apiFetch } from "@/lib/api-client";
 import { useUIStore } from "@/stores/ui-store";
 import { readSSEData } from "./stream";
+import { normalizeBaseUrl } from "./base-url";
 
 export function createOpenAIProvider(config: ProviderConfig): AIProvider {
-  const baseUrl = config.baseUrl || "https://api.openai.com/v1";
+  const baseUrl = normalizeBaseUrl(config.baseUrl, "/chat/completions") || "https://api.openai.com/v1";
 
   // 请求头超时：连接挂起（网关黑洞/断网无 RST）超过该时长即中断。
   // 直连超时会走代理重试（catch 分支），代理也超时则把超时错误抛给调用方。

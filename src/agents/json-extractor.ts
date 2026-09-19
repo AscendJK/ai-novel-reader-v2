@@ -18,10 +18,36 @@ export function extractJSON<T = unknown>(
     fixTruncated?: boolean;
   }
 ): T | null {
-  let raw = content.trim();
+  const raw = content.trim();
 
-  // 移除 markdown 代码块包裹（```json ... ``` 或 ``` ... ```）
-  raw = raw.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```[\s\S]*$/i, "");
+  // 候选顺序：先按原文（模型直接吐纯 JSON 最常见，也避免把字符串值里的 ```
+  // 当成围栏而破坏一份本来合法的 JSON），再按"剥掉代码围栏"的版本。
+  // 旧实现只用两个锚定正则（^``` 开头 + ``` 到结尾）：遇到"以下是 JSON：
+  // \n```json{…}```"这种极常见形态时，前缀不匹配开头锚、却从第一个 ``` 一路
+  // 裁到结尾，只剩没闭合的 `{` → 图谱稳定报"未能提取 JSON"（round 2 R-38）
+  const candidates = [raw];
+  const unfenced = stripCodeFence(raw);
+  if (unfenced && unfenced !== raw) candidates.push(unfenced);
+
+  for (const candidate of candidates) {
+    const parsed = parseCandidate<T>(candidate, options);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+}
+
+/** 只认"独占一行或行首"的围栏（markdown 规则），并容忍围栏后同一行就有内容 */
+function stripCodeFence(text: string): string | null {
+  const open = /^[ \t]*```[ \t]*(?:json|JSON)?[ \t]*(.*)$/m.exec(text);
+  if (!open) return null;
+  const body = open[1] + text.slice(open.index + open[0].length);
+  const close = /^[ \t]*```[ \t]*$/m.exec(body);
+  const inner = close ? body.slice(0, close.index) : body;
+  return inner.trim();
+}
+
+function parseCandidate<T>(text: string, options?: { fixTruncated?: boolean }): T | null {
+  let raw = text;
 
   // 移除字符串之外的单行注释（// ...）。
   // 不能用全局正则 /\/\/.*$/gm：无字符串感知的删除会把字符串值里的

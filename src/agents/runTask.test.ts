@@ -175,3 +175,83 @@ describe("formatAPIError", () => {
     expect(formatAPIError(err)).toContain("上下文超限");
   });
 });
+
+/**
+ * 取消 ≠ 失败（round 2 批次 3 / round 1 遗留）
+ *
+ * 旧实现把 AbortError 一路当失败：章节循环会把"总结生成失败: aborted"当成
+ * 正文写进数据库，用户还会看到红色错误提示。
+ */
+describe("runAgentTask 的取消语义", () => {
+  const abortError = () => Object.assign(new Error("This operation was aborted"), { name: "AbortError" });
+
+  it("agent 抛出 AbortError 时静默收尾，不报错误", async () => {
+    const hooks = makeHooks();
+    const agent = {
+      name: "t", taskType: "chapter", description: "d",
+      run: vi.fn(async () => { throw abortError(); }),
+    } as unknown as Agent;
+    const out = await runAgentTask(hooks, {
+      taskName: "任务", agent, context: makeContext(), errorMessage: "失败",
+    } as never);
+    expect(out).toBeUndefined();
+    expect(hooks.onError).not.toHaveBeenCalled();
+    expect(hooks.onDone).toHaveBeenCalledOnce();
+  });
+
+  it("signal 已中止时普通错误也按取消处理（不再弹错误）", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const hooks = makeHooks();
+    const agent = {
+      name: "t", taskType: "chapter", description: "d",
+      run: vi.fn(async () => { throw new Error("请求超时"); }),
+    } as unknown as Agent;
+    await runAgentTask(hooks, {
+      taskName: "任务", agent, context: makeContext({ signal: controller.signal }), errorMessage: "失败",
+    } as never);
+    expect(hooks.onError).not.toHaveBeenCalled();
+  });
+
+  it("cancelled 结果仍然保存部分成果且不报错误", async () => {
+    const hooks = makeHooks();
+    const onSuccess = vi.fn();
+    const agent = makeAgent({ success: true, data: { summaries: [1, 2] }, cancelled: true });
+    const out = await runAgentTask(hooks, {
+      taskName: "任务", agent, context: makeContext(), errorMessage: "失败", onSuccess, returnData: true,
+    } as never);
+    expect(onSuccess).toHaveBeenCalledOnce();
+    expect(hooks.onError).not.toHaveBeenCalled();
+    expect(out).toEqual({ summaries: [1, 2] });
+  });
+
+  it("result.error 写着已取消时不算失败", async () => {
+    const hooks = makeHooks();
+    const agent = makeAgent({ success: false, error: "已取消", cancelled: true });
+    await runAgentTask(hooks, {
+      taskName: "任务", agent, context: makeContext(), errorMessage: "失败",
+    } as never);
+    expect(hooks.onError).not.toHaveBeenCalled();
+  });
+
+  it("真实失败仍然照报（不能被取消判定吞掉）", async () => {
+    const hooks = makeHooks();
+    const agent = makeAgent({ success: false, error: "[rate_limit] 请求频率过高" });
+    await runAgentTask(hooks, {
+      taskName: "任务", agent, context: makeContext(), errorMessage: "失败",
+    } as never);
+    expect(hooks.onError).toHaveBeenCalledWith("[rate_limit] 请求频率过高");
+  });
+
+  it("普通网络失败不被误判为取消", async () => {
+    const hooks = makeHooks();
+    const agent = {
+      name: "t", taskType: "chapter", description: "d",
+      run: vi.fn(async () => { throw new APIError("Failed to fetch", "network"); }),
+    } as unknown as Agent;
+    await runAgentTask(hooks, {
+      taskName: "任务", agent, context: makeContext(), errorMessage: "失败",
+    } as never);
+    expect(hooks.onError).toHaveBeenCalledOnce();
+  });
+});
