@@ -354,3 +354,40 @@ describe("checkServerReachable", () => {
     );
   });
 });
+
+describe("apiFetch 的总超时与调用方 signal 的关系（round 3 批次 D）", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    setServerUrl("https://192.168.1.100:8443");
+    globalThis.fetch = vi.fn(async () => new Response(null, { status: 200 }));
+  });
+
+  const sentSignal = () => (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1]?.signal;
+
+  it("不传 timeoutMs 时不强加超时（长请求由调用方自己管）", async () => {
+    await apiFetch("/api/rag/progress");
+    expect(sentSignal()).toBeUndefined();
+  });
+
+  it("传了 timeoutMs 就带上会真的 abort 的 signal", async () => {
+    await apiFetch("/api/novels", { timeoutMs: 5 });
+    const signal = sentSignal();
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal.aborted).toBe(false);
+    await new Promise((r) => setTimeout(r, 25));
+    expect(signal.aborted).toBe(true); // 到点必须真的中断，否则"总超时"是假的
+  });
+
+  it("调用方自带 signal 时不得被总超时顶掉——那是“停止”按钮的中断句柄", async () => {
+    const ctrl = new AbortController();
+    await apiFetch("/api/novels", { timeoutMs: 5, signal: ctrl.signal });
+    expect(sentSignal()).toBe(ctrl.signal);
+  });
+
+  it("timeoutMs 不得混进 fetch 的 init 里", async () => {
+    await apiFetch("/api/novels", { timeoutMs: 1000, method: "POST" });
+    const init = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    expect(init.timeoutMs).toBeUndefined();
+    expect(init.method).toBe("POST");
+  });
+});
