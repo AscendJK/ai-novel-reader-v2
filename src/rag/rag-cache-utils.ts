@@ -187,15 +187,17 @@ async function evictToFree(needFree: number, extraProtect: Iterable<string> = []
  */
 export async function updateAccessTime(novelId: string, engine: string) {
   try {
-    const cacheKey = `${novelId}-${engine}`;
-    const entry = await db.ragCache.get(cacheKey);
-    if (entry) {
-      await db.ragCache.put({
-        ...entry,
-        lastAccessed: Date.now(),
-        accessCount: (entry.accessCount || 0) + 1,
+    // 用 where().modify() 而不是 get + put：后者会把整条记录（含 vectorsBuffer，
+    // 大索引几十 MB）为了两个计数字段重写一遍，更要命的是它和 ensureCacheSpace 的
+    // delete 竞态——淘汰先落地、这里迟到的 put 会把已删条目整份复活，而 store 那边
+    // 早已登记"已淘汰"，于是内存记账与磁盘不一致，留下一条本轮 LRU 管不到的幽灵条目。
+    await db.ragCache
+      .where("id")
+      .equals(`${novelId}-${engine}`)
+      .modify((entry: { lastAccessed?: number; accessCount?: number }) => {
+        entry.lastAccessed = Date.now();
+        entry.accessCount = (entry.accessCount || 0) + 1;
       });
-    }
   } catch (e) { console.warn("[rag] 更新访问时间失败:", e); }
 }
 

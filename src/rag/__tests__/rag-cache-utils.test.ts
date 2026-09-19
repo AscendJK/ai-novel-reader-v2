@@ -19,6 +19,7 @@ const mockDb = vi.hoisted(() => ({
     get: vi.fn(),
     put: vi.fn(),
     delete: vi.fn(),
+    where: vi.fn(),
   },
 }));
 
@@ -82,33 +83,43 @@ describe("updateAccessTime", () => {
     vi.clearAllMocks();
   });
 
-  it("缓存条目存在时更新访问时间", async () => {
-    mockDb.ragCache.get.mockResolvedValue({
-      id: "novel-1-tfidf",
-      novelId: "novel-1",
-      engine: "tfidf",
-      createdAt: 1000,
-      accessCount: 5,
-    });
-    mockDb.ragCache.put.mockResolvedValue(undefined);
+  it("只增量改两个字段，不把整条记录（含 vectorsBuffer）重写一遍", async () => {
+    const modify = vi.fn<(m: unknown) => Promise<number>>(async () => 1);
+    const equals = vi.fn(() => ({ modify }));
+    mockDb.ragCache.where.mockImplementation(() => ({ equals }));
 
     await updateAccessTime("novel-1", "tfidf");
 
-    expect(mockDb.ragCache.get).toHaveBeenCalledWith("novel-1-tfidf");
-    expect(mockDb.ragCache.put).toHaveBeenCalledOnce();
-    const putArg = mockDb.ragCache.put.mock.calls[0][0];
-    expect(putArg.accessCount).toBe(6); // 递增
-    expect(putArg.lastAccessed).toBeGreaterThan(0);
+    expect(mockDb.ragCache.where).toHaveBeenCalledWith("id");
+    expect(equals).toHaveBeenCalledWith("novel-1-tfidf");
+    // 关键：不得再走 get + put 整条重写（大索引可达几十 MB）
+    expect(mockDb.ragCache.get).not.toHaveBeenCalled();
+    expect(mockDb.ragCache.put).not.toHaveBeenCalled();
+
+    const mutate = modify.mock.calls[0][0] as (o: unknown) => void;
+    const record = {
+      id: "novel-1-tfidf", novelId: "novel-1", engine: "tfidf", createdAt: 1000,
+      size: 123, vectorsBuffer: new ArrayBuffer(8), lastAccessed: 1, accessCount: 5,
+    };
+    mutate(record);
+    expect(record.accessCount).toBe(6);
+    expect(record.lastAccessed).toBeGreaterThan(1);
+    expect(record.size).toBe(123); // 其余字段原样保留
   });
 
-  it("缓存条目不存在时静默跳过", async () => {
-    mockDb.ragCache.get.mockResolvedValue(undefined);
+  it("条目已被淘汰时不产生任何整条写入（不得把删掉的记录复活）", async () => {
+    // Dexie 的 modify 对不存在的键是空操作；这里断言我们没有 get+put 的复活路径
+    const modify = vi.fn(async () => 0);
+    mockDb.ragCache.where.mockImplementation(() => ({ equals: () => ({ modify }) }));
+
     await updateAccessTime("novel-1", "tfidf");
+
+    expect(modify).toHaveBeenCalledOnce();
     expect(mockDb.ragCache.put).not.toHaveBeenCalled();
   });
 
   it("数据库错误时静默处理", async () => {
-    mockDb.ragCache.get.mockRejectedValue(new Error("DB error"));
+    mockDb.ragCache.where.mockImplementation(() => { throw new Error("DB error"); });
     await expect(updateAccessTime("novel-1", "tfidf")).resolves.toBeUndefined();
   });
 });
