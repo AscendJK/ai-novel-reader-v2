@@ -301,16 +301,19 @@ export async function saveSummary(summary: SummaryItem & { novelId: string }): P
 }
 
 export async function loadSummaries(novelId: string): Promise<(SummaryItem & { novelId: string })[]> {
+  let db: ReturnType<typeof getUserDB> | undefined;
   try {
-    const db = getUserDB();
+    db = getUserDB();
     const all = await db.summaries.where("novelId").equals(novelId).sortBy("createdAt");
     // SummaryRecord.type 是 string，运行时实际存储的是字面量联合类型值，安全断言
     return all.filter((s) => !s.deleted) as (SummaryItem & { novelId: string })[];
   } catch (e) {
-    // 数据库被并发关闭时重试一次（与 loadAllNovelMeta 相同的兜底）
+    // 数据库被并发关闭时重试一次（与 loadAllNovelMeta:176-179 相同的兜底）。
+    // 必须比实例而不是判真值：getUserDB() 永不返回假值，只写 `if (db2)` 的话
+    // 拿回来还是同一个已关闭实例时会原地递归到 RangeError（round 3 R-78）
     if (isDatabaseClosedError(e)) {
       const db2 = getUserDB();
-      if (db2) return await loadSummaries(novelId);
+      if (db2 !== db) return await loadSummaries(novelId);
     }
     console.error("loadSummaries failed:", e);
     return [];
