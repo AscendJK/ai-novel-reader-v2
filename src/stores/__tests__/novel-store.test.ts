@@ -4,7 +4,8 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { useNovelStore, shallow } from "../novel-store";
+import { useNovelStore, shallow, pickFlushPosition } from "../novel-store";
+import { userKey } from "@/lib/user-utils";
 import type { Novel } from "@/parsers/types";
 
 // 创建模拟小说
@@ -472,5 +473,38 @@ describe("addChapters", () => {
     const chapters = useNovelStore.getState().currentNovel!.chapters;
     expect(chapters[0].index).toBe(0);
     expect(chapters[1].index).toBe(1);
+  });
+});
+
+describe("切书时旧书的滚动位置落盘（round 3 R-77）", () => {
+  beforeEach(() => { localStorage.clear(); });
+
+  it("pickFlushPosition 只认确实属于上一本书的测量值", () => {
+    const captured = { novelId: "A", scrollTop: 1234, chapterOffset: 56 };
+    expect(pickFlushPosition("A", captured)).toEqual({ scrollTop: 1234, chapterOffset: 56 });
+    // 切书后容器已是新书的 DOM（脱离文档时 scrollTop 还会读成 0）：
+    // 那种测量值写给 A 等于把 A 的进度覆盖坏
+    expect(pickFlushPosition("A", { ...captured, novelId: "B" })).toBeNull();
+    expect(pickFlushPosition("A", { novelId: "A", scrollTop: 0, chapterOffset: 0 })).toEqual({ scrollTop: 0, chapterOffset: 0 });
+    expect(pickFlushPosition("A", null)).toBeNull();
+  });
+
+  it("saveScrollTopFor 只改滚动字段，保留章节与 updatedAt", () => {
+    useNovelStore.setState({
+      readingPositions: { A: { chapterId: "ch-1", chapterIndex: 1, scrollTop: 10, chapterOffset: 2, updatedAt: 777 } },
+    });
+    useNovelStore.getState().saveScrollTopFor("A", 900, 30);
+
+    expect(useNovelStore.getState().readingPositions.A).toMatchObject({
+      chapterId: "ch-1", chapterIndex: 1, scrollTop: 900, chapterOffset: 30, updatedAt: 777,
+    });
+    const persisted = JSON.parse(localStorage.getItem(userKey("novel-reader-positions")) || "{}");
+    expect(persisted.A.scrollTop).toBe(900);
+  });
+
+  it("该书没有进度记录时不凭空造一条", () => {
+    useNovelStore.setState({ readingPositions: {} });
+    useNovelStore.getState().saveScrollTopFor("ghost", 500, 1);
+    expect(useNovelStore.getState().readingPositions.ghost).toBeUndefined();
   });
 });

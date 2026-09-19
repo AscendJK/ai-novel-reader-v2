@@ -32,6 +32,8 @@ interface NovelState {
   getReadingPosition: (novelId: string) => ReadPosition | null;
   saveReadingPosition: (novelId: string, chapterId: string, chapterIndex: number, scrollTop?: number, chapterOffset?: number) => void;
   saveScrollTop: (scrollTop: number, chapterOffset?: number) => void;
+  /** 给指定那本书更新滚动字段（切书时上一本的收尾落盘要用，不能靠 currentNovel） */
+  saveScrollTopFor: (novelId: string, scrollTop: number, chapterOffset: number) => void;
   addChapters: (chapters: Novel["chapters"]) => void;
   /**
    * 从 localStorage 重新加载阅读进度（登录/切换用户后调用）。
@@ -56,6 +58,28 @@ function loadPositions(): Record<string, ReadPosition> {
 
 function savePositions(positions: Record<string, ReadPosition>) {
   try { localStorage.setItem(userKey("novel-reader-positions"), JSON.stringify(positions)); } catch { /* ignore */ }
+}
+
+/** 一次滚动位置测量，带着"它是哪本书的"这个标记 */
+export interface CapturedPosition {
+  novelId: string;
+  scrollTop: number;
+  chapterOffset: number;
+}
+
+/**
+ * 切书/退出时，上一本书该写成什么位置；null = 什么都不写。
+ *
+ * 只认标记相同的测量值：effect 跑起来时容器已经是新书的 DOM（甚至已脱离文档，
+ * scrollTop 读回 0），拿那种数字写旧书就是把进度覆盖坏（round 3 R-77）。
+ */
+export function pickFlushPosition(
+  prevId: string,
+  captured: CapturedPosition | null,
+): { scrollTop: number; chapterOffset: number } | null {
+  return captured && captured.novelId === prevId
+    ? { scrollTop: captured.scrollTop, chapterOffset: captured.chapterOffset }
+    : null;
 }
 
 export function getLastOpenedTimes(): Record<string, number> {
@@ -187,6 +211,21 @@ export const useNovelStore = create<NovelState>((set, get) => ({
     const positions = {
       ...readingPositions,
       [currentNovel.id]: { ...existingPos, scrollTop, chapterOffset: newChapterOffset },
+    };
+    savePositions(positions);
+    set({ readingPositions: positions });
+  },
+
+  saveScrollTopFor: (novelId, scrollTop, chapterOffset) => {
+    const { readingPositions } = get();
+    const existingPos = readingPositions[novelId];
+    // 没有这本书的进度记录就不凭空造一条：章节信息我们并不知道，造出来是假数据
+    if (!existingPos) return;
+    if (existingPos.scrollTop === scrollTop && existingPos.chapterOffset === chapterOffset) return;
+    // 与 saveScrollTop 一样不刷新 updatedAt：滚动不该被当成一次进度变更推给同步
+    const positions = {
+      ...readingPositions,
+      [novelId]: { ...existingPos, scrollTop, chapterOffset },
     };
     savePositions(positions);
     set({ readingPositions: positions });

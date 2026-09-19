@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback, useRef, useMemo, useState, startTransition } from "react";
-import { useNovelStore } from "@/stores/novel-store";
+import { useNovelStore, pickFlushPosition } from "@/stores/novel-store";
 import { useSummaryStore } from "@/stores/summary-store";
 import { useUIStore } from "@/stores/ui-store";
 import { useRAGStore } from "@/stores/rag-store";
@@ -14,7 +14,6 @@ import type { ScrollControl } from "./ReadingPanel";
 import { TopBar, BottomNav, ChapterParagraphs, type ReadingMode } from "./ReadingChrome";
 import { Loader2, Pause } from "lucide-react";
 import { loadChapters } from "@/db/repositories";
-import { userKey } from "@/lib/user-utils";
 import { showToast } from "@/lib/toast-store";
 
 interface ChapterContentProps {
@@ -176,6 +175,10 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
 
   // 缓存当前章节元素，避免每次滚动都遍历所有章节
   const cachedChapterElRef = useRef<HTMLElement | null>(null);
+  // 最后一次测量到的位置，连同"它是哪本书的"（切书时给上一本收尾用，见 R-77）
+  const capturedPosRef = useRef<{ novelId: string; scrollTop: number; chapterOffset: number } | null>(null);
+  const novelIdRef = useRef<string | undefined>(currentNovel?.id);
+  useEffect(() => { novelIdRef.current = currentNovel?.id; }, [currentNovel?.id]);
 
   // 计算当前章节内偏移量（相对于章节元素顶部的像素偏移）
   const calcChapterOffset = useCallback((): { scrollTop: number; chapterOffset: number } | null => {
@@ -214,44 +217,25 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
 
   const savePositionNow = useCallback(() => {
     const pos = calcChapterOffset();
-    if (pos) saveScrollTopRef.current(pos.scrollTop, pos.chapterOffset);
+    if (!pos) return;
+    // 记下这份测量属于哪本书：切书后的 effect 里容器已是新书的 DOM，届时只能靠
+    // 这个标记判断该不该把值落给上一本（R-77）
+    if (novelIdRef.current) capturedPosRef.current = { novelId: novelIdRef.current, ...pos };
+    saveScrollTopRef.current(pos.scrollTop, pos.chapterOffset);
   }, [calcChapterOffset]);
 
   // 退出或切换小说时立即保存滚动位置
   const prevNovelIdRef = useRef(currentNovel?.id);
-  const prevContainerRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const prevId = prevNovelIdRef.current;
     const curId = currentNovel?.id;
     prevNovelIdRef.current = curId;
-    // 小说变化（退出或切换到另一本小说），用之前的 container 保存旧小说的位置
-    if (prevId && prevId !== curId && prevContainerRef.current) {
-      const container = prevContainerRef.current;
-      const scrollTop = container.scrollTop;
-      const containerRect = container.getBoundingClientRect();
-      // 计算章节偏移量（使用 getBoundingClientRect 避免 offsetParent 问题）
-      const sections = container.querySelectorAll(".chapter-section[data-chapter-id]");
-      let chapterOffset = 0;
-      for (const section of sections) {
-        const el = section as HTMLElement;
-        const elRect = el.getBoundingClientRect();
-        const relativeTop = elRect.top - containerRect.top + scrollTop;
-        const relativeBottom = relativeTop + elRect.height;
-        if (relativeBottom > scrollTop) {
-          chapterOffset = scrollTop - relativeTop;
-          break;
-        }
-      }
-      const { readingPositions } = useNovelStore.getState();
-      const existingPos = readingPositions[prevId];
-      if (existingPos) {
-        const positions = { ...readingPositions, [prevId]: { ...existingPos, scrollTop, chapterOffset } };
-        localStorage.setItem(userKey("novel-reader-positions"), JSON.stringify(positions));
-        useNovelStore.setState({ readingPositions: positions });
-      }
-    }
-    prevContainerRef.current = scrollContainerRef.current;
-  }, [currentNovel?.id, scrollContainerRef]);
+    if (!prevId || prevId === curId) return;
+    // 用"上一次确实量自这本书"的值落盘，绝不在这里重新量容器：此刻 DOM 已经换成
+    // 新书（或整块脱离文档，scrollTop 读回 0），量出来的数字写给旧书就是把进度覆盖坏
+    const flush = pickFlushPosition(prevId, capturedPosRef.current);
+    if (flush) useNovelStore.getState().saveScrollTopFor(prevId, flush.scrollTop, flush.chapterOffset);
+  }, [currentNovel?.id]);
 
   // 节流保存滚动位置（每 3 秒最多保存一次）
   const lastSaveTimeRef = useRef(0);
