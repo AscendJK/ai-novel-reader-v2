@@ -46,7 +46,9 @@ app.use(cors({
     cb(null, false);
   },
   allowedHeaders: ["Content-Type", "Authorization", "x-api-key", "anthropic-version"],
-  exposedHeaders: ["Content-Type"],
+  // X-Proxy-Auth 必须暴露：GitHub Pages 前端 + 局域网后端是跨源的，不在这里列出
+  // 客户端就读不到，于是"后端会话失效"与"厂商 401"又分不开了
+  exposedHeaders: ["Content-Type", "X-Proxy-Auth"],
   credentials: true,
   maxAge: 86400,
 }));

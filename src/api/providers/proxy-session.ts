@@ -24,19 +24,31 @@ function discard(resp: Response): void {
 }
 
 /**
- * 发一次代理请求；若拿到 401，就借同步那套重注册换新 token 再试一次。
+ * 判断这个 401 是不是"后端在说自己不认识你这个会话"。
+ *
+ * 必须靠标记而不是状态码：代理会把上游厂商的 401 原样转达（sensenova 这类网关用 401
+ * 表达"密钥/模型无权访问"），只看状态码就会把厂商的拒绝误判成本地会话失效。
+ * 标记由 server/routes/proxy.js 在本地鉴权失败时加，并在 server/index.js 的
+ * exposedHeaders 里放行（跨源部署下浏览器才读得到）。
+ */
+function isLocalSessionLost(resp: Response): boolean {
+  return resp.status === 401 && resp.headers.get("x-proxy-auth") === "required";
+}
+
+/**
+ * 发一次代理请求；若后端说"本地会话失效"，就借同步那套重注册换新 token 再试一次。
  * 只重试一次：续期失败或续期后仍 401，一律如实报"会话失效"。
  */
 export async function proxyWithSessionRetry(send: () => Promise<Response>): Promise<Response> {
   const first = await send();
-  if (first.status !== 401) return first;
+  if (!isLocalSessionLost(first)) return first;
 
   discard(first);
   const renewed = await syncClient.refreshSession();
   if (!renewed) throw sessionLost(first.status);
 
   const second = await send();
-  if (second.status === 401) {
+  if (isLocalSessionLost(second)) {
     discard(second);
     throw sessionLost(second.status);
   }

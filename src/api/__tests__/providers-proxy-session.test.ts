@@ -25,7 +25,7 @@ const openaiConfig = {
 };
 const anthropicConfig = { ...openaiConfig, id: "t-anthropic", format: "anthropic" as const };
 
-type Step = { status: number; body?: unknown } | Error;
+type Step = { status: number; body?: unknown; headers?: Record<string, string> } | Error;
 
 /** 按 URL 分流：直连命中 baseUrl，代理命中 /api/proxy/chat；各自按脚本走 */
 function scriptedFetch(direct: Step[], proxy: Step[]) {
@@ -40,7 +40,7 @@ function scriptedFetch(direct: Step[], proxy: Step[]) {
     if (step instanceof Error) throw step;
     return new Response(JSON.stringify(step.body ?? {}), {
       status: step.status,
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(step.headers ?? {}) },
     });
   });
   return { fn, calls };
@@ -49,7 +49,17 @@ function scriptedFetch(direct: Step[], proxy: Step[]) {
 const CORS = () => new TypeError("Failed to fetch");
 const okOpenAI = { status: 200, body: { choices: [{ message: { role: "assistant", content: "图谱结果" } }] } };
 const okAnthropic = { status: 200, body: { content: [{ type: "text", text: "图谱结果" }] } };
-const UNAUTHORIZED = { status: 401, body: { error: "需要登录" } };
+/** 后端自己拒的 401：带 X-Proxy-Auth 标记（server/routes/proxy.js 只在本地鉴权失败时加） */
+const UNAUTHORIZED = {
+  status: 401,
+  body: { error: "需要登录" },
+  headers: { "X-Proxy-Auth": "required" },
+};
+/** 上游厂商回的 401 被代理原样转达（sensenova 网关就是这形态）：没有标记，含义完全不同 */
+const UPSTREAM_401 = {
+  status: 401,
+  body: { error: "API 返回错误: 401 Unauthorized", details: '{"error": {"code": 16,"message": "Forbidden"}}' },
+};
 const REQ = { messages: [{ role: "user" as const, content: "hi" }], stream: false };
 
 beforeEach(() => {
@@ -123,6 +133,21 @@ describe("不再把会话失效掩盖成网络错误（B）", () => {
     expect(err).toBeInstanceOf(APIError);
     expect(err.statusCode).toBe(500);
     expect(refreshSession).not.toHaveBeenCalled();
+  });
+
+  it("上游厂商自己回 401（无本地标记）→ 不去重注册，也不谎报\"后端会话失效\"", async () => {
+    // sensenova 这类网关会用 401 表达"密钥/模型无权访问"。只看状态码就会把它误判成
+    // 本地会话失效：既做了一次无谓的重注册，又把"去检查密钥"这条正确建议盖掉。
+    const { fn, calls } = scriptedFetch([CORS()], [UPSTREAM_401]);
+    globalThis.fetch = fn;
+    refreshSession.mockResolvedValue(true);
+
+    const err = await createOpenAIProvider(openaiConfig).chat(REQ).catch((e) => e);
+    expect(refreshSession).not.toHaveBeenCalled();
+    expect(calls.filter((c) => c.url.includes("/api/proxy/chat"))).toHaveLength(1);
+    expect(err).toBeInstanceOf(APIError);
+    expect(err.apiCode).toBe("auth");
+    expect(err.message).not.toContain("会话已失效");
   });
 
   it("代理连不上（请求本身失败）时保留既有语义：抛最初的直连错误", async () => {

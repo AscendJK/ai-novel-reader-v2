@@ -10,6 +10,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { freePort } from "./lib/probe-ports.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.PROBE_PORT || 5199);
@@ -35,6 +36,8 @@ const child = spawn(process.execPath, [path.join(repoRoot, "server", "index.js")
   env: {
     ...process.env,
     PORT: String(PORT),
+    // 后端总会起 HTTPS；不给空闲端口，探针在"应用正在跑"时必然启动失败
+    HTTPS_PORT: String(await freePort()),
     NOVEL_READER_DB_PATH: path.join(workDir, "novels.db"),
     NOVEL_READER_BACKUP_DIR: path.join(workDir, "backups"),
     // 探针绝不触碰真实的 server/data/.admin_token

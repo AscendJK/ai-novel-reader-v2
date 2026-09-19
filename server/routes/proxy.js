@@ -5,14 +5,20 @@
 
 import { Router } from "express";
 import dns from "node:dns";
-import { authNovel } from "../middleware/auth.js";
+import { getSessionUsername } from "../middleware/auth.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 
 const router = Router();
 
 // POST /api/proxy/chat — proxy LLM API requests
 router.post("/chat", rateLimit(60), async (req, res) => {
-  if (!authNovel(req, res)) return;
+  // 本地鉴权失败必须与"上游厂商原样转达的 401"可区分：客户端只在带 X-Proxy-Auth 标记时
+  // 才去重注册续期。sensenova 这类网关会用 401 表达"密钥/模型无权访问"，只看状态码就会
+  // 把厂商的拒绝误判成后端会话失效——既白做重注册，又盖掉"去检查密钥"这条正确建议。
+  if (!getSessionUsername(req)) {
+    res.setHeader("X-Proxy-Auth", "required");
+    return res.status(401).json({ error: "需要登录" });
+  }
   try {
     const { url, headers, body } = req.body;
     if (!url) return res.status(400).json({ error: "url required" });
@@ -85,12 +91,16 @@ router.post("/chat", rateLimit(60), async (req, res) => {
       }
     }
 
-    // Only forward specific headers
+    // 只转发白名单里的头。匹配必须大小写不敏感：HTTP 头名本身不区分大小写，而客户端
+    // （openai.ts）发的是 `Authorization` 大写 A。旧实现按小写键取值 → OpenAI 格式的密钥
+    // 被静默丢掉，症状是"这家厂商永远 401，换一家就好"——只有不支持 CORS、必须走代理的
+    // 厂商才会暴露，Anthropic 格式（小写 x-api-key）不受影响。
+    const allowedHeaders = new Set(["authorization", "x-api-key", "anthropic-version", "content-type"]);
     const safeHeaders = {};
-    const allowedHeaders = ["authorization", "x-api-key", "anthropic-version", "content-type"];
-    for (const key of allowedHeaders) {
-      if (headers?.[key]) {
-        safeHeaders[key] = headers[key];
+    for (const [key, value] of Object.entries(headers ?? {})) {
+      const lower = key.toLowerCase();
+      if (typeof value === "string" && allowedHeaders.has(lower)) {
+        safeHeaders[lower] = value;
       }
     }
 
@@ -113,7 +123,8 @@ router.post("/chat", rateLimit(60), async (req, res) => {
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
+        // 键统一小写：safeHeaders 已归一，混用大小写会发出两个 Content-Type
+        "content-type": "application/json",
         ...safeHeaders,
       },
       body: JSON.stringify(body),

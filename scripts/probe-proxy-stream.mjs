@@ -15,6 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { freePort } from "./lib/probe-ports.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.PROBE_PORT || 5201);
@@ -52,6 +53,22 @@ const upstream = http.createServer((req, res) => {
       });
       return;
     }
+    if (req.url === "/echo") {
+      // 把代理真正转发过来的鉴权头回显出来：用来盯"头白名单是否区分大小写"这类问题
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        choices: [{ message: { content: "echo" } }],
+        gotAuthorization: req.headers.authorization ?? null,
+        gotApiKey: req.headers["x-api-key"] ?? null,
+      }));
+      return;
+    }
+    if (req.url === "/unauth") {
+      // 模仿 sensenova 这类网关：用 401 表达"密钥/模型无权访问"，且错误体不是 OpenAI 格式
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { code: 16, message: "Forbidden" } }));
+      return;
+    }
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ choices: [{ message: { content: "非流式回答" } }], usage: {} }));
   });
@@ -65,6 +82,8 @@ const server = spawn(process.execPath, [path.join(repoRoot, "server", "index.js"
   env: {
     ...process.env,
     PORT: String(PORT),
+    // 后端总会起 HTTPS；不给空闲端口，探针在"应用正在跑"时必然启动失败
+    HTTPS_PORT: String(await freePort()),
     NOVEL_READER_DB_PATH: path.join(workDir, "novels.db"),
     NOVEL_READER_BACKUP_DIR: path.join(workDir, "backups"),
     NOVEL_READER_ADMIN_TOKEN_FILE: adminTokenFile,
@@ -114,6 +133,53 @@ try {
     directOk = direct.status === 200 && directText.includes("[DONE]");
   } catch { /* 留给下面的 check 报失败 */ }
   check("假上游可用（探针前置条件）", directOk);
+
+  // ── 0. 两种 401 必须可区分 ─────────────────────────────
+  // 客户端只在带 X-Proxy-Auth 标记时才去做"会话续期 + 重注册"。若标记丢了，厂商的
+  // 401（密钥/模型无权访问）会被误判成本地会话失效：白重注册一次，还把正确建议盖掉。
+  const noSession = await fetch(`${base}/api/proxy/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: `http://127.0.0.1:${upstreamPort}/unauth`, headers: {}, body: {} }),
+  });
+  check(
+    "后端自己拒的 401 带 X-Proxy-Auth 标记",
+    noSession.status === 401 && noSession.headers.get("x-proxy-auth") === "required",
+    `status=${noSession.status} marker=${noSession.headers.get("x-proxy-auth")}`
+  );
+  const upstream401 = await fetch(`${base}/api/proxy/chat`, {
+    method: "POST",
+    headers: authHeaders,
+    body: JSON.stringify({
+      url: `http://127.0.0.1:${upstreamPort}/unauth`,
+      headers: {},
+      body: { model: "m", messages: [{ role: "user", content: "hi" }] },
+    }),
+  });
+  check(
+    "厂商原样转达的 401 不带该标记",
+    upstream401.status === 401 && upstream401.headers.get("x-proxy-auth") === null,
+    `status=${upstream401.status} marker=${upstream401.headers.get("x-proxy-auth")}`
+  );
+
+  // ── 0b. 鉴权头必须真的被转发（大小写不敏感）─────────────
+  // 客户端 openai.ts 发的是 `Authorization`（大写 A），白名单按小写键取值就会静默丢头，
+  // 症状是"这家厂商永远 401，换一家就好"——只有不支持 CORS、必须走代理的厂商才会暴露。
+  const echo = await fetch(`${base}/api/proxy/chat`, {
+    method: "POST",
+    headers: authHeaders,
+    body: JSON.stringify({
+      url: `http://127.0.0.1:${upstreamPort}/echo`,
+      headers: { Authorization: "Bearer CAPITALIZED-KEY" },
+      body: { model: "m", messages: [{ role: "user", content: "hi" }] },
+    }),
+  });
+  const echoJson = await echo.json().catch(() => null);
+  check(
+    "大写 Authorization 也照样转发给上游",
+    echoJson?.gotAuthorization === "Bearer CAPITALIZED-KEY",
+    `got=${JSON.stringify(echoJson?.gotAuthorization)}`
+  );
 
   let sse = null;
   const sseStartedAt = Date.now();
