@@ -43,6 +43,12 @@ jobs:
       - name: Unit tests
         run: npm test
 
+      - name: Backup/restore probe (server 端 SQLite 链，需 better-sqlite3 原生模块)
+        run: npm run probe:backup
+
+      - name: Server boot probe (真实拉起后端 + HTTP 校验)
+        run: npm run probe:boot
+
       - name: Build
         run: npm run build
 

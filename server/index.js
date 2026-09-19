@@ -126,13 +126,11 @@ const keyPath = path.join(dataDir, "key.pem");
 
 async function isCertValid(certFile) {
   try {
-    const { execSync } = await import("node:child_process");
-    // Use openssl to check certificate expiry
-    const result = execSync(`openssl x509 -enddate -noout -in "${certFile}"`, { encoding: "utf-8" });
-    // Output format: "notAfter=Jun 14 12:00:00 2026 GMT"
-    const match = result.match(/notAfter=(.+)/);
-    if (!match) return false;
-    return new Date(match[1]) > new Date();
+    // 用 Node 内置 X509 而不是 PATH 里的 openssl：Windows 上通常没有 openssl，
+    // execSync 抛错会被判为"证书过期"，于是每次启动都白重签一遍
+    const { X509Certificate } = await import("node:crypto");
+    const cert = new X509Certificate(fs.readFileSync(certFile));
+    return new Date(cert.validTo) > new Date();
   } catch {
     return false;
   }
@@ -288,7 +286,7 @@ startServers();
 // ── Maintenance tasks ───────────────────────────────────────
 
 // 启动时立即执行一次备份
-try { createBackup(); } catch { /* ignore */ }
+createBackup().catch((e) => console.error("[backup] 启动备份失败:", e?.message ?? e));
 
 // WAL checkpoint every 30 minutes
 setInterval(() => {
@@ -302,7 +300,7 @@ function scheduleBackup() {
   const config = getBackupConfig();
   const intervalMs = config.intervalHours * 60 * 60 * 1000;
   backupTimer = setInterval(() => {
-    try { createBackup(); } catch { /* ignore */ }
+    createBackup().catch((e) => console.error("[backup] 定时备份失败:", e?.message ?? e));
   }, intervalMs);
   console.log(`[backup] interval: ${config.intervalHours}h, max: ${config.maxCount} files, retain: ${config.retainDays} days`);
 }

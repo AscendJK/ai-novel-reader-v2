@@ -7,7 +7,9 @@ import { getTimeoutConfig, setPerChunkTimeout } from "./rag-builder.js";
 import { getUsersOnlineStatus, getUserDevices } from "./sync-handler.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TOKEN_FILE = path.join(__dirname, "data", ".admin_token");
+// 可通过环境变量重定向，便于测试/探针在不触碰真实口令文件的前提下启动服务器
+const TOKEN_FILE = process.env.NOVEL_READER_ADMIN_TOKEN_FILE
+  || path.join(__dirname, "data", ".admin_token");
 
 function getOrCreateToken() {
   if (fs.existsSync(TOKEN_FILE)) return fs.readFileSync(TOKEN_FILE, "utf-8").trim();
@@ -212,12 +214,16 @@ export function mountAdminRoutes(app, hooks = {}) {
     } catch (e) { res.status(500).json({ error: "保存配置失败" }); }
   });
 
-  app.post("/api/admin/backups/create", (req, res) => {
+  app.post("/api/admin/backups/create", async (req, res) => {
     if (!auth(req, res)) return;
     try {
-      db.createBackup();
-      res.json({ ok: true });
-    } catch (e) { res.status(500).json({ error: "创建备份失败" }); }
+      // 必须 await：createBackup 的失败以 reject 上抛，不 await 就只能对用户谎报成功
+      const backupPath = await db.createBackup();
+      res.json({ ok: true, backupPath });
+    } catch (e) {
+      console.error("[admin] backup create failed:", e);
+      res.status(500).json({ error: e?.message ? `创建备份失败: ${e.message}` : "创建备份失败" });
+    }
   });
 
   app.post("/api/admin/backups/:filename/restore", async (req, res) => {

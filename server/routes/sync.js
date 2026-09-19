@@ -86,7 +86,8 @@ router.post("/register", rateLimit(30), (req, res) => {
 });
 
 // POST /api/sync/heartbeat
-router.post("/heartbeat", (req, res) => {
+// 心跳 15s 一次（4 次/分/标签页）；上限留足多标签页余量，只拦真正的异常刷屏
+router.post("/heartbeat", rateLimit(60), (req, res) => {
   const { username, clientId, token } = req.body;
   if (!username || !clientId) return res.status(400).json({ error: "username and clientId required" });
   // Check if this is a known device and session is still valid
@@ -112,7 +113,8 @@ router.post("/heartbeat", (req, res) => {
 });
 
 // POST /api/sync/push
-router.post("/push", (req, res) => {
+// 上限要容得下积压分批：增量分页每批 50 条、间隔 1s，大 backlog 时可达 60 次/分
+router.post("/push", rateLimit(90), (req, res) => {
   try {
     const { username, clientId, token, changes, lastSyncTime } = req.body;
     if (!username || !clientId) return res.status(400).json({ error: "username and clientId required" });

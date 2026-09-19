@@ -534,8 +534,10 @@ export function checkpointWAL() {
 
 // ── Backup management ──
 
-const BACKUP_DIR = path.join(__dirname, "data", "backups");
-const BACKUP_CONFIG_FILE = path.join(__dirname, "data", "backup-config.json");
+// 备份目录跟随 DB 所在目录（此前硬编码 server/data/backups，与 NOVEL_READER_DB_PATH
+// 指向别处的场景不一致，也让备份/恢复无法在临时目录里做隔离测试）
+const BACKUP_DIR = process.env.NOVEL_READER_BACKUP_DIR || path.join(dataDir, "backups");
+const BACKUP_CONFIG_FILE = path.join(dataDir, "backup-config.json");
 
 const DEFAULT_BACKUP_CONFIG = {
   maxCount: 5,
@@ -579,18 +581,30 @@ export function listBackups() {
     .sort((a, b) => b.createdAt - a.createdAt);
 }
 
+/**
+ * 备份文件名。必须带毫秒与随机后缀并用不同前缀区分用途：
+ * 原先常规备份与"恢复前快照"都用 novels-<秒级时间戳>.db，同一秒内两者同名——
+ * 恢复时快照会把正待恢复的那份源文件覆盖掉，于是"恢复成功"却把当前库原样
+ * 装了回去（静默无效恢复），而且源数据就此丢失。
+ */
+function newBackupPath(kind = "novels") {
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 23); // 含毫秒
+  const rand = Math.random().toString(36).slice(2, 6);
+  return path.join(BACKUP_DIR, `${kind}-${ts}-${rand}.db`);
+}
+
 export function createBackup() {
   if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const backupPath = path.join(BACKUP_DIR, `novels-${timestamp}.db`);
-  // db.backup() 是异步任务（线程池执行）：失败（磁盘满/目录被锁）会成为 unhandled
-  // rejection 直接崩掉整个进程，所以 catch 必须挂在这里，调用方才敢放心 fire-and-forget
-  return db.backup(backupPath)
-    .then(() => {
-      console.log(`[backup] created: ${backupPath}`);
-      cleanOldBackups();
-    })
-    .catch((e) => console.error("[backup] backup failed:", e?.message ?? e));
+  const backupPath = newBackupPath("novels");
+  // db.backup() 是异步任务（线程池执行）。这里不 catch：吞掉失败就等于对调用方
+  // 谎报"备份成功"。失败以 reject 上抛，两类调用方各自负责——admin 手动备份
+  // await 它并把错误回给人，启动/定时器 .catch(log)（漏掉 .catch 由 index.js
+  // 的全局 unhandledRejection 兜底，不至于崩进程）
+  return db.backup(backupPath).then(() => {
+    console.log(`[backup] created: ${backupPath}`);
+    cleanOldBackups();
+    return backupPath;
+  });
 }
 
 let isRestoring = false;
@@ -606,39 +620,67 @@ export async function restoreBackup(filename) {
   }
   const backupPath = path.join(BACKUP_DIR, filename);
   if (!fs.existsSync(backupPath)) throw new Error("备份文件不存在");
-  // 恢复前快照必须等待完成：db.backup() 是异步任务，不等它就 close 连接会杀死
-  // 快照（还遗留一个会让进程崩溃的 rejected promise），等于没有快照可回退
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const snapshotPath = path.join(BACKUP_DIR, `novels-${timestamp}.db`);
+
+  // 0. 预检：只读打开待恢复的备份，确认它是含 novels 表的合法 SQLite 库。
+  //    必须放在动主库之前——恢复最坏的代价是"主库已 close、新库没换上"
+  try {
+    const probe = new Database(backupPath, { readonly: true, fileMustExist: true });
+    try {
+      const { c } = probe
+        .prepare("SELECT count(*) AS c FROM sqlite_master WHERE type='table' AND name='novels'")
+        .get();
+      if (!c) throw new Error("备份里没有 novels 表，不是本项目的数据库备份");
+    } finally {
+      probe.close();
+    }
+  } catch (e) {
+    throw new Error(`备份文件无法读取，已中止恢复: ${e?.message ?? e}`);
+  }
+
+  // 1. 恢复前快照：必须 await 完成再 close，否则 close 会杀死异步备份，
+  //    等于"号称有快照可回退但文件根本不存在"
+  const snapshotPath = newBackupPath("snapshot");
+  if (snapshotPath === backupPath) throw new Error("快照文件名与待恢复备份同名，已中止恢复");
   try {
     await db.backup(snapshotPath);
     console.log(`[backup] pre-restore snapshot: ${snapshotPath}`);
-    cleanOldBackups();
   } catch (e) {
-    // 快照失败：数据库未被触碰，直接中止恢复（比覆盖后无快照可回退安全得多）
+    // 快照失败：数据库未被触碰，直接中止（比覆盖后无快照可回退安全得多）
     throw new Error(`恢复前快照失败，已中止恢复: ${e?.message ?? e}`);
   }
-  // Set restoring flag to reject incoming requests
+
+  // 2. 先把备份复制成同卷暂存文件。这一步主库连接完好，任何失败都能干净中止；
+  //    换库（close + rename）因此只剩极窄的失败窗口
+  const stagingPath = DB_PATH + ".restoring";
+  try {
+    fs.copyFileSync(backupPath, stagingPath);
+  } catch (e) {
+    try { fs.rmSync(stagingPath, { force: true }); } catch { /* ignore */ }
+    throw new Error(`备份复制失败，数据库未做任何改动: ${e?.message ?? e}`);
+  }
+
+  // 3. 换库。不再尝试"重开连接"：better-sqlite3 的 db.open 是布尔属性不是方法，
+  //    调用它必抛 TypeError；而真要重开得重建所有模块持有的导出绑定。
+  //    这里也不调 cleanOldBackups——恢复是一次性高危操作，绝不应顺手删任何备份
   isRestoring = true;
-  // Close current connection, replace DB
   try {
     db.close();
-    fs.copyFileSync(backupPath, DB_PATH);
-    console.log(`[backup] restored: ${filename}`);
-  } catch (e) {
-    // 恢复失败：重置标志并尝试重新打开数据库连接，避免服务器永久锁死
-    console.error("[backup] restore failed:", e);
-    isRestoring = false;
-    try {
-      // 重新打开数据库连接（原连接已关闭），让服务继续可用
-      db.open();
-    } catch (openErr) {
-      console.error("[backup] failed to reopen db:", openErr);
-      // 数据库无法重开时安排退出，由启动脚本拉起
-      setTimeout(() => process.exit(1), 500);
+    // close 后残留的 stale WAL/-shm 会在下次启动时被回放进刚恢复的库，
+    // 而 stop 脚本用的是强杀（Stop-Process -Force），必须显式清掉
+    for (const suffix of ["-wal", "-shm"]) {
+      try { fs.rmSync(DB_PATH + suffix, { force: true }); } catch { /* ignore */ }
     }
-    throw new Error(`备份恢复失败: ${e.message}`);
+    fs.renameSync(stagingPath, DB_PATH);
+  } catch (e) {
+    console.error("[backup] restore failed during swap:", e);
+    try { fs.rmSync(stagingPath, { force: true }); } catch { /* ignore */ }
+    setTimeout(() => process.exit(1), 500);
+    throw new Error(
+      `备份恢复在换库阶段失败，服务即将退出。人工回退：停服后把 ${snapshotPath} 复制覆盖为 ${DB_PATH} 再重启`
+    );
   }
+
+  console.log(`[backup] restored: ${filename}`);
   // Schedule graceful shutdown so the response can be sent first
   setTimeout(() => {
     console.log("[backup] shutting down for restore...");

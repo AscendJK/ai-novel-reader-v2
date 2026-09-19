@@ -177,15 +177,31 @@ router.post("/tts/synthesize", requireAuth, rateLimit(60), async (req, res) => {
     const s = Math.max(0.4, Math.min(3.5, Number(speed) || 1.0));
     const voiceId = Number.isInteger(Number(sid)) ? Math.max(0, Math.min(102, Number(sid))) : 45;
 
-    const result = await pyGenerate(text, voiceId, s, req.username);
-    const wavBuf = Buffer.from(result.wavBase64, "base64");
-    res.setHeader("Content-Type", "audio/wav");
-    res.setHeader("Content-Length", wavBuf.length);
-    res.setHeader("Cache-Control", "no-cache");
-    res.send(wavBuf);
+    // 客户端断开（关页面/停止朗读/网络断）就把这条请求出队：否则 Python 仍会
+    // 跑满最长 180s，把音频交给一个已经不存在的响应，还占着队列位
+    const pyRef = {};
+    const onClientGone = () => {
+      if (res.writableEnded) return;
+      const p = pyRef.id != null ? pyQueue.get(pyRef.id) : null;
+      if (p) {
+        dropPyRequest(pyRef.id);
+        p.reject(new Error("客户端已断开"));
+      }
+    };
+    req.on("close", onClientGone);
+    try {
+      const result = await pyGenerate(text, voiceId, s, req.username, pyRef);
+      const wavBuf = Buffer.from(result.wavBase64, "base64");
+      res.setHeader("Content-Type", "audio/wav");
+      res.setHeader("Content-Length", wavBuf.length);
+      res.setHeader("Cache-Control", "no-cache");
+      res.send(wavBuf);
+    } finally {
+      req.removeListener("close", onClientGone);
+    }
   } catch (e) {
     console.error("[tts-py] synthesize error:", e.message);
-    res.status(500).json({ error: "服务端推理失败: " + e.message });
+    if (!res.writableEnded) res.status(500).json({ error: "服务端推理失败: " + e.message });
   }
 });
 
@@ -351,7 +367,8 @@ router.get("/model-proxy/{*path}", rateLimit(10), async (req, res) => {
         : "application/octet-stream";
       res.setHeader("Content-Type", contentType);
       res.setHeader("Content-Length", data.length);
-      res.setHeader("Access-Control-Allow-Origin", "*");
+      // 不设 Access-Control-Allow-Origin：交给 index.js 的 cors() 白名单统一决定，
+      // 手写 "*" 会覆盖白名单且与 credentials:true 互斥
       res.setHeader("Cache-Control", "no-cache");
       return res.send(data);
     }
@@ -379,7 +396,7 @@ router.get("/model-proxy/{*path}", rateLimit(10), async (req, res) => {
         const contentLength = response.headers.get("content-length");
         res.setHeader("Content-Type", contentType);
         if (contentLength) res.setHeader("Content-Length", contentLength);
-        res.setHeader("Access-Control-Allow-Origin", "*");
+        // Access-Control-Allow-Origin 由 index.js 的 cors() 白名单负责，此处不覆盖
         res.setHeader("Cache-Control", "no-cache");
 
         const buffer = Buffer.from(await response.arrayBuffer());
@@ -436,6 +453,20 @@ const TTS_CACHE_DIR = path.resolve(__dirname, "../data/tts-cache");
 const TTS_WASM_CACHE = path.join(TTS_CACHE_DIR, "wasm");
 const TTS_MODEL_CACHE = path.join(TTS_CACHE_DIR, "model");
 const TTS_TEMP_DIR = path.resolve(__dirname, "../data/tts-temp");
+
+// 这个目录只是下载/解压的中转区，进程被强杀后里面全是半成品（模型包一次可达数百 MB，
+// 实测本机就留着一个上次的 -extract 目录）。启动时清空一次，避免只增不减地吃磁盘。
+try {
+  if (fs.existsSync(TTS_TEMP_DIR)) {
+    let removed = 0;
+    for (const name of fs.readdirSync(TTS_TEMP_DIR)) {
+      try { fs.rmSync(path.join(TTS_TEMP_DIR, name), { recursive: true, force: true }); removed++; } catch { /* 被占用，下次启动再清 */ }
+    }
+    if (removed) console.log(`[tts-proxy] 已清理中转目录 tts-temp（${removed} 项残留）`);
+  }
+} catch (e) {
+  console.warn("[tts-proxy] 清理 tts-temp 失败:", e.message);
+}
 
 // ── 下载源配置 ──
 // 方案4: 分离式标准部署 — 通用 WASM 运行时 + 独立模型文件
@@ -831,6 +862,35 @@ async function downloadFromGitHubZip(url, archiveName, targetDir, requiredFiles,
  */
 const MIN_DISK_SPACE_BYTES = 500 * 1024 * 1024; // 500MB
 
+/**
+ * 下载前的磁盘余量守卫。
+ * fs.statfsSync 返回的是 bsize/bavail/blocks——没有 available 与 size 字段，
+ * 拿它们相乘得到 NaN，`NaN < 阈值` 恒为 false，等于这道守卫从未生效过。
+ */
+function assertDiskSpace(dir) {
+  // 目标目录可能还不存在，statfsSync 要求已存在的路径：逐级上溯到存在的祖先
+  let probeDir = dir;
+  for (let i = 0; i < 6 && !fs.existsSync(probeDir); i++) probeDir = path.dirname(probeDir);
+  let freeBytes;
+  try {
+    const s = fs.statfsSync(probeDir);
+    freeBytes = Number(s.bsize) * Number(s.bavail);
+  } catch (e) {
+    console.warn(`[tts-proxy] 无法检查磁盘余量（${e.message}），跳过检查`);
+    return;
+  }
+  if (!Number.isFinite(freeBytes) || freeBytes <= 0) {
+    console.warn(`[tts-proxy] 磁盘余量读数异常（${freeBytes}），跳过检查`);
+    return;
+  }
+  if (freeBytes < MIN_DISK_SPACE_BYTES) {
+    throw new Error(
+      `磁盘空间不足：需要至少 ${Math.round(MIN_DISK_SPACE_BYTES / 1024 / 1024)}MB，` +
+      `${probeDir} 当前可用 ${Math.round(freeBytes / 1024 / 1024)}MB`
+    );
+  }
+}
+
 async function downloadAndExtract(giteeParts, githubUrl, archiveName, targetDir, requiredFiles, onProgress, { signal, force = false } = {}) {
   // L1 fix: 强制重新下载时清除缓存
   if (force && fs.existsSync(targetDir)) {
@@ -857,16 +917,7 @@ async function downloadAndExtract(giteeParts, githubUrl, archiveName, targetDir,
   }
 
   // L1 fix: 检查磁盘空间
-  try {
-    const stats = fs.statfsSync(TTS_CACHE_DIR);
-    if (stats.available * stats.size < MIN_DISK_SPACE_BYTES) {
-      throw new Error(`磁盘空间不足，需要至少 500MB，当前可用 ${Math.round(stats.available * stats.size / 1024 / 1024)}MB`);
-    }
-  } catch (e) {
-    if (e.message.includes("磁盘空间")) throw e;
-    // statfsSync 可能不可用（旧版 Node），跳过检查
-    console.warn("[tts-proxy] 无法检查磁盘空间:", e.message);
-  }
+  assertDiskSpace(TTS_CACHE_DIR);
 
   // 优先 Gitee（仅当配置了分卷；模型包已切 GitHub 官方源，分卷为空时跳过）
   if (giteeParts && giteeParts.length > 0) {
@@ -900,14 +951,19 @@ let wasmReady = false;
 let wasmReadyPromise = null;
 let wasmLastFailure = 0;
 export async function ensureWasmReady(onProgress, { signal, force = false } = {}) {
-  if (force) { wasmReady = false; wasmReadyPromise = null; }
+  // force 只在"当前没有下载在跑"时生效：另起一份会和在跑的那次写同一批临时文件，互相踩坏
+  if (force && !wasmReadyPromise) wasmReady = false;
   if (wasmReady) return;
-  if (wasmReadyPromise) return wasmReadyPromise;
+  if (wasmReadyPromise) { await wasmReadyPromise; return; }
   if (Date.now() - wasmLastFailure < 30000) throw new Error("上次下载失败，请 30 秒后重试");
+  // 下载用独立的 controller：这是全服务器共享的一次性下载，某个标签页离开设置页
+  // 不应该打断它（否则所有人重下 + 各自吃 30s 冷却）；断开只影响事件推送，
+  // 由 /tts/prepare 的 clientDisconnected 负责
+  const internal = new AbortController();
   wasmReadyPromise = downloadAndExtract(
-    GITEE_WASM_PARTS, null, WASM_ARCHIVE_NAME, TTS_WASM_CACHE, WASM_REQUIRED_FILES, onProgress, { signal, force }
+    GITEE_WASM_PARTS, null, WASM_ARCHIVE_NAME, TTS_WASM_CACHE, WASM_REQUIRED_FILES, onProgress, { signal: internal.signal, force }
   ).then(() => { wasmReady = true; })
-   .catch((e) => { wasmLastFailure = Date.now(); wasmReadyPromise = null; throw e; });
+   .catch((e) => { wasmLastFailure = Date.now(); wasmReadyPromise = null; internal.abort(); throw e; });
   await wasmReadyPromise;
 }
 
@@ -916,14 +972,15 @@ let modelReady = false;
 let modelReadyPromise = null;
 let modelLastFailure = 0;
 export async function ensureModelReady(onProgress, { signal, force = false } = {}) {
-  if (force) { modelReady = false; modelReadyPromise = null; }
+  if (force && !modelReadyPromise) modelReady = false;
   if (modelReady) return;
-  if (modelReadyPromise) return modelReadyPromise;
+  if (modelReadyPromise) { await modelReadyPromise; return; }
   if (Date.now() - modelLastFailure < 30000) throw new Error("上次下载失败，请 30 秒后重试");
+  const internal = new AbortController();
   modelReadyPromise = downloadAndExtract(
-    GITEE_MODEL_PARTS, GITHUB_MODEL_URL, MODEL_ARCHIVE_NAME, TTS_MODEL_CACHE, MODEL_REQUIRED_FILES, onProgress, { signal, force }
+    GITEE_MODEL_PARTS, GITHUB_MODEL_URL, MODEL_ARCHIVE_NAME, TTS_MODEL_CACHE, MODEL_REQUIRED_FILES, onProgress, { signal: internal.signal, force }
   ).then(() => { modelReady = true; })
-   .catch((e) => { modelLastFailure = Date.now(); modelReadyPromise = null; throw e; });
+   .catch((e) => { modelLastFailure = Date.now(); modelReadyPromise = null; internal.abort(); throw e; });
   await modelReadyPromise;
 }
 
@@ -954,6 +1011,8 @@ let pyBuffer = "";            // stdout 行缓冲
 let pyQueue = new Map();      // id → { resolve, reject, timer }
 let pyNextId = 1;
 let pyLastError = "";         // 上次失败原因（status 接口展示）
+let pyStartFailedAt = 0;      // 上次启动失败时刻：冷却期内不再反复 spawn（每个约 925MB）
+const PY_START_COOLDOWN = 30000;
 let pyCandidates = ["python", "python3", "py"]; // 依次探测可用的 Python 命令
 
 // 保留字符白名单（实测校准，Kokoro fp32 v1.0 + espeak-ng）：
@@ -1035,6 +1094,10 @@ async function ensurePyProcess() {
   if (!pyCmd) throw new Error("服务器未安装 Python 或 sherpa-onnx，无法使用服务端推理。请运行: pip install sherpa-onnx");
   if (pyProc && pyReady) return pyProc;
   if (pyStartPromise) return pyStartPromise;
+  // 启动失败冷却：前端会自动重试多次，没有冷却就会反复 spawn 每个约 925MB 的进程
+  if (Date.now() - pyStartFailedAt < PY_START_COOLDOWN) {
+    throw new Error(pyLastError || `服务端推理启动失败，请 ${PY_START_COOLDOWN / 1000} 秒后重试`);
+  }
 
   pyStartPromise = (async () => {
     // 先确保模型文件在服务器上就绪（懒下载：仅在启用服务端推理时触发）
@@ -1047,19 +1110,20 @@ async function ensurePyProcess() {
     // PYTHONUTF8，Node 写入的 UTF-8 字节会被 Python 按 GBK 解码成乱码，
     // Kokoro 对乱码汉字硬拼音素 → 音色/语速正常但内容胡话（乱读）。
     // 不依赖部署机全局环境变量，一处改动根治。
-    pyProc = spawn(pyCmd, [TTS_WORKER_PY, TTS_MODEL_CACHE, String(TTS_PY_THREADS)], {
+    const proc = spawn(pyCmd, [TTS_WORKER_PY, TTS_MODEL_CACHE, String(TTS_PY_THREADS)], {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
       env: { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
     });
+    pyProc = proc;
 
     // stdin 必须挂 error 监听：进程死亡瞬间，exit 事件置空 pyProc 与 socket
     // 真正关闭之间存在异步窗口，此刻 pyGenerate 的 stdin.write 会触发 EPIPE——
     // Stream 无 error 监听时按 uncaughtException 处理，整个 Node 后端崩溃退出。
     // 挂上监听后 EPIPE 被吞掉，未完成请求由下方 exit 处理器统一 reject。
-    pyProc.stdin.on("error", () => {});
+    proc.stdin.on("error", () => {});
 
-    pyProc.stdout.on("data", (chunk) => {
+    proc.stdout.on("data", (chunk) => {
       pyBuffer += chunk.toString("utf8");
       let idx;
       while ((idx = pyBuffer.indexOf("\n")) >= 0) {
@@ -1071,6 +1135,7 @@ async function ensurePyProcess() {
           if (msg.type === "ready") {
             pyReady = true;
             pyLastError = "";
+            pyStartFailedAt = 0;
             console.log(`[tts-py] 服务端推理就绪 (numSpeakers=${msg.numSpeakers})`);
           } else if (msg.type === "result") {
             const pending = pyQueue.get(msg.id);
@@ -1092,15 +1157,19 @@ async function ensurePyProcess() {
         } catch { /* 非 JSON 行忽略 */ }
       }
     });
-    pyProc.stderr.on("data", (chunk) => {
+    proc.stderr.on("data", (chunk) => {
       const s = String(chunk).trim();
       if (s) console.warn("[tts-py] stderr:", s.slice(0, 500));
     });
-    pyProc.on("exit", (code) => {
+    // 所有状态回写都要认进程身份：超时/停止会让 pyProc 指向**新**进程，
+    // 旧进程稍后才 exit，无条件清空就会把新进程的引用抹掉 → 新进程成孤儿
+    proc.on("exit", (code) => {
       console.warn(`[tts-py] 进程退出 code=${code}`);
-      pyProc = null;
-      pyReady = false;
-      pyStartPromise = null;
+      if (pyProc === proc) {
+        pyProc = null;
+        pyReady = false;
+        pyStartPromise = null;
+      }
       // 未完成请求全部失败
       for (const [id, p] of pyQueue) {
         clearTimeout(p.timer);
@@ -1108,12 +1177,14 @@ async function ensurePyProcess() {
         p.reject(new Error("服务端推理进程已退出"));
       }
     });
-    pyProc.on("error", (err) => {
+    proc.on("error", (err) => {
       pyLastError = err.message;
       console.error("[tts-py] 进程错误:", err.message);
-      pyProc = null;
-      pyReady = false;
-      pyStartPromise = null;
+      if (pyProc === proc) {
+        pyProc = null;
+        pyReady = false;
+        pyStartPromise = null;
+      }
     });
 
     // 等待 ready（含模型加载，约 3s）
@@ -1123,12 +1194,17 @@ async function ensurePyProcess() {
         if (pyReady) { clearInterval(timer); resolve(); }
         else if (Date.now() - t0 > TTS_PY_START_TIMEOUT) {
           clearInterval(timer);
-          reject(new Error(pyLastError || "服务端推理启动超时"));
+          // 超时必须杀掉刚起的进程：只 reject 会让它带着 ~925MB 常驻，
+          // 下次 ensurePyProcess 又起一个，反复触发直到 OOM
+          try { proc.kill(); } catch { /* 已退出 */ }
+          reject(new Error(pyLastError || `服务端推理启动超时（${TTS_PY_START_TIMEOUT / 1000}s）`));
         }
       }, 200);
     });
     return pyProc;
   })().catch((e) => {
+    pyStartFailedAt = Date.now();
+    pyLastError = e?.message ?? String(e);
     pyStartPromise = null;
     throw e;
   });
@@ -1139,13 +1215,13 @@ async function ensurePyProcess() {
 /** 提交一次生成请求，返回 { sampleRate, wavBase64 }。
  *  username 用于取消协议：前端停止时按用户清掉排队中的请求。
  *  先入队（等待 Python 就绪期间也可被 cancel 取消），进程就绪后再写入 stdin。 */
-async function pyGenerate(text, sid, speed, username = "") {
+async function pyGenerate(text, sid, speed, username = "", idRef = null) {
   cancelPyIdleShutdown(); // 有新请求：取消空闲关闭计划
   const id = pyNextId++;
+  if (idRef) idRef.id = id; // 同步回填：调用方要在 await 之前就能拿到 id 做出队
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      if (pyQueue.has(id)) {
-        pyQueue.delete(id);
+      if (dropPyRequest(id)) {
         reject(new Error(`服务端推理超时（${TTS_PY_GEN_TIMEOUT / 1000}s）`));
       }
     }, TTS_PY_GEN_TIMEOUT);
@@ -1158,9 +1234,7 @@ async function pyGenerate(text, sid, speed, username = "") {
         pyQueue.get(id).started = true;
         pyProc.stdin.write(JSON.stringify({ id, text, sid, speed }) + "\n");
       } catch (e) {
-        if (pyQueue.has(id)) {
-          clearTimeout(timer);
-          pyQueue.delete(id);
+        if (dropPyRequest(id)) {
           reject(e instanceof Error ? e : new Error(String(e)));
         }
       }
@@ -1178,8 +1252,7 @@ export function cancelPyRequests(username) {
   let cancelled = 0;
   for (const [id, p] of pyQueue) {
     if (p.username === username) {
-      clearTimeout(p.timer);
-      pyQueue.delete(id);
+      dropPyRequest(id);
       p.reject(new Error("服务端推理已取消"));
       cancelled++;
     }
@@ -1212,6 +1285,20 @@ function cancelPyIdleShutdown() {
     clearTimeout(pyIdleTimer);
     pyIdleTimer = null;
   }
+}
+
+/**
+ * 从队列移除一条请求。超时/cancel/启动失败都必须走这里——空闲关闭计划原先
+ * 只挂在 stdout 的 result/error 分支上，客户端停止朗读后队列被清空却排不上
+ * 关闭计划，~925MB 的进程就无限常驻了。
+ */
+function dropPyRequest(id) {
+  const p = pyQueue.get(id);
+  if (!p) return false;
+  clearTimeout(p.timer);
+  pyQueue.delete(id);
+  if (pyQueue.size === 0) schedulePyIdleShutdown();
+  return true;
 }
 
 /** 关闭 Python 推理进程（空闲超时 / 后端退出时调用） */
@@ -1331,7 +1418,7 @@ router.get("/tts/prepare", requireAuth, async (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  // ACAO 由全局 cors() 白名单设置，这里不再手写 "*"
   res.flushHeaders();
 
   let clientDisconnected = false;

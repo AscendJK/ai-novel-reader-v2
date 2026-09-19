@@ -14,7 +14,9 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
-    "verify": "npm run typecheck && npm run lint && npm test",
+    "verify": "npm run typecheck && npm run lint && npm test && npm run probe:backup && npm run probe:boot",
+    "probe:backup": "node scripts/probe-backup-restore.mjs",
+    "probe:boot": "node scripts/probe-server-boot.mjs",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage"
