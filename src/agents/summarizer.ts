@@ -7,7 +7,7 @@ import { TaskType } from "./types";
 import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
 import { buildChapterSummaryPrompt } from "@/lib/prompt-templates";
-import { sampleChapterContent, prepareAgentContext, chatWithContextRetry, isAbortError } from "./utils";
+import { sampleChapterContent, prepareAgentContext, chatWithContextRetry, isAbortError, sampleChapterTitles } from "./utils";
 import { estimateTokens, computeAvailableInput, requireUsableInput } from "@/api/token-manager";
 import { APIError } from "@/api/error-handler";
 
@@ -155,14 +155,16 @@ class GlobalSummarizerAgent extends BaseAgent {
     const { novel, provider, budget } = env;
 
     // Build a prompt with metadata + chapter structure + content samples
-    const chapterList = novel.chapters
+    const chapterLines = novel.chapters
       .map((c, i) => {
         const charCount = c.content.length;
         return charCount > 0
           ? `${i + 1}. ${c.title} (${charCount.toLocaleString()} 字)`
           : `${i + 1}. ${c.title}`;
-      })
-      .join("\n");
+      });
+    // 目录按预算抽样：全书总结的"精简版"此前仍带着全量目录，上千章必 400
+    // （round 2 R-40）
+    const chapterList = sampleChapterTitles(chapterLines, Math.floor(computeAvailableInput(budget, 4096) * 0.25)).text;
 
     // Use pre-retrieved relevant text from RAG if available, else fall back to samples
     const relevantContent = context.preRetrieved && context.preRetrieved.length >= 100

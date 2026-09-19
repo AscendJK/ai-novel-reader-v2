@@ -6,7 +6,7 @@ import type { AgentContext, AgentResult } from "./types";
 import { TaskType } from "./types";
 import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
-import { getRelevantContent, chatWithContextRetry } from "./utils";
+import { getRelevantContent, chatWithContextRetry, sampleChapterTitles } from "./utils";
 import { estimateTokens, computeAvailableInput } from "@/api/token-manager";
 
 /**
@@ -20,12 +20,14 @@ class CharacterAnalysisAgent extends BaseAgent {
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider, budget } = env;
 
-    const chapterList = novel.chapters
+    const chapterLines = novel.chapters
       .map((c, i) => {
         const charCount = c.content.length;
         return charCount > 0 ? `${i + 1}. ${c.title} (${charCount.toLocaleString()}字)` : `${i + 1}. ${c.title}`;
-      })
-      .join("\n");
+      });
+    // 长书的全量目录本身就能把请求顶到 400（旧实现的"精简版"也带着它），
+    // 所以目录同样按预算抽样，并明确告诉模型这是抽样（round 2 R-40）
+    const chapterList = sampleChapterTitles(chapterLines, Math.floor(computeAvailableInput(budget, 4096) * 0.25)).text;
 
     const { content: relevantContent, label: promptLabel } = getRelevantContent(context, novel.chapters);
 
@@ -105,12 +107,14 @@ class TimelineAgent extends BaseAgent {
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider, budget } = env;
 
-    const chapterList = novel.chapters
+    const chapterLines = novel.chapters
       .map((c, i) => {
         const charCount = c.content.length;
         return charCount > 0 ? `${i + 1}. ${c.title} (${charCount.toLocaleString()}字)` : `${i + 1}. ${c.title}`;
-      })
-      .join("\n");
+      });
+    // 长书的全量目录本身就能把请求顶到 400（旧实现的"精简版"也带着它），
+    // 所以目录同样按预算抽样，并明确告诉模型这是抽样（round 2 R-40）
+    const chapterList = sampleChapterTitles(chapterLines, Math.floor(computeAvailableInput(budget, 4096) * 0.25)).text;
 
     const { content: relevantContent, label: promptLabel } = getRelevantContent(context, novel.chapters);
 

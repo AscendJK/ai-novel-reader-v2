@@ -6,7 +6,7 @@ import type { AgentContext, AgentResult } from "./types";
 import { TaskType } from "./types";
 import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
-import { getRelevantContent, chatWithContextRetry } from "./utils";
+import { getRelevantContent, chatWithContextRetry, sampleChapterTitles } from "./utils";
 import { extractJSON } from "./json-extractor";
 import { useUIStore } from "@/stores/ui-store";
 import { estimateTokens, computeAvailableInput } from "@/api/token-manager";
@@ -36,7 +36,11 @@ class CharacterGraphAgent extends BaseAgent {
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider } = env;
 
-    const chapterList = novel.chapters.map((c, i) => `${i + 1}. ${c.title}`).join("\n");
+    // 目录按预算抽样：上千章的书带着全量目录必 400（round 2 R-40）
+    const chapterList = sampleChapterTitles(
+      novel.chapters.map((c, i) => `${i + 1}. ${c.title}`),
+      Math.floor(computeAvailableInput(env.budget, 8192) * 0.25)
+    ).text;
 
     const { content: relevantContent, label: promptLabel } = getRelevantContent(context, novel.chapters);
     const charLimit = useUIStore.getState().graphCharacterLimit ?? 50;

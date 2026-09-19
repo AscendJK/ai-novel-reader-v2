@@ -8,7 +8,8 @@ import { TaskType } from "./types";
 import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
 import { extractJSON } from "./json-extractor";
-import { prepareAgentContext, chatWithContextRetry } from "./utils";
+import { prepareAgentContext, chatWithContextRetry, sampleChapterTitles } from "./utils";
+import { computeAvailableInput } from "@/api/token-manager";
 
 /**
  * 地图生成 Agent
@@ -28,9 +29,11 @@ class MapAgent extends BaseAgent {
 
     // 1. 构建章节目录
     context.onStatus?.("正在准备分析数据...");
-    const chapterList = novel.chapters
-      .map((c, i) => `${i + 1}. ${c.title}`)
-      .join("\n");
+    // 目录按预算抽样（round 2 R-40）
+    const chapterList = sampleChapterTitles(
+      novel.chapters.map((c, i) => `${i + 1}. ${c.title}`),
+      Math.floor(computeAvailableInput(env.budget, 4096) * 0.25)
+    ).text;
 
     // 尝试两次：第一次正常生成，第二次带上错误反馈
     let lastError: string | undefined;

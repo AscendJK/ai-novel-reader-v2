@@ -9,7 +9,7 @@ import { getProvider } from "@/api/registry";
 import { useAPIStore } from "@/stores/api-store";
 import { loadNovel } from "@/db/repositories";
 import type { Novel } from "@/parsers/types";
-import { getTokenBudget, extractContextLength, setDiscoveredContextWindow, type TokenBudget } from "@/api/token-manager";
+import { getTokenBudget, estimateTokens, extractContextLength, setDiscoveredContextWindow, type TokenBudget } from "@/api/token-manager";
 import { APIError } from "@/api/error-handler";
 import type { AgentEnvironment } from "./base-agent";
 import type { ChatCompletionResponse } from "@/api/types";
@@ -125,6 +125,58 @@ export function getRelevantContent(
     return { content: context.preRetrieved, label: "语义检索相关段落" };
   }
   return { content: sampleChaptersContent(chapters), label: "内容样本" };
+}
+
+/**
+ * 章节目录按 token 预算抽样（round 2 R-40）。
+ *
+ * 五个"全书级"功能在长书上的精简 prompt 里仍保留**全量** chapterList，
+ * 上千章的书直接把请求顶到 400：自愈一次后彻底失败；即便侥幸通过，模型只见
+ * 目录没见过正文，产出的是纯目录幻觉。这里保留首尾 + 等距抽样，并在返回里
+ * 明确标出"被抽样"，让调用方能把这一点如实告诉用户。
+ */
+export function sampleChapterTitles(
+  titles: string[],
+  maxTokens: number
+): { text: string; sampled: boolean; kept: number } {
+  const budget = Math.max(0, Math.floor(maxTokens));
+  const render = (list: string[]) => list.join("\n");
+  if (titles.length === 0) return { text: "", sampled: false, kept: 0 };
+  if (estimateTokens(render(titles)) <= budget) {
+    return { text: render(titles), sampled: false, kept: titles.length };
+  }
+
+  // 二分：找出能塞进预算的抽样条数
+  let lo = 1;
+  let hi = titles.length;
+  let best = 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const candidate = pickEvenly(titles, mid);
+    if (estimateTokens(render(candidate)) <= budget) {
+      best = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  const kept = pickEvenly(titles, best);
+  return {
+    text: render(kept) + `\n（共 ${titles.length} 章，以上为等距抽样 ${kept.length} 章）`,
+    sampled: true,
+    kept: kept.length,
+  };
+}
+
+/** 等距抽样，始终包含首尾 */
+function pickEvenly<T>(list: T[], count: number): T[] {
+  const n = Math.min(count, list.length);
+  if (n >= list.length) return [...list];
+  if (n === 1) return [list[0]];
+  const out: T[] = [];
+  const step = (list.length - 1) / (n - 1);
+  for (let i = 0; i < n; i++) out.push(list[Math.round(i * step)]);
+  return [...new Set(out)];
 }
 
 /**

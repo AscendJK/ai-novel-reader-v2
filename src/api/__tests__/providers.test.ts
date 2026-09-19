@@ -384,3 +384,66 @@ describe("Anthropic provider parseResponse", () => {
     expect(body.stream).toBe(false);
   });
 });
+
+/**
+ * Anthropic 角色交替（round 2 批次 3 / R-36）
+ *
+ * API 要求 user/assistant 严格交替。QA 里失败或被取消的那一轮会把用户消息
+ * 留在历史里，下一轮就出现连续两条 user → 400，之后每次追问都失败。
+ */
+describe("Anthropic provider 消息归一", () => {
+  const anthropicReply = { content: [{ type: "text", text: "ok" }], usage: {} };
+
+  function anthropicMessages(calls: { url: string; init?: RequestInit }[]) {
+    return JSON.parse(calls[0].init?.body as string).messages as { role: string; content: string }[];
+  }
+
+  it("连续两条 user 合并成一条", async () => {
+    const calls = mockFetchCapture(anthropicReply);
+    const provider = createAnthropicProvider(anthropicConfig);
+    await provider.chat({ messages: [
+      { role: "user", content: "第一个问题" },
+      { role: "user", content: "第二个问题" },
+    ] });
+    const msgs = anthropicMessages(calls);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].role).toBe("user");
+    expect(msgs[0].content).toContain("第一个问题");
+    expect(msgs[0].content).toContain("第二个问题");
+  });
+
+  it("连续 assistant 同样合并，正常交替保持原样", async () => {
+    const calls = mockFetchCapture(anthropicReply);
+    const provider = createAnthropicProvider(anthropicConfig);
+    await provider.chat({ messages: [
+      { role: "user", content: "u1" },
+      { role: "assistant", content: "a1" },
+      { role: "assistant", content: "a2" },
+      { role: "user", content: "u2" },
+    ] });
+    expect(anthropicMessages(calls).map((m) => `${m.role}:${m.content}`))
+      .toEqual(["user:u1", "assistant:a1\n\na2", "user:u2"]);
+  });
+
+  it("首条不是 user 时丢弃前导 assistant（否则整个请求被拒）", async () => {
+    const calls = mockFetchCapture(anthropicReply);
+    const provider = createAnthropicProvider(anthropicConfig);
+    await provider.chat({ messages: [
+      { role: "assistant", content: "不该有的开头" },
+      { role: "user", content: "u1" },
+    ] });
+    expect(anthropicMessages(calls)).toEqual([{ role: "user", content: "u1" }]);
+  });
+
+  it("system 仍单独走 system 字段，不混进消息序列", async () => {
+    const calls = mockFetchCapture(anthropicReply);
+    const provider = createAnthropicProvider(anthropicConfig);
+    await provider.chat({ messages: [
+      { role: "system", content: "你是助手" },
+      { role: "user", content: "u1" },
+    ] });
+    const body = JSON.parse(calls[0].init?.body as string);
+    expect(body.system).toBe("你是助手");
+    expect(body.messages).toEqual([{ role: "user", content: "u1" }]);
+  });
+});

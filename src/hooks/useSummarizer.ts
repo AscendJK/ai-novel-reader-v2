@@ -13,7 +13,8 @@ import { getProvider } from "@/api/registry";
 import { saveSummary, saveMap, deleteMap, loadChapters, loadNovel } from "@/db/repositories";
 import { getUserDB } from "@/db/database";
 import { APIError } from "@/api/error-handler";
-import { getTokenBudget, requireUsableInput } from "@/api/token-manager";
+import { getTokenBudget, requireUsableInput, estimateTokens } from "@/api/token-manager";
+import { sampleChapterTitles } from "@/agents/utils";
 import { buildIndex, retrieveRelevantWithDetails } from "@/rag/index";
 import { useRAGStore } from "@/stores/rag-store";
 import { syncClient } from "@/sync/sync-client";
@@ -607,8 +608,13 @@ ${combinedText}`;
 
       startTask("问答", TaskType.QA);
 
-      // Build system context
-      const chapterList = currentNovel.chapters.map((c, i) => `${i + 1}. ${c.title}`).join("\n");
+      // 上下文按预算装配（round 2 R-35）：此前系统提示里塞的是**全量**章节目录
+      // + 最多 80 个 RAG 片段（约 45k token）+ 全量对话历史，且不经过
+      // chatWithContextRetry → 长书 + 多轮追问必然 400，且不会自愈。
+      const QA_OUTPUT_TOKENS = 2048;
+      const budget = getTokenBudget(provider.model, provider.contextWindow, provider.maxTokens);
+      const available = requireUsableInput(budget, QA_OUTPUT_TOKENS, "问答");
+      const allTitles = currentNovel.chapters.map((c, i) => `${i + 1}. ${c.title}`);
 
       // Use cached RAG context for follow-up questions, refresh if topic changes
       let relevantText: string;
@@ -624,32 +630,64 @@ ${combinedText}`;
         qaRagCacheRef.current = { question, text: relevantText, followUps: 0, novelId: currentNovel.id };
       }
 
-      const systemPrompt = `你是一位专业的小说分析助手。请根据以下小说信息回答用户问题。请用中文回答。
+      // 历史从最新往回装，最多 12 轮，且不超过预算的 30%
+      const historyCap = Math.floor(available * 0.3);
+      const keptReversed: { role: "user" | "assistant"; content: string }[] = [];
+      let historyTokens = 0;
+      const recentFirst = [...history].reverse();
+      for (const msg of recentFirst) {
+        if (keptReversed.length >= 12) break;
+        const cost = estimateTokens(msg.content) + 4;
+        if (keptReversed.length > 0 && historyTokens + cost > historyCap) break;
+        keptReversed.push(msg);
+        historyTokens += cost;
+      }
+      const keptHistory = keptReversed.reverse();
+      const droppedTurns = Math.max(0, history.length - keptHistory.length);
+
+      const chapterSample = sampleChapterTitles(allTitles, Math.floor(available * 0.2));
+
+      const systemSkeleton = `你是一位专业的小说分析助手。请根据以下小说信息回答用户问题。请用中文回答。
 
 **小说：**《${currentNovel.title}》
 **章节目录：**
-${chapterList}
+${chapterSample.text}
 
 **语义检索相关段落：**
-${relevantText || "（无额外参考信息，请基于章节目录回答）"}
+`;
+      const tailNote = chapterSample.sampled
+        ? "\n\n注意：章节目录过长，上面只给了抽样部分。若抽样不足以回答，请明确说明需要查阅哪些章节，不要凭目录猜测剧情。"
+        : "";
+      const fixedCost = estimateTokens(systemSkeleton) + estimateTokens(tailNote) + estimateTokens(question);
+      const ragCap = Math.max(200, available - historyTokens - fixedCost);
+      let relevantBody = relevantText || "（无额外参考信息，请基于章节目录回答）";
+      if (estimateTokens(relevantBody) > ragCap) {
+        // 按字符近似截断（中文约 1 字 = 1 token）
+        relevantBody = relevantBody.slice(0, Math.max(0, ragCap)) + "\n……（检索结果因长度限制被截断）";
+      }
 
-记住：你可以基于提供的文本信息和章节目录进行回答。如果信息不足以回答，请诚实说明并基于已有信息给出推断。`;
+      const systemPrompt = `${systemSkeleton}${relevantBody}${tailNote}`;
 
       // Build messages: system context + conversation history + new question
       const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
         { role: "system", content: systemPrompt },
       ];
-      for (const msg of history) {
+      for (const msg of keptHistory) {
         messages.push(msg);
       }
       messages.push({ role: "user", content: question });
+      if (droppedTurns > 0) {
+        console.log(`[qa] 历史超出预算，省略最早 ${droppedTurns} 条消息`);
+      }
 
       try {
         const providerInstance = getProvider(provider);
         const response = await providerInstance.chat({
           model: "",
           messages,
-          max_tokens: 2048,
+          // 与上面 computeAvailableInput 的输出预留取同一值，否则预算算小了
+          // 而请求要得多，严格校验的服务商必 400
+          max_tokens: Math.min(QA_OUTPUT_TOKENS, budget.maxOutputTokens),
           temperature: 0.5,
           signal: createSignal(),
         });

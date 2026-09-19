@@ -41,15 +41,26 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
 
   function buildMessages(req: ChatCompletionRequest) {
     let systemPrompt = "";
-    const messages: { role: string; content: string }[] = [];
+    const merged: { role: string; content: string }[] = [];
     for (const msg of req.messages) {
       if (msg.role === "system") {
         systemPrompt += (systemPrompt ? "\n" : "") + msg.content;
+        continue;
+      }
+      const content = typeof msg.content === "string" ? msg.content : String(msg.content ?? "");
+      const last = merged[merged.length - 1];
+      // Anthropic 要求 user/assistant 严格交替：QA 里失败或取消的那一轮会把
+      // 用户消息留在历史中，下一轮就出现连续两条 user → 400，且之后每次追问
+      // 都失败直到用户点"新会话"（round 2 R-36）。同角色合并成一条即可。
+      if (last && last.role === msg.role) {
+        last.content = last.content ? `${last.content}\n\n${content}` : content;
       } else {
-        messages.push({ role: msg.role, content: msg.content });
+        merged.push({ role: msg.role, content });
       }
     }
-    return { systemPrompt, messages };
+    // 首条必须是 user：否则整个请求被拒
+    while (merged.length && merged[0].role !== "user") merged.shift();
+    return { systemPrompt, messages: merged };
   }
 
   function buildBody(req: ChatCompletionRequest) {
