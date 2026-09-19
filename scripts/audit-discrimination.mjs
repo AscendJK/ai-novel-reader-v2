@@ -189,13 +189,17 @@ for (const [i, file] of changed.entries()) {
   inFlight = file;
   let res, stage;
   if (IS_SERVER) {
-    const runs = probes.map(runProbe);
-    stage = probes.join("+");
-    res = runs.find((r) => r.error) ?? {
-      failed: runs.reduce((n, r) => n + r.failed, 0),
-      total: runs.reduce((n, r) => n + r.total, 0),
+    const runs = probes.map((n) => ({ name: n, ...runProbe(n) }));
+    stage = runs.map((r) => `${r.name}:${r.error ? "跑不起来" : `${r.failed}红/${r.total}`}`).join("  ");
+    const reds = runs.reduce((n, r) => n + (r.error ? 0 : r.failed), 0);
+    const broken = runs.filter((r) => r.error);
+    res = {
+      failed: reds,
+      total: runs.reduce((n, r) => n + (r.error ? 0 : r.total), 0),
       exit: 0,
-      failedFiles: [],
+      failedFiles: runs.filter((r) => !r.error && r.failed > 0).map((r) => r.name),
+      // 一只探针跑不起来，不该把它盖住的那只的红色也一起抹掉：有红就先算"有保护"
+      error: reds > 0 || broken.length === 0 ? null : broken.map((r) => r.error).join("；"),
     };
   } else {
     res = runVitest(targets);
