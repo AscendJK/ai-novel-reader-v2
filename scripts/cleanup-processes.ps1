@@ -1,8 +1,8 @@
 # 清理 AI Novel Reader 残留进程（Windows / PowerShell）
 # 被 start.bat / start-backend.bat / stop.bat 调用（含打包后端包内的 start.bat）
 #
-# 清理对象（精确匹配，避免误杀其他项目的 node/python）：
-#   1. Node.js 进程：命令行含 server\index.js 或本项目路径（前端 dev / 后端服务）
+# 清理对象（只认本项目，避免误杀其他项目的 node/python）：
+#   1. Node.js 进程：命令行含本项目路径（前端 dev / 后端服务）
 #   2. Python 进程：命令行含 tts-worker.py（服务端 TTS 推理常驻进程）
 #   3. 兜底：占用本项目端口 (8443/5173/5174) 的 node.exe 进程
 $ErrorActionPreference = "SilentlyContinue"
@@ -28,7 +28,12 @@ foreach ($proc in Get-CimInstance Win32_Process -ErrorAction SilentlyContinue) {
   # 其 python.exe 子进程会孤儿残留，py.exe 本身也需清理
   $isPy = $proc.Name -eq "python.exe" -or $proc.Name -eq "python3.exe" -or $proc.Name -eq "py.exe"
   $match = $false
-  if ($isNode -and ($cmd -match "server[\\/]index\.js" -or $cmd -match $proj)) { $match = $true }
+  # 只按"命令行里带本项目路径"认人。旧写法还并了一个与项目无关的
+  # `server[\\/]index\.js`，于是任何项目里 `node server/index.js` 的进程都会被
+  # 顺手杀掉——第 4 行承诺的"不误杀其他项目"当时并没兑现（round 3 R-76）。
+  # start.bat 用的是相对路径 `node server/index.js`，命令行里不带项目路径，
+  # 由下面的端口兜底接住（那也是它存在的目的：覆盖自定义启动方式）。
+  if ($isNode -and $cmd -match $proj) { $match = $true }
   elseif ($isPy -and $cmd -match "tts-worker\.py") { $match = $true }
   if ($match) { $targets.Add($proc) }
 }
