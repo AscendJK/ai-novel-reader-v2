@@ -606,14 +606,25 @@ ${combinedText}`;
       const provider = getActiveProvider();
       if (!provider) return null;
 
-      startTask("问答", TaskType.QA);
-
       // 上下文按预算装配（round 2 R-35）：此前系统提示里塞的是**全量**章节目录
       // + 最多 80 个 RAG 片段（约 45k token）+ 全量对话历史，且不经过
       // chatWithContextRetry → 长书 + 多轮追问必然 400，且不会自愈。
       const QA_OUTPUT_TOKENS = 2048;
       const budget = getTokenBudget(provider.model, provider.contextWindow, provider.maxTokens);
-      const available = requireUsableInput(budget, QA_OUTPUT_TOKENS, "问答");
+      // 预算校验必须在进入运行态之前收口（round 3 R-73）：它是下面这段装配里唯一会抛的
+      // 调用，而 startTask 与那个 try/finally 之间没有兜底——一次"上下文窗口不足"就会把
+      // 模块级 aiRunning 与 isGenerating 永久留在 true，同步还把 getAiRunning 当门控，
+      // 症状是"AI 按钮全灰、进度条一直转、界面显示已同步却永不再上传"。
+      // 走 handleError 也保住了这句精确文案，而不是上层那句笼统的"问答失败，请重试"。
+      let available: number;
+      try {
+        available = requireUsableInput(budget, QA_OUTPUT_TOKENS, "问答");
+      } catch (err) {
+        handleError(err);
+        return null;
+      }
+
+      startTask("问答", TaskType.QA);
       const allTitles = currentNovel.chapters.map((c, i) => `${i + 1}. ${c.title}`);
 
       // Use cached RAG context for follow-up questions, refresh if topic changes
