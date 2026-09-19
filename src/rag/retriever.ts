@@ -129,14 +129,26 @@ export class Retriever {
 
     const f32 = new Float32Array(vectorsBuffer);
     const dim = 128;
-    for (let i = 0; i < chunks.length; i++) {
+    // 缓存被截断时（写入中途配额打断/强杀进程）按向量数收敛，避免越界读出
+    // 整片 NaN 向量——NaN 参与点积会让所有分数变 NaN 并静默返回空结果
+    const usable = Math.min(chunks.length, Math.floor(f32.length / dim));
+    if (usable < chunks.length) {
+      console.warn(`[rag] TF-IDF 缓存不完整：${chunks.length} 个 chunk 只有 ${usable} 条向量，建议重新构建`);
+    }
+    for (let i = 0; i < usable; i++) {
       const vector = new Float64Array(dim);
       for (let j = 0; j < dim; j++) {
         vector[j] = f32[i * dim + j];
       }
       r.docs.push({ id: chunks[i].id, vector });
     }
+    r.chunks = chunks.slice(0, usable);
     return r;
+  }
+
+  /** 该索引是否携带章节索引——范围过滤的前提（缺失时范围检索会退化成全书检索） */
+  supportsChapterRange(): boolean {
+    return this.chunks.some((c) => typeof c.chapterIndex === "number");
   }
 
   /** 序列化为可存入 ragCache 的格式 */

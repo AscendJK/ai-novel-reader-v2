@@ -475,7 +475,17 @@ export async function retrieveRelevantForRange(
   if (!entry) return { text: "", results: [], engine: "none" };
 
   const k = topK ?? useRAGStore.getState().getTopK(entry.chunkCount);
-  const inRange = (ci?: number) => ci === undefined || (ci >= fromChapter && ci <= toChapter);
+  // 索引里存在章节索引时，缺失 chapterIndex 的 chunk 必须排除：旧实现把它们
+  // 一律算作"在范围内"，于是"只检索第 N–M 章"会静默返回全书内容并被写成
+  // 该范围的总结（round 2 R-32/R-33）。整份索引都没有章节索引时（老数据）
+  // 才放弃过滤，但要留下日志。
+  const rangeCapable = (entry.embedding?.supportsChapterRange() ?? false)
+    || entry.retriever.supportsChapterRange();
+  if (!rangeCapable) {
+    ragLog(`范围检索降级为全书检索：${novelId.slice(0, 8)} 的索引不含 chapterIndex（旧数据），建议重新构建`);
+  }
+  const inRange = (ci?: number) =>
+    !rangeCapable || (typeof ci === "number" && ci >= fromChapter && ci <= toChapter);
 
   if (isEmbeddingEngine(entry.engine) && entry.embedding) {
     const allResults = await entry.embedding.search(query, k * 3, opts); // fetch extra to compensate for filtering

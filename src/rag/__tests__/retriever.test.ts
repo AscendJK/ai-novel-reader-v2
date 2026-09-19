@@ -177,3 +177,33 @@ describe("并发懒构建 TF-IDF", () => {
     expect(hits.length).toBeLessThanOrEqual(60);
   });
 });
+
+/**
+ * 缓存完整性与范围过滤前提（round 2 批次 4 / R-32）
+ */
+describe("缓存完整性", () => {
+  const docs = [
+    { id: "0", content: "今天天气真不错适合出去散步", chapterIndex: 0 },
+    { id: "1", content: "人工智能正在改变世界格局", chapterIndex: 1 },
+    { id: "2", content: "深度学习是人工智能的重要分支", chapterIndex: 2 },
+  ];
+  const idfJson = JSON.stringify({ 天气: 0.5, 人工智能: 0.4, 深度: 0.3 });
+
+  it("向量缓冲被截断时按可用条数收敛，不产出 NaN 分数", () => {
+    const full = new Float32Array(3 * 128);
+    for (let i = 0; i < full.length; i++) full[i] = i % 7 === 0 ? 0.1 : 0;
+    const truncated = full.buffer.slice(0, 128 * 2 * 4); // 只够 2 条向量
+    const r = Retriever.fromCache(docs, truncated as ArrayBuffer, idfJson);
+    const hits = r.search("人工智能", 10);
+    expect(hits.length).toBeGreaterThan(0);
+    for (const h of hits) expect(Number.isFinite(h.score)).toBe(true);
+    expect(hits.map((h) => h.id)).not.toContain("2");
+  });
+
+  it("supportsChapterRange 反映索引能否做范围过滤", async () => {
+    const withIndex = await Retriever.buildAsync(docs);
+    const withoutIndex = await Retriever.buildAsync(docs.map((d) => ({ id: d.id, content: d.content })));
+    expect(withIndex.supportsChapterRange()).toBe(true);
+    expect(withoutIndex.supportsChapterRange()).toBe(false);
+  });
+});

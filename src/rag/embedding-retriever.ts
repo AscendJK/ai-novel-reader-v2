@@ -254,8 +254,22 @@ export class EmbeddingRetriever {
     }
   }
 
+  /** 该索引是否携带章节索引——范围过滤的前提（与 Retriever 同名方法） */
+  supportsChapterRange(): boolean {
+    return this.chunks.some((c) => typeof c.chapterIndex === "number");
+  }
+
+  /** 向量数与 chunk 数必须一致：缓存被截断时点积会读出 undefined 并静默产出 NaN 分数 */
+  isConsistent(): boolean {
+    return this.vectors.length === this.chunks.length && this.dim > 0;
+  }
+
   async search(query: string, topK: number = 15, opts?: { signal?: AbortSignal }): Promise<{ chunk: Chunk; score: number }[]> {
     if (this.vectors.length === 0) return [];
+    if (!this.isConsistent()) {
+      console.warn(`[rag] 嵌入索引不完整：${this.chunks.length} 个 chunk 对应 ${this.vectors.length} 条向量（dim=${this.dim}），建议重新构建`);
+      return [];
+    }
     if (opts?.signal?.aborted) return [];
     let qVec: Float32Array | null = null;
 
