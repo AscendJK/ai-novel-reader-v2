@@ -11,48 +11,57 @@ import type { GraphData } from "@/hooks/useSummarizer";
 
 export type { MapRecord, GraphRecord };
 
+/**
+ * 写入一本小说及其章节。
+ *
+ * 配额降级必须在事务**外**重试：withQuotaRetry 的降级链要 await
+ * navigator.storage.estimate() 与动态 import（非 IDB 操作），在 Dexie 事务内
+ * 一让这些微任务跑完事务就已自动提交，后续 bulkPut 只会拿到
+ * TransactionInactiveError——真正的"配额不足"于是被替换成看不懂的次生错误。
+ * 整体重跑是安全的：novels.put 按 id 覆盖、章节先按 novelId 删再批量写。
+ */
 export async function saveNovel(novel: Novel): Promise<void> {
   const db = getUserDB();
   try {
-    await db.transaction("rw", db.novels, db.chapters, async () => {
-      await db.novels.put({
-        id: novel.id,
-        title: novel.title,
-        author: novel.author,
-        fileName: novel.fileName,
-        fileFormat: novel.fileFormat,
-        totalChars: novel.totalChars,
-        createdAt: novel.createdAt,
-        updatedAt: novel.updatedAt,
-      });
-
-      const chapterRecords = novel.chapters.map((ch) => ({
-        id: ch.id,
-        novelId: ch.novelId,
-        index: ch.index,
-        title: ch.title,
-        content: ch.content,
-        startOffset: ch.startOffset,
-        endOffset: ch.endOffset,
-      }));
-
-      await db.chapters.where("novelId").equals(novel.id).delete();
-      // 分批写入以防止 IndexedDB 事务超时（每批 500 条）
-      // 配额不足时自动降级清理并重试（bulkPut 同 id 覆盖，重试安全）
-      const BATCH_SIZE = 500;
-      for (let i = 0; i < chapterRecords.length; i += BATCH_SIZE) {
-        const batch = chapterRecords.slice(i, i + BATCH_SIZE);
-        await withQuotaRetry(async () => {
-          await db.chapters.bulkPut(batch);
-        });
-      }
-    });
+    await withQuotaRetry(() => writeNovelOnce(db, novel));
   } catch (e) {
     // 不能静默吞掉：导入路径（useFileParser）依赖抛错来中止后续的
     // 服务器上传与进书架，静默失败会让用户看到章节内容缺失的"幽灵书"
     console.error("saveNovel failed:", e);
     throw e;
   }
+}
+
+async function writeNovelOnce(db: ReturnType<typeof getUserDB>, novel: Novel): Promise<void> {
+  await db.transaction("rw", db.novels, db.chapters, async () => {
+    await db.novels.put({
+      id: novel.id,
+      title: novel.title,
+      author: novel.author,
+      fileName: novel.fileName,
+      fileFormat: novel.fileFormat,
+      totalChars: novel.totalChars,
+      createdAt: novel.createdAt,
+      updatedAt: novel.updatedAt,
+    });
+
+    const chapterRecords = novel.chapters.map((ch) => ({
+      id: ch.id,
+      novelId: ch.novelId,
+      index: ch.index,
+      title: ch.title,
+      content: ch.content,
+      startOffset: ch.startOffset,
+      endOffset: ch.endOffset,
+    }));
+
+    await db.chapters.where("novelId").equals(novel.id).delete();
+    // 分批写入以防止 IndexedDB 事务超时（每批 500 条）
+    const BATCH_SIZE = 500;
+    for (let i = 0; i < chapterRecords.length; i += BATCH_SIZE) {
+      await db.chapters.bulkPut(chapterRecords.slice(i, i + BATCH_SIZE));
+    }
+  });
 }
 
 export async function loadNovel(novelId: string, chapterIndex?: number, loadAllContent?: boolean): Promise<Novel | null> {

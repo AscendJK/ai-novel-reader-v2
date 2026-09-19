@@ -80,7 +80,11 @@ export function getEffectiveServerUrl(): string {
  * @returns Promise<Response>
  * @throws Error 未配置服务器地址时抛出
  */
-export async function apiFetch(path: string, init?: RequestInit, skipAuth?: boolean): Promise<Response> {
+export async function apiFetch(
+  path: string,
+  init?: RequestInit & { timeoutMs?: number },
+  skipAuth?: boolean,
+): Promise<Response> {
   const base = getEffectiveServerUrl();
   if (!base) {
     throw new Error("未配置服务器地址，请在登录页面配置后端地址");
@@ -89,13 +93,18 @@ export async function apiFetch(path: string, init?: RequestInit, skipAuth?: bool
   const url = `${base}${path}`;
 
   // 合并认证头（skipAuth 时跳过）
+  const { timeoutMs, ...fetchInit } = init ?? {};
   const headers = skipAuth
     ? { ...(init?.headers || {}) }
     : { ...authHeaders(), ...(init?.headers || {}) };
+  // 总超时只在调用方明确要求时加：SSE 进度流（prepareTTS）、模型分片下载这类
+  // 长请求会被总超时掐断，它们自己带 signal 或不带
+  const signal = timeoutMs && !fetchInit.signal ? AbortSignal.timeout(timeoutMs) : fetchInit.signal;
 
   return fetch(url, {
-    ...init,
+    ...fetchInit,
     headers,
+    signal,
   });
 }
 

@@ -12,6 +12,12 @@ interface ApiErrorResponse {
 
 const SYNC_INTERVAL = 30_000;
 const HEARTBEAT_INTERVAL = 15_000;
+/**
+ * 单次推送的总超时。syncOnce 里的 checkTimeout 只在两次 await 之间生效，
+ * 弱网/半开连接下 fetch 本身挂住就永远不会被检查 → this.syncing 永久为 true，
+ * 之后每一轮都打印 "skipped — busy"，同步静默停摆。
+ */
+const PUSH_TIMEOUT_MS = 60_000;
 
 type ChangeCallback = (data: SyncData) => Promise<void>;
 
@@ -28,6 +34,9 @@ export class SyncClient {
   // 本轮积压中"已推送"的记录 id：收集用 aboveOrEqual（为了不跳过同时间戳的
   // 未推记录），必须靠这个集合排除已推的那些；积压清空/重登时重置
   private pushedIds = new Set<string>();
+  // 因服务端孤儿拒收而暂停提交水位的连续轮数（见 settleAfterPush）
+  private orphanRounds = 0;
+  private static readonly MAX_ORPHAN_ROUNDS = 3;
   private syncTimer: ReturnType<typeof setInterval> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private gatherChanges: ((lastSyncTime: number, excludeIds?: ReadonlySet<string>) => Promise<GatherResult>) | null = null;
@@ -155,6 +164,7 @@ export class SyncClient {
       this.token = result.token;
       this.activeCount = result.activeCount;
       this.lastSyncTime = 0; // full sync on login
+      this.orphanRounds = 0; // 新身份重新计孤儿额度（settleAfterPush 每轮会 resetPushCursor，不能放那里）
       this.resetPushCursor();
       localStorage.setItem("sync-username", username);
       localStorage.setItem("sync-clientId", result.clientId);
@@ -244,6 +254,7 @@ export class SyncClient {
     this.token = null;
     this.activeCount = 0;
     this.lastSyncTime = 0;
+    this.orphanRounds = 0;
     this.resetPushCursor();
     this.autoOffline = false;
     this.heartbeatFailCount = 0;
@@ -299,6 +310,7 @@ export class SyncClient {
       const resp = await apiFetch("/api/sync/push", {
         method: "POST",
         body: JSON.stringify({ username: this.username, clientId: this.clientId, token: this.token, changes, lastSyncTime: this.lastSyncTime }),
+        timeoutMs: PUSH_TIMEOUT_MS,
       });
       checkTimeout();
       console.log(`[sync] push response: ${resp.status}`);
@@ -322,6 +334,7 @@ export class SyncClient {
               const retryResp = await apiFetch("/api/sync/push", {
                 method: "POST",
                 body: JSON.stringify({ username: this.username, clientId: this.clientId, token: this.token, changes, lastSyncTime: 0 }),
+                timeoutMs: PUSH_TIMEOUT_MS,
               });
               if (retryResp.ok) {
                 const r: PushResult = await retryResp.json();
@@ -372,6 +385,7 @@ export class SyncClient {
             const retryResp = await apiFetch("/api/sync/push", {
               method: "POST",
               body: JSON.stringify({ username: this.username, clientId: this.clientId, token: this.token, changes, lastSyncTime: 0 }),
+              timeoutMs: PUSH_TIMEOUT_MS,
             });
             console.log("[sync] retry response:", retryResp.status);
             if (retryResp.ok) {
@@ -412,6 +426,11 @@ export class SyncClient {
         if (r.data) {
           await this.applyData(r.data);
           checkTimeout();
+        }
+
+        // 服务端丢弃的坏载荷：水位照常推进（这些行不再重传），必须显式告警
+        if (r.skippedRecords) {
+          console.warn(`[sync] 服务端丢弃 ${r.skippedRecords} 条坏载荷记录（未入库，本地仍保留）`);
         }
 
         // 孤儿数据：对应小说尚未上传到服务器，通知上层补传后重试
@@ -514,10 +533,24 @@ export class SyncClient {
     }
     this.resetPushCursor();
     if (!orphanedNovelIds?.length) {
+      this.orphanRounds = 0;
       this.commitWatermark(batchMaxUpdatedAt, gatherStartedAt);
       localStorage.setItem(this.lastPushTimeKey, String(gatherStartedAt));
+    } else if (this.orphanRounds < SyncClient.MAX_ORPHAN_ROUNDS) {
+      this.orphanRounds++;
+      console.log(`[sync] orphan records present, keeping watermark (retry after novel upload) 第 ${this.orphanRounds}/${SyncClient.MAX_ORPHAN_ROUNDS} 轮`);
     } else {
-      console.log("[sync] orphan records present, keeping watermark (retry after novel upload)");
+      // 到顶：父小说既不在服务器也不在本地时，补传是永久无望的（handleOrphaned
+      // 对"本地查不到这本小说"只能跳过）。不推进水位的后果不是报错而是静默空转
+      // ——每轮重收重推同一批、水位与 lastSyncAt 永久不动，新数据的同步也被拖住。
+      // 保持计数在上限：下一轮若还有孤儿立即提交，不再拖满 3 轮。
+      console.warn(
+        `[sync] 孤儿记录连续 ${this.orphanRounds} 轮未消除，放弃等待补传并推进水位；` +
+        `小说 ${orphanedNovelIds.join("、")} 的相关数据需在重新导入该小说后再同步`,
+      );
+      this.orphanRounds = SyncClient.MAX_ORPHAN_ROUNDS;
+      this.commitWatermark(batchMaxUpdatedAt, gatherStartedAt);
+      localStorage.setItem(this.lastPushTimeKey, String(gatherStartedAt));
     }
   }
 
@@ -699,6 +732,7 @@ export class SyncClient {
     this.token = null;
     this.activeCount = 0;
     this.lastSyncTime = 0;
+    this.orphanRounds = 0;
     this.resetPushCursor();
     this.autoOffline = false;
     this.heartbeatFailCount = 0;

@@ -236,16 +236,30 @@ function normalizeTimestamped(t) {
 }
 
 // Merge changes into SQLite (last write wins by updatedAt)
-// Returns { data, orphanedNovelIds } — orphanedNovelIds is the set of novelIds
-// whose data was skipped because the novel doesn't exist on the server yet.
-// The frontend should retry after uploading the missing novels.
+// Returns { data, orphanedNovelIds, skipped } — orphanedNovelIds is the set of
+// novelIds whose data was skipped because the novel doesn't exist on the server
+// yet; the frontend retries after uploading the missing novels.
+// skipped counts rows the server refused to store (missing keys / bad payload):
+// silently dropping them is the hardest kind of data loss to notice, so the
+// count travels back to the client and the route fails the push when it is
+// large enough to mean something systemic.
 export function mergeAndSave(username, changes, lastSyncTime = 0) {
   const orphanedNovelIds = new Set();
+  let skippedBadPayload = 0;
+  const skippedIds = [];
+  const skipBad = (id, reason) => {
+    skippedBadPayload++;
+    if (skippedIds.length < 20) skippedIds.push(String(id ?? "?"));
+    console.error("[sync] skip bad record:", id, reason);
+  };
+  const pushedRows =
+    (changes.summaries?.length ?? 0) + (changes.notes?.length ?? 0) +
+    (changes.maps?.length ?? 0) + (changes.graphs?.length ?? 0);
 
   db.db.transaction(() => {
     if (changes.summaries?.length) {
       for (const s of changes.summaries) {
-        if (!s.id || !s.novelId) continue;
+        if (!s.id || !s.novelId) { skipBad(s?.id, "缺少 id/novelId"); continue; }
         if (!db.getNovel(s.novelId)) {
           orphanedNovelIds.add(s.novelId);
           continue; // skip orphaned records, track for retry
@@ -253,13 +267,13 @@ export function mergeAndSave(username, changes, lastSyncTime = 0) {
         try {
           db.upsertSummary({ ...normalizeSummary(s), username });
         } catch (e) {
-          console.error("[sync] skip bad summary record:", s.id, e?.message ?? e);
+          skipBad(s.id, e?.message ?? e);
         }
       }
     }
     if (changes.notes?.length) {
       for (const n of changes.notes) {
-        if (!n.id || !n.novelId) continue;
+        if (!n.id || !n.novelId) { skipBad(n?.id, "缺少 id/novelId"); continue; }
         if (!db.getNovel(n.novelId)) {
           orphanedNovelIds.add(n.novelId);
           continue;
@@ -267,13 +281,13 @@ export function mergeAndSave(username, changes, lastSyncTime = 0) {
         try {
           db.upsertNote({ ...normalizeNote(n), username });
         } catch (e) {
-          console.error("[sync] skip bad note record:", n.id, e?.message ?? e);
+          skipBad(n.id, e?.message ?? e);
         }
       }
     }
     if (changes.maps?.length) {
       for (const m of changes.maps) {
-        if (!m.id || !m.novelId) continue;
+        if (!m.id || !m.novelId) { skipBad(m?.id, "缺少 id/novelId"); continue; }
         if (!db.getNovel(m.novelId)) {
           orphanedNovelIds.add(m.novelId);
           continue;
@@ -281,13 +295,13 @@ export function mergeAndSave(username, changes, lastSyncTime = 0) {
         try {
           db.upsertMap({ ...normalizeTimestamped(m), username, data: JSON.stringify(m.data ?? null) });
         } catch (e) {
-          console.error("[sync] skip bad map record:", m.id, e?.message ?? e);
+          skipBad(m.id, e?.message ?? e);
         }
       }
     }
     if (changes.graphs?.length) {
       for (const g of changes.graphs) {
-        if (!g.id || !g.novelId) continue;
+        if (!g.id || !g.novelId) { skipBad(g?.id, "缺少 id/novelId"); continue; }
         if (!db.getNovel(g.novelId)) {
           orphanedNovelIds.add(g.novelId);
           continue;
@@ -295,7 +309,7 @@ export function mergeAndSave(username, changes, lastSyncTime = 0) {
         try {
           db.upsertGraph({ ...normalizeTimestamped(g), username, data: JSON.stringify(g.data ?? null) });
         } catch (e) {
-          console.error("[sync] skip bad graph record:", g.id, e?.message ?? e);
+          skipBad(g.id, e?.message ?? e);
         }
       }
     }
@@ -338,5 +352,9 @@ export function mergeAndSave(username, changes, lastSyncTime = 0) {
   const data = db.gatherSyncData(username, lastSyncTime);
   data.lastSyncAt = lastSyncAt;
 
-  return { data, orphanedNovelIds: Array.from(orphanedNovelIds) };
+  return {
+    data,
+    orphanedNovelIds: Array.from(orphanedNovelIds),
+    skipped: { badPayload: skippedBadPayload, total: pushedRows, ids: skippedIds },
+  };
 }

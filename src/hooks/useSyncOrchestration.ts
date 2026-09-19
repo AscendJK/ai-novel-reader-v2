@@ -266,6 +266,29 @@ const applySyncData = useCallback(async (data: SyncData) => {
     }
   }, []);
 
+  /**
+   * 改名迁移必须连 localStorage 的用户后缀键一起搬走：阅读进度、最后打开时间、
+   * 朗读位置、上次推送水位都按 `<base>:<用户名>` 存。
+   * 漏掉的后果不是报错而是静默：改名后这些状态归零，旧键再没人读，
+   * 用户以旧名登录时"复活"成一份对不上的进度（round 2 R-54）。
+   * 按后缀扫描而非列白名单：新增用户态键时不必回来改这里。
+   */
+  const renameUserScopedKeys = useCallback((oldUsername: string, newUsername: string) => {
+    const suffix = `:${oldUsername}`;
+    const moved: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || !key.endsWith(suffix)) continue;
+      const value = localStorage.getItem(key);
+      if (value === null) continue;
+      localStorage.setItem(key.slice(0, -suffix.length) + `:${newUsername}`, value);
+      moved.push(key);
+    }
+    // 先写后删：中途抛错最多留下旧键（仍可读），不会两头都丢
+    for (const key of moved) localStorage.removeItem(key);
+    if (moved.length) console.log(`[sync] 改名迁移了 ${moved.length} 个用户态 localStorage 键`);
+  }, []);
+
   const migrateUserData = useCallback(async (oldUsername: string, newUsername: string) => {
     const oldDb = getUserDB();
     const [novels, chapters, summaries, notes, maps, graphs] = await Promise.all([
@@ -279,6 +302,7 @@ const applySyncData = useCallback(async (data: SyncData) => {
     syncClient.setUsername(newUsername);
     setCurrentUser(newUsername);
     localStorage.setItem("sync-username", newUsername);
+    renameUserScopedKeys(oldUsername, newUsername);
     addLocalUser(newUsername);
     const newDb = getUserDB();
     await newDb.transaction("rw", [newDb.novels, newDb.chapters, newDb.summaries, newDb.notes, newDb.maps, newDb.graphs], async () => {
@@ -291,7 +315,7 @@ const applySyncData = useCallback(async (data: SyncData) => {
     });
     await deleteUserDB(oldUsername).catch(() => {});
     removeLocalUser(oldUsername);
-  }, []);
+  }, [renameUserScopedKeys]);
 
   const handleSyncConflict = useCallback(async (conflictUsername: string): Promise<"overwrite" | "rename"> => {
     const choice = window.confirm(
@@ -452,65 +476,73 @@ const applySyncData = useCallback(async (data: SyncData) => {
     let serverSynced = false;
     let loginResult: { success: boolean; error?: string } = { success: false };
     try {
-      loginResult = await syncClient.login(username, "join");
-      if (!loginResult.success) {
-        loginResult = await syncClient.login(username, "create");
-      }
-    } catch {
-      syncClient.markServerUnreachable();
-    }
-    if (loginResult.success) {
-      syncClient.resetAutoOffline();
-      if (useUIStore.getState().offlineMode) useUIStore.getState().setOfflineMode(false);
-
-      const localNovelCount = await getUserDB().novels.count().catch(() => 0);
-      let serverNovelCount = 0;
       try {
-        const resp = await apiFetch(`/api/novels?username=${encodeURIComponent(username)}`);
-        if (resp.ok) {
-          const list = await resp.json();
-          serverNovelCount = list.length;
+        loginResult = await syncClient.login(username, "join");
+        if (!loginResult.success) {
+          loginResult = await syncClient.login(username, "create");
         }
-      } catch { /* ignore */ }
+      } catch {
+        syncClient.markServerUnreachable();
+      }
+      if (loginResult.success) {
+        syncClient.resetAutoOffline();
+        if (useUIStore.getState().offlineMode) useUIStore.getState().setOfflineMode(false);
 
-      if (localNovelCount > 0 && serverNovelCount > 0) {
-        const choice = window.prompt(
-          `服务器上已有用户 "${username}" 的数据（${serverNovelCount} 本小说），本地也有数据（${localNovelCount} 本小说）。\n\n` +
-          `请选择处理方式（输入数字）：\n` +
-          `1 - 合并：两边数据合并（推荐）\n` +
-          `2 - 覆盖：用服务器数据覆盖本地（警告：将永久删除本地全部数据，不可恢复！）\n` +
-          `3 - 改名：本地数据改名存为新用户`,
-          "1"
-        );
+        const localNovelCount = await getUserDB().novels.count().catch(() => 0);
+        let serverNovelCount = 0;
+        try {
+          const resp = await apiFetch(`/api/novels?username=${encodeURIComponent(username)}`);
+          if (resp.ok) {
+            const list = await resp.json();
+            serverNovelCount = list.length;
+          }
+        } catch { /* ignore */ }
 
-        if (choice === "2") {
-          await clearLocalData();
-          // "覆盖"= 丢弃本地数据：内存中残留的旧进度/摘要必须一并清掉，
-          // 否则下方 syncOnce 会把它们当本地变更推上服务器，覆盖语义失真
-          useNovelStore.setState({ novels: [], currentNovel: null, readingPositions: {} });
-          useSummaryStore.getState().setSummaries([]);
-          try {
-            await syncClient.syncOnce({ force: true });
-            await syncJoinedNovels();
-            serverSynced = true;
-          } catch { /* syncOnce 内部已处理错误 */ }
-        } else if (choice === "3") {
-          const newName = window.prompt("请输入新的用户名：", username + "-local");
-          if (newName && newName.trim() && newName.trim() !== username) {
-            const trimmedName = newName.trim();
+        if (localNovelCount > 0 && serverNovelCount > 0) {
+          const choice = window.prompt(
+            `服务器上已有用户 "${username}" 的数据（${serverNovelCount} 本小说），本地也有数据（${localNovelCount} 本小说）。\n\n` +
+            `请选择处理方式（输入数字）：\n` +
+            `1 - 合并：两边数据合并（推荐）\n` +
+            `2 - 覆盖：用服务器数据覆盖本地（警告：将永久删除本地全部数据，不可恢复！）\n` +
+            `3 - 改名：本地数据改名存为新用户`,
+            "1"
+          );
+
+          if (choice === "2") {
+            await clearLocalData();
+            // "覆盖"= 丢弃本地数据：内存中残留的旧进度/摘要必须一并清掉，
+            // 否则下方 syncOnce 会把它们当本地变更推上服务器，覆盖语义失真
+            useNovelStore.setState({ novels: [], currentNovel: null, readingPositions: {} });
+            useSummaryStore.getState().setSummaries([]);
             try {
-              await migrateUserData(username, trimmedName);
+              await syncClient.syncOnce({ force: true });
+              await syncJoinedNovels();
+              serverSynced = true;
+            } catch { /* syncOnce 内部已处理错误 */ }
+          } else if (choice === "3") {
+            const newName = window.prompt("请输入新的用户名：", username + "-local");
+            if (newName && newName.trim() && newName.trim() !== username) {
+              const trimmedName = newName.trim();
               try {
-                const regResult = await syncClient.login(trimmedName, "create");
-                if (regResult.success) {
-                  await syncClient.syncOnce({ force: true });
-                  await syncJoinedNovels();
-                  serverSynced = true;
-                }
-              } catch { /* server unreachable */ }
-            } catch (e) {
-              console.error("[AppLayout] data migration failed:", e);
+                await migrateUserData(username, trimmedName);
+                try {
+                  const regResult = await syncClient.login(trimmedName, "create");
+                  if (regResult.success) {
+                    await syncClient.syncOnce({ force: true });
+                    await syncJoinedNovels();
+                    serverSynced = true;
+                  }
+                } catch { /* server unreachable */ }
+              } catch (e) {
+                console.error("[AppLayout] data migration failed:", e);
+              }
             }
+          } else {
+            try {
+              await syncClient.syncOnce({ force: true });
+              await syncJoinedNovels();
+              serverSynced = true;
+            } catch { /* syncOnce 内部已处理错误 */ }
           }
         } else {
           try {
@@ -519,61 +551,61 @@ const applySyncData = useCallback(async (data: SyncData) => {
             serverSynced = true;
           } catch { /* syncOnce 内部已处理错误 */ }
         }
-      } else {
-        try {
-          await syncClient.syncOnce({ force: true });
-          await syncJoinedNovels();
-          serverSynced = true;
-        } catch { /* syncOnce 内部已处理错误 */ }
       }
-    }
 
-    // 服务器明确拒绝（404 用户不存在 / 409 冲突）时必须把"身份"整体回滚，而不
-    // 只是 sync-username 那一个键：React 与 Dexie 若仍指向被拒的用户名，用户会
-    // 落进一个没有 novels 的幻影库——笔记写进幻影库、阅读进度却按上一个名字
-    // 存进 localStorage，重启后两边对不上（round 2 R-14）。
-    // 网络错误不在本分支内：那时 loginResult.error 为空，按既定设计保留用户名走离线登录。
-    if (!loginResult.success && loginResult.error) {
-      if (!userPreexisted) removeLocalUser(username);
-      setLocalUsers(getLocalUsers());
-      useNovelStore.setState({ novels: [], currentNovel: null, readingPositions: {} });
-      useSummaryStore.getState().setSummaries([]);
-      if (prevUsername && prevUsername !== username) {
-        localStorage.setItem("sync-username", prevUsername);
-        setCurrentUser(prevUsername);
-        useNovelStore.getState().reloadReadingPositions();
-        broadcast.send("user-switched", prevUsername);
-        window.alert(`登录失败：${loginResult.error}`);
-        // prepareSync 已打开登录门控，不解除就会永远不再周期同步（R-51 的门侧）
-        startSync();
-        onSyncReady();
-      } else {
-        // 之前没有登录身份：回到未登录态，留在登录界面，不启动同步
-        localStorage.removeItem("sync-username");
-        syncClient.logout();
-        syncStarted.current = false;
-        window.alert(`登录失败：${loginResult.error}`);
+      // 服务器明确拒绝（404 用户不存在 / 409 冲突）时必须把"身份"整体回滚，而不
+      // 只是 sync-username 那一个键：React 与 Dexie 若仍指向被拒的用户名，用户会
+      // 落进一个没有 novels 的幻影库——笔记写进幻影库、阅读进度却按上一个名字
+      // 存进 localStorage，重启后两边对不上（round 2 R-14）。
+      // 网络错误不在本分支内：那时 loginResult.error 为空，按既定设计保留用户名走离线登录。
+      if (!loginResult.success && loginResult.error) {
+        if (!userPreexisted) removeLocalUser(username);
+        setLocalUsers(getLocalUsers());
+        useNovelStore.setState({ novels: [], currentNovel: null, readingPositions: {} });
+        useSummaryStore.getState().setSummaries([]);
+        if (prevUsername && prevUsername !== username) {
+          localStorage.setItem("sync-username", prevUsername);
+          setCurrentUser(prevUsername);
+          useNovelStore.getState().reloadReadingPositions();
+          broadcast.send("user-switched", prevUsername);
+          window.alert(`登录失败：${loginResult.error}`);
+          // prepareSync 已打开登录门控，不解除就会永远不再周期同步（R-51 的门侧）
+          startSync();
+          onSyncReady();
+        } else {
+          // 之前没有登录身份：回到未登录态，留在登录界面，不启动同步
+          localStorage.removeItem("sync-username");
+          syncClient.logout();
+          syncStarted.current = false;
+          window.alert(`登录失败：${loginResult.error}`);
+        }
+        return;
       }
-      return;
+
+      // 登录与冲突决策均已完成（或明确失败），现在才启动周期同步（含心跳）
+      startSync();
+
+      if (!serverSynced) {
+        const novels = await loadAllNovels();
+        novels.forEach((n) => addNovel(n));
+      }
+
+      const store = useRAGStore.getState();
+      const defaultModelKey = "Xenova/bge-small-zh-v1.5";
+      const hasServer = !!getEffectiveServerUrl();
+      if (hasServer && !store.isModelDownloaded(defaultModelKey) && !store.currentDownload) {
+        downloadModel(defaultModelKey).catch(() => {});
+      }
+
+      onSyncReady();
+      useUIStore.getState().setDebugMode(false);
+    } finally {
+      // R-51：登录门控必须在任何退出路径上解除——决策窗口里还有多个未包 try 的
+      // await（clearLocalData、removeLocalUser/localStorage 写入等）。门控残留的
+      // 后果不是报错而是静默：定时器同步永久停摆、之后的积压批次再也不推。
+      // 只解除门控，不启动同步：是否启动由上面各分支自己决定（被拒登录分支不启动）。
+      syncClient.setTimerSyncGate(false);
     }
-
-    // 登录与冲突决策均已完成（或明确失败），现在才启动周期同步（含心跳）
-    startSync();
-
-    if (!serverSynced) {
-      const novels = await loadAllNovels();
-      novels.forEach((n) => addNovel(n));
-    }
-
-    const store = useRAGStore.getState();
-    const defaultModelKey = "Xenova/bge-small-zh-v1.5";
-    const hasServer = !!getEffectiveServerUrl();
-    if (hasServer && !store.isModelDownloaded(defaultModelKey) && !store.currentDownload) {
-      downloadModel(defaultModelKey).catch(() => {});
-    }
-
-    onSyncReady();
-    useUIStore.getState().setDebugMode(false);
   }, [clearLocalData, prepareSync, startSync, syncJoinedNovels, migrateUserData, addNovel, onSyncReady, setLocalUsers]);
 
   const handleDeleteUser = useCallback(async (username: string) => {

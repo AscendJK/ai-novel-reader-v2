@@ -131,10 +131,19 @@ router.post("/push", rateLimit(90), (req, res) => {
       return res.json({ merged: false, data });
     }
 
-    const { data, orphanedNovelIds } = mergeAndSave(username, changes, lastSyncTime || 0);
+    const { data, orphanedNovelIds, skipped } = mergeAndSave(username, changes, lastSyncTime || 0);
+    // 坏载荷过半（且至少 3 条）＝系统性问题（schema/编码不匹配），而不是偶发脏行：
+    // 让整次推送失败，客户端就不提交水位、下一轮重传，而不是静默丢一半数据
+    if (skipped.badPayload >= 3 && skipped.badPayload >= Math.ceil(skipped.total / 2)) {
+      console.error(`[sync] push rejected: ${skipped.badPayload}/${skipped.total} records unusable (user=${username})`);
+      return res.status(422).json({ error: `服务端无法入库 ${skipped.badPayload}/${skipped.total} 条记录`, skipped });
+    }
     const result = { merged: !!(data || orphanedNovelIds?.length), data };
     if (orphanedNovelIds?.length) {
       result.orphanedNovelIds = orphanedNovelIds;
+    }
+    if (skipped.badPayload > 0) {
+      result.skippedRecords = skipped.badPayload;
     }
     res.json(result);
   } catch (e) {

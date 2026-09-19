@@ -38,4 +38,6 @@ export interface PushResult {
   data: SyncData & { username: string; lastSyncAt: number };
   /** 服务器跳过入库的孤儿数据所属的 novelId（小说尚未上传到服务器），前端应补传后重试 */
   orphanedNovelIds?: string[];
+  /** 服务器判为坏载荷而丢弃的记录数（缺 id/novelId 或 upsert 抛错）。>0 就要报警：静默丢数据最难查 */
+  skippedRecords?: number;
 }

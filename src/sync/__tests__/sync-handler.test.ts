@@ -13,6 +13,8 @@ import { describe, it, expect } from "vitest";
 (globalThis as { process?: { env: Record<string, string | undefined> } }).process!.env!.NOVEL_READER_DB_PATH = ":memory:";
 // @ts-expect-error - 后端 JS 模块无类型声明，测试仅验证运行时语义
 const handler = await import("../../../server/sync-handler.js");
+// @ts-expect-error - 同上；mergeAndSave 用例要直接种小说行
+const db = await import("../../../server/database.js");
 
 describe("sync-handler 会话语义", () => {
   it("register 为已知设备重建会话并复用 clientId", () => {
@@ -115,5 +117,63 @@ describe("sync-handler 会话语义", () => {
     handler.register(username, "device-Y", t);
     expect(handler.isActive(username, "device-Y")).toBe(true);
     expect(handler.isActive(username, "other")).toBe(false);
+  });
+});
+
+/**
+ * mergeAndSave 的坏载荷计数（R-53）
+ * 旧实现逐条 catch 吞错后照样返回成功、lastSyncAt 照常推进 → 客户端提交水位、
+ * 这些记录永久不再上传，而服务器日志是唯一线索。现在计数回传，
+ * 路由在"过半都入库失败"时整次拒绝（让客户端下一轮重传）。
+ */
+describe("mergeAndSave 坏载荷计数", () => {
+  const now = () => Date.now();
+
+  function seedNovel(id: string) {
+    db.insertNovel({
+      id, title: "测试书", author: null, fileName: "t.txt", fileFormat: "txt",
+      totalChars: 100, chapterCount: 1, createdAt: now(), updatedAt: now(),
+    });
+  }
+
+  it("缺 novelId / 缺 id 的记录计入 skipped.badPayload", () => {
+    const novelId = `sk-1-${Date.now()}`;
+    seedNovel(novelId);
+    const res = handler.mergeAndSave(`u-${Date.now()}`, {
+      summaries: [
+        { id: "ok", novelId, content: "x", updatedAt: now() },
+        { id: "no-novel", content: "x", updatedAt: now() },
+        { novelId, content: "x", updatedAt: now() },
+      ],
+    }, 0);
+    expect(res.skipped.total).toBe(3);
+    expect(res.skipped.badPayload).toBe(2);
+    expect(res.skipped.ids).toContain("no-novel");
+    expect(res.skipped.ids).toContain("?");
+  });
+
+  it("小说不存在的记录算孤儿（可补传重试），不算坏载荷", () => {
+    const res = handler.mergeAndSave(`u-${Date.now()}`, {
+      summaries: [{ id: "orphan-1", novelId: `missing-${Date.now()}`, content: "x", updatedAt: now() }],
+    }, 0);
+    expect(res.orphanedNovelIds).toHaveLength(1);
+    expect(res.skipped.badPayload).toBe(0);
+    expect(res.skipped.total).toBe(1);
+  });
+
+  it("入库抛错的记录计入坏载荷，且不影响同批其他记录写入", async () => {
+    const username = `sk-3-${Date.now()}`;
+    const novelId = `sk-3-${Date.now()}`;
+    seedNovel(novelId);
+    // updatedAt 传字符串 → normalizeTimestamped 的 toNum 不抛，改用最恶心的形态：
+    // data 为不可结构化克隆的函数（upsert 时抛 DataCloneError）
+    const bad = { id: "bad-map", novelId, updatedAt: now(), data: () => 1 };
+    const res = handler.mergeAndSave(username, {
+      maps: [bad, { id: "good-map", novelId, updatedAt: now(), data: { nodes: [] } }],
+    }, 0);
+    expect(res.skipped.badPayload).toBe(1);
+    expect(res.skipped.ids).toEqual(["bad-map"]);
+    const stored = db.gatherSyncData(username, 0);
+    expect(stored.maps?.map((m: { id: string }) => m.id)).toContain("good-map");
   });
 });
