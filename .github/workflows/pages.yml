@@ -46,6 +46,9 @@ jobs:
       - name: Backup/restore probe (server 端 SQLite 链，需 better-sqlite3 原生模块)
         run: npm run probe:backup
 
+      - name: maps/graphs 主键迁移探针 (旧库副本上验证)
+        run: npm run probe:maps
+
       - name: Server boot probe (真实拉起后端 + HTTP 校验)
         run: npm run probe:boot
 

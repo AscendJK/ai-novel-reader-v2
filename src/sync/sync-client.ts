@@ -25,10 +25,9 @@ export class SyncClient {
   // 下一批从游标之后继续收集。旧实现水位不推进，第 51 条起的积压永远
   // 轮不到，且 1 秒一次无限重推同一批最旧记录
   private pushFloor = 0;
-  // 游标边界上"已推送"的记录 id（updatedAt == pushFloor 的那批）：
-  // 收集用 aboveOrEqual，必须排除它们才能跳过已推送的平局记录；
-  // 游标推进到更大时间戳时重置
-  private pushedBoundaryIds = new Set<string>();
+  // 本轮积压中"已推送"的记录 id：收集用 aboveOrEqual（为了不跳过同时间戳的
+  // 未推记录），必须靠这个集合排除已推的那些；积压清空/重登时重置
+  private pushedIds = new Set<string>();
   private syncTimer: ReturnType<typeof setInterval> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private gatherChanges: ((lastSyncTime: number, excludeIds?: ReadonlySet<string>) => Promise<GatherResult>) | null = null;
@@ -287,7 +286,7 @@ export class SyncClient {
       const gatherStartedAt = Date.now();
       // 收集起点 = max(持久化水位, 积压游标)：积压分批推送时从上一批之后继续
       const gatherFloor = Math.max(this.lastSyncTime, this.pushFloor);
-      const gathered = await this.gatherChanges(gatherFloor, this.pushedBoundaryIds);
+      const gathered = await this.gatherChanges(gatherFloor, this.pushedIds);
       const changes = gathered.data;
       const batchMaxUpdatedAt = gathered.maxUpdatedAt;
       const batchHasMore = gathered.hasMore;
@@ -502,20 +501,15 @@ export class SyncClient {
     orphanedNovelIds: string[] | undefined
   ): void {
     if (batchHasMore) {
-      const boundary = new Set<string>();
-      for (const s of changes.summaries ?? []) if (s.updatedAt === batchMaxUpdatedAt) boundary.add(s.id);
-      for (const n of changes.notes ?? []) if (n.updatedAt === batchMaxUpdatedAt) boundary.add(n.id);
-      for (const m of changes.maps ?? []) if (m.updatedAt === batchMaxUpdatedAt) boundary.add(m.id);
-      for (const g of changes.graphs ?? []) if (g.updatedAt === batchMaxUpdatedAt) boundary.add(g.id);
-      if (batchMaxUpdatedAt > this.pushFloor) {
-        this.pushFloor = batchMaxUpdatedAt;
-        this.pushedBoundaryIds = boundary;
-      } else {
-        // 整批都压在游标上（同时间戳 >50 条）：累积边界，防止重复推同一条
-        for (const id of boundary) this.pushedBoundaryIds.add(id);
+      // 登记本批**全部**已推 id（不只是边界那一批）：gatherChanges 返回的是保守
+      // 游标，可能落在本批某些已推记录的时间戳之下，那些记录下一轮会被重新
+      // 收集——不登记就会每轮重复推同一批
+      for (const key of ["summaries", "notes", "maps", "graphs"] as const) {
+        for (const row of changes[key] ?? []) this.pushedIds.add(row.id);
       }
+      if (batchMaxUpdatedAt > this.pushFloor) this.pushFloor = batchMaxUpdatedAt;
       console.log("[sync] more data to sync, scheduling next batch...");
-      setTimeout(() => this.syncOnce(), 1000);
+      setTimeout(() => this.syncOnce({ force: true }), 1000);
       return;
     }
     this.resetPushCursor();
@@ -527,10 +521,10 @@ export class SyncClient {
     }
   }
 
-  /** 重置积压游标与边界排除集（登录/登出/被踢/积压清空时） */
+  /** 重置积压游标与已推 id 集合（登录/登出/被踢/积压清空时） */
   private resetPushCursor() {
     this.pushFloor = 0;
-    this.pushedBoundaryIds = new Set();
+    this.pushedIds = new Set();
   }
 
   private async tryReRegister(): Promise<boolean> {

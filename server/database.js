@@ -136,13 +136,14 @@ try { db.exec("ALTER TABLE reading_progress ADD COLUMN updated_at INTEGER DEFAUL
 // ── Migration: add maps table ────────────────────────────
 db.exec(`
   CREATE TABLE IF NOT EXISTS maps (
-    id TEXT PRIMARY KEY,
-    novel_id TEXT NOT NULL,
+    id TEXT NOT NULL,
     username TEXT NOT NULL,
+    novel_id TEXT NOT NULL,
     data TEXT NOT NULL DEFAULT '{}',
     created_at INTEGER DEFAULT 0,
     updated_at INTEGER DEFAULT 0,
     deleted INTEGER DEFAULT 0,
+    PRIMARY KEY (id, username),
     FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
   );
   CREATE INDEX IF NOT EXISTS idx_maps_novel_user ON maps(novel_id, username);
@@ -151,17 +152,52 @@ db.exec(`
 // ── Migration: add graphs table (character graph, per-user) ──
 db.exec(`
   CREATE TABLE IF NOT EXISTS graphs (
-    id TEXT PRIMARY KEY,
-    novel_id TEXT NOT NULL,
+    id TEXT NOT NULL,
     username TEXT NOT NULL,
+    novel_id TEXT NOT NULL,
     data TEXT NOT NULL DEFAULT '{}',
     created_at INTEGER DEFAULT 0,
     updated_at INTEGER DEFAULT 0,
     deleted INTEGER DEFAULT 0,
+    PRIMARY KEY (id, username),
     FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
   );
   CREATE INDEX IF NOT EXISTS idx_graphs_novel_user ON graphs(novel_id, username);
 `);
+
+// ── 迁移：maps/graphs 的主键 id → (id, username) ────────────────
+// 旧结构下客户端把主键写成 novelId，两人共读同一本书时：后来者的 upsert 命中
+// 同一行、把 data 覆盖掉而 username 仍是第一个人 → 第一个人看到别人的地图，
+// 第二个人因 getMaps 按 username 过滤而永远读不到自己刚存的东西（round 2 R-05）。
+function migrateUserScopedKeys() {
+  for (const table of ["maps", "graphs"]) {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(table);
+    if (!row) continue;
+    if (/PRIMARY KEY\s*\(\s*id\s*,\s*username\s*\)/i.test(row.sql)) continue; // 已迁移
+    console.log(`[db] 迁移 ${table}: 主键 id → (id, username)，每用户各存一份`);
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE ${table}__new (
+          id TEXT NOT NULL,
+          novel_id TEXT NOT NULL,
+          username TEXT NOT NULL,
+          data TEXT NOT NULL DEFAULT '{}',
+          created_at INTEGER DEFAULT 0,
+          updated_at INTEGER DEFAULT 0,
+          deleted INTEGER DEFAULT 0,
+          PRIMARY KEY (id, username),
+          FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+        );
+        INSERT INTO ${table}__new (id, novel_id, username, data, created_at, updated_at, deleted)
+          SELECT id, novel_id, username, data, created_at, updated_at, deleted FROM ${table};
+        DROP TABLE ${table};
+        ALTER TABLE ${table}__new RENAME TO ${table};
+      `);
+    })();
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_novel_user ON ${table}(novel_id, username);`);
+  }
+}
+migrateUserScopedKeys();
 
 // ── Prepared statements ─────────────────────────────────────
 
@@ -330,6 +366,7 @@ export function upsertSummary(s) {
   db.prepare(`
     INSERT INTO summaries (id, novel_id, chapter_id, chapter_title, username, content, tokens_used, created_at, type, updated_at, deleted, used_fallback)
     VALUES (@id, @novelId, @chapterId, @chapterTitle, @username, @content, @tokensUsed, @createdAt, @type, @updatedAt, @deleted, @usedFallback)
+    -- summaries.id 是客户端生成的 UUID，跨用户不会相撞，故单列主键即可
     ON CONFLICT(id) DO UPDATE SET
       content = @content, tokens_used = @tokensUsed, type = @type, updated_at = @updatedAt, deleted = @deleted, used_fallback = @usedFallback
     WHERE @updatedAt >= updated_at
@@ -372,7 +409,7 @@ export function upsertMap(m) {
   db.prepare(`
     INSERT INTO maps (id, novel_id, username, data, created_at, updated_at, deleted)
     VALUES (@id, @novelId, @username, @data, @createdAt, @updatedAt, @deleted)
-    ON CONFLICT(id) DO UPDATE SET
+    ON CONFLICT(id, username) DO UPDATE SET
       data = @data, updated_at = @updatedAt, deleted = @deleted
     WHERE @updatedAt >= updated_at
   `).run({ ...m, updatedAt: m.updatedAt || Date.now(), deleted: m.deleted || 0 });
@@ -388,7 +425,7 @@ export function upsertGraph(g) {
   db.prepare(`
     INSERT INTO graphs (id, novel_id, username, data, created_at, updated_at, deleted)
     VALUES (@id, @novelId, @username, @data, @createdAt, @updatedAt, @deleted)
-    ON CONFLICT(id) DO UPDATE SET
+    ON CONFLICT(id, username) DO UPDATE SET
       data = @data, updated_at = @updatedAt, deleted = @deleted
     WHERE @updatedAt >= updated_at
   `).run({ ...g, updatedAt: g.updatedAt || Date.now(), deleted: g.deleted || 0 });
