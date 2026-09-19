@@ -40,7 +40,7 @@
 - **Windows**：双击 `start.bat`
 - **macOS / Linux**：`chmod +x start.sh && ./start.sh`
 
-两个包的启动脚本都只执行 `npm install`（仅 5 个后端依赖）+ `node server/index.js`；区别是全包的脚本自带 `--full` 参数并伺服 `dist/`（**无需任何构建步骤**）。
+两个包的启动脚本依次做三件事：调用 `scripts/cleanup-processes.*` 清掉上次残留的 node/python 进程（`stop.*` 也走同一份清理逻辑）→ `npm install`（仅 5 个后端依赖）→ `node server/index.js`；区别是全包的脚本自带 `--full` 参数并伺服 `dist/`（**无需任何构建步骤**）。
 
 > **如何更新后端包**：下载新版 zip，直接解压到旧版目录覆盖即可。
 > 后端包不包含 `server/data/` 目录，你的数据库（小说、笔记、阅读进度等）不会丢失。
@@ -62,8 +62,8 @@ pwsh -File pack-backend.ps1 -IncludeDist  # 额外打前后端全包（需先 np
 **自动发布 Release**：推送到 `main` 分支只触发前端部署，不会打包后端。需要发布新版本时打 tag：
 
 ```bash
-git tag v2.1.8
-git push origin v2.1.8
+git tag v2.3.0
+git push origin v2.3.0
 ```
 
 GitHub Actions（`.github/workflows/release-backend.yml`）会自动构建前端、分别打包两个 zip、校验产物（检查 `tts-worker.py`、`rag.js`、全包的 `dist/index.html` 等关键文件，缺失即失败）、并创建 Release 上传。也可以在 Actions 页面手动触发（workflow_dispatch）。
@@ -499,7 +499,7 @@ admin.bat        # Windows 双击
 ├─ 用户名系统 + Session Token 认证 + 服务端中心化同步（自动重注册）
 ├─ 三级 RAG 缓存：内存 LRU（100MB）→ IndexedDB（100-500MB）→ 服务端 SQLite
 ├─ 定时 WAL checkpoint + 自动数据库备份（24h）
-└─ 单元测试覆盖：578 个测试用例（Vitest + Testing Library）
+└─ 质量闸门：`npm run verify` = tsc 双配置 + ESLint（含 server/，零警告）+ 单测（Vitest + Testing Library）+ 五个服务端探针；用例数以运行结果为准
 ```
 
 ---
