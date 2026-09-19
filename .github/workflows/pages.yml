@@ -49,6 +49,9 @@ jobs:
       - name: maps/graphs 主键迁移探针 (旧库副本上验证)
         run: npm run probe:maps
 
+      - name: 小说重传不删派生数据探针 (同 id 二次入库不得级联删书架关系/地图/索引)
+        run: npm run probe:reupload
+
       - name: RAG 索引失效探针 (改章/重传后旧向量必须作废)
         run: npm run probe:rag
 
