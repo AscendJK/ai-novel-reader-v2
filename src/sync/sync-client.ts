@@ -46,6 +46,7 @@ export class SyncClient {
   private onConflict: ((username: string) => Promise<"overwrite" | "rename">) | null = null;
   private onOrphaned: ((novelIds: string[]) => void) | null = null;
   private reRegistering = false;
+  private reRegisterPromise: Promise<boolean> | null = null;
   private syncing = false;
   // 登录冲突决策窗口期挂起"定时器驱动"的同步（显式 syncOnce 不受影响）：
   // 慢登录（>30s）时定时器可能赶在"合并/覆盖"提示之前把本地数据推上服务器
@@ -560,7 +561,26 @@ export class SyncClient {
     this.pushedIds = new Set();
   }
 
-  private async tryReRegister(): Promise<boolean> {
+  /**
+   * 重注册（会话失效时重建）。单飞：一次生成会并发发好几个请求，各自 401 后统统
+   * 去重注册就成了注册风暴；心跳与 AI 代理也可能同时发现会话死了。
+   */
+  async tryReRegister(): Promise<boolean> {
+    if (!this.username) return false;
+    if (!this.reRegisterPromise) {
+      this.reRegisterPromise = this.doReRegister().finally(() => { this.reRegisterPromise = null; });
+    }
+    return await this.reRegisterPromise;
+  }
+
+  /**
+   * 供非同步链路（AI 代理）在拿到 401 时续期会话。
+   */
+  async refreshSession(): Promise<boolean> {
+    return await this.tryReRegister();
+  }
+
+  private async doReRegister(): Promise<boolean> {
     if (!this.username) return false;
     this.reRegistering = true;
     try {

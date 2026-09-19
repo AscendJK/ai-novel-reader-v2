@@ -4,6 +4,7 @@ import { apiFetch } from "@/lib/api-client";
 import { useUIStore } from "@/stores/ui-store";
 import { readSSEData } from "./stream";
 import { normalizeBaseUrl } from "./base-url";
+import { proxyWithSessionRetry } from "./proxy-session";
 
 export function createOpenAIProvider(config: ProviderConfig): AIProvider {
   const baseUrl = normalizeBaseUrl(config.baseUrl, "/chat/completions") || "https://api.openai.com/v1";
@@ -77,16 +78,18 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
   }
 
   async function doProxy(req: ChatCompletionRequest): Promise<Response> {
-    return withTimeout(req, (signal) =>
-      apiFetch("/api/proxy/chat", {
-        method: "POST",
-        signal,
-        body: JSON.stringify({
-          url: `${baseUrl}/chat/completions`,
-          headers: { Authorization: `Bearer ${config.apiKey}` },
-          body: buildBody(req),
-        }),
-      })
+    return proxyWithSessionRetry(() =>
+      withTimeout(req, (signal) =>
+        apiFetch("/api/proxy/chat", {
+          method: "POST",
+          signal,
+          body: JSON.stringify({
+            url: `${baseUrl}/chat/completions`,
+            headers: { Authorization: `Bearer ${config.apiKey}` },
+            body: buildBody(req),
+          }),
+        })
+      )
     );
   }
 
@@ -208,8 +211,9 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
         // 其他错误（包括 CORS、网络错误等）都走代理
         try {
           return parseResponse(await doProxy(req));
-        } catch {
-          // 代理也失败了，抛出原始错误
+        } catch (proxyErr) {
+          // 代理在解析前就失败：会话失效要如实报（它最贴近真相），其余保留原始错误
+          if (proxyErr instanceof APIError && proxyErr.apiCode === "auth") throw proxyErr;
           throw err;
         }
       }
