@@ -20,6 +20,7 @@
     "probe:rag": "node scripts/probe-rag-fingerprint.mjs",
     "probe:proxy": "node scripts/probe-proxy-stream.mjs",
     "probe:boot": "node scripts/probe-server-boot.mjs",
+    "preview:migration": "node scripts/preview-db-migration.mjs",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage"
