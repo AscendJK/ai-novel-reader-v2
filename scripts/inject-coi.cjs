@@ -14,13 +14,15 @@ const path = require("path");
 const swPath = path.join(__dirname, "..", "dist", "sw.js");
 const coiPath = path.join(__dirname, "coi-sw.js");
 
+// COI 注入是浏览器推理（SharedArrayBuffer）的硬前提：静默跳过会让构建"成功"
+// 却产出一个拿不到 crossOriginIsolated 的站点，故障要到 TTS 起模型时才暴露
 if (!fs.existsSync(swPath)) {
-  console.warn("[coi] dist/sw.js 不存在，跳过注入");
-  process.exit(0);
+  console.error("[coi] 构建失败：dist/sw.js 不存在（PWA 未生成 SW），COI 头无处注入");
+  process.exit(1);
 }
 if (!fs.existsSync(coiPath)) {
-  console.warn("[coi] scripts/coi-sw.js 不存在，跳过注入");
-  process.exit(0);
+  console.error("[coi] 构建失败：scripts/coi-sw.js 缺失，无法注入 COOP/COEP 处理");
+  process.exit(1);
 }
 
 const sw = fs.readFileSync(swPath, "utf8");

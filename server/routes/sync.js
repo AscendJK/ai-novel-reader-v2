@@ -58,6 +58,7 @@ router.post("/register", rateLimit(30), (req, res) => {
   if (trimmed.length < 2 || trimmed.length > 30) {
     return res.status(400).json({ error: "用户名需 2-30 个字符" });
   }
+  // eslint-disable-next-line no-control-regex -- 这里就是要匹配控制字符以拒绝畸形用户名
   if (/[\x00-\x1f\x7f]/.test(trimmed)) {
     return res.status(400).json({ error: "用户名包含非法字符" });
   }

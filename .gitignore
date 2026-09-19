@@ -44,9 +44,8 @@ public/models/custom/Xenova/*/tokenizer.json
 public/models/custom/Xenova/*/tokenizer_config.json
 !public/models/custom/Xenova/*/.gitkeep
 
-# Build artifacts
-ai-novel-reader-v2-backend.zip
-ai-novel-reader-v2-full.zip
+# Build artifacts (pack-backend.ps1 输出目录)
+release/
 
 # Promotional post (not part of the project)
 POST.md
@@ -66,8 +65,13 @@ CLAUDE.md
 # MiMoCode memory
 .mimocode
 
-# 本地规划/方案/排查文档（不入库，仅本机保留）
-docs/
+# 本地漏洞审查记录与修复计划（含精确缺陷位置，仅本机保留）
+docs/code-review-report*.md
+docs/fix-plan*.md
+# 其余本地规划/排查文档仍不入库
+docs/*
+!docs/DEVELOPER_MANUAL.md
+!docs/*.png
 .fetch/
 # OpenSquilla runtime workspace
 .opensquilla/
