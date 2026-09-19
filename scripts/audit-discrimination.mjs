@@ -124,15 +124,15 @@ function runProbe(name) {
     maxBuffer: 32 * 1024 * 1024,
   });
   if (run.error?.code === "ETIMEDOUT" || run.status === null || Boolean(run.signal)) {
-    return { failed: -1, total: 0, exit: null, error: `探针 ${name} 超时或被强杀` };
+    return { failed: -1, total: 0, exit: null, failedFiles: [], error: `探针 ${name} 超时或被强杀` };
   }
   const out = (run.stdout || "") + (run.stderr || "");
   const m = out.match(/探针结果：(\d+)\/(\d+)/);
-  if (!m) return { failed: -1, total: 0, exit: run.status, error: `探针 ${name} 没打印结果行` };
+  if (!m) return { failed: -1, total: 0, exit: run.status, failedFiles: [], error: `探针 ${name} 没打印结果行` };
   const failed = Number(m[2]) - Number(m[1]);
   // exit 0 但计数不齐 = 探针自己没跑起来
   if (failed === 0 && run.status !== 0) {
-    return { failed: -1, total: Number(m[2]), exit: run.status, error: `探针 ${name} 全绿却退出码 ${run.status}` };
+    return { failed: -1, total: Number(m[2]), exit: run.status, failedFiles: [], error: `探针 ${name} 全绿却退出码 ${run.status}` };
   }
   return { failed, total: Number(m[2]), exit: run.status };
 }
