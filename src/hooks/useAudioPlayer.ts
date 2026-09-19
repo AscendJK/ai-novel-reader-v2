@@ -337,8 +337,12 @@ export function useAudioPlayer({
   const togglePause = useCallback(async () => {
     const manager = getManager();
     if (manager.isPaused()) {
-      await manager.resume();
-      setPaused(false);
+      const ok = await manager.resume();
+      // resume 被浏览器拒绝（iOS 来电/锁屏/静音中断后必现）：必须保持暂停态。
+      // 旧代码无条件 setPaused(false) → UI 显示"正在播放"而实际无声，
+      // 且朗读链已挂死，本会话只能刷新页面。
+      if (ok) setPaused(false);
+      else showToast("浏览器阻止了音频播放，请点击页面空白处后重试", "warn");
     } else if (manager.isPlaying() || useTTSStore.getState().generating) {
       // 生成间隙（下一段生成中）isPlaying 为 false，但暂停意图必须传达给
       // 引擎（pauseRequested），否则生成完成后音频照常自动出声

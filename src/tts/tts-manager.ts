@@ -44,6 +44,15 @@ export interface TTSPlaybackCallbacks {
 }
 
 /**
+ * 读取 AudioContext 是否可出声。显式标注 boolean（而非让 TS 推断类型谓词），
+ * 这样 await 之后复查 state 不会被调用方先前的 `ctx.state` 窄化缓存挡掉——
+ * resume() 完成时浏览器确实会改写该 readonly 属性。
+ */
+function isCtxRunning(ctx: AudioContext): boolean {
+  return ctx.state === "running";
+}
+
+/**
  * 二分查找：字符位置 → paragraphBreaks 中的段落下标（两引擎共用）
  */
 export function findParagraphByCharIndex(charIdx: number, breaks: number[]): number {
@@ -283,6 +292,16 @@ class WebSpeechTTSEngine {
       clearTimeout(this.fallbackCheckTimer);
       this.fallbackCheckTimer = null;
     }
+    // cancel() 前先摘掉当前 utterance 的回调：Firefox/部分 WebView 对 cancel
+    // 会补发 onend，若留着就会被当成"自然播完"→ 暂停后继续朗读下一段。
+    // 另外 Chrome 的 cancel 是异步的，旧 utterance 的回调可能在新 utterance
+    // 开播后才到达，摘除回调同时挡住这条跨代次污染路径。
+    if (this.utterance) {
+      this.utterance.onstart = null;
+      this.utterance.onend = null;
+      this.utterance.onerror = null;
+      this.utterance.onboundary = null;
+    }
     if (this.available) speechSynthesis.cancel();
     this.utterance = null;
   }
@@ -310,6 +329,8 @@ class ZipVoiceTTSEngine {
   protected currentBuffer: AudioBuffer | null = null;
   protected voice = "45";
   protected pendingPlayResolve: (() => void) | null = null;
+  // resume() 在飞行中（等待 ctx.resume）：并发调用合并到这一轮，避免各建一个 source 混播
+  private resumeInFlight: Promise<boolean> | null = null;
   // 段落追踪状态（基于音频播放时间的线性估算）
   private paraTimer: ReturnType<typeof setInterval> | null = null;
   private trackText = "";
@@ -335,11 +356,28 @@ class ZipVoiceTTSEngine {
     return this.audioContext;
   }
 
+  /**
+   * 尝试恢复 AudioContext，返回"是否真的可以出声"。
+   * 三条退出路径都必须落到 state 复查上：
+   * - resume() reject（自动播放策略拒绝）
+   * - resume() resolve 但 state 仍是 suspended（iOS Safari 的常见行为）
+   * - resume() 既不 resolve 也不 reject（iOS 音频中断后挂死）→ 超时兜底
+   * 调用方若不看返回值直接 source.start()，在 suspended 下是静默失败：
+   * 不出声也不触发 onended，等待 onended 的播放链会永久挂起。
+   */
+  private async tryResumeContext(ctx: AudioContext, timeoutMs = 3000): Promise<boolean> {
+    if (isCtxRunning(ctx)) return true;
+    if (ctx.state === "closed") return false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      ctx.resume().catch(() => { /* 由下方 state 复查兜底 */ }),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); }),
+    ]).finally(() => { if (timer) clearTimeout(timer); });
+    return isCtxRunning(ctx);
+  }
+
   async ensureResumed(): Promise<void> {
-    const ctx = this.getAudioContext();
-    if (ctx.state === "suspended") {
-      try { await ctx.resume(); } catch { /* 自动播放策略拒绝：继续尝试播放 */ }
-    }
+    await this.tryResumeContext(this.getAudioContext());
   }
 
   /**
@@ -448,12 +486,9 @@ class ZipVoiceTTSEngine {
         this.pendingPlayResolve = resolve;
       };
       if (ctx.state === "suspended") {
-        ctx.resume().then(() => {
-          if (ctx.state === "running") startPlayback();
+        void this.tryResumeContext(ctx).then((running) => {
+          if (running) startPlayback();
           else { console.warn("[TTS] AudioContext.resume 后仍非 running，跳过该 chunk"); resolve(); }
-        }).catch(() => {
-          console.warn("[TTS] AudioContext.resume 被拒绝，跳过该 chunk");
-          resolve();
         });
       } else startPlayback();
     });
@@ -471,11 +506,9 @@ class ZipVoiceTTSEngine {
   ): Promise<AudioBuffer> {
     this.stopped = false; // 重置引擎级作废标志（新一轮生成）
     const ctx = this.getAudioContext();
-    if (ctx.state === "suspended") {
-      try { await ctx.resume(); } catch { /* 自动播放策略拒绝，继续尝试 */ }
-    }
-    // 移到块外重新检查：避免 TS 对块内 ctx.state 的窄化（resume 可能成功也可能被拒）
-    if (ctx.state !== "running") {
+    // tryResumeContext 带超时兜底：iOS 的 ctx.resume() 可能永不 settle，
+    // 直接 await 会把生成链挂在这里
+    if (!(await this.tryResumeContext(ctx))) {
       throw new Error("浏览器阻止了自动播放，请点击页面任意位置后重试");
     }
     const { samples, sampleRate } = await this.generate(text, this.voice, speed, priority);
@@ -519,10 +552,7 @@ class ZipVoiceTTSEngine {
       return;
     }
     const ctx = this.getAudioContext();
-    if (ctx.state === "suspended") {
-      try { await ctx.resume(); } catch { /* 继续尝试播放 */ }
-    }
-    if (ctx.state !== "running") {
+    if (!(await this.tryResumeContext(ctx))) {
       callbacks.onError?.("浏览器阻止了自动播放，请点击页面任意位置后重试");
       return;
     }
@@ -571,35 +601,63 @@ class ZipVoiceTTSEngine {
     }
   }
 
-  async resume(): Promise<void> {
+  /**
+   * 恢复暂停的播放。返回 false = 没能恢复（AudioContext 仍被浏览器挂起，
+   * 如 iOS 来电/锁屏/静音中断后 resume 被拒），调用方必须保持"暂停"UI。
+   * 这里的关键是绝不创建 source：suspended 下 start() 静默失败——不出声、
+   * 也不触发 onended，pendingPlayResolve 永不 resolve → 整条朗读链永久停摆，
+   * 本会话只能刷新页面。放弃恢复并保持暂停态后，用户下一次手势内 resume 成功
+   * 即从暂停点继续。
+   */
+  async resume(): Promise<boolean> {
     // 清除未消费的暂停请求：若用户"生成期间按暂停 → 又按播放"，生成完成时
     // pauseRequested 若还在，会把新 buffer 错误挂起（按了播放却不出声）。
     // 已挂起（paused && currentBuffer）的场景由下方分支正常消费，不受影响。
     this.pauseRequested = false;
-    if (this.paused && this.currentBuffer) {
-      try {
-        const ctx = this.getAudioContext();
-        if (ctx.state === "suspended") {
-          try { await ctx.resume(); } catch { /* 忽略，继续尝试播放 */ }
-        }
-        const source = ctx.createBufferSource();
-        source.buffer = this.currentBuffer;
-        // 同 playOneBuffer：播放固定 1.0 倍速，倍速由生成 speed 控制（保音高）
-        source.connect(ctx.destination);
-        const resolve = this.pendingPlayResolve;
-        source.onended = () => {
-          this.currentSource = null;
-          this.stopParagraphTracking();
-          if (!this.paused) { this.currentBuffer = null; this.pendingPlayResolve = null; resolve?.(); }
-        };
-        this.currentSource = source;
-        this.startedAt = ctx.currentTime - this.pausedAt;
-        this.paused = false;
-        try { source.start(0, this.pausedAt); } catch { resolve?.(); }
-        // 恢复播放：重启段落追踪（startedAt 已修正，进度从暂停点继续）
-        this.restartParagraphTracking(this.currentBuffer);
-      } catch { /* context closed, buffer detached */ }
+    if (!this.paused || !this.currentBuffer) return true;
+    // 连点两下/并发调用：合并为同一轮，否则两轮各建一个 source 叠播（混播）
+    if (this.resumeInFlight) return await this.resumeInFlight;
+    const round = this.doResume();
+    this.resumeInFlight = round;
+    try {
+      return await round;
+    } finally {
+      this.resumeInFlight = null;
     }
+  }
+
+  private async doResume(): Promise<boolean> {
+    const ctx = this.getAudioContext();
+    const running = await this.tryResumeContext(ctx);
+    // await 期间可能已被 stop()/seek/新朗读作废：此时 currentBuffer 已换或清空，
+    // 必须重新取值并复查状态，否则会凭空造出一条属于上一轮的播放链
+    if (!running || this.stopped || !this.paused || !this.currentBuffer) return false;
+    const buffer = this.currentBuffer;
+    const resolve = this.pendingPlayResolve;
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    // 同 playOneBuffer：播放固定 1.0 倍速，倍速由生成 speed 控制（保音高）
+    source.connect(ctx.destination);
+    source.onended = () => {
+      this.currentSource = null;
+      this.stopParagraphTracking();
+      if (!this.paused) { this.currentBuffer = null; this.pendingPlayResolve = null; resolve?.(); }
+    };
+    this.currentSource = source;
+    this.startedAt = ctx.currentTime - this.pausedAt;
+    this.paused = false;
+    try {
+      source.start(0, this.pausedAt);
+    } catch {
+      this.currentSource = null;
+      this.currentBuffer = null;
+      this.pendingPlayResolve = null;
+      resolve?.();
+      return false;
+    }
+    // 恢复播放：重启段落追踪（startedAt 已修正，进度从暂停点继续）
+    this.restartParagraphTracking(buffer);
+    return true;
   }
 
   stop(): void {
@@ -1181,25 +1239,35 @@ export class TTSManager {
   pause(): void {
     if (this.engine !== "webspeech" && this.zipvoice) this.zipvoice.pause();
     else {
-      // Web Speech API：保存当前段落位置，cancel 后恢复时从该位置继续
+      // Web Speech API：保存当前段落位置，cancel 后恢复时从该位置继续。
+      // 先作废旧朗读链再 cancel：引擎 stop() 已摘除 utterance 回调，这里是第二道
+      // 防线——代次一变，任何仍在飞行中的 onend/onError 回调都会被守卫丢弃，
+      // 不会被误当成"播完"而推进到下一段。
+      this.generationId++;
       this.webSpeech.stop();
     }
     this.userPaused = true;
     this.callbacks.onPause?.();
   }
 
-  async resume(): Promise<void> {
+  /**
+   * 恢复播放。返回 false = 未能恢复（Kokoro 引擎的 AudioContext 仍被浏览器挂起），
+   * 调用方须保持暂停态 UI，不能当作已继续播放。
+   */
+  async resume(): Promise<boolean> {
     if (this.engine !== "webspeech" && this.zipvoice) {
-      await this.zipvoice.resume();
-      this.userPaused = false; // 与 pause() 对称：否则 isPaused() 恒真，无法再次暂停
-    }
-    else {
+      const ok = await this.zipvoice.resume();
+      if (!ok) return false;      // 保持 userPaused，也不触发 onResume
+      this.userPaused = false;    // 与 pause() 对称：否则 isPaused() 恒真，无法再次暂停
+    } else {
+      this.generationId++;         // 作废暂停期间残留的旧朗读链（同 pause）
       this.webSpeech.stop();
       this.userPaused = false;
       // 从当前段落位置恢复（不是从 chunk 头部）
       this.speakFromParagraph(this.currentParagraphIndex);
     }
     this.callbacks.onResume?.();
+    return true;
   }
 
   stop(): void {
