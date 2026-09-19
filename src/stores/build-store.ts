@@ -15,6 +15,8 @@ export interface NovelBuildStatus {
   queuePosition?: number;
   open: boolean;  // 是否显示状态窗口
   startTime: number;
+  /** 最后一次状态变化的时刻——用来识别"再也不会推进"的僵死构建 */
+  lastUpdate: number;
 }
 
 /** 构建状态 Store */
@@ -71,6 +73,7 @@ export const useBuildStore = create<BuildState>((set, get) => ({
         total: 0,
         open: true,
         startTime: Date.now(),
+        lastUpdate: Date.now(),
       });
       return { builds: newBuilds };
     });
@@ -92,7 +95,7 @@ export const useBuildStore = create<BuildState>((set, get) => ({
         ) {
           return state; // 无变化，不触发更新
         }
-        newBuilds.set(key, { ...existing, ...progress });
+        newBuilds.set(key, { ...existing, ...progress, lastUpdate: Date.now() });
       }
       return { builds: newBuilds };
     });
@@ -109,6 +112,7 @@ export const useBuildStore = create<BuildState>((set, get) => ({
           status: "done",
           message: "索引构建成功",
           open: true,
+          lastUpdate: Date.now(),
         });
       }
       return { builds: newBuilds };
@@ -132,6 +136,7 @@ export const useBuildStore = create<BuildState>((set, get) => ({
           message: "构建失败",
           error,
           open: true,
+          lastUpdate: Date.now(),
         });
       }
       return { builds: newBuilds };
@@ -176,13 +181,34 @@ export const useBuildStore = create<BuildState>((set, get) => ({
   cleanupCompleted: () => {
     set((state) => {
       const newBuilds = new Map(state.builds);
+      const now = Date.now();
       for (const [key, build] of newBuilds) {
+        const since = now - (build.lastUpdate ?? build.startTime);
         // 清除超过 1 小时的完成/错误状态
         if (
           (build.status === "done" || build.status === "error") &&
-          Date.now() - build.startTime > 60 * 60 * 1000
+          since > 60 * 60 * 1000
         ) {
           newBuilds.delete(key);
+          continue;
+        }
+        // 进行中的构建长时间没有任何状态推进 → 判为僵死。轮询依赖 sync-token
+        // 且离线时会直接 return，一旦 token 失效/切页/离线，就再没人把这条推进
+        // 或收尾；不判定的话状态窗口永远"构建中"、构建按钮永久禁用（R-25）。
+        // 20 分钟远大于服务端每 chunk 的动态超时节奏，不会误杀正常构建。
+        if (
+          (build.status === "building" || build.status === "loading"
+            || build.status === "encoding" || build.status === "queued") &&
+          since > 20 * 60 * 1000
+        ) {
+          newBuilds.set(key, {
+            ...build,
+            status: "error",
+            message: "构建状态长时间未更新",
+            error: "服务器或网络在中途失联，请重新构建",
+            open: true,
+            lastUpdate: now,
+          });
         }
       }
       return { builds: newBuilds };

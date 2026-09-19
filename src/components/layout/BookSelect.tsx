@@ -167,6 +167,9 @@ export function BookSelect() {
 
         // 同步更新 Zustand store（用于构建状态窗口显示）
         const buildStore = useBuildStore.getState();
+        // 每轮顺带清理：过期条目移出，长时间零推进的"构建中"判为僵死，
+        // 否则窗口与按钮会一路锁到刷新（R-25）
+        buildStore.cleanupCompleted();
         for (const [novelId, engines] of Object.entries(statuses) as [string, Record<string, ServerBuildStatus>][]) {
           for (const [engine, st] of Object.entries(engines)) {
             if (st && typeof st === "object" && st.status) {

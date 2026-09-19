@@ -189,10 +189,27 @@ export class EmbeddingRetriever {
       // 触发构建并轮询
       ragLog("触发服务器构建...");
       useBuildStore.getState().startBuild(novelId, this.engine);
-      await buildAndPollRAGIndex({
-        novelId, engine: this.engine,
-        onProgress: (p) => onProgress?.({ phase: p.status === "building" || p.status === "encoding" ? "encoding" : "loading", current: p.current, total: p.total }),
-      });
+      // buildStore 必须同样收到进度与收尾：BookSelect 的轮询要求 sync-token，
+      // 未登录/离线用户走不到那条路径，只有 startBuild 的话状态窗口会永远
+      // "构建中"、构建按钮永久禁用（round 2 R-25）
+      try {
+        await buildAndPollRAGIndex({
+          novelId, engine: this.engine,
+          onProgress: (p) => {
+            const phase = p.status === "building" || p.status === "encoding" ? "encoding" as const : "loading" as const;
+            useBuildStore.getState().updateProgress(novelId, this.engine, {
+              status: phase,
+              message: p.message || "正在构建...",
+              current: p.current ?? 0,
+              total: p.total ?? 0,
+            });
+            onProgress?.({ phase, current: p.current, total: p.total });
+          },
+        });
+      } catch (e) {
+        useBuildStore.getState().failBuild(novelId, this.engine, e instanceof Error ? e.message : "构建失败");
+        throw e;
+      }
       // 下载并缓存到 IndexedDB
       await downloadAndCacheIndex({ novelId, engine: this.engine, updateStore: false });
       const cached2 = await db.ragCache.get(memCacheKey);
@@ -201,6 +218,7 @@ export class EmbeddingRetriever {
         useRAGStore.getState().addCachedKey(memCacheKey);
         lruAdd(memCacheKey, this.vectors, this.chunks, this.dim);
       }
+      useBuildStore.getState().finishBuild(novelId, this.engine);
       onProgress?.({ phase: "done" });
     } catch (serverErr) {
     	      // 本地没有缓存且服务器不可达，无法获取嵌入索引
