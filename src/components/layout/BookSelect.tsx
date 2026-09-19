@@ -73,6 +73,7 @@ export function BookSelect() {
   const buildPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [batchParsing, setBatchParsing] = useState(false);
+  const [txtEncoding, setTxtEncoding] = useState("auto");
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -391,7 +392,7 @@ export function BookSelect() {
       if (toProcess.length === 0) return;
 
       for (const file of toProcess) {
-        const novel = await parseFile(file);
+        const novel = await parseFile(file, { encoding: txtEncoding });
         if (novel) {
           const meta: NovelMeta = {
             id: novel.id, title: novel.title, author: novel.author,
@@ -406,7 +407,7 @@ export function BookSelect() {
         }
       }
     },
-    [parseFile]
+    [parseFile, txtEncoding]
   );
 
   // Folder import: try showOpenFilePicker first (files visible + type filter), fallback to webkitdirectory
@@ -588,6 +589,23 @@ export function BookSelect() {
                 className="hidden"
                 onChange={handleFolderFallback}
               />
+            </div>
+            {/* 编码纠错入口：自动识别有失败面（繁体 Big5 被判成 GBK 等），
+                识别错时整本书都是形近错字，必须留一条手动指定的路（R-57） */}
+            <div className="flex items-center gap-2 text-xs text-muted-foreground" onClick={(e) => e.stopPropagation()}>
+              <label htmlFor="txt-encoding">TXT 编码</label>
+              <select
+                id="txt-encoding"
+                className="text-xs rounded border bg-background px-1.5 py-1"
+                value={txtEncoding}
+                onChange={(e) => setTxtEncoding(e.target.value)}
+              >
+                <option value="auto">自动识别</option>
+                <option value="utf-8">UTF-8</option>
+                <option value="gbk">GBK（简体）</option>
+                <option value="big5">Big5（繁体）</option>
+              </select>
+              {txtEncoding !== "auto" && <span>按所选编码解析 .txt</span>}
             </div>
           </CardContent>
         </Card>

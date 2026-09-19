@@ -71,13 +71,79 @@ function detectEncoding(bytes: Uint8Array): string {
   return gbkRatio > 0.15 ? "GBK" : "UTF-8";
 }
 
+/** 用指定编码解码；浏览器不支持该标签时返回 null（不抛异常，交给调用方换候选） */
+function decodeWith(bytes: Uint8Array, label: string, fatal = false): string | null {
+  try {
+    return new TextDecoder(label, { fatal }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 给解码结果打分：正确编码下中文落在 CJK 统一表意区与中文标点区；
+ * 错码（GBK↔Big5 混用、UTF-8 当 Latin 读）会产出私用区、谚文、代理残片与替换字符。
+ */
+function scoreDecoded(s: string): number {
+  let ok = 0;
+  let bad = 0;
+  let seen = 0;
+  for (const ch of s) {
+    if (seen++ > 4000) break;
+    const c = ch.codePointAt(0) ?? 0;
+    if (c === 0xfffd) bad += 3;                                     // 替换字符
+    else if (c >= 0xe000 && c <= 0xf8ff) bad += 2;                  // 私用区
+    else if (c >= 0xac00 && c <= 0xd7ff) bad += 1;                  // 谚文：中文书里几乎不出现
+    else if (c >= 0xd800 && c <= 0xdfff) bad += 3;                  // 孤立代理
+    else if (c >= 0x4e00 && c <= 0x9fff) ok += 2;                   // CJK 统一表意
+    else if (c >= 0x3000 && c <= 0x303f) ok += 2;                   // 中文标点
+    else if (c >= 0xff00 && c <= 0xffef) ok += 1;                   // 全角
+    else if (c === 0x0a || c === 0x20) ok += 1;
+    else if (c >= 0x20 && c < 0x7f) ok += 0.5;                      // ASCII
+    else ok += 0.1;
+  }
+  return ok - bad;
+}
+
+/**
+ * 选编码。只在样本上比候选，选定后整份只解码一次（100MB 文件经不起三份副本）。
+ *
+ * 判据顺序有讲究：UTF-8 有严格的结构校验（follow byte 规则），能通过就一定是它；
+ * 而 GBK/Big5 互为错码时都会解出"看起来像中文"的 mojibake，靠打分分不开
+ * （实测 UTF-8 的中文按 GBK 解出的 浠撳 一类字照样落在 CJK 区，分数反而更高）。
+ * 所以结构校验优先，只有它失败时才在 GBK/Big5 之间比可读性。
+ */
+function pickEncoding(bytes: Uint8Array): string {
+  const sample = bytes.subarray(0, Math.min(bytes.length, 256 * 1024));
+  const heuristic = detectEncoding(bytes);
+  if (heuristic.startsWith("UTF-16")) return heuristic;          // 0x00 分布判出来的，别再猜
+  if (decodeWith(sample, "UTF-8", true) !== null) return "UTF-8";
+
+  let best = heuristic === "UTF-8" ? "GBK" : heuristic;
+  let bestScore = -Infinity;
+  for (const label of ["GBK", "Big5"]) {
+    const decoded = decodeWith(sample, label);
+    if (decoded === null) continue;
+    const score = scoreDecoded(decoded);
+    if (score > bestScore) { bestScore = score; best = label; }
+  }
+  return best;
+}
+
 export async function parseTxt(file: File, options?: ParserOptions): Promise<ParseResult> {
   const arrayBuffer = await file.arrayBuffer();
   const bytes = new Uint8Array(arrayBuffer);
-  const encoding = options?.encoding || detectEncoding(bytes);
+  const requested = options?.encoding?.trim();
 
-  const decoder = new TextDecoder(encoding);
-  const text = decoder.decode(bytes);
+  let text: string | null;
+  if (requested) {
+    // 手动指定优先：这是繁体书被自动判成 GBK（整本乱码）时用户唯一的纠错入口
+    text = decodeWith(bytes, requested);
+    if (text === null) throw new Error(`浏览器不支持编码 ${requested}，请改用 UTF-8 / GBK / Big5`);
+  } else {
+    text = decodeWith(bytes, pickEncoding(bytes));
+  }
+  if (text === null) text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
 
   // Normalize line endings
   const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");

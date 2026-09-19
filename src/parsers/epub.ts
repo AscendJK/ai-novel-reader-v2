@@ -2,9 +2,32 @@ import JSZip from "jszip";
 import type { ParseResult } from "./types";
 import { detectChapters, splitByChapters } from "./chapter-detector";
 
+/**
+ * zip bomb 上限：EPUB 就是 zip，几 MB 的压缩包可以声明几百 GB 的解压体积，
+ * 浏览器会在解压途中被杀（iOS 尤其直接崩页面）。按中央目录里声明的
+ * uncompressedSize 先拦一道；同时限制条目数（每个条目都会走一次路径解析）。
+ */
+const MAX_EPUB_DECOMPRESSED = 300 * 1024 * 1024;
+const MAX_EPUB_ENTRIES = 5000;
+
 export async function parseEpub(file: File): Promise<ParseResult> {
   const arrayBuffer = await file.arrayBuffer();
   const zip = await JSZip.loadAsync(arrayBuffer);
+
+  const entries = Object.values(zip.files);
+  if (entries.length > MAX_EPUB_ENTRIES) {
+    throw new Error(`EPUB 条目过多（${entries.length} > ${MAX_EPUB_ENTRIES}），已拒绝解析`);
+  }
+  let declaredBytes = 0;
+  for (const entry of entries) {
+    if (entry.dir) continue;
+    declaredBytes += (entry as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize ?? 0;
+  }
+  if (declaredBytes > MAX_EPUB_DECOMPRESSED) {
+    throw new Error(
+      `EPUB 解压后体积过大（${(declaredBytes / 1048576).toFixed(0)}MB > ${(MAX_EPUB_DECOMPRESSED / 1048576).toFixed(0)}MB），已拒绝解析`
+    );
+  }
 
   // Find container.xml to locate the OPF file
   const containerFile = zip.file("META-INF/container.xml");

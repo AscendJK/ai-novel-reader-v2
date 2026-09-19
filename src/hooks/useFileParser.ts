@@ -31,7 +31,12 @@ export function useFileParser() {
   const [warning, setWarning] = useState<string | null>(null);
   const addNovel = useNovelStore((s) => s.addNovel);
 
-  const parseFile = useCallback(async (file: File): Promise<Novel | null> => {
+  /**
+   * @param options.encoding 手动指定 TXT 编码（"auto"/留空 = 自动识别）。
+   *   自动识别有失败面（繁体 Big5 被判成 GBK 之类），这是用户唯一的纠错入口，
+   *   所以必须从 UI 一路透传到 parseTxt（round 2 R-57）。
+   */
+  const parseFile = useCallback(async (file: File, options?: { encoding?: string }): Promise<Novel | null> => {
     setIsParsing(true);
     parseCountRef.current++;
     setProgress(0);
@@ -55,7 +60,8 @@ export function useFileParser() {
         result = await parseEpub(file);
       } else if (ext === "txt" || !ext) {
         setProgress(30);
-        result = await parseTxt(file);
+        const encoding = options?.encoding?.trim();
+        result = await parseTxt(file, encoding && encoding !== "auto" ? { encoding } : undefined);
       } else {
         throw new Error(`不支持的文件格式: .${ext}。当前支持 .txt 和 .epub 格式。`);
       }
