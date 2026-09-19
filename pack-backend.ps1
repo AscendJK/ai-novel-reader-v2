@@ -4,6 +4,7 @@
 #   跨平台:   pwsh -File pack-backend.ps1
 #   或:       npm run pack:backend
 #   附带前端: pwsh -File pack-backend.ps1 -IncludeDist  （额外产出前后端全包，需先 npm run build）
+# 产物输出: release/ 目录（ai-novel-reader-v2-backend.zip / ai-novel-reader-v2-full.zip）
 
 param(
     [switch]$IncludeDist
@@ -16,13 +17,17 @@ $root = $PSScriptRoot
 if (-not $root) { $root = (Get-Location).Path }
 Set-Location $root
 
+# 产物统一输出到 release/ 目录
+$releaseDir = Join-Path $root "release"
+New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+
 # 清理旧的临时目录和压缩包
 if (Test-Path "backend-pack-tmp") { Remove-Item -Recurse -Force "backend-pack-tmp" }
-# 清理历史遗留的旧文件名和本次输出的目标文件（只删本次将产出的那个，
-# 避免 CI 上两遍连续打包时第二遍误删第一遍的产物）
+# 清理历史遗留的旧文件名（早期版本直接输出在仓库根目录）和本次输出的目标文件
+# （只删本次将产出的那个，避免 CI 上两遍连续打包时第二遍误删第一遍的产物）
 if (Test-Path "release-backend.zip") { Remove-Item -Force "release-backend.zip" }
 $targetZip = if ($IncludeDist) { "ai-novel-reader-v2-full.zip" } else { "ai-novel-reader-v2-backend.zip" }
-if (Test-Path $targetZip) { Remove-Item -Force $targetZip }
+if (Test-Path (Join-Path $releaseDir $targetZip)) { Remove-Item -Force (Join-Path $releaseDir $targetZip) }
 
 # 创建目录结构
 New-Item -ItemType Directory -Force -Path "backend-pack-tmp/server/routes" | Out-Null
@@ -84,7 +89,7 @@ if ($IncludeDist) {
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zipName = if ($IncludeDist) { "ai-novel-reader-v2-full.zip" } else { "ai-novel-reader-v2-backend.zip" }
-$zipPath = Join-Path $root $zipName
+$zipPath = Join-Path $releaseDir $zipName
 if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
 $archive = [System.IO.Compression.ZipFile]::Open($zipPath, [System.IO.Compression.ZipArchiveMode]::Create)
 try {

@@ -162,6 +162,16 @@ export class Retriever {
     return hash;
   }
 
+  /**
+   * 按 id 取 chunk（降级检索映射用）。search() 返回的 id 来自 retriever 自身
+   * 持有的 chunks——内存索引与 IndexedDB 缓存的 chunk id 体系可能不一致
+   * （本地构建为 `${novelId}-${i}`，服务端下载为 "0","1"...），降级映射
+   * 必须优先用同源的 chunks 而不是回读 IDB。
+   */
+  getChunkById(id: string): Chunk | undefined {
+    return this.chunks.find((c) => c.id === id);
+  }
+
   /** 懒构建 TF-IDF 向量：仅在 docs 为空时执行（用于 embedding 引擎降级场景） */
   async buildDocsIfNeeded(): Promise<void> {
     if (this.docs.length > 0 || this.chunks.length === 0) return;

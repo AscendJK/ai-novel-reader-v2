@@ -275,7 +275,9 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
       {loading && (
         <div className="mx-2.5 mt-2 p-1.5 rounded bg-primary/10 border border-primary/20 flex items-center gap-2 text-xs text-primary shrink-0">
           <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-          <span className="flex-1 min-w-0 truncate">AI 正在执行：{currentTask || qaHook.qaLoading ? "问答中..." : "分析任务"}...</span>
+          {/* 三元必须显式分层：原写法 currentTask || qaLoading ? ... 会因优先级
+              在 currentTask 非空时恒显示"问答中..."，真实进度文本从不展示 */}
+          <span className="flex-1 min-w-0 truncate">AI 正在执行：{currentTask ? currentTask : qaHook.qaLoading ? "问答中..." : "分析任务"}...</span>
           <Button
             variant="ghost"
             size="sm"

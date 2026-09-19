@@ -300,6 +300,10 @@ class ZipVoiceTTSEngine {
   protected audioContext: AudioContext | null = null;
   protected currentSource: AudioBufferSourceNode | null = null;
   protected paused = false;
+  // 用户在"生成间隙"（上一段播完、下一段生成中，currentSource 为 null）按下的
+  // 暂停意图：此时 pause() 无源可停，靠本标志在下一段开播前挂起。
+  // 不这样做的话生成完成后音频照常自动出声，暂停操作被无声吞掉。
+  protected pauseRequested = false;
   protected stopped = false;
   protected pausedAt = 0;
   protected startedAt = 0;
@@ -495,6 +499,25 @@ class ZipVoiceTTSEngine {
     onParagraphChange?: (paraIdx: number) => void,
   ): Promise<void> {
     if (this.stopped || isCancelled?.()) return;
+    // 消费生成间隙的暂停请求：把本段挂起为"待恢复"（管线在此等待，不推进），
+    // resume() 会从 currentBuffer 开头播放本段并在结束时 resolve。
+    if (this.pauseRequested && !this.paused) {
+      this.pauseRequested = false;
+      this.paused = true;
+      this.pausedAt = 0;
+      this.currentBuffer = buffer;
+      // 段落追踪必须以本 chunk 的参数建立：resume 的 restartParagraphTracking
+      // 读的是追踪状态，若不在挂起前写入，会用上一个 chunk 的旧参数映射本段
+      if (text && paragraphBreaks && paragraphIndices && paragraphIndices.length > 1 && onParagraphChange) {
+        this.startParagraphTracking(buffer, text, paragraphBreaks, paragraphIndices, onParagraphChange);
+      }
+      await new Promise<void>((resolve) => { this.pendingPlayResolve = resolve; });
+      // stop() 会 resolve 该 promise 并置 stopped；resume() 播放完本段后 resolve
+      if (this.stopped || isCancelled?.()) return;
+      callbacks.onPlay?.();
+      if (!this.stopped && !isCancelled?.()) callbacks.onEnd?.();
+      return;
+    }
     const ctx = this.getAudioContext();
     if (ctx.state === "suspended") {
       try { await ctx.resume(); } catch { /* 继续尝试播放 */ }
@@ -534,6 +557,8 @@ class ZipVoiceTTSEngine {
   }
 
   pause(): void {
+    // 无论是否有正在播放的 source 都要记录暂停意图（生成间隙消费）
+    this.pauseRequested = true;
     if (this.currentSource && !this.paused) {
       try {
         const ctx = this.getAudioContext();
@@ -547,6 +572,10 @@ class ZipVoiceTTSEngine {
   }
 
   async resume(): Promise<void> {
+    // 清除未消费的暂停请求：若用户"生成期间按暂停 → 又按播放"，生成完成时
+    // pauseRequested 若还在，会把新 buffer 错误挂起（按了播放却不出声）。
+    // 已挂起（paused && currentBuffer）的场景由下方分支正常消费，不受影响。
+    this.pauseRequested = false;
     if (this.paused && this.currentBuffer) {
       try {
         const ctx = this.getAudioContext();
@@ -576,6 +605,7 @@ class ZipVoiceTTSEngine {
   stop(): void {
     this.stopped = true;
     this.stopParagraphTracking();
+    this.pauseRequested = false;
     if (this.currentSource) { try { this.currentSource.stop(); } catch { /* 已停止的 source 忽略 */ } this.currentSource = null; }
     if (this.pendingPlayResolve) { this.pendingPlayResolve(); this.pendingPlayResolve = null; }
     this.currentBuffer = null;
@@ -710,9 +740,13 @@ export class TTSManager {
     // 游标从 max(已提交进度, 当前应提交起点) 开始：
     // seek 后 clearPrefetch 把 watermark 重置为 0，但不能重新提交 seek 之前的段
     let cursor = Math.max(this.generateWatermark, base);
-    // 播放中每次只提交 1 个任务：防止生成慢时水位落后导致一次积压 K 个预生成任务，
+    // 播放中每次只提交 1 个任务：防止生成慢时一次积压 K 个预生成任务，
     // 把现场生成（高优先级插队）挤到队尾——这正是"缓冲不足 K 就不播"的根源之一。
-    const limit = this.preparing ? target : Math.min(target, this.generateWatermark + 1);
+    // limit 必须基于游标而非水位：若基于水位，seek/调速/错误重试（都走
+    // clearPrefetch 置 0）后 cursor 从 base 起步而水位为 0，首轮 pump 把水位
+    // 抬到 base，此后 cursor === limit === 水位+1 永久成立，缓冲池停摆，
+    // 每段都退化为现场生成（zipvoice 下每段卡 30-120s）。
+    const limit = this.preparing ? target : Math.min(target, cursor + 1);
     while (cursor < limit) {
       const idx = cursor++;
       const chunk = this.chunks[idx];
@@ -967,12 +1001,14 @@ export class TTSManager {
     }
 
     if (this.engine !== "webspeech") {
+      // 代次必须在 try 外捕获：catch 里的守卫引用 try 块内的 const 会是
+      // TS2304（esbuild 构建不查类型，直接变成运行时 ReferenceError）
+      const kokoroGenId = this.generationId;
       try {
         const kokoro = this.getKokoroEngine();
         if (!kokoro) throw new Error("Kokoro 引擎创建失败");
         kokoro.setVoice(this.voiceId);
         await kokoro.ensureResumed();
-        const kokoroGenId = this.generationId; // 捕获本次朗读代次，供加载/预生成后校验
 
         // 浏览器推理（zipvoice）需要先在浏览器加载模型；服务端推理无需。
         // 无条件调用 loadModel：模型已加载且池大小一致时立即返回（幂等）；
@@ -989,6 +1025,9 @@ export class TTSManager {
           if (this.stopped || this.generationId !== kokoroGenId) return;
         }
       } catch (err) {
+        // 停止/换代触发的中断（resetWorker reject）不是加载失败：立即静默返回，
+        // 否则会误降级到 Web Speech 并永久切走用户选的引擎
+        if (this.stopped || this.generationId !== kokoroGenId) return;
         console.warn("[TTS] Kokoro 引擎加载失败，降级到 Web Speech API:", err);
         const failedEngine = this.engine; // 保存原引擎（server/zipvoice）
         this.engine = "webspeech";
@@ -1150,7 +1189,10 @@ export class TTSManager {
   }
 
   async resume(): Promise<void> {
-    if (this.engine !== "webspeech" && this.zipvoice) await this.zipvoice.resume();
+    if (this.engine !== "webspeech" && this.zipvoice) {
+      await this.zipvoice.resume();
+      this.userPaused = false; // 与 pause() 对称：否则 isPaused() 恒真，无法再次暂停
+    }
     else {
       this.webSpeech.stop();
       this.userPaused = false;
@@ -1209,7 +1251,8 @@ export class TTSManager {
 
   isPaused(): boolean {
     if (this.engine === "webspeech") return this.userPaused;
-    return this.getKokoroEngine()?.isPaused() ?? false;
+    // userPaused 覆盖"生成间隙已按下暂停"的窗口（此时引擎尚无 paused 状态）
+    return this.userPaused || (this.getKokoroEngine()?.isPaused() ?? false);
   }
 
   destroy(): void {

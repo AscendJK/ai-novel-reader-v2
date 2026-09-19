@@ -7,6 +7,33 @@ import { readSSEData } from "./stream";
 export function createAnthropicProvider(config: ProviderConfig): AIProvider {
   const baseUrl = config.baseUrl || "https://api.anthropic.com/v1";
 
+  // 请求头超时（同 openai.ts：直连挂起时中断，超时错误区别于用户取消）
+  const REQUEST_TIMEOUT_MS = 120_000;
+
+  async function withTimeout(req: ChatCompletionRequest, run: (signal: AbortSignal) => Promise<Response>): Promise<Response> {
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    // 已中止的 signal 不会触发新注册的 listener，必须先同步透传一次
+    if (req.signal?.aborted) controller.abort();
+    req.signal?.addEventListener("abort", onAbort, { once: true });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, REQUEST_TIMEOUT_MS);
+    try {
+      return await run(controller.signal);
+    } catch (e) {
+      if (timedOut && !req.signal?.aborted) {
+        throw new Error(`请求超时（${REQUEST_TIMEOUT_MS / 1000} 秒无响应），请检查网络或 API 地址`, { cause: e });
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
+      req.signal?.removeEventListener("abort", onAbort);
+    }
+  }
+
   function buildMessages(req: ChatCompletionRequest) {
     let systemPrompt = "";
     const messages: { role: string; content: string }[] = [];
@@ -25,6 +52,9 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
     const body: Record<string, unknown> = {
       model: config.model || req.model || "claude-sonnet-4-6",
       max_tokens: req.max_tokens ?? config.maxTokens ?? 2048,
+      // 各 Agent 为 JSON 生成精调的采样参数（如图谱 0.3）必须传递，
+      // 丢弃会导致默认 ~1.0 的高随机性、JSON 解析失败率上升
+      temperature: req.temperature ?? 0.7,
       messages,
       // 默认开启流式；可在 API 设置中关闭，支持请求级覆盖
       stream: req.stream ?? config.stream !== false,
@@ -34,31 +64,35 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
   }
 
   async function doDirect(req: ChatCompletionRequest): Promise<Response> {
-    return fetch(`${baseUrl}/messages`, {
-      method: "POST",
-      signal: req.signal,
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": config.apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify(buildBody(req)),
-    });
-  }
-
-  async function doProxy(req: ChatCompletionRequest): Promise<Response> {
-    return apiFetch("/api/proxy/chat", {
-      method: "POST",
-      signal: req.signal,
-      body: JSON.stringify({
-        url: `${baseUrl}/messages`,
+    return withTimeout(req, (signal) =>
+      fetch(`${baseUrl}/messages`, {
+        method: "POST",
+        signal,
         headers: {
+          "Content-Type": "application/json",
           "x-api-key": config.apiKey,
           "anthropic-version": "2023-06-01",
         },
-        body: buildBody(req),
-      }),
-    });
+        body: JSON.stringify(buildBody(req)),
+      })
+    );
+  }
+
+  async function doProxy(req: ChatCompletionRequest): Promise<Response> {
+    return withTimeout(req, (signal) =>
+      apiFetch("/api/proxy/chat", {
+        method: "POST",
+        signal,
+        body: JSON.stringify({
+          url: `${baseUrl}/messages`,
+          headers: {
+            "x-api-key": config.apiKey,
+            "anthropic-version": "2023-06-01",
+          },
+          body: buildBody(req),
+        }),
+      })
+    );
   }
 
   /** 解析 Anthropic 格式的流式 SSE 响应，聚合 content_block_delta 事件中的 text */

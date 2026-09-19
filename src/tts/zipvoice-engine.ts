@@ -38,6 +38,10 @@ let activePoolSize = 0;                 // 上次成功建立的池大小（检�
 let modelLoaded = false;
 let disposed = false;
 let loadingPromise: Promise<void> | null = null;
+// 加载代次：resetWorker 自增。在途的旧 loadModel 落定时代次不匹配则不写任何
+// 模块状态——否则它的重试分支会 createWorker 写进新会话的 ttsWorkers 数组，
+// 与新会话的加载循环互相覆写（双循环最长 20 分钟才自愈）
+let loadGeneration = 0;
 let nextRequestId = 0;
 const pendingRequests = new Map<number, { resolve: (audio: Float32Array) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 // 当前等待 worker ready 的 resolve/reject（供 onerror 快速失败，避免卡 10 分钟超时）
@@ -220,6 +224,18 @@ function scheduleRebuild(): void {
     void (async () => {
       try {
         if (disposed) return;
+        // 全池重建分支必须自己取缓存文件：`files` 在本作用域不存在（那是补建
+        // 分支 IIFE 里的局部变量），直接引用会 ReferenceError，被下方 catch 吞掉
+        // 后恢复永远失败（iOS 单 Worker 崩溃必落此分支）
+        const genAtStart = loadGeneration;
+        const files = await getCachedFiles();
+        if (files.size === 0) {
+          console.warn("[TTS] 缓存模型不可用，无法自动重建 Worker");
+          return;
+        }
+        // 读缓存（数百 ms 异步窗口）期间用户可能 stop→重新朗读：
+        // loadModel 已在建新池时本重建必须放弃，否则两套循环交叉覆写同一槽位
+        if (disposed || genAtStart !== loadGeneration || loadingPromise) return;
         // 重建整个池（沿用上次池大小）
         const targetSize = Math.max(1, activePoolSize || workerPoolSize);
         ttsWorkers = new Array(targetSize) as Worker[];
@@ -356,8 +372,9 @@ async function transferFilesToWorker(index: number): Promise<void> {
   }
 
   return new Promise<void>((resolve, reject) => {
+    const waiter = { resolve, reject };
     const timeout = setTimeout(() => {
-      readyWaiter = null;
+      if (readyWaiter === waiter) readyWaiter = null;
       w.removeEventListener("message", handler);
       reject(new Error("模型加载超时（10分钟）"));
     }, 600000);
@@ -365,17 +382,17 @@ async function transferFilesToWorker(index: number): Promise<void> {
       if (e.data.type === "sherpa-onnx-tts-ready") {
         clearTimeout(timeout);
         w.removeEventListener("message", handler);
-        readyWaiter = null;
+        if (readyWaiter === waiter) readyWaiter = null;
         modelLoaded = true;
         resolve();
       } else if (e.data.type === "error") {
         clearTimeout(timeout);
         w.removeEventListener("message", handler);
-        readyWaiter = null;
+        if (readyWaiter === waiter) readyWaiter = null;
         reject(new Error(e.data.message));
       }
     };
-    readyWaiter = { resolve, reject };
+    readyWaiter = waiter;
     w.addEventListener("message", handler);
 
     w.postMessage(
@@ -388,11 +405,13 @@ async function transferFilesToWorker(index: number): Promise<void> {
 async function initWorker(files: Map<string, ArrayBuffer>, index: number): Promise<void> {
   const w = await createWorker(index);
   await new Promise<void>((resolve, reject) => {
+    const waiter = { resolve, reject };
     const timeout = setTimeout(() => {
-      readyWaiter = null;
+      if (readyWaiter === waiter) readyWaiter = null;
       w.removeEventListener("message", handler);
       try { w.terminate(); } catch { /* worker 可能已终止 */ }
-      ttsWorkers[index] = undefined as unknown as Worker;
+      // 只清自己创建的槽位：若槽位已被新会话换成了别的 worker，不能越界覆盖
+      if (ttsWorkers[index] === w) ttsWorkers[index] = undefined as unknown as Worker;
       revokeWorkerBlob(index);
       modelLoaded = false;
       reject(new Error("模型加载超时（10分钟）"));
@@ -401,21 +420,21 @@ async function initWorker(files: Map<string, ArrayBuffer>, index: number): Promi
       if (e.data.type === "sherpa-onnx-tts-ready") {
         clearTimeout(timeout);
         w.removeEventListener("message", handler);
-        readyWaiter = null;
+        if (readyWaiter === waiter) readyWaiter = null;
         modelLoaded = true;
         resolve();
       } else if (e.data.type === "error") {
         clearTimeout(timeout);
         w.removeEventListener("message", handler);
-        readyWaiter = null;
+        if (readyWaiter === waiter) readyWaiter = null;
         try { w.terminate(); } catch { /* worker 可能已终止 */ }
-        ttsWorkers[index] = undefined as unknown as Worker;
+        if (ttsWorkers[index] === w) ttsWorkers[index] = undefined as unknown as Worker;
         revokeWorkerBlob(index);
         modelLoaded = false;
         reject(new Error(e.data.message));
       }
     };
-    readyWaiter = { resolve, reject };
+    readyWaiter = waiter;
     w.addEventListener("message", handler);
 
     // 构造 files 对象，用 transfer 传输大文件（零拷贝）。
@@ -571,10 +590,14 @@ export async function loadModel(
   disposed = false;
 
   loadingPromise = (async () => {
+    const gen = ++loadGeneration;
+    const stale = () => gen !== loadGeneration;
     try {
       // 1. 检查 IndexedDB 缓存
+      if (stale()) throw new Error("已停止");
       options?.onProgress?.(5);
       const cached = await isCacheReady();
+      if (stale()) throw new Error("已停止");
 
       if (!cached) {
         // 2. 服务器端准备（下载 + 解压）
@@ -607,13 +630,18 @@ export async function loadModel(
       taskQueue = [];
       let initError: Error | null = null;
       for (let idx = 0; idx < targetSize; idx++) {
+        if (stale()) throw new Error("已停止");
         let ok = false;
         for (let attempt = 1; attempt <= 2 && !ok; attempt++) {
           try {
             await transferFilesToWorker(idx);
+            if (stale()) throw new Error("已停止"); // init 期间被 resetWorker：结果作废
             initError = null;
             ok = true;
           } catch (err) {
+            // 代次已过期：立即退出，绝不重试——重试会 createWorker 写入新会话
+            // 的 ttsWorkers 数组并互相覆写 modelLoaded
+            if (stale()) throw new Error("已停止", { cause: err });
             initError = err instanceof Error ? err : new Error(String(err));
             console.warn(`[TTS] Worker #${idx} 初始化失败（第 ${attempt} 次），${attempt < 2 ? "自动重试" : "放弃"}: ${initError.message}`);
             try { ttsWorkers[idx]?.terminate(); } catch { /* worker 可能已终止 */ }
@@ -624,6 +652,7 @@ export async function loadModel(
         }
         if (!ok) break;
       }
+      if (stale()) throw new Error("已停止");
       if (initError) {
         // 部分 worker 已成功初始化：保留可用 worker（降级运行），
         // 不抛错（避免 TTSManager 整体降级到 Web Speech，浪费已加载的模型）
@@ -640,10 +669,14 @@ export async function loadModel(
 
       options?.onProgress?.(100);
     } catch (err) {
+      // 代次已过期：本会话已被 resetWorker 作废，静默退出，不写任何模块状态
+      // （写 modelLoaded=false 会清掉新会话刚建好的池状态）
+      if (gen !== loadGeneration) return;
       modelLoaded = false;
       throw err;
     } finally {
-      loadingPromise = null;
+      // 新会话可能已装入自己的 loadingPromise，旧会话不得清掉它
+      if (gen === loadGeneration) loadingPromise = null;
     }
   })();
 
@@ -758,9 +791,16 @@ export async function generateAudioFull(
  * 下次朗读会重新初始化 worker（模型文件来自缓存，约 3-5 秒）。
  */
 export function resetWorker(): void {
+  loadGeneration++; // 在途 loadModel 全部作废（见 loadGeneration 注释）
   modelLoaded = false;
   loadingPromise = null;
+  // 立即 reject 在途的 init 等待：不 reject 的话它要挂到 10 分钟超时才落定，
+  // 期间 loadingPromise 重建、worker 池状态都可能被旧会话的迟到回调覆写
+  const waiter = readyWaiter;
   readyWaiter = null;
+  if (waiter) {
+    try { waiter.reject(new Error("已停止")); } catch { /* ignore */ }
+  }
   for (const w of ttsWorkers) {
     if (w) {
       try { w.terminate(); } catch { /* 已销毁的 worker 忽略 */ }

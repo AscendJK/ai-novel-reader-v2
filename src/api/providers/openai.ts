@@ -7,6 +7,37 @@ import { readSSEData } from "./stream";
 export function createOpenAIProvider(config: ProviderConfig): AIProvider {
   const baseUrl = config.baseUrl || "https://api.openai.com/v1";
 
+  // 请求头超时：连接挂起（网关黑洞/断网无 RST）超过该时长即中断。
+  // 直连超时会走代理重试（catch 分支），代理也超时则把超时错误抛给调用方。
+  // 响应体阶段由 SSE 看门狗（stream.ts）保护。
+  const REQUEST_TIMEOUT_MS = 120_000;
+
+  /** 给 fetch 包一层超时：用户取消（signal 已中止）原样抛 AbortError，
+   *  超时抛普通 Error（避免被上游当作"用户取消"吞掉） */
+  async function withTimeout(req: ChatCompletionRequest, run: (signal: AbortSignal) => Promise<Response>): Promise<Response> {
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    // 已中止的 signal 不会触发新注册的 listener，必须先同步透传一次
+    if (req.signal?.aborted) controller.abort();
+    req.signal?.addEventListener("abort", onAbort, { once: true });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, REQUEST_TIMEOUT_MS);
+    try {
+      return await run(controller.signal);
+    } catch (e) {
+      if (timedOut && !req.signal?.aborted) {
+        throw new Error(`请求超时（${REQUEST_TIMEOUT_MS / 1000} 秒无响应），请检查网络或 API 地址`, { cause: e });
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
+      req.signal?.removeEventListener("abort", onAbort);
+    }
+  }
+
   function buildBody(req: ChatCompletionRequest) {
     const body: Record<string, unknown> = {
       model: config.model || req.model || "gpt-4o",
@@ -24,27 +55,31 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
   }
 
   async function doDirect(req: ChatCompletionRequest): Promise<Response> {
-    return fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      signal: req.signal,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify(buildBody(req)),
-    });
+    return withTimeout(req, (signal) =>
+      fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        signal,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${config.apiKey}`,
+        },
+        body: JSON.stringify(buildBody(req)),
+      })
+    );
   }
 
   async function doProxy(req: ChatCompletionRequest): Promise<Response> {
-    return apiFetch("/api/proxy/chat", {
-      method: "POST",
-      signal: req.signal,
-      body: JSON.stringify({
-        url: `${baseUrl}/chat/completions`,
-        headers: { Authorization: `Bearer ${config.apiKey}` },
-        body: buildBody(req),
-      }),
-    });
+    return withTimeout(req, (signal) =>
+      apiFetch("/api/proxy/chat", {
+        method: "POST",
+        signal,
+        body: JSON.stringify({
+          url: `${baseUrl}/chat/completions`,
+          headers: { Authorization: `Bearer ${config.apiKey}` },
+          body: buildBody(req),
+        }),
+      })
+    );
   }
 
   /** 解析 OpenAI 格式的流式 SSE 响应，聚合 delta.content */

@@ -8,45 +8,78 @@ import { userKey } from "@/lib/user-utils";
 // 每批同步的最大记录数
 const BATCH_SIZE = 50;
 
+/** gatherChanges 的返回：data 之外附带分批元信息（推进增量收集游标用） */
+export interface GatherResult {
+  data: Partial<SyncData>;
+  /** 按同一过滤条件，本批之后是否还有更多记录 */
+  hasMore: boolean;
+  /** 本批记录的最大 updatedAt（本地时钟），作为下一批收集起点 */
+  maxUpdatedAt: number;
+}
+
 /** Gather user data for sync push (no novels/chapters — those are server-side) */
-export async function gatherChanges(lastSyncTime: number): Promise<Partial<SyncData>> {
+export async function gatherChanges(
+  lastSyncTime: number,
+  excludeIds?: ReadonlySet<string>
+): Promise<GatherResult> {
   const udb = getUserDB();
 
-  // Incremental: use index queries instead of full table scan + filter
-  const filteredSummaries = lastSyncTime > 0
-    ? await udb.summaries.where("updatedAt").above(lastSyncTime).toArray()
-    : await udb.summaries.toArray();
+  // Incremental: use index queries instead of full table scan + filter。
+  // 用 aboveOrEqual（而非严格 above）：分页游标停在时间戳平局的边界时，
+  // == 游标的未推送记录仍要能被取到（靠 excludeIds 排除已推送的那部分）
+  const summariesQuery = lastSyncTime > 0
+    ? udb.summaries.where("updatedAt").aboveOrEqual(lastSyncTime)
+    : udb.summaries.toCollection();
+  const filteredSummaries = await (excludeIds
+    ? summariesQuery.and((s) => !excludeIds.has(s.id))
+    : summariesQuery).toArray();
 
-  const filteredNotes = lastSyncTime > 0
-    ? await udb.notes.where("updatedAt").above(lastSyncTime).toArray()
-    : await udb.notes.toArray();
+  const notesQuery = lastSyncTime > 0
+    ? udb.notes.where("updatedAt").aboveOrEqual(lastSyncTime)
+    : udb.notes.toCollection();
+  const filteredNotes = await (excludeIds
+    ? notesQuery.and((n) => !excludeIds.has(n.id))
+    : notesQuery).toArray();
 
   // maps/graphs: filter by updatedAt, include soft-deleted (deletions must propagate)
+  // 多取 1 条用于精确判断 hasMore（limit(BATCH_SIZE) 无法区分"恰好 50"与"还有更多"）
   const mapQuery = lastSyncTime > 0
-    ? udb.maps.where("updatedAt").above(lastSyncTime)
+    ? udb.maps.where("updatedAt").aboveOrEqual(lastSyncTime)
     : udb.maps.toCollection();
-  const maps = await mapQuery.limit(BATCH_SIZE).toArray();
+  const mapsAll = await (excludeIds
+    ? mapQuery.and((m) => !excludeIds.has(m.id))
+    : mapQuery).limit(BATCH_SIZE + 1).toArray();
 
   const graphQuery = lastSyncTime > 0
-    ? udb.graphs.where("updatedAt").above(lastSyncTime)
+    ? udb.graphs.where("updatedAt").aboveOrEqual(lastSyncTime)
     : udb.graphs.toCollection();
-  const graphs = await graphQuery.limit(BATCH_SIZE).toArray();
+  const graphsAll = await (excludeIds
+    ? graphQuery.and((g) => !excludeIds.has(g.id))
+    : graphQuery).limit(BATCH_SIZE + 1).toArray();
 
   // 分批：只取前 BATCH_SIZE 条记录
   const summaries = filteredSummaries.slice(0, BATCH_SIZE);
   const notes = filteredNotes.slice(0, BATCH_SIZE);
+  const maps = mapsAll.slice(0, BATCH_SIZE);
+  const graphs = graphsAll.slice(0, BATCH_SIZE);
+
+  const summariesHasMore = filteredSummaries.length > BATCH_SIZE;
+  const notesHasMore = filteredNotes.length > BATCH_SIZE;
+  const mapsHasMore = mapsAll.length > BATCH_SIZE;
+  const graphsHasMore = graphsAll.length > BATCH_SIZE;
+  const hasMore = summariesHasMore || notesHasMore || mapsHasMore || graphsHasMore;
 
   // 如果有更多数据，记录日志
-  if (filteredSummaries.length > BATCH_SIZE) {
+  if (summariesHasMore) {
     console.log(`[sync] summaries batch: ${summaries.length}/${filteredSummaries.length}`);
   }
-  if (filteredNotes.length > BATCH_SIZE) {
+  if (notesHasMore) {
     console.log(`[sync] notes batch: ${notes.length}/${filteredNotes.length}`);
   }
-  if (maps.length === BATCH_SIZE) {
+  if (mapsHasMore) {
     console.log(`[sync] maps batch: ${maps.length}+ (可能还有更多)`);
   }
-  if (graphs.length === BATCH_SIZE) {
+  if (graphsHasMore) {
     console.log(`[sync] graphs batch: ${graphs.length}+ (可能还有更多)`);
   }
 
@@ -79,13 +112,26 @@ export async function gatherChanges(lastSyncTime: number): Promise<Partial<SyncD
     settings: Object.keys(settings).length,
   });
 
+  // 本批最大 updatedAt（本地时钟）：调用方据此推进增量收集游标
+  const maxUpdatedAt = Math.max(
+    0,
+    ...summaries.map((s) => s.updatedAt || 0),
+    ...notes.map((n) => n.updatedAt || 0),
+    ...maps.map((m) => m.updatedAt || 0),
+    ...graphs.map((g) => g.updatedAt || 0),
+  );
+
   return {
-    summaries: summaries.map((s) => ({ ...s, type: s.type as SummaryItem["type"] })),
-    notes,
-    maps,
-    graphs,
-    settings,
-    progress: { readingPositions, lastOpened },
+    data: {
+      summaries: summaries.map((s) => ({ ...s, type: s.type as SummaryItem["type"] })),
+      notes,
+      maps,
+      graphs,
+      settings,
+      progress: { readingPositions, lastOpened },
+    },
+    hasMore,
+    maxUpdatedAt,
   };
 }
 

@@ -583,9 +583,14 @@ export function createBackup() {
   if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const backupPath = path.join(BACKUP_DIR, `novels-${timestamp}.db`);
-  db.backup(backupPath);
-  console.log(`[backup] created: ${backupPath}`);
-  cleanOldBackups();
+  // db.backup() 是异步任务（线程池执行）：失败（磁盘满/目录被锁）会成为 unhandled
+  // rejection 直接崩掉整个进程，所以 catch 必须挂在这里，调用方才敢放心 fire-and-forget
+  return db.backup(backupPath)
+    .then(() => {
+      console.log(`[backup] created: ${backupPath}`);
+      cleanOldBackups();
+    })
+    .catch((e) => console.error("[backup] backup failed:", e?.message ?? e));
 }
 
 let isRestoring = false;
@@ -594,15 +599,25 @@ export function isRestoringBackup() {
   return isRestoring;
 }
 
-export function restoreBackup(filename) {
+export async function restoreBackup(filename) {
   // Validate filename FIRST before constructing path
   if (!filename.endsWith(".db") || filename.includes("..") || filename.includes("/") || filename.includes("\\")) {
     throw new Error("无效的文件名");
   }
   const backupPath = path.join(BACKUP_DIR, filename);
   if (!fs.existsSync(backupPath)) throw new Error("备份文件不存在");
-  // Create a pre-restore backup first
-  createBackup();
+  // 恢复前快照必须等待完成：db.backup() 是异步任务，不等它就 close 连接会杀死
+  // 快照（还遗留一个会让进程崩溃的 rejected promise），等于没有快照可回退
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const snapshotPath = path.join(BACKUP_DIR, `novels-${timestamp}.db`);
+  try {
+    await db.backup(snapshotPath);
+    console.log(`[backup] pre-restore snapshot: ${snapshotPath}`);
+    cleanOldBackups();
+  } catch (e) {
+    // 快照失败：数据库未被触碰，直接中止恢复（比覆盖后无快照可回退安全得多）
+    throw new Error(`恢复前快照失败，已中止恢复: ${e?.message ?? e}`);
+  }
   // Set restoring flag to reject incoming requests
   isRestoring = true;
   // Close current connection, replace DB

@@ -26,7 +26,7 @@ function auth(req, res) {
   return true;
 }
 
-export function mountAdminRoutes(app) {
+export function mountAdminRoutes(app, hooks = {}) {
   // ── Stats ──
 
   app.get("/api/admin/stats", (req, res) => {
@@ -206,6 +206,8 @@ export function mountAdminRoutes(app) {
     if (!auth(req, res)) return;
     try {
       const config = db.setBackupConfig(req.body);
+      // 间隔变更立即生效（重建定时器），不用等进程重启
+      hooks.onBackupConfigChanged?.();
       res.json({ ok: true, config });
     } catch (e) { res.status(500).json({ error: "保存配置失败" }); }
   });
@@ -218,14 +220,16 @@ export function mountAdminRoutes(app) {
     } catch (e) { res.status(500).json({ error: "创建备份失败" }); }
   });
 
-  app.post("/api/admin/backups/:filename/restore", (req, res) => {
+  app.post("/api/admin/backups/:filename/restore", async (req, res) => {
     if (!auth(req, res)) return;
     try {
-      const result = db.restoreBackup(req.params.filename);
+      const result = await db.restoreBackup(req.params.filename);
       res.json(result);
     } catch (e) {
+      // 异步（等待恢复前快照）后错误不再走同步 try/catch，必须在这里接住；
+      // 带上具体原因（如"快照失败已中止"）方便管理页排查
       console.error("[admin] backup restore failed:", e);
-      res.status(400).json({ error: "备份恢复失败" });
+      res.status(400).json({ error: e?.message ?? "备份恢复失败" });
     }
   });
 

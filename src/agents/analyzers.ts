@@ -70,7 +70,9 @@ ${relevantContent}
             { role: "system", content: "你是一位资深的小说人物分析师，擅长深入剖析角色性格、关系网络和人物弧光。" },
             { role: "user", content: useP },
           ],
-          max_tokens: b.maxOutputTokens,
+          // 与上方 computeAvailableInput 的 4096 输出预留一致：请求超过预留量
+          // 会在严格校验 input+max_tokens≤context 的服务商触发 400
+          max_tokens: Math.min(b.maxOutputTokens, 4096),
           temperature: 0.4,
           signal: context.signal,
         });
@@ -163,7 +165,8 @@ ${relevantContent}
             { role: "system", content: "你是一位资深的小说剧情分析师，擅长提取和梳理剧情时间线。" },
             { role: "user", content: useP },
           ],
-          max_tokens: b.maxOutputTokens,
+          // 与 4096 输出预留一致（同人物分析 Agent 的说明）
+          max_tokens: Math.min(b.maxOutputTokens, 4096),
           temperature: 0.4,
           signal: context.signal,
         });

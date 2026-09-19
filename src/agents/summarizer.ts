@@ -19,6 +19,11 @@ class SummarizerAgent extends BaseAgent {
   description = "生成章节摘要或全书总结";
   taskType = TaskType.CHAPTER;
 
+  // 输出预算（token）：必须与请求的 max_tokens 取同一值——若预留 1024 却请求
+  // maxOutputTokens（4096+），严格校验 input+max_tokens≤context 的服务商上
+  // 长章节必然 400，且自愈重试按同样预算重算、无法恢复
+  private static readonly OUTPUT_TOKENS = 1024;
+
   /** 章节总结需要读取原文内容，强制加载全书 */
   protected async prepareEnvironment(context: AgentContext) {
     return prepareAgentContext(context, { loadAllContent: true });
@@ -26,8 +31,8 @@ class SummarizerAgent extends BaseAgent {
 
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider, budget } = env;
-    // 精确计算：可用输入空间 = 上下文总长 - 输出预算(1024) - 安全余量(5%)
-    const maxChapterChars = Math.floor(computeAvailableInput(budget, 1024));
+    // 精确计算：可用输入空间 = 上下文总长 - 输出预算 - 安全余量(5%)
+    const maxChapterChars = Math.floor(computeAvailableInput(budget, SummarizerAgent.OUTPUT_TOKENS));
 
     const targetChapterIds = context.chapterIds || novel.chapters.map((c) => c.id);
     const chapters = novel.chapters.filter((c) => targetChapterIds.includes(c.id));
@@ -59,7 +64,7 @@ class SummarizerAgent extends BaseAgent {
         context.onStatus?.("AI 正在生成分析...");
         const response = await chatWithContextRetry(env, async (b) => {
           // 用最新预算重新计算章节截断阈值（400 自愈时预算缩小会触发更严格截断）
-          const maxChars = Math.floor(computeAvailableInput(b, 1024));
+          const maxChars = Math.floor(computeAvailableInput(b, SummarizerAgent.OUTPUT_TOKENS));
           let content = chapter.content;
           if (chapter.content.length > maxChars) {
             content = sampleChapterContent(chapter.content, maxChars);
@@ -68,7 +73,7 @@ class SummarizerAgent extends BaseAgent {
           return provider.chat({
             model: "",
             messages: [{ role: "user", content: p }],
-            max_tokens: b.maxOutputTokens,
+            max_tokens: Math.min(b.maxOutputTokens, SummarizerAgent.OUTPUT_TOKENS),
             temperature: 0.5,
             signal: context.signal,
           });
@@ -182,7 +187,8 @@ class GlobalSummarizerAgent extends BaseAgent {
             },
             { role: "user", content: useP },
           ],
-          max_tokens: b.maxOutputTokens,
+          // 与上方 computeAvailableInput(b, 4096) 的输出预留一致（同章节路径）
+          max_tokens: Math.min(b.maxOutputTokens, 4096),
           temperature: 0.5,
           signal: context.signal,
         });

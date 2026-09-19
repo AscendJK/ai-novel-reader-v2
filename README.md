@@ -57,7 +57,7 @@ npm run pack:backend                      # 只打后端包
 pwsh -File pack-backend.ps1 -IncludeDist  # 额外打前后端全包（需先 npm run build）
 ```
 
-分别生成 `ai-novel-reader-v2-backend.zip`（约 68 KB）和 `ai-novel-reader-v2-full.zip`（约 1 MB）。
+分别生成到 `release/` 目录：`release/ai-novel-reader-v2-backend.zip`（约 68 KB）和 `release/ai-novel-reader-v2-full.zip`（约 1 MB）。该目录已被 `.gitignore` 忽略。
 
 **自动发布 Release**：推送到 `main` 分支只触发前端部署，不会打包后端。需要发布新版本时打 tag：
 
@@ -180,7 +180,7 @@ mkcert -install
 
 重启后端（`start.bat`），启动日志确认出现 `https://0.0.0.0:8443`。
 
-**证书 IP 变更**：mkcert 证书按生成时机器的 IP 签发。换了 Wi-Fi / IP 变化后，删除 `server/data/cert.pem` 和 `server/data/key.pem` 再重启后端，会自动按新 IP 重新签发（`rootCA.pem` 与手机端安装不受影响）。
+**证书 IP 变更**：mkcert 证书按生成时机器的 IP 签发。换了 Wi-Fi / IP 变化后，**重启一次后端即可**——启动时会检测当前 IP 是否在证书覆盖范围内，不在就自动按新 IP 重新签发（`rootCA.pem` 与手机端安装不受影响）。仅当日志提示自动重签失败（mkcert 不可用）时，才需手动删除 `server/data/cert.pem` 和 `server/data/key.pem` 再重启。
 
 **根证书与文件位置速查**：
 
@@ -212,7 +212,7 @@ mkcert -CAROOT                           # 先查路径，再手动删除整个�
 
 > 卸载后各端影响：电脑端 Windows 信任存储里的 CA 随 `mkcert -uninstall` 移除；**已装证书的 iPhone 需手动删除描述文件**（设置 → 通用 → VPN 与设备管理 → mkcert → 删除描述文件，再到「证书信任设置」确认已消失），否则手机上仍显示已信任但服务器已无法出 HTTPS。
 
-**iPhone 安装根证书**（每台设备一次性）：
+**iPhone 安装根证书**（每台设备一次性。整个流程分**两个必做阶段**：① 安装描述文件 → ② 开启完全信任。iOS 装完①会显示"已安装"，看似结束，但此时证书**仍未受信**——漏掉②是 HTTPS 连不上的最常见原因）：
 
 1. 找到根证书 `rootCA.pem` 并传到 iPhone（隔空投送不可用于证书，用微信/QQ/邮件均可，**传完建议删除文件与聊天记录**——根证书是敏感物）。
 
@@ -223,8 +223,10 @@ mkcert -CAROOT                           # 先查路径，再手动删除整个�
    ```
 
    打开该目录取 `rootCA.pem`。服务器首次生成证书时也会把根证书复制一份到 `server/data/rootCA.pem`（存在即可直接用）；两种来源等价。
-2. iPhone 上点开该文件 → 设置自动跳转「已下载描述文件」→ 设置 → 通用 → VPN 与设备管理 → 安装
-3. ⚠️ **关键步骤，漏掉等于白装**：设置 → 通用 → 关于本机 → **证书信任设置** → 把 mkcert 相关项的开关打开（开启"完全信任"）
+2. **阶段①：安装描述文件**。iPhone 上点开该文件 → 设置自动跳转「已下载描述文件」→ 设置 → 通用 → VPN 与设备管理 → 安装。
+   ⚠️ 系统显示"已安装"只是阶段①完成，**此刻还不算装好**，紧接着做阶段②。
+3. **阶段②：开启完全信任**。设置 → 通用 → 关于本机 → **证书信任设置** → 把 mkcert 相关项的开关打开。
+   ⚠️ **关键步骤，漏掉等于白装**：这是 iOS 设计的独立步骤，藏在「关于本机」深处，安装流程不会引导你来。不开这个开关，Safari 直接访问后端地址会弹证书警告，而应用内（登录页配置服务器地址）的请求则**不弹任何提示、直接静默失败**——正是"装了证书还是连不上"的元凶。
 
 **验证**：Safari 访问 GitHub Pages 前端 → 配置服务器地址 `https://<电脑IP>:8443` → 显示"连接成功"且无证书警告；或直接访问 `https://<电脑IP>:8443/ai-novel-reader-v2/`（同源 HTTPS）。
 
@@ -669,9 +671,9 @@ winget install FiloSottile.mkcert
 1. 后端是否已启动（终端显示 `[sync] http://0.0.0.0:5173`）
 2. 服务器地址协议与端口是否匹配：`http://` 对应 `:5173`，`https://` 对应 `:8443`（两种端口同时监听）
 3. **iOS 设备**：HTTP 后端 + GitHub Pages 前端的组合会被平台阻断，改用同源模式或 mkcert HTTPS
-4. 换过 Wi-Fi / IP 变化后连不上 HTTPS？删除 `server/data/cert.pem`、`key.pem` 重启后端重新签证书
+4. 换过 Wi-Fi / IP 变化后连不上 HTTPS？重启后端即可自动重签证书（启动时检测 IP 变化；仅重签失败时才需手动删除 `server/data/cert.pem`、`key.pem` 再重启）
 5. 前端和后端是否在同一局域网；防火墙是否放行 5173/8443 端口
-6. HTTPS 报证书错误且手机已装 rootCA？检查「证书信任设置」是否开启完全信任
+6. 手机已装 rootCA 还是连不上 HTTPS？十有八九是漏了「证书信任设置」的完全信任开关（设置 → 通用 → 关于本机）。验证方法：手机 Safari 直接访问 `https://<电脑IP>:8443`，无警告（有小锁）才算证书装好；注意应用内请求失败时不弹证书提示，别被"没有任何报错"迷惑
 
 ### 如何重新安装依赖
 

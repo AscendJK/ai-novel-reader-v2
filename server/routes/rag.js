@@ -18,6 +18,7 @@ const router = Router();
 // ── RAG: Cached pipeline for test/encode endpoints ────────
 
 const _cachedPipes = new Map(); // modelKey → pipeline
+const _pipeLoading = new Map(); // modelKey → 加载中的 promise（单飞锁）
 const MAX_CACHED_PIPES = 3;
 
 async function getEncodePipeline(engine) {
@@ -29,28 +30,41 @@ async function getEncodePipeline(engine) {
     _cachedPipes.set(modelKey, val);
     return val;
   }
-  const { pipeline, env } = await import("@xenova/transformers");
-  env.allowRemoteModels = true;
-  env.cacheDir = path.resolve(__dirname, "../data/models-cache");
-  // 依次尝试镜像源：磁盘缓存（cacheDir）未命中时 → 配置/环境变量 → hf-mirror → HuggingFace
-  let lastErr = null;
-  for (const host of getMirrorHosts()) {
-    env.remoteHost = host;
-    try {
-      const pipe = await pipeline("feature-extraction", modelKey);
-      _cachedPipes.set(modelKey, pipe);
-      // LRU 淘汰：超过上限时移除最久未使用的
-      while (_cachedPipes.size > MAX_CACHED_PIPES) {
-        const oldest = _cachedPipes.keys().next().value;
-        if (oldest) _cachedPipes.delete(oldest);
+  // 单飞锁：并发未命中（多设备同时首次查询/客户端重试）共享同一次模型加载。
+  // 无锁时每个请求各自实例化完整 ONNX pipeline（26-120MB/个），一波冷启动
+  // 就能把内存推到 GB 级甚至 OOM 崩进程。
+  const loading = _pipeLoading.get(modelKey);
+  if (loading) return loading;
+  const p = (async () => {
+    const { pipeline, env } = await import("@xenova/transformers");
+    env.allowRemoteModels = true;
+    env.cacheDir = path.resolve(__dirname, "../data/models-cache");
+    // 依次尝试镜像源：磁盘缓存（cacheDir）未命中时 → 配置/环境变量 → hf-mirror → HuggingFace
+    let lastErr = null;
+    for (const host of getMirrorHosts()) {
+      env.remoteHost = host;
+      try {
+        const pipe = await pipeline("feature-extraction", modelKey);
+        _cachedPipes.set(modelKey, pipe);
+        // LRU 淘汰：超过上限时移除最久未使用的
+        while (_cachedPipes.size > MAX_CACHED_PIPES) {
+          const oldest = _cachedPipes.keys().next().value;
+          if (oldest) _cachedPipes.delete(oldest);
+        }
+        return pipe;
+      } catch (e) {
+        lastErr = e;
+        console.warn(`[rag] 从 ${host} 加载模型失败，尝试下一镜像: ${e.message}`);
       }
-      return pipe;
-    } catch (e) {
-      lastErr = e;
-      console.warn(`[rag] 从 ${host} 加载模型失败，尝试下一镜像: ${e.message}`);
     }
+    throw lastErr || new Error("模型加载失败：所有镜像均不可用");
+  })();
+  _pipeLoading.set(modelKey, p);
+  try {
+    return await p;
+  } finally {
+    _pipeLoading.delete(modelKey);
   }
-  throw lastErr || new Error("模型加载失败：所有镜像均不可用");
 }
 
 // ── RAG: Quick test endpoint ──────────────────────────────
@@ -372,11 +386,26 @@ router.get("/model-proxy/{*path}", rateLimit(10), async (req, res) => {
         res.send(buffer);
 
         // Cache to disk with normalized path (async, don't block response)
+        // 先写临时文件再 rename 原子替换：直接写目标文件时，并发请求会在写入
+        // 中途命中 existsSync 读到半截文件；写盘中断留下的截断文件还会永久
+        // 毒化该模型的磁盘缓存（无校验、无自愈）。
+        // tmp 名带随机后缀：并发下载同一文件时固定 tmp 名仍会交叉写
         const dir = path.dirname(cachePath);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFile(cachePath, buffer, (err) => {
-          if (err) console.warn(`[model-proxy] cache write failed: ${err.message}`);
-          else console.log(`[model-proxy] cached: ${toCachePath(subPath)} (${(buffer.length / 1024 / 1024).toFixed(1)} MB)`);
+        const tmpPath = `${cachePath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        fs.writeFile(tmpPath, buffer, (err) => {
+          if (err) {
+            console.warn(`[model-proxy] cache write failed: ${err.message}`);
+            try { fs.unlinkSync(tmpPath); } catch {}
+            return;
+          }
+          try {
+            fs.renameSync(tmpPath, cachePath);
+            console.log(`[model-proxy] cached: ${toCachePath(subPath)} (${(buffer.length / 1024 / 1024).toFixed(1)} MB)`);
+          } catch (e) {
+            console.warn(`[model-proxy] cache rename failed: ${e.message}`);
+            try { fs.unlinkSync(tmpPath); } catch {}
+          }
         });
         return;
       } catch (e) {
@@ -555,37 +584,56 @@ function validateExtractedFiles(dir, requiredFiles) {
 async function downloadFile(url, destPath, minSize = 1024, onProgress, { signal } = {}) {
   console.log(`[tts-proxy] 下载: ${url}`);
   const controller = new AbortController();
+  // 响应头 5 分钟超时；拿到响应头后清除，改用响应体"空闲看门狗"——
+  // 跨境链路常见中途断流，reader.read() 会永久挂起且不报错，没有看门狗
+  // 整条下载通道（共享 promise）会卡死到进程重启
   const timeout = setTimeout(() => controller.abort(), 300000);
-  // 如果外部提供了 abort signal，监听它
   const onAbort = () => controller.abort();
   signal?.addEventListener("abort", onAbort);
-  const response = await fetch(url, { redirect: "follow", signal: controller.signal });
-  clearTimeout(timeout);
-  signal?.removeEventListener("abort", onAbort);
-  if (!response.ok) throw new Error(`下载失败: HTTP ${response.status}`);
-
-  const contentLength = parseInt(response.headers.get("content-length") || "0");
-  const reader = response.body.getReader();
-  const ws = fs.createWriteStream(destPath);
+  let bodyWatchdog = null;
+  // 函数作用域声明：下载完成后 minSize 校验在 try/finally 之外引用它
   let received = 0;
-
   try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      ws.write(Buffer.from(value));
-      received += value.length;
-      if (onProgress && contentLength > 0) {
-        onProgress(Math.round((received / contentLength) * 100));
+    const response = await fetch(url, { redirect: "follow", signal: controller.signal });
+    clearTimeout(timeout);
+    if (!response.ok) throw new Error(`下载失败: HTTP ${response.status}`);
+
+    const contentLength = parseInt(response.headers.get("content-length") || "0");
+    const reader = response.body.getReader();
+    const ws = fs.createWriteStream(destPath);
+    const armBodyWatchdog = () => {
+      if (bodyWatchdog) clearTimeout(bodyWatchdog);
+      bodyWatchdog = setTimeout(() => {
+        console.error(`[tts-proxy] 下载停滞超过 60s，中断: ${url}`);
+        controller.abort();
+      }, 60000);
+    };
+
+    try {
+      armBodyWatchdog();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        armBodyWatchdog(); // 收到数据即重置
+        ws.write(Buffer.from(value));
+        received += value.length;
+        if (onProgress && contentLength > 0) {
+          onProgress(Math.round((received / contentLength) * 100));
+        }
       }
+      ws.end();
+      await new Promise((resolve, reject) => { ws.on("finish", resolve); ws.on("error", reject); });
+    } catch (e) {
+      ws.destroy();
+      // 下载中断/失败时删除残缺文件，避免后续 size 校验误判为有效缓存
+      try { fs.unlinkSync(destPath); } catch {}
+      throw e;
+    } finally {
+      if (bodyWatchdog) clearTimeout(bodyWatchdog);
     }
-    ws.end();
-    await new Promise((resolve, reject) => { ws.on("finish", resolve); ws.on("error", reject); });
-  } catch (e) {
-    ws.destroy();
-    // 下载中断/失败时删除残缺文件，避免后续 size 校验误判为有效缓存
-    try { fs.unlinkSync(destPath); } catch {}
-    throw e;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", onAbort);
   }
 
   if (received < minSize) {
@@ -605,6 +653,9 @@ async function downloadFromGitee(partNames, archiveName, targetDir, requiredFile
   const partPaths = [];
   const archivePath = path.join(TTS_TEMP_DIR, archiveName + ".7z");
   const extractedDir = path.join(TTS_TEMP_DIR, archiveName);
+  // 解压根目录必须在 try 之外声明：finally 要清理它，而 try 块内的 const 在
+  // finally 作用域不可见——引用它会抛 ReferenceError 并顶替 try 的正常返回
+  const extractRoot = path.join(TTS_TEMP_DIR, archiveName + "-extract");
 
   try {
     // 1. 下载所有分卷
@@ -635,7 +686,6 @@ async function downloadFromGitee(partNames, archiveName, targetDir, requiredFile
 
     // 4. 解压到独立子目录（避免归档根目录模式与 TTS_TEMP_DIR 其他残留混淆）
     onProgress?.("解压中", "7z 解压...");
-    const extractRoot = path.join(TTS_TEMP_DIR, archiveName + "-extract");
     try { fs.rmSync(extractRoot, { recursive: true }); } catch {}
     fs.mkdirSync(extractRoot, { recursive: true });
     try {
@@ -1002,6 +1052,12 @@ async function ensurePyProcess() {
       windowsHide: true,
       env: { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
     });
+
+    // stdin 必须挂 error 监听：进程死亡瞬间，exit 事件置空 pyProc 与 socket
+    // 真正关闭之间存在异步窗口，此刻 pyGenerate 的 stdin.write 会触发 EPIPE——
+    // Stream 无 error 监听时按 uncaughtException 处理，整个 Node 后端崩溃退出。
+    // 挂上监听后 EPIPE 被吞掉，未完成请求由下方 exit 处理器统一 reject。
+    pyProc.stdin.on("error", () => {});
 
     pyProc.stdout.on("data", (chunk) => {
       pyBuffer += chunk.toString("utf8");

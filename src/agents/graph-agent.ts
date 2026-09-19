@@ -64,8 +64,10 @@ class CharacterGraphAgent extends BaseAgent {
               { role: "user", content: useP },
             ],
             // 大 JSON 需要尽量多的输出空间，但不得超过模型自身的输出上限，
-            // 否则上限低于 16384 的模型（如 4096 档）会直接 400
-            max_tokens: Math.min(b.maxOutputTokens, 16384),
+            // 否则上限低于 16384 的模型（如 4096 档）会直接 400。
+            // 上限 8192 与输入侧 computeAvailableInput(b, 8192) 的预留一致，
+            // 避免 input+output 超上下文在严格服务商必然 400
+            max_tokens: Math.min(b.maxOutputTokens, 8192),
             temperature: 0.3,
             signal: context.signal,
           });

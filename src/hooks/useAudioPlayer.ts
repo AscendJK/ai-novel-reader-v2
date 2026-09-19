@@ -339,7 +339,9 @@ export function useAudioPlayer({
     if (manager.isPaused()) {
       await manager.resume();
       setPaused(false);
-    } else if (manager.isPlaying()) {
+    } else if (manager.isPlaying() || useTTSStore.getState().generating) {
+      // 生成间隙（下一段生成中）isPlaying 为 false，但暂停意图必须传达给
+      // 引擎（pauseRequested），否则生成完成后音频照常自动出声
       manager.pause();
       setPaused(true);
     }

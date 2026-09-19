@@ -144,7 +144,8 @@ Send `rootCA.pem` to other devices and install:
 - **Windows**: Double-click → Install certificate → Trusted Root Certification Authorities
 - **macOS**: `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain rootCA.pem`
 - **Android**: Settings → Security → Encryption & credentials → Install certificate → CA certificate
-- **iOS**: Settings → General → Profiles → Install → Settings → General → About → Certificate Trust Settings → Enable
+- **iOS**: Settings → General → Profiles → Install → Settings → General → About → Certificate Trust Settings → Enable full trust
+  ⚠️ **Install alone is NOT enough** — iOS shows "Installed" and stops there, but the cert stays untrusted until you flip the switch in Certificate Trust Settings. Without it, Safari shows a warning and in-app requests fail silently (no prompt at all).
 
 | Access method | Without mkcert | With mkcert |
 |--------------|---------------|-------------|

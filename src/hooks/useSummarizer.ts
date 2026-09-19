@@ -69,7 +69,9 @@ export function useSummarizer() {
   // 代次已不匹配，跳过状态清理/错误写入，避免覆盖正在运行的新任务的状态
   const taskGenRef = useRef(0);
   // Cached RAG context for Q&A session (cleared on new session or every 3 follow-ups)
-  const qaRagCacheRef = useRef<{ question: string; text: string; followUps: number } | null>(null);
+  // novelId 必须参与命中判断：面板常驻、切书不重挂，否则上一本书的检索内容
+  // 会被当作当前书的 RAG 上下文（跨书污染）
+  const qaRagCacheRef = useRef<{ question: string; text: string; followUps: number; novelId: string } | null>(null);
 
   const startTask = useCallback((name: string, type?: string) => {
     setCurrentTask(name);
@@ -179,6 +181,23 @@ export function useSummarizer() {
     },
     [currentNovel]
   );
+
+  // RAG 预取纳入任务生命周期：先 startTask（UI 进入运行态、生成按钮禁用、
+  // 停止按钮出现）再预取。否则大书 TF-IDF 流式构建期间（可达分钟级）无任何
+  // loading 提示、按钮可重复触发并发构建、且无法停止。
+  // 代次必须在这里就自增：被顶替的旧任务其迟到 finally 以 gen 匹配为准，
+  // 若预取期间代次不动，旧任务会在检索期把运行态清掉
+  const preRetrieve = useCallback(async (query: string): Promise<string> => {
+    taskGenRef.current++;
+    startTask("正在检索相关内容", "检索");
+    try {
+      return await getRelevantText(query);
+    } catch (e) {
+      // 预取失败不阻塞任务：返回空串走 agent 内部的采样回退
+      console.warn("[useSummarizer] RAG 预取失败，回退空上下文:", e);
+      return "";
+    }
+  }, [startTask, getRelevantText]);
 
   const checkProvider = useCallback(() => {
     const provider = getActiveProvider();
@@ -374,22 +393,22 @@ export function useSummarizer() {
     await runAgentTask({
       taskName: "生成全书总览",
       agent: globalSummarizerAgent,
-      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await getRelevantText("小说的核心主线、主题思想、故事梗概，关键情节的发展脉络"), onStatus: setCurrentTask },
+      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await preRetrieve("小说的核心主线、主题思想、故事梗概，关键情节的发展脉络"), onStatus: setCurrentTask },
       errorMessage: "全局总结生成失败",
       onSuccess: (result) => saveGlobalSummary(currentNovel.id, result, "global", "全书总结", "__global__"),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, getRelevantText]);
+  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, preRetrieve]);
 
   const regenerateGlobal = useCallback(async () => {
     if (!currentNovel || !checkProvider()) return;
     await runAgentTask({
       taskName: "重新生成全书总览",
       agent: globalSummarizerAgent,
-      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await getRelevantText("小说的核心主线、主题思想、故事梗概，关键情节的发展脉络"), onStatus: setCurrentTask },
+      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await preRetrieve("小说的核心主线、主题思想、故事梗概，关键情节的发展脉络"), onStatus: setCurrentTask },
       errorMessage: "重新生成失败",
       onSuccess: (result) => saveGlobalSummary(currentNovel.id, result, "global", "全书总结", "__global__"),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, getRelevantText]);
+  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, preRetrieve]);
 
   // --- Character analysis ---
   const generateCharacterAnalysis = useCallback(async () => {
@@ -397,22 +416,22 @@ export function useSummarizer() {
     await runAgentTask({
       taskName: "生成人物关系分析",
       agent: characterAnalysisAgent,
-      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await getRelevantText("小说中各主要角色的关系网络、互动、性格特征与情感变化"), onStatus: setCurrentTask },
+      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await preRetrieve("小说中各主要角色的关系网络、互动、性格特征与情感变化"), onStatus: setCurrentTask },
       errorMessage: "人物分析失败",
       onSuccess: (result) => saveGlobalSummary(currentNovel.id, result, "characters", "人物关系分析", "__characters__"),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, getRelevantText]);
+  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, preRetrieve]);
 
   const regenerateCharacters = useCallback(async () => {
     if (!currentNovel || !checkProvider()) return;
     await runAgentTask({
       taskName: "重新生成人物关系分析",
       agent: characterAnalysisAgent,
-      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await getRelevantText("小说中各主要角色的关系网络、互动、性格特征与情感变化"), onStatus: setCurrentTask },
+      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await preRetrieve("小说中各主要角色的关系网络、互动、性格特征与情感变化"), onStatus: setCurrentTask },
       errorMessage: "重新生成失败",
       onSuccess: (result) => saveGlobalSummary(currentNovel.id, result, "characters", "人物关系分析", "__characters__"),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, getRelevantText]);
+  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, preRetrieve]);
 
   // --- Character graph only (no text analysis) ---
   const generateCharacterGraph = useCallback(async (): Promise<GraphData | null> => {
@@ -420,7 +439,7 @@ export function useSummarizer() {
     const result = await runAgentTask({
       taskName: "生成人物关系图谱",
       agent: characterGraphAgent,
-      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await getRelevantText("小说中各主要角色的关系网络、互动、性格特征与情感变化"), onStatus: setCurrentTask },
+      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await preRetrieve("小说中各主要角色的关系网络、互动、性格特征与情感变化"), onStatus: setCurrentTask },
       errorMessage: "图谱生成失败",
       returnData: true,
     }) as { graphData: GraphData } | null;
@@ -429,14 +448,14 @@ export function useSummarizer() {
       return null;
     }
     return result?.graphData || null;
-  }, [currentNovel, checkProvider, runAgentTask, createSignal, getRelevantText]);
+  }, [currentNovel, checkProvider, runAgentTask, createSignal, preRetrieve]);
 
   const regenerateCharacterGraph = useCallback(async (): Promise<GraphData | null> => {
     if (!currentNovel || !checkProvider()) return null;
     const result = await runAgentTask({
       taskName: "重新生成人物关系图谱",
       agent: characterGraphAgent,
-      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await getRelevantText("小说中各主要角色的关系网络、互动、性格特征与情感变化"), onStatus: setCurrentTask },
+      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await preRetrieve("小说中各主要角色的关系网络、互动、性格特征与情感变化"), onStatus: setCurrentTask },
       errorMessage: "图谱生成失败",
       returnData: true,
     }) as { graphData: GraphData } | null;
@@ -445,7 +464,7 @@ export function useSummarizer() {
       return null;
     }
     return result?.graphData || null;
-  }, [currentNovel, checkProvider, runAgentTask, createSignal, getRelevantText]);
+  }, [currentNovel, checkProvider, runAgentTask, createSignal, preRetrieve]);
 
   // --- Timeline ---
   const generateTimeline = useCallback(async () => {
@@ -453,22 +472,22 @@ export function useSummarizer() {
     await runAgentTask({
       taskName: "生成剧情时间线",
       agent: timelineAgent,
-      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await getRelevantText("小说剧情的时间线、关键事件、转折点、伏笔与高潮结局"), onStatus: setCurrentTask },
+      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await preRetrieve("小说剧情的时间线、关键事件、转折点、伏笔与高潮结局"), onStatus: setCurrentTask },
       errorMessage: "时间线生成失败",
       onSuccess: (result) => saveGlobalSummary(currentNovel.id, result, "timeline", "剧情时间线", "__timeline__"),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, getRelevantText]);
+  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, preRetrieve]);
 
   const regenerateTimeline = useCallback(async () => {
     if (!currentNovel || !checkProvider()) return;
     await runAgentTask({
       taskName: "重新生成剧情时间线",
       agent: timelineAgent,
-      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await getRelevantText("小说剧情的时间线、关键事件、转折点、伏笔与高潮结局"), onStatus: setCurrentTask },
+      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await preRetrieve("小说剧情的时间线、关键事件、转折点、伏笔与高潮结局"), onStatus: setCurrentTask },
       errorMessage: "重新生成失败",
       onSuccess: (result) => saveGlobalSummary(currentNovel.id, result, "timeline", "剧情时间线", "__timeline__"),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, getRelevantText]);
+  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, preRetrieve]);
 
   // --- Map generation ---
   const generateMap = useCallback(async (): Promise<MapData | null> => {
@@ -565,6 +584,8 @@ ${combinedText}`;
           createdAt: Date.now(),
         };
       } catch (err) {
+        // 用户主动取消不是错误：不写入错误状态（否则显示原始 abort 信息）
+        if (err instanceof Error && err.name === "AbortError") return null;
         handleError(err);
         return null;
       } finally {
@@ -593,13 +614,14 @@ ${combinedText}`;
       let relevantText: string;
       const QA_CACHE_MAX_FOLLOWUPS = 3;
       const cached = qaRagCacheRef.current;
-      const isSameTopic = cached && keywordOverlap(cached.question, question) > 0.5;
+      const isSameNovel = cached?.novelId === currentNovel.id;
+      const isSameTopic = cached && isSameNovel && keywordOverlap(cached.question, question) > 0.5;
       if (cached && cached.followUps < QA_CACHE_MAX_FOLLOWUPS && isSameTopic) {
         relevantText = cached.text;
         cached.followUps++;
       } else {
         relevantText = await getRelevantText(question);
-        qaRagCacheRef.current = { question, text: relevantText, followUps: 0 };
+        qaRagCacheRef.current = { question, text: relevantText, followUps: 0, novelId: currentNovel.id };
       }
 
       const systemPrompt = `你是一位专业的小说分析助手。请根据以下小说信息回答用户问题。请用中文回答。
@@ -640,8 +662,9 @@ ${relevantText || "（无额外参考信息，请基于章节目录回答）"}
 
         return { answer: response.content, tokensUsed: response.content.length };
       } catch (err) {
-        // 用户主动取消（停止按钮触发 abort）不是错误
-        if (err instanceof Error && err.name === "AbortError") return null;
+        // 用户主动取消（停止按钮触发 abort）：向上抛出让调用方静默处理，
+        // 否则 useQA 会把它当成失败显示"问答失败，请重试"
+        if (err instanceof Error && err.name === "AbortError") throw err;
         handleError(err);
         return null;
       } finally {

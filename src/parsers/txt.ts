@@ -7,10 +7,28 @@ function detectEncoding(bytes: Uint8Array): string {
   if (bytes[0] === 0xff && bytes[1] === 0xfe) return "UTF-16LE";
   if (bytes[0] === 0xfe && bytes[1] === 0xff) return "UTF-16BE";
 
-  // Simple heuristic: check if first 100 bytes look like UTF-8
+  // UTF-16 无 BOM 兜底：UTF-16 编码的文本（含 ASCII 段落）每两个字节就有一个
+  // 0x00 高位字节，而 UTF-8/GBK 正常中文文本几乎不含 0x00。在 BOM 检测之后、
+  // UTF-8/GBK 打分之前判断，避免无 BOM 的 UTF-16 文件被误判成 UTF-8（全文乱码）
+  let zeros = 0;
+  let zerosEven = 0;
+  const zLen = Math.min(bytes.length, 1024);
+  for (let i = 0; i < zLen; i++) {
+    if (bytes[i] === 0) {
+      zeros++;
+      if (i % 2 === 0) zerosEven++;
+    }
+  }
+  if (zeros > zLen * 0.1) {
+    // 0x00 集中在偶数位 → 高位字节在前 → BE；否则 LE
+    return zerosEven > zeros / 2 ? "UTF-16BE" : "UTF-16LE";
+  }
+
+  // 启发式打分：采样窗口不能太小——GBK 文件常以长英文版权页/序言开头，
+  // 前 500 字节几乎全 ASCII（utf8/gbk 同分），会被误判成 UTF-8，正文全乱码
   let utf8Score = 0;
   let gbkScore = 0;
-  const len = Math.min(bytes.length, 500);
+  const len = Math.min(bytes.length, 65536);
 
   for (let i = 0; i < len; i++) {
     const b = bytes[i];

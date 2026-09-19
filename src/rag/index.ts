@@ -116,6 +116,10 @@ export async function buildIndex(
         ragLog(`TF-IDF 从缓存加载: ${chunks.length}片段`);
         useRAGStore.getState().addCachedKey(cacheKey);
         useRAGStore.getState().addLruKey(cacheKey);
+        // 登记 LRU：TF-IDF entry 只进 indexCache 的话没有任何淘汰路径引用它，
+        // 多书检索时内存单调增长。尺寸按真实驻留计（Float64 文档向量 dim×8B/条），
+        // 不传 buffer（避免额外滞留一份 vectorsBuffer）
+        lruAdd(cacheKey, [], chunks, cached.dim, chunks.length * cached.dim * 8);
         updateAccessTime(novelId, "tfidf");
         const entry: IndexEntry = { novelId, engine, retriever, chunkCount: chunks.length, buildTime: 0 };
         indexCache.set(cacheKey, entry);
@@ -197,6 +201,14 @@ export async function buildIndex(
       });
       ragLog(`编码完成: ${chunks.length}片段 · ${(Date.now() - t0) / 1000}s`);
 
+      // init 可能静默失败（服务器不可达/索引未就绪时早退，向量为空）：
+      // 空对象也是 truthy，一旦写入 indexCache，本会话内所有后续调用都会
+      // 命中它且永不重试，检索静默退化为空结果。
+      // 仅在确有输入时才判定失败（空书构建本就没有向量）
+      if (chunks.length > 0 && emb.vectors.length === 0) {
+        throw new Error("嵌入索引初始化失败（未获得向量），请稍后重试");
+      }
+
       const entry: IndexEntry = { novelId, engine, retriever: new Retriever(chunks), embedding: emb, chunkCount: chunks.length, buildTime: Date.now() - t0 };
       indexCache.set(cacheKey, entry);
       return emb;
@@ -224,6 +236,8 @@ export async function buildIndex(
       });
       useRAGStore.getState().addCachedKey(cacheKey);
       useRAGStore.getState().addLruKey(cacheKey);
+      // 登记 LRU（同上：按 Float64 文档向量真实驻留计尺寸）
+      lruAdd(cacheKey, [], chunks, 128, chunks.length * 128 * 8);
       ragLog(`TF-IDF 已缓存: ${chunks.length}片段`);
       // 清理超限缓存
       await enforceIndexedDBQuota();
@@ -379,11 +393,16 @@ export async function retrieveRelevant(
 
   await entry.retriever.buildDocsIfNeeded();
   const results = entry.retriever.search(query, k);
-  const chunkMap = await loadChunksFromCache(novelId, effectiveEngine);
-  return results
-    .map((r) => chunkMap.get(r.id)?.content || "")
-    .filter(Boolean)
-    .join("\n\n---\n\n");
+  // 优先用 retriever 自身持有的 chunks（与 search 返回的 id 同源）；IDB chunkMap
+  // 的 id 体系可能不同（本地构建 vs 服务端下载），仅作兜底
+  const parts = results
+    .map((r) => entry.retriever.getChunkById(r.id)?.content || "")
+    .filter(Boolean);
+  if (parts.length === 0) {
+    const chunkMap = await loadChunksFromCache(novelId, effectiveEngine);
+    parts.push(...results.map((r) => chunkMap.get(r.id)?.content || "").filter(Boolean));
+  }
+  return parts.join("\n\n---\n\n");
 }
 
 export async function retrieveRelevantWithDetails(
@@ -413,13 +432,22 @@ export async function retrieveRelevantWithDetails(
 
   await entry.retriever.buildDocsIfNeeded();
   const results = entry.retriever.search(query, k);
-  const chunkMap = await loadChunksFromCache(novelId, effectiveEngine);
-  const mapped = results
+  // 同 retrieveRelevant：优先 retriever 同源 chunks，IDB chunkMap 仅兜底
+  let mapped = results
     .map((r) => {
-      const chunk = chunkMap.get(r.id);
+      const chunk = entry.retriever.getChunkById(r.id);
       return chunk ? { content: chunk.content, score: r.score } : null;
     })
     .filter(Boolean) as { content: string; score: number }[];
+  if (mapped.length === 0) {
+    const chunkMap = await loadChunksFromCache(novelId, effectiveEngine);
+    mapped = results
+      .map((r) => {
+        const chunk = chunkMap.get(r.id);
+        return chunk ? { content: chunk.content, score: r.score } : null;
+      })
+      .filter(Boolean) as { content: string; score: number }[];
+  }
   return {
     engine: "tfidf",
     text: mapped.map((r) => `[TF-IDF] ${r.content}`).join("\n\n---\n\n"),
@@ -460,15 +488,31 @@ export async function retrieveRelevantForRange(
   }
 
   await entry.retriever.buildDocsIfNeeded();
-  const chunkMap = await loadChunksFromCache(novelId, effectiveEngine);
   const allResults = entry.retriever.search(query, k * 3);
-  const mapped = allResults
+  // 同 retrieveRelevant：优先 retriever 同源 chunks，IDB chunkMap 仅兜底
+  const resolveChunk = (id: string): Chunk | undefined => {
+    const own = entry.retriever.getChunkById(id);
+    if (own) return own;
+    return chunksFallbackMap?.get(id);
+  };
+  let chunksFallbackMap: Map<string, Chunk> | null = null;
+  let mapped = allResults
     .map((r) => {
-      const chunk = chunkMap.get(r.id);
+      const chunk = resolveChunk(r.id);
       if (!chunk || !inRange(chunk.chapterIndex)) return null;
       return { content: chunk.content, score: r.score };
     })
     .filter(Boolean) as { content: string; score: number }[];
+  if (mapped.length === 0) {
+    chunksFallbackMap = await loadChunksFromCache(novelId, effectiveEngine);
+    mapped = allResults
+      .map((r) => {
+        const chunk = resolveChunk(r.id);
+        if (!chunk || !inRange(chunk.chapterIndex)) return null;
+        return { content: chunk.content, score: r.score };
+      })
+      .filter(Boolean) as { content: string; score: number }[];
+  }
   return {
     engine: "tfidf",
     text: mapped.slice(0, k).map((r) => `[TF-IDF] ${r.content}`).join("\n\n---\n\n"),

@@ -164,6 +164,8 @@ export function useQA({ novelId, askCustomQuestion, generateRangeSummary, clearQ
         setQaError("问答失败，请重试");
       }
     } catch (err) {
+      // 用户主动取消：静默返回（保留已发出的用户消息，不显示错误）
+      if (err instanceof Error && err.name === "AbortError") return;
       setQaError(err instanceof Error ? err.message : "问答失败");
     } finally {
       setQaLoading(false);

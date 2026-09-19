@@ -20,6 +20,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isFullMode = process.argv.includes("--full");
 const app = express();
 
+// 兜底日志：未捕获的 promise 拒绝只记录不退出（Node ≥15 默认会 crash 整个进程，
+// 对长驻的家庭服务器来说，带病坚持 + 留下日志好过无声消失）
+process.on("unhandledRejection", (reason) => {
+  console.error("[server] unhandledRejection:", reason);
+});
+
 // ── CORS: restrict to specific origins ──
 const ALLOWED_ORIGINS = [
   // 开发环境
@@ -61,7 +67,7 @@ app.use((req, res, next) => {
 });
 
 // ── Mount Admin Routes ──────────────────────────────────────
-mountAdminRoutes(app);
+mountAdminRoutes(app, { onBackupConfigChanged: scheduleBackup });
 
 // ── Mount API Routes ────────────────────────────────────────
 versionRouter(app);
@@ -132,13 +138,11 @@ async function isCertValid(certFile) {
   }
 }
 
-async function generateCert() {
-  const { execSync } = await import("node:child_process");
+// Collect all non-internal IPv4 addresses of this machine
+async function getLanIPv4s() {
   const os = await import("node:os");
-
-  // Get local IP addresses
   const interfaces = os.networkInterfaces();
-  const ips = ["localhost"];
+  const ips = [];
   for (const name of Object.keys(interfaces)) {
     for (const iface of interfaces[name]) {
       if (iface.family === "IPv4" && !iface.internal) {
@@ -146,6 +150,15 @@ async function generateCert() {
       }
     }
   }
+  return ips;
+}
+
+async function generateCert() {
+  const { execSync } = await import("node:child_process");
+
+  // Certificate covers localhost + all current LAN IPv4 addresses;
+  // if these change later (Wi-Fi/router/DHCP), the startup IP-coverage check re-issues
+  const ips = ["localhost", ...(await getLanIPv4s())];
 
   // Use mkcert to generate trusted certificate
   try {
@@ -167,6 +180,23 @@ async function generateCert() {
   }
 }
 
+// Compare the certificate's SANs against the current LAN IPv4 addresses,
+// returning the IPs the certificate does NOT cover.
+// On any parse failure returns [] so the existing certificate keeps being used.
+async function getIpsMissingFromCert(certFile) {
+  try {
+    const { X509Certificate } = await import("node:crypto");
+    const cert = new X509Certificate(fs.readFileSync(certFile));
+    const covered = new Set(
+      [...(cert.subjectAltName ?? "").matchAll(/IP Address:([^,\s]+)/g)].map((m) => m[1])
+    );
+    const current = await getLanIPv4s();
+    return current.filter((ip) => !covered.has(ip));
+  } catch {
+    return [];
+  }
+}
+
 // Start servers
 async function startServers() {
   // Check if certificate exists and is valid
@@ -174,6 +204,17 @@ async function startServers() {
   if (hasSSL && !(await isCertValid(certPath))) {
     console.log("[ssl] Certificate expired, regenerating...");
     hasSSL = await generateCert();
+  }
+  // IP 变化自动重签：换了 Wi-Fi / 路由器重启后当前 IP 不在旧证书覆盖范围内时直接重签，
+  // 免去手动删证书（rootCA 与手机端已装信任不受重签影响）
+  if (hasSSL) {
+    const missingIps = await getIpsMissingFromCert(certPath);
+    if (missingIps.length > 0) {
+      console.log(`[ssl] 检测到 IP 变化：${missingIps.join(", ")} 不在证书覆盖范围内，自动重新签发...`);
+      if (!(await generateCert())) {
+        console.warn("[ssl] 自动重签失败（mkcert 不可用？），沿用现有证书继续运行");
+      }
+    }
   }
   if (!hasSSL) {
     console.log("[ssl] No certificate found, generating...");
@@ -254,11 +295,13 @@ setInterval(() => {
   try { checkpointWAL(); } catch { /* ignore */ }
 }, 30 * 60 * 1000);
 
-// Backup at configured interval
+// Backup at configured interval（管理后台修改配置时经 onBackupConfigChanged 触发重建定时器，立即生效）
+let backupTimer = null;
 function scheduleBackup() {
+  if (backupTimer) clearInterval(backupTimer);
   const config = getBackupConfig();
   const intervalMs = config.intervalHours * 60 * 60 * 1000;
-  setInterval(() => {
+  backupTimer = setInterval(() => {
     try { createBackup(); } catch { /* ignore */ }
   }, intervalMs);
   console.log(`[backup] interval: ${config.intervalHours}h, max: ${config.maxCount} files, retain: ${config.retainDays} days`);

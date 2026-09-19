@@ -32,6 +32,14 @@ setInterval(() => {
   }
 }, 60_000);
 
+// 启动恢复：构建中途进程重启/被杀会把 rag_indices 留在 'building' 状态——书架
+// 永久显示"构建中"且重建按钮被禁用。启动时重置为 error，用户可手动重建
+// （buildIndex 对非 ready 状态允许重新入队）。
+try {
+  const r = db.db.prepare("UPDATE rag_indices SET status = 'error', error_msg = '服务器重启时构建被中断，请重新构建' WHERE status = 'building'").run();
+  if (r.changes > 0) console.warn(`[rag-builder] 启动恢复：${r.changes} 个中断的构建已标记为 error`);
+} catch { /* 表尚未创建（全新库）时忽略 */ }
+
 // Build queue: serial processing
 const queue = [];
 let running = false;

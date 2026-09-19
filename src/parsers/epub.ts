@@ -49,12 +49,26 @@ export async function parseEpub(file: File): Promise<ParseResult> {
     }
   }
 
-  // Map IDs to hrefs and media types
+  // Map IDs to hrefs and media types.
+  // 逐 <item> 标签解析并逐属性提取：OCF 规范不约束属性书写顺序，
+  // 要求 id→href→media-type 顺序的正则会漏掉 href 写在 id 前面的合法
+  // EPUB，spine 项被静默丢弃（章节缺失且无报错）
   const manifestItems = new Map<string, { href: string; mediaType: string }>();
-  const itemMatches = opfXml.matchAll(/<item[^>]*id="([^"]+)"[^>]*href="([^"]+)"[^>]*media-type="([^"]+)"[^>]*>/g);
-  for (const m of itemMatches) {
-    manifestItems.set(m[1], { href: m[2], mediaType: m[3] });
+  for (const itemTag of opfXml.matchAll(/<item\s[^>]*>/g)) {
+    const tag = itemTag[0];
+    const id = /\bid="([^"]+)"/.exec(tag)?.[1];
+    const href = /\bhref="([^"]+)"/.exec(tag)?.[1];
+    const mediaType = /\bmedia-type="([^"]+)"/.exec(tag)?.[1];
+    if (id && href && mediaType) {
+      manifestItems.set(id, { href, mediaType });
+    }
   }
+
+  // OCF 规范要求 href 百分号编码（文件名含空格/中文时必然出现），而 JSZip
+  // 内部是解码后的路径；不解码会 zip.file 查不到 → 章节静默丢失
+  const safeDecode = (s: string) => {
+    try { return decodeURIComponent(s); } catch { return s; }
+  };
 
   // Extract text from all spine items
   let fullText = "";
@@ -67,8 +81,9 @@ export async function parseEpub(file: File): Promise<ParseResult> {
     const mt = item.mediaType;
     if (!mt.includes("html") && !mt.includes("xml") && !mt.includes("xhtml") && !mt.includes("text")) continue;
 
-    const fullPath = opfDir + item.href;
-    const contentFile = zip.file(fullPath);
+    const decodedHref = safeDecode(item.href).replace(/^\.\//, "");
+    const fullPath = opfDir + decodedHref;
+    const contentFile = zip.file(fullPath) || zip.file(decodedHref);
     if (!contentFile) continue;
 
     const htmlContent = await contentFile.async("string");

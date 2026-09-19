@@ -21,8 +21,11 @@ const evictListeners: Set<(key: string) => void> = new Set();
 export function onLRUEvict(fn: (key: string) => void) { evictListeners.add(fn); return () => evictListeners.delete(fn); }
 
 /** Add an entry to the LRU memory cache and evict if over limit */
-export function lruAdd(key: string, vectors: Float32Array[], chunks: Chunk[], dim: number) {
-  const size = vectors.length * dim * 4;
+export function lruAdd(key: string, vectors: Float32Array[], chunks: Chunk[], dim: number, extraBytes = 0) {
+  // extraBytes：vectors 之外的额外驻留内存（如 TF-IDF 的 Float64 文档向量
+  // dim×8B/条）。不传的话该类条目按 512B 计尺寸，实际不占额度，
+  // "内存 LRU 100MB"上限对其形同虚设
+  const size = vectors.length * dim * 4 + extraBytes;
   // Remove old entry if exists
   const old = LRU_CACHE.get(key);
   if (old) cacheTotalSize -= old.size;

@@ -192,6 +192,49 @@ function isSensitiveKey(key) {
   return SENSITIVE_PREFIXES.some((p) => key === p || key.startsWith(p + ":"));
 }
 
+// ── payload 归一化 ──
+// 客户端记录可能缺后期新增的键（旧版本数据、undefined 被 JSON.stringify 静默丢弃），
+// better-sqlite3 对命名参数缺键抛 "Missing named parameter"，而所有记录在同一个
+// 事务里——一条坏记录会让整批回滚、客户端无限重试，同步从此卡死。
+// 因此入库前补齐默认键；仍失败的记录单条跳过（catch 在事务内部，不触发回滚）。
+function toNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+function normalizeSummary(s) {
+  return {
+    ...s,
+    chapterId: s.chapterId ?? null,
+    chapterTitle: s.chapterTitle ?? "",
+    content: s.content ?? "",
+    tokensUsed: toNum(s.tokensUsed),
+    createdAt: toNum(s.createdAt),
+    // updatedAt 必须是数字：LWW 的 WHERE @updatedAt >= updated_at 混入字符串
+    // 会退化成类型序比较，破坏"最后写入胜出"
+    updatedAt: toNum(s.updatedAt),
+    type: s.type ?? "chapter",
+  };
+}
+function normalizeNote(n) {
+  return {
+    ...n,
+    chapterId: n.chapterId ?? null,
+    chapterTitle: n.chapterTitle ?? "",
+    content: n.content ?? "",
+    source: n.source ?? "user",
+    sourceLabel: n.sourceLabel ?? "",
+    createdAt: toNum(n.createdAt),
+    updatedAt: toNum(n.updatedAt),
+  };
+}
+function normalizeTimestamped(t) {
+  return {
+    ...t,
+    createdAt: toNum(t.createdAt),
+    updatedAt: toNum(t.updatedAt),
+  };
+}
+
 // Merge changes into SQLite (last write wins by updatedAt)
 // Returns { data, orphanedNovelIds } — orphanedNovelIds is the set of novelIds
 // whose data was skipped because the novel doesn't exist on the server yet.
@@ -207,7 +250,11 @@ export function mergeAndSave(username, changes, lastSyncTime = 0) {
           orphanedNovelIds.add(s.novelId);
           continue; // skip orphaned records, track for retry
         }
-        db.upsertSummary({ ...s, username });
+        try {
+          db.upsertSummary({ ...normalizeSummary(s), username });
+        } catch (e) {
+          console.error("[sync] skip bad summary record:", s.id, e?.message ?? e);
+        }
       }
     }
     if (changes.notes?.length) {
@@ -217,7 +264,11 @@ export function mergeAndSave(username, changes, lastSyncTime = 0) {
           orphanedNovelIds.add(n.novelId);
           continue;
         }
-        db.upsertNote({ ...n, username });
+        try {
+          db.upsertNote({ ...normalizeNote(n), username });
+        } catch (e) {
+          console.error("[sync] skip bad note record:", n.id, e?.message ?? e);
+        }
       }
     }
     if (changes.maps?.length) {
@@ -227,7 +278,11 @@ export function mergeAndSave(username, changes, lastSyncTime = 0) {
           orphanedNovelIds.add(m.novelId);
           continue;
         }
-        db.upsertMap({ ...m, username, data: JSON.stringify(m.data) });
+        try {
+          db.upsertMap({ ...normalizeTimestamped(m), username, data: JSON.stringify(m.data ?? null) });
+        } catch (e) {
+          console.error("[sync] skip bad map record:", m.id, e?.message ?? e);
+        }
       }
     }
     if (changes.graphs?.length) {
@@ -237,7 +292,11 @@ export function mergeAndSave(username, changes, lastSyncTime = 0) {
           orphanedNovelIds.add(g.novelId);
           continue;
         }
-        db.upsertGraph({ ...g, username, data: JSON.stringify(g.data) });
+        try {
+          db.upsertGraph({ ...normalizeTimestamped(g), username, data: JSON.stringify(g.data ?? null) });
+        } catch (e) {
+          console.error("[sync] skip bad graph record:", g.id, e?.message ?? e);
+        }
       }
     }
     if (changes.settings && Object.keys(changes.settings).length > 0) {
@@ -250,7 +309,11 @@ export function mergeAndSave(username, changes, lastSyncTime = 0) {
     if (changes.progress?.readingPositions && Object.keys(changes.progress.readingPositions).length > 0) {
       for (const [novelId, pos] of Object.entries(changes.progress.readingPositions)) {
         if (pos && pos.chapterId) {
-          db.saveProgress(username, novelId, pos.chapterId, pos.chapterIndex ?? 0, pos.updatedAt || Date.now());
+          try {
+            db.saveProgress(username, novelId, String(pos.chapterId), toNum(pos.chapterIndex), toNum(pos.updatedAt) || Date.now());
+          } catch (e) {
+            console.error("[sync] skip bad progress record:", novelId, e?.message ?? e);
+          }
         }
       }
     }
@@ -258,9 +321,13 @@ export function mergeAndSave(username, changes, lastSyncTime = 0) {
     if (changes.progress?.lastOpened && Object.keys(changes.progress.lastOpened).length > 0) {
       for (const [novelId, openedAt] of Object.entries(changes.progress.lastOpened)) {
         if (openedAt) {
-          db.db.prepare(
-            `UPDATE reading_progress SET last_opened = ? WHERE username = ? AND novel_id = ?`
-          ).run(openedAt, username, novelId);
+          try {
+            db.db.prepare(
+              `UPDATE reading_progress SET last_opened = ? WHERE username = ? AND novel_id = ?`
+            ).run(toNum(openedAt), username, novelId);
+          } catch (e) {
+            console.error("[sync] skip bad lastOpened record:", novelId, e?.message ?? e);
+          }
         }
       }
     }

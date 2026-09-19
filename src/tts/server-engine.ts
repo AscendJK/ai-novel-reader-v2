@@ -83,10 +83,13 @@ export async function synthesizeServer(
 
   const t0 = performance.now();
   console.log(`[TTS-server] 请求生成: ${cleanText.length} 字, sid=${sid}, speed=${options?.speed ?? 1.0}`);
+  // 无超时的话：服务端 TCP 半开/推理进程僵死时该请求永不返回，播放链
+  // 永久停在"生成中"。120s 覆盖最大 2000 字的服务端推理耗时（RTF≈0.6）。
   const res = await apiFetch("/api/rag/tts/synthesize", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text: cleanText, sid, speed: options?.speed ?? 1.0 }),
+    signal: AbortSignal.timeout(120_000),
   });
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;

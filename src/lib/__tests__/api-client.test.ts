@@ -144,8 +144,8 @@ describe("detectAndSetServerUrl 裸 IP 智能探测", () => {
   });
 
   it("仅 HTTP 在线时回落 5173", async () => {
-    vi.mocked(globalThis.fetch).mockImplementation(async (input: unknown) => {
-      const url = typeof input === "string" ? input : input.url;
+    vi.mocked(globalThis.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       if (String(url).includes("https://")) throw new TypeError("fetch failed");
       return new Response(null, { status: 200 });
     });

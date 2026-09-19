@@ -58,6 +58,7 @@ function ensureWorker(): Worker {
 export async function encodeQueryWithWorker(text: string, engine: string, opts?: { signal?: AbortSignal }): Promise<Float32Array | null> {
   if (opts?.signal?.aborted) return null;
   if (!workerFailed) {
+    let businessFail = false;
     try {
       const w = ensureWorker();
       const result = await new Promise<EncodeResult>((resolve, reject) => {
@@ -80,15 +81,25 @@ export async function encodeQueryWithWorker(text: string, engine: string, opts?:
         }
       });
       if (result.ok) return result.data;
-      throw new Error(result.error || "worker encode failed");
+      // 业务性失败（模型未缓存/服务器未配置等）不是 Worker 故障：本次回退
+      // 主线程（主线程可能有热模型），但保留 Worker——永久禁用会让后续所有
+      // 查询都退回主线程反复尝试注定失败的模型加载并阻塞 UI
+      businessFail = true;
+      ragLog(`[encode-worker] 编码失败（业务原因）: ${result.error}，本次回退主线程`);
     } catch (err) {
-      // Worker 不可用 → 永久降级，之后直接走主线程
+      // 用户取消（AbortError）同样不是 Worker 故障：保留 Worker
+      if (err instanceof DOMException && err.name === "AbortError") return null;
+      // 到这里才是真正的基础设施故障（worker.onerror / postMessage 异常）
       if (!workerFailed) {
         workerFailed = true;
       }
       try { worker?.terminate(); } catch { /* ignore */ }
       worker = null;
       ragLog(`Worker 编码失败, 降级主线程: ${err instanceof Error ? err.message : err}`);
+    }
+    if (businessFail) {
+      if (opts?.signal?.aborted) return null;
+      return encodeQuery(text, engine);
     }
   }
   if (opts?.signal?.aborted) return null;

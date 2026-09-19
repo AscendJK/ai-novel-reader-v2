@@ -1,6 +1,6 @@
 import type { SyncData, RegisterResult, HeartbeatResult, PushResult } from "./types";
 import { useUIStore } from "@/stores/ui-store";
-import { hasMoreChanges } from "./sync-bridge";
+import type { GatherResult } from "./sync-bridge";
 import { broadcast } from "@/lib/broadcast";
 import { apiFetch } from "@/lib/api-client";
 
@@ -21,9 +21,17 @@ export class SyncClient {
   private token: string | null = null;
   private activeCount = 0;
   private lastSyncTime = 0;
+  // 增量收集游标（本地时钟）：积压超过一批（50 条）时随每批推进，
+  // 下一批从游标之后继续收集。旧实现水位不推进，第 51 条起的积压永远
+  // 轮不到，且 1 秒一次无限重推同一批最旧记录
+  private pushFloor = 0;
+  // 游标边界上"已推送"的记录 id（updatedAt == pushFloor 的那批）：
+  // 收集用 aboveOrEqual，必须排除它们才能跳过已推送的平局记录；
+  // 游标推进到更大时间戳时重置
+  private pushedBoundaryIds = new Set<string>();
   private syncTimer: ReturnType<typeof setInterval> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  private gatherChanges: ((lastSyncTime: number) => Promise<Partial<SyncData>>) | null = null;
+  private gatherChanges: ((lastSyncTime: number, excludeIds?: ReadonlySet<string>) => Promise<GatherResult>) | null = null;
   private applyData: ChangeCallback | null = null;
   private isAiRunning: () => boolean = () => false;
   private onKicked: ((username: string) => void) | null = null;
@@ -31,6 +39,9 @@ export class SyncClient {
   private onOrphaned: ((novelIds: string[]) => void) | null = null;
   private reRegistering = false;
   private syncing = false;
+  // 登录冲突决策窗口期挂起"定时器驱动"的同步（显式 syncOnce 不受影响）：
+  // 慢登录（>30s）时定时器可能赶在"合并/覆盖"提示之前把本地数据推上服务器
+  private timerSyncGated = false;
   private heartbeatFailCount = 0;
   private autoOffline = false; // true if offlineMode was auto-enabled by heartbeat failure
   private conflictCooldownUntil = 0; // timestamp until which conflict dialog is suppressed
@@ -105,6 +116,9 @@ export class SyncClient {
   }
 
   async login(username: string, mode: "create" | "join" = "create"): Promise<{ success: boolean; isNew: boolean; activeCount: number; error?: string }> {
+    // 先快照旧用户名：rollbackUsernameOnReject 需要区分"覆盖前是谁"——
+    // 若在覆写后才取，prev === attempted 恒成立，回滚退化为空操作
+    const prevUsername = this.username;
     try {
       console.log("[sync] login:", username, mode);
       // 提前保存 username，这样即使网络错误，心跳也能用它来重试
@@ -117,10 +131,12 @@ export class SyncClient {
       console.log("[sync] register response:", resp.status);
       if (resp.status === 404) {
         const err: ApiErrorResponse = await resp.json().catch(() => ({}));
+        this.rollbackUsernameOnReject(prevUsername, username);
         return { success: false, isNew: false, activeCount: 0, error: err.error || "用户名不存在" };
       }
       if (resp.status === 409) {
         const err: ApiErrorResponse = await resp.json().catch(() => ({}));
+        this.rollbackUsernameOnReject(prevUsername, username);
         return { success: false, isNew: false, activeCount: 0, error: err.error || "用户名已存在" };
       }
       if (!resp.ok) {
@@ -140,6 +156,7 @@ export class SyncClient {
       this.token = result.token;
       this.activeCount = result.activeCount;
       this.lastSyncTime = 0; // full sync on login
+      this.resetPushCursor();
       localStorage.setItem("sync-username", username);
       localStorage.setItem("sync-clientId", result.clientId);
       if (result.token) localStorage.setItem("sync-token", result.token);
@@ -163,7 +180,7 @@ export class SyncClient {
   }
 
   start(opts: {
-    gatherChanges: (lastSyncTime: number) => Promise<Partial<SyncData>>;
+    gatherChanges: (lastSyncTime: number, excludeIds?: ReadonlySet<string>) => Promise<GatherResult>;
     applyData: ChangeCallback;
     isAiRunning: () => boolean;
     onKicked: (username: string) => void;
@@ -199,6 +216,10 @@ export class SyncClient {
     localStorage.removeItem("sync-auto-offline");
   }
 
+  setTimerSyncGate(gated: boolean) {
+    this.timerSyncGated = gated;
+  }
+
   /** Mark server as unreachable and enable offline mode immediately (e.g. after login failure) */
   markServerUnreachable() {
     this.autoOffline = true;
@@ -224,6 +245,7 @@ export class SyncClient {
     this.token = null;
     this.activeCount = 0;
     this.lastSyncTime = 0;
+    this.resetPushCursor();
     this.autoOffline = false;
     this.heartbeatFailCount = 0;
     localStorage.removeItem("sync-username");
@@ -237,7 +259,7 @@ export class SyncClient {
 
   // ── Full sync round ──
 
-  async syncOnce(): Promise<boolean> {
+  async syncOnce(opts?: { force?: boolean }): Promise<boolean> {
     if (!this.username || !this.clientId || !this.gatherChanges || !this.applyData) {
       console.warn("[sync] syncOnce skipped — not ready");
       return false;
@@ -246,6 +268,13 @@ export class SyncClient {
       console.log("[sync] syncOnce skipped — busy");
       return false;
     }
+    // 登录冲突决策窗口期：自动同步（定时器/心跳触发）一律挂起，
+    // 只有显式调用（冲突分支、startSync 首轮）传 force 放行
+    if (this.timerSyncGated && !opts?.force) {
+      console.log("[sync] syncOnce skipped — login in progress (gated)");
+      return false;
+    }
+    this.refreshTokenFromStore();
     this.syncing = true;
     const syncTimeoutMs = 60_000; // 60s overall timeout
     const syncDeadline = Date.now() + syncTimeoutMs;
@@ -256,7 +285,12 @@ export class SyncClient {
       // 本轮 gather 起点（本地时钟）。推送成功后与 lastSyncTime 同点写入
       // last-push-time：截至该时刻的变更必然已包含在成功推送的载荷中
       const gatherStartedAt = Date.now();
-      const changes = await this.gatherChanges(this.lastSyncTime);
+      // 收集起点 = max(持久化水位, 积压游标)：积压分批推送时从上一批之后继续
+      const gatherFloor = Math.max(this.lastSyncTime, this.pushFloor);
+      const gathered = await this.gatherChanges(gatherFloor, this.pushedBoundaryIds);
+      const changes = gathered.data;
+      const batchMaxUpdatedAt = gathered.maxUpdatedAt;
+      const batchHasMore = gathered.hasMore;
       checkTimeout();
       const pushS = changes.summaries?.length || 0;
       const pushN = changes.notes?.length || 0;
@@ -295,11 +329,7 @@ export class SyncClient {
                 if (r.data) {
                   await this.applyData(r.data);
                   checkTimeout();
-                  if (r.data.lastSyncAt) {
-                    this.lastSyncTime = r.data.lastSyncAt;
-                    localStorage.setItem(this.syncTimeKey, String(this.lastSyncTime));
-                    localStorage.setItem(this.lastPushTimeKey, String(gatherStartedAt));
-                  }
+                  this.settleAfterPush(changes, batchMaxUpdatedAt, batchHasMore, gatherStartedAt, r.orphanedNovelIds);
                 }
                 if (r.orphanedNovelIds?.length && this.onOrphaned) {
                   this.onOrphaned(r.orphanedNovelIds);
@@ -353,11 +383,7 @@ export class SyncClient {
               if (r.data) {
                 await this.applyData(r.data);
                 checkTimeout();
-                if (r.data.lastSyncAt) {
-                  this.lastSyncTime = r.data.lastSyncAt;
-                  localStorage.setItem(this.syncTimeKey, String(this.lastSyncTime));
-                  localStorage.setItem(this.lastPushTimeKey, String(gatherStartedAt));
-                }
+                this.settleAfterPush(changes, batchMaxUpdatedAt, batchHasMore, gatherStartedAt, r.orphanedNovelIds);
               }
               if (r.orphanedNovelIds?.length && this.onOrphaned) {
                 this.onOrphaned(r.orphanedNovelIds);
@@ -399,27 +425,12 @@ export class SyncClient {
           broadcast.send('sync-complete');
         } catch { /* ignore */ }
 
-        // 检查是否还有更多数据需要同步
-        let hasMore = false;
-        try {
-          hasMore = await hasMoreChanges(this.lastSyncTime);
-        } catch { /* ignore */ }
-
-        if (hasMore) {
-          // 还有数据没同步完，不更新 lastSyncTime（防止下批失败时丢数据）
-          console.log("[sync] more data to sync, scheduling next batch...");
-          setTimeout(() => this.syncOnce(), 1000);
-        } else {
-          // 全部同步完成，安全更新 lastSyncTime
-          if (r.data?.lastSyncAt) {
-            this.lastSyncTime = r.data.lastSyncAt;
-            localStorage.setItem(this.syncTimeKey, String(this.lastSyncTime));
-            // 与水位同条件写入：孤儿记录（服务端未入库）场景必然 hasMore=true，
-            // 走不到这里，不会把未确认的 tombstone 误标为已推送
-            localStorage.setItem(this.lastPushTimeKey, String(gatherStartedAt));
-          }
-        }
-
+        // 分批推送：本批之后还有更多 → 推进积压游标（本批最大 updatedAt），
+        // 下一批从游标之后继续收集。持久化水位暂不动：积压全部推完才落盘，
+        // 中途失败下一批从原游标重试（LWW 幂等，不丢数据）。
+        // 时间戳平局：游标停在 T 时，==T 的未推送记录靠边界排除集跳过已推送
+        // 部分（aboveOrEqual 仍会取到它们）；游标推进到更大时间戳时重置排除集
+        this.settleAfterPush(changes, batchMaxUpdatedAt, batchHasMore, gatherStartedAt, r.orphanedNovelIds);
         return true;
       } else {
         const errText = await resp.text().catch(() => "unknown");
@@ -433,6 +444,94 @@ export class SyncClient {
   }
 
   // ── private ──
+
+  /**
+   * 从 localStorage 刷新内存 token。多标签页共享同一会话：任一标签页重注册后
+   * localStorage 里是新 token，本页若继续用旧内存 token 会 401 → 触发重注册 →
+   * 踢掉对方的新会话，两页每 15 秒一轮永久乒乓。每次心跳/同步前对齐一次。
+   */
+  private refreshTokenFromStore() {
+    const stored = localStorage.getItem("sync-token");
+    if (stored && stored !== this.token) this.token = stored;
+  }
+
+  /**
+   * 登录被服务器明确拒绝（404 用户不存在 / 409 用户名已占用）时回滚用户名。
+   * 不回滚的后果：心跳发现无 clientId 后拿被拒绝的用户名自动重注册成功，
+   * 把正在使用该名字的真实设备踢下线——"失败的登录"变成"成功的登录"。
+   * 网络错误不回滚（保留 username 是离线登录的既定设计，见 login 主体注释）。
+   */
+  private rollbackUsernameOnReject(prevUsername: string | null, attempted: string) {
+    if (prevUsername && prevUsername !== attempted) {
+      this.username = prevUsername;
+      localStorage.setItem("sync-username", prevUsername);
+    } else if (!prevUsername) {
+      this.username = null;
+      localStorage.removeItem("sync-username");
+    }
+    // prev === attempted：重登自己的用户名失败，保留——它是本地数据的身份标识
+  }
+
+  /**
+   * 推进持久化同步水位。语义：W 表示 "updatedAt < W 的记录都已同步"，
+   * 收集用 aboveOrEqual(W)。取 max(旧水位, 本批最大 updatedAt+1, 本轮
+   * gather 起点)：+1 跳过已推送的边界记录；gather 期间产生的新编辑其
+   * updatedAt ≥ 起点，保持在水位之上（含等于），下一轮照常收集。
+   */
+  private commitWatermark(batchMaxUpdatedAt: number, gatherStartedAt: number) {
+    const next = Math.max(this.lastSyncTime, (batchMaxUpdatedAt || 0) + 1, gatherStartedAt);
+    this.lastSyncTime = next;
+    localStorage.setItem(this.syncTimeKey, String(next));
+  }
+
+  /**
+   * 推送成功后的游标/水位结算（主路径与 401/409 重试路径共用）。
+   * 水位用本地时钟单调游标（已推送记录的最大 updatedAt + 1 与本轮 gather
+   * 起点），不再用服务器 lastSyncAt——那是服务器墙钟，与记录 updatedAt
+   * （客户端时钟域）不同源，本地钟偏慢时会把同步完成后 N 秒窗口内的本地
+   * 编辑永久排除在增量收集之外。+1 语义：水位 W 表示 "< W 的都已同步"。
+   * 提交判定不看本地记录数——刚推送完的记录仍在本地库里，数它们只会永远
+   * "还有更多"把水位冻死；唯一扣住水位的是服务端明示的孤儿记录（tombstone
+   * 未入库不能被 GC 判定为已推送），补传成功后下一轮提交。
+   */
+  private settleAfterPush(
+    changes: Partial<SyncData>,
+    batchMaxUpdatedAt: number,
+    batchHasMore: boolean,
+    gatherStartedAt: number,
+    orphanedNovelIds: string[] | undefined
+  ): void {
+    if (batchHasMore) {
+      const boundary = new Set<string>();
+      for (const s of changes.summaries ?? []) if (s.updatedAt === batchMaxUpdatedAt) boundary.add(s.id);
+      for (const n of changes.notes ?? []) if (n.updatedAt === batchMaxUpdatedAt) boundary.add(n.id);
+      for (const m of changes.maps ?? []) if (m.updatedAt === batchMaxUpdatedAt) boundary.add(m.id);
+      for (const g of changes.graphs ?? []) if (g.updatedAt === batchMaxUpdatedAt) boundary.add(g.id);
+      if (batchMaxUpdatedAt > this.pushFloor) {
+        this.pushFloor = batchMaxUpdatedAt;
+        this.pushedBoundaryIds = boundary;
+      } else {
+        // 整批都压在游标上（同时间戳 >50 条）：累积边界，防止重复推同一条
+        for (const id of boundary) this.pushedBoundaryIds.add(id);
+      }
+      console.log("[sync] more data to sync, scheduling next batch...");
+      setTimeout(() => this.syncOnce(), 1000);
+      return;
+    }
+    this.resetPushCursor();
+    if (!orphanedNovelIds?.length) {
+      this.commitWatermark(batchMaxUpdatedAt, gatherStartedAt);
+      localStorage.setItem(this.lastPushTimeKey, String(gatherStartedAt));
+    } else {
+      console.log("[sync] orphan records present, keeping watermark (retry after novel upload)");
+    }
+  }
+
+  /** 重置积压游标与边界排除集（登录/登出/被踢/积压清空时） */
+  private resetPushCursor() {
+    this.pushFloor = 0;
+    this.pushedBoundaryIds = new Set();
+  }
 
   private async tryReRegister(): Promise<boolean> {
     if (!this.username) return false;
@@ -482,6 +581,7 @@ export class SyncClient {
     // Skip if user manually enabled offline mode (heartbeatFailCount === 0 means manual)
     if (useUIStore.getState().offlineMode && this.heartbeatFailCount === 0) return;
     if (this.reRegistering) return;
+    this.refreshTokenFromStore();
 
     // No credentials yet (server was offline during login) — try to register
     if (!this.clientId) {
@@ -576,6 +676,7 @@ export class SyncClient {
     if (useUIStore.getState().offlineMode) return;
     if (this.isAiRunning()) return;
     if (this.reRegistering) return;
+    if (this.timerSyncGated) return;
     // 多标签互斥：每个标签页各自跑 30s 定时器 + pushNow，同一账号多开时会重复
     // 推送（LWW 幂等保证结果收敛，但带宽与 SQLite 写放大翻倍）。锁按用户隔离，
     // 拿不到锁说明另一标签正在同步，本页跳过本轮——本轮未推的变更由本页下一轮
@@ -604,6 +705,7 @@ export class SyncClient {
     this.token = null;
     this.activeCount = 0;
     this.lastSyncTime = 0;
+    this.resetPushCursor();
     this.autoOffline = false;
     this.heartbeatFailCount = 0;
     localStorage.removeItem("sync-username");

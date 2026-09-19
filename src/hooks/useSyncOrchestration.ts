@@ -93,13 +93,30 @@ export function useSyncOrchestration({ onSyncReady, setLocalUsers }: SyncOrchest
             await udb.transaction("rw", [udb.novels, udb.chapters, udb.summaries, udb.notes, udb.maps, udb.graphs], async () => {
               await udb!.novels.delete(oldId);
               await udb!.chapters.where("novelId").equals(oldId).delete();
+              // 章节 id 重键的同时必须重写 summaries/notes 的 chapterId——否则
+              // 章节级摘要/笔记指向旧 id，按章节查询全部落空
+              const chapterIdMap = new Map<string, string>();
               for (const ch of chapters) {
-                await udb!.chapters.put({ ...ch, novelId: serverId, id: `${serverId}-ch${ch.index}` });
+                const newChapterId = `${serverId}-ch${ch.index}`;
+                chapterIdMap.set(ch.id, newChapterId);
+                await udb!.chapters.put({ ...ch, novelId: serverId, id: newChapterId });
               }
-              for (const s of summaries) { await udb!.summaries.put({ ...s, novelId: serverId }); }
-              for (const n of notes) { await udb!.notes.put({ ...n, novelId: serverId }); }
+              const remapChapterId = (oldChapterId: string | undefined) =>
+                oldChapterId ? chapterIdMap.get(oldChapterId) : undefined;
+              for (const s of summaries) {
+                const mapped = remapChapterId(s.chapterId);
+                await udb!.summaries.put(mapped ? { ...s, novelId: serverId, chapterId: mapped } : { ...s, novelId: serverId });
+              }
+              for (const n of notes) {
+                const mapped = remapChapterId(n.chapterId);
+                await udb!.notes.put(mapped ? { ...n, novelId: serverId, chapterId: mapped } : { ...n, novelId: serverId });
+              }
               for (const m of maps) { await udb!.maps.put({ ...m, novelId: serverId }); }
               for (const g of graphs) { await udb!.graphs.put({ ...g, novelId: serverId }); }
+              // novels 行必须重键写入（旧实现只删不写，靠下载分支兜底补回；
+              // 现在"novels 缺失但章节在"已改判为用户已删，缺口必须在此补上，
+              // 否则认亲后的书永远进不了书架）
+              await udb!.novels.put({ ...local, id: serverId });
             });
             const { readingPositions } = useNovelStore.getState();
             const oldPos = readingPositions[oldId];
@@ -172,6 +189,17 @@ export function useSyncOrchestration({ onSyncReady, setLocalUsers }: SyncOrchest
             .where("novelId").equals(sn.id).toArray().catch(() => []);
           if (!shouldDownloadNovel(existing, localChapters)) continue; // 正常，跳过
           console.warn(`[sync] novel ${sn.id} 本地章节缺失或已软删，从服务器重新下载恢复`);
+        } else {
+          // novels 记录不存在但章节墓碑仍在 = 用户已删除该书（deleteNovel 硬删
+          // novel 行 + 软删章节）。此时服务器仍 joined 多半是 /leave 请求失败的
+          // 残留——绝不能重新下载，否则用户明确删除的书整本复活且墓碑被清。
+          const tombstone = await udb.chapters
+            .where("novelId").equals(sn.id).limit(1).toArray().catch(() => []);
+          if (tombstone.length > 0) {
+            console.log(`[sync] novel ${sn.id} 本地已删除（章节墓碑在），跳过重新下载`);
+            continue;
+          }
+          // 记录与章节都不存在：从未本地化过的 joined 书，正常走下载
         }
         const chResp = await apiFetch(`/api/novels/${sn.id}/chapters`);
         if (!chResp.ok) continue;
@@ -324,7 +352,11 @@ const applySyncData = useCallback(async (data: SyncData) => {
     }
   }, []);
 
-  const startSync = useCallback(() => {
+  // 仅注册同步 handler（gatherChanges/applyData/回调），不触发立即同步、
+  // 可重复调用（syncClient.start 内部会先 stop 防定时器重复）。
+  // 注册后同步挂起"定时器驱动"的推送，直到 startSync 解除——慢登录期间
+  // 定时器不能赶在"合并/覆盖"提示之前把本地数据推上服务器
+  const prepareSync = useCallback(() => {
     if (syncStarted.current) return;
     syncStarted.current = true;
     syncClient.start({
@@ -335,13 +367,19 @@ const applySyncData = useCallback(async (data: SyncData) => {
       onConflict: handleSyncConflict,
       onOrphaned: handleOrphaned,
     });
+    syncClient.setTimerSyncGate(true);
+  }, [applySyncData, handleKicked, handleSyncConflict, handleOrphaned]);
+
+  const startSync = useCallback(() => {
+    prepareSync();
+    syncClient.setTimerSyncGate(false);
     setTimeout(() => {
-      syncClient.syncOnce().then(() => syncJoinedNovels()).catch(() => {
+      syncClient.syncOnce({ force: true }).then(() => syncJoinedNovels()).catch(() => {
         syncJoinedNovels();
       });
       cleanupDeletedRecords().catch(() => {});
     }, 0);
-  }, [applySyncData, handleKicked, handleSyncConflict, syncJoinedNovels, handleOrphaned]);
+  }, [prepareSync, syncJoinedNovels]);
 
   const handleLogin = useCallback(async (username: string) => {
     const onlineStatus = await syncClient.checkUserOnline(username);
@@ -378,7 +416,12 @@ const applySyncData = useCallback(async (data: SyncData) => {
     addLocalUser(username);
     setLocalUsers(getLocalUsers());
 
-    useNovelStore.setState({ novels: [], currentNovel: null });
+    // 切换用户必须同时清掉内存中的阅读进度与摘要缓存：
+    // - readingPositions 残留旧用户进度会被下方 reloadReadingPositions 按 updatedAt
+    //   合并进新账号并持久化、随同步扩散（跨用户数据串号）
+    // - summary store 残留旧用户摘要会混入新用户的 AI 上下文与界面
+    useNovelStore.setState({ novels: [], currentNovel: null, readingPositions: {} });
+    useSummaryStore.getState().setSummaries([]);
 
     // 重新从 localStorage 加载当前用户的阅读进度。
     // 阅读进度存于 localStorage（key 带用户名后缀），但 store 只在模块加载时
@@ -386,7 +429,11 @@ const applySyncData = useCallback(async (data: SyncData) => {
     // 否则离线重登（syncOnce 失败、无服务器合并）时打开小说会回到第一章。
     useNovelStore.getState().reloadReadingPositions();
 
-    startSync();
+    // 先注册同步 handler（不触发立即同步）：下方冲突分支里的 syncOnce 需要
+    // gatherChanges/applyData 已就位才能工作。周期同步的 t=0 推送仍然推迟到
+    // 冲突决策完成之后（见 startSync 调用点）——否则本地数据会先行合并进
+    // 服务器，用户选"覆盖"时服务器已被污染。
+    prepareSync();
 
     let serverSynced = false;
     let loginResult: { success: boolean; error?: string } = { success: false };
@@ -424,9 +471,12 @@ const applySyncData = useCallback(async (data: SyncData) => {
 
         if (choice === "2") {
           await clearLocalData();
-          useNovelStore.setState({ novels: [], currentNovel: null });
+          // "覆盖"= 丢弃本地数据：内存中残留的旧进度/摘要必须一并清掉，
+          // 否则下方 syncOnce 会把它们当本地变更推上服务器，覆盖语义失真
+          useNovelStore.setState({ novels: [], currentNovel: null, readingPositions: {} });
+          useSummaryStore.getState().setSummaries([]);
           try {
-            await syncClient.syncOnce();
+            await syncClient.syncOnce({ force: true });
             await syncJoinedNovels();
             serverSynced = true;
           } catch { /* syncOnce 内部已处理错误 */ }
@@ -439,7 +489,7 @@ const applySyncData = useCallback(async (data: SyncData) => {
               try {
                 const regResult = await syncClient.login(trimmedName, "create");
                 if (regResult.success) {
-                  await syncClient.syncOnce();
+                  await syncClient.syncOnce({ force: true });
                   await syncJoinedNovels();
                   serverSynced = true;
                 }
@@ -450,19 +500,22 @@ const applySyncData = useCallback(async (data: SyncData) => {
           }
         } else {
           try {
-            await syncClient.syncOnce();
+            await syncClient.syncOnce({ force: true });
             await syncJoinedNovels();
             serverSynced = true;
           } catch { /* syncOnce 内部已处理错误 */ }
         }
       } else {
         try {
-          await syncClient.syncOnce();
+          await syncClient.syncOnce({ force: true });
           await syncJoinedNovels();
           serverSynced = true;
         } catch { /* syncOnce 内部已处理错误 */ }
       }
     }
+
+    // 登录与冲突决策均已完成（或明确失败），现在才启动周期同步（含心跳）
+    startSync();
 
     if (!serverSynced) {
       const novels = await loadAllNovels();
@@ -478,15 +531,23 @@ const applySyncData = useCallback(async (data: SyncData) => {
 
     onSyncReady();
     useUIStore.getState().setDebugMode(false);
-  }, [clearLocalData, startSync, syncJoinedNovels, migrateUserData, addNovel, onSyncReady, setLocalUsers]);
+  }, [clearLocalData, prepareSync, startSync, syncJoinedNovels, migrateUserData, addNovel, onSyncReady, setLocalUsers]);
 
   const handleDeleteUser = useCallback(async (username: string) => {
+    // 先捕获判断依据：syncClient.logout() 会清掉 localStorage 的 sync-username，
+    // 之后再按 localStorage 判断"是否当前用户"恒为 false，清理分支失活
+    const wasCurrentUser = localStorage.getItem("sync-username") === username;
+    // 删除的是当前登录用户：先停同步客户端（否则心跳/定时器继续空转报错，
+    // 服务器 session 不断开还会显示该用户"仍在线"几分钟）
+    if (syncClient.user === username) {
+      syncClient.logout();
+      syncStarted.current = false;
+    }
     await deleteUserData(username);
     setLocalUsers(getLocalUsers());
-    if (localStorage.getItem("sync-username") === username) {
-      localStorage.removeItem("sync-username");
+    if (wasCurrentUser) {
+      // logout 刻意保留 clientId（已知设备复用），但用户已被删除，设备标识一并清除
       localStorage.removeItem("sync-clientId");
-      localStorage.removeItem("sync-token");
       localStorage.removeItem(`novel-reader-last-sync-time:${username}`);
       localStorage.removeItem("sync-auto-offline");
     }
