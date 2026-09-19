@@ -97,6 +97,46 @@ function runVitest(filter) {
   return { failed: json.numFailedTests ?? failedFiles.length, total: json.numTotalTests ?? 0, exit: run.status, failedFiles };
 }
 
+/**
+ * server 文件 → 该跑哪只探针。空数组 = 真没人看着。
+ * 判据与 verification-matrix §6 同源；新增探针时要一起改。
+ */
+const PROBE_FOR = {
+  "server/index.js": ["probe:boot", "probe:proxy"],
+  "server/admin.js": ["probe:boot"],
+  "server/sync-handler.js": ["probe:maps"],
+  "server/routes/sync.js": ["probe:maps"],
+  "server/routes/proxy.js": ["probe:proxy"],
+  "server/routes/rag.js": ["probe:rag"],
+  "server/rag-builder.js": ["probe:rag"],
+  "server/database.js": ["probe:backup", "probe:maps", "probe:reupload"],
+  "server/lib/engine-config.js": [],
+  "server/rag-worker.mjs": [],
+};
+
+/** 跑一只探针：只认它自己打印的 "探针结果：n/m"，读不到就不算通过 */
+function runProbe(name) {
+  const run = spawnSync("npm", ["run", name], {
+    encoding: "utf8",
+    cwd: process.cwd(),
+    timeout: 240_000,
+    shell: process.platform === "win32",
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  if (run.error?.code === "ETIMEDOUT" || run.status === null || Boolean(run.signal)) {
+    return { failed: -1, total: 0, exit: null, error: `探针 ${name} 超时或被强杀` };
+  }
+  const out = (run.stdout || "") + (run.stderr || "");
+  const m = out.match(/探针结果：(\d+)\/(\d+)/);
+  if (!m) return { failed: -1, total: 0, exit: run.status, error: `探针 ${name} 没打印结果行` };
+  const failed = Number(m[2]) - Number(m[1]);
+  // exit 0 但计数不齐 = 探针自己没跑起来
+  if (failed === 0 && run.status !== 0) {
+    return { failed: -1, total: Number(m[2]), exit: run.status, error: `探针 ${name} 全绿却退出码 ${run.status}` };
+  }
+  return { failed, total: Number(m[2]), exit: run.status };
+}
+
 const LIMIT = Number(getArg("limit", 0));
 const ONLY_FILES = getArg("files", "").split(",").map((s) => s.trim()).filter(Boolean);
 const changedRaw = git("diff", "--name-only", `${FROM}..HEAD`).trim().split("\n")
@@ -107,21 +147,30 @@ const changedRaw = git("diff", "--name-only", `${FROM}..HEAD`).trim().split("\n"
 const changed = LIMIT > 0 ? changedRaw.slice(0, LIMIT) : changedRaw;
 
 console.log(`范围内 ${changed.length} 个源文件（scope=${SCOPE}）。先取基线…`);
-const baseline = runVitest(null);
+const IS_SERVER = SCOPE === "server";
+const PROBE_UNION = IS_SERVER ? [...new Set(changed.flatMap((f) => PROBE_FOR[f] ?? []))] : [];
+const baseline = IS_SERVER
+  ? (PROBE_UNION.map(runProbe).find((r) => r.error || r.failed !== 0) ?? { failed: 0 })
+  : runVitest(null);
 if (baseline.error || baseline.failed !== 0) {
   console.error("基线就不是全绿，审计结果无法解释。先修好当前 HEAD。", baseline);
   process.exit(3);
 }
-console.log("基线全绿，开始逐文件还原。\n");
+console.log(`基线全绿（${IS_SERVER ? `探针 ${PROBE_UNION.join(", ")}` : "vitest 全量"}），开始逐文件还原。\n`);
 
 for (const [i, file] of changed.entries()) {
   // 先判"要不要跑"，再动文件。上一版把可达性判断放在 revert 之后却直接 continue，
   // 于是 4 个文件留在还原态被守卫抓到、整轮中止。
   const reach = reachMap[file] ?? [];
-  if (SCOPE === "server" || (REACH_FILE && reach.length === 0)) {
-    const why = SCOPE === "server" ? "服务端：无 vitest 面，由探针判定" : "★ 无保护（无任何测试可达）";
-    record({ file, status: why });
-    console.log(`[${i + 1}/${changed.length}] ${file} — ${why}`);
+  const probes = IS_SERVER ? (PROBE_FOR[file] ?? []) : [];
+  if (IS_SERVER && probes.length === 0) {
+    record({ file, status: "★ 无保护（无探针映射）" });
+    console.log(`[${i + 1}/${changed.length}] ${file} — ★ 无保护（无探针映射）`);
+    continue;
+  }
+  if (!IS_SERVER && REACH_FILE && reach.length === 0) {
+    record({ file, status: "★ 无保护（无任何测试可达）" });
+    console.log(`[${i + 1}/${changed.length}] ${file} — ★ 无保护（无任何测试可达）`);
     continue;
   }
   const targets = reach.length ? reach : [`src/${file.split("/")[1] ?? ""}`];
@@ -138,11 +187,23 @@ for (const [i, file] of changed.entries()) {
     continue;
   }
   inFlight = file;
-  let res = runVitest(targets);
-  let stage = reach.length ? `reach(${targets.length})` : "subset";
-  if (!res.error && res.failed === 0 && res.exit === 0 && reach.length === 0) {
-    res = runVitest(null);
-    stage = "full";
+  let res, stage;
+  if (IS_SERVER) {
+    const runs = probes.map(runProbe);
+    stage = probes.join("+");
+    res = runs.find((r) => r.error) ?? {
+      failed: runs.reduce((n, r) => n + r.failed, 0),
+      total: runs.reduce((n, r) => n + r.total, 0),
+      exit: 0,
+      failedFiles: [],
+    };
+  } else {
+    res = runVitest(targets);
+    stage = reach.length ? `reach(${targets.length})` : "subset";
+    if (!res.error && res.failed === 0 && res.exit === 0 && reach.length === 0) {
+      res = runVitest(null);
+      stage = "full";
+    }
   }
 
   git("restore", "--source=HEAD", "--worktree", "--", file);
