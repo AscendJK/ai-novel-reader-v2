@@ -11,8 +11,23 @@ vi.mock("@/rag/model-loader", () => ({
 vi.mock("@/rag/index", () => ({ clearCache: vi.fn() }));
 vi.mock("@/rag/rag-cache-utils", () => ({ updateRagCacheSize: vi.fn() }));
 
+// 跨标签通知必须走共享 broadcast 单例：mock 掉它并捕获订阅，用来抓"又手写一个
+// BroadcastChannel"的回归（R-75 的病因就是收发两端通道名/载荷格式都不一致）
+const subscriptions = vi.hoisted(() => new Map<string, () => void>());
+vi.mock("@/lib/broadcast", () => ({
+  broadcast: {
+    on: (type: string, handler: () => void) => {
+      subscriptions.set(type, handler);
+      return () => { subscriptions.delete(type); };
+    },
+    send: vi.fn(),
+    close: vi.fn(),
+  },
+}));
+
 import { RAGSettings } from "@/components/settings/RAGSettings";
 import { useUIStore } from "@/stores/ui-store";
+import { useRAGStore } from "@/stores/rag-store";
 
 function setMobile(width: number) {
   Object.defineProperty(window, "innerWidth", { value: width, writable: true, configurable: true });
@@ -42,6 +57,7 @@ function setMobile(width: number) {
 
 describe("RAGSettings 的调试模式入口", () => {
   beforeEach(() => {
+    subscriptions.clear();
     vi.stubGlobal("BroadcastChannel", class {
       onmessage: ((e: MessageEvent) => void) | null = null;
       postMessage() {}
@@ -57,5 +73,20 @@ describe("RAGSettings 的调试模式入口", () => {
     fireEvent.click(toggle);
     expect(useUIStore.getState().debugMode).toBe(true);
     setMobile(1280);
+  });
+
+  it("通过共享 broadcast 订阅“模型下载完成”，另一标签下载后本页刷新", () => {
+    useRAGStore.setState({ downloadedModels: new Set(["Xenova/bge-small-zh-v1.5"]) });
+    const before = useRAGStore.getState().downloadedModels;
+
+    render(<RAGSettings />);
+
+    const notify = subscriptions.get("model-download-complete");
+    expect(notify).toBeTypeOf("function"); // 收发不同通道/比字符串的那个 bug 会红在这里
+    notify!();
+
+    const after = useRAGStore.getState().downloadedModels;
+    expect(after).not.toBe(before); // 换了引用才会触发重渲染，内容仍来自原集合
+    expect([...after]).toEqual([...before]);
   });
 });

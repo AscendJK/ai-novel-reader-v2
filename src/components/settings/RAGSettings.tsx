@@ -4,6 +4,7 @@ import { useUIStore } from "@/stores/ui-store";
 import { ALL_ENGINES, downloadModel, getMirrorOptions } from "@/rag/model-loader";
 import { clearCache } from "@/rag/index";
 import { updateRagCacheSize } from "@/rag/rag-cache-utils";
+import { broadcast } from "@/lib/broadcast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -39,17 +40,13 @@ export function RAGSettings() {
   const mountedRef = useRef(true);
   useEffect(() => { return () => { mountedRef.current = false; }; }, []);
 
-  // BroadcastChannel: listen for download complete from other tabs
-  useEffect(() => {
-    const bc = new BroadcastChannel("novel-reader-model-sync");
-    bc.onmessage = (e) => {
-      if (e.data === "model-download-complete") {
-        // Force re-render to update downloaded status
-        useRAGStore.setState({ downloadedModels: new Set(useRAGStore.getState().downloadedModels) });
-      }
-    };
-    return () => bc.close();
-  }, []);
+  // 跨标签：另一个标签下载完模型后刷新"已下载"状态。必须走共享 broadcast 单例——
+  // 发送方 src/rag/model-loader.ts 用的就是它（channel 'ai-novel-reader'，载荷是
+  // {type,…} 对象）。原先这里自建 'novel-reader-model-sync' 通道并拿 e.data 比字符串，
+  // 两端根本对不上，通知从来没到达过（round 3 R-75）。
+  useEffect(() => broadcast.on("model-download-complete", () => {
+    useRAGStore.setState({ downloadedModels: new Set(useRAGStore.getState().downloadedModels) });
+  }), []);
 
   const handleDownload = async (modelKey: string) => {
     // Check if another download is in progress
