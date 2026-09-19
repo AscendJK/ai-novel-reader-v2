@@ -170,7 +170,7 @@ export function useSummarizer() {
         if (signal?.aborted) { ragLog("getRelevantText: 构建索引后被取消"); return ""; }
         setCurrentTask(`正在检索相关段落${degradedLabel}...`);
         const t0 = performance.now();
-        const result = await retrieveRelevantWithDetails(currentNovel.id, query, undefined, engine);
+        const result = await retrieveRelevantWithDetails(currentNovel.id, query, undefined, engine, { signal });
         setRagEngineUsed(result.engine);
         addDebugEntry({ query, duration: (performance.now() - t0) / 1000, results: result.results, engine: result.engine });
         ragLog(`检索: "${query}" → ${result.results.length}段 ${result.text.length}字 (${result.engine})`);

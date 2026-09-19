@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { authNovel, requireAuth } from "../middleware/auth.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import { buildIndex, getProgress, getIndexData, getStatuses, getAllStatuses } from "../rag-builder.js";
-import { resolveModelKey } from "../lib/engine-config.js";
+import { resolveModelKey, isAllowedEngine, allowedEngineList } from "../lib/engine-config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -102,10 +102,16 @@ router.post("/encode", rateLimit(30), async (req, res) => {
     if (texts.some((t) => typeof t !== "string" || t.length > 10000)) {
       return res.status(400).json({ error: "文本过长或格式错误" });
     }
-    const pipe = await getEncodePipeline(engine);
+    // 同 /build：白名单外引擎不能静默换成默认模型编码，否则查询向量与库内
+    // 向量来自两个模型空间，相似度结果看似正常实则全错（round 2 R-29）
+    const requestedEngine = engine || "Xenova/bge-small-zh-v1.5";
+    if (!isAllowedEngine(requestedEngine)) {
+      return res.status(400).json({ error: "不支持的嵌入引擎", engine: requestedEngine, allowed: allowedEngineList() });
+    }
+    const pipe = await getEncodePipeline(requestedEngine);
     const result = await pipe(texts, { pooling: "mean", normalize: true });
     const vectors = await result.tolist();
-    res.json({ vectors });
+    res.json({ vectors, engine: requestedEngine, modelKey: resolveModelKey(requestedEngine) });
   } catch (e) {
     console.error("[rag] encode error:", e);
     res.status(500).json({ error: "编码失败" });
@@ -261,8 +267,14 @@ router.post("/:novelId/build", rateLimit(5), (req, res) => {
   if (!authNovel(req, res)) return;
   try {
     const engine = req.body?.engine || "Xenova/bge-small-zh-v1.5";
+    // 白名单外的引擎过去会被 resolveModelKey 静默换成默认模型建库，而客户端仍按
+    // 自己那个引擎编码查询——两个模型空间的向量混算，只要维度相同就"看起来正常"
+    // 而相似度彻底失真（round 2 R-29）。现在直接拒绝，让客户端走本地编码降级。
+    if (!isAllowedEngine(engine)) {
+      return res.status(400).json({ error: "不支持的嵌入引擎", engine, allowed: allowedEngineList() });
+    }
     const result = buildIndex(req.params.novelId, engine);
-    res.json(result);
+    res.json({ ...result, engine, modelKey: resolveModelKey(engine) });
   } catch (e) {
     console.error("[rag] build error:", e);
     res.status(500).json({ error: "构建失败" });

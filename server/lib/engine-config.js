@@ -26,3 +26,13 @@ export function resolveModelKey(engine) {
   if (ENGINE_MODEL_MAP[engine]) return ENGINE_MODEL_MAP[engine];
   return DEFAULT_ENGINE;
 }
+
+/** 白名单判定：路由层必须在入口就拒绝未知引擎 */
+export function isAllowedEngine(engine) {
+  return typeof engine === "string" && VALID_ENGINES.has(engine);
+}
+
+/** 给 400 响应用的可读白名单 */
+export function allowedEngineList() {
+  return [...VALID_ENGINES];
+}

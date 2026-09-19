@@ -17,6 +17,9 @@ export interface EmbeddingRetrieverData { vectors: number[][]; chunks: Chunk[]; 
 const LRU_CACHE = new Map<string, { vectors: Float32Array[]; chunks: Chunk[]; dim: number; size: number }>();
 let cacheTotalSize = 0;
 
+/** 单次查询编码的上限：服务端 /encode 与浏览器 Worker 各一份（R-30） */
+const ENCODE_WATCHDOG_MS = 60_000;
+
 const evictListeners: Set<(key: string) => void> = new Set();
 export function onLRUEvict(fn: (key: string) => void) { evictListeners.add(fn); return () => evictListeners.delete(fn); }
 
@@ -207,37 +210,71 @@ export class EmbeddingRetriever {
     	    }
   }
 
-  async search(query: string, topK: number = 15): Promise<{ chunk: Chunk; score: number }[]> {
+  /** 编码阶段看门狗：Worker 或 /encode 挂起时不能把整次检索永久吊住（R-30）。
+   *  不用 AbortSignal.timeout 是因为老 iOS WebView 没有它。 */
+  private async encodeWithWatchdog<T>(
+    run: (signal: AbortSignal) => Promise<T | null>,
+    outer?: AbortSignal,
+    timeoutMs = ENCODE_WATCHDOG_MS
+  ): Promise<T | null> {
+    if (outer?.aborted) return null;
+    const ctrl = new AbortController();
+    const onOuterAbort = () => ctrl.abort();
+    outer?.addEventListener("abort", onOuterAbort, { once: true });
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      return await run(ctrl.signal);
+    } catch (e) {
+      if (outer?.aborted || ctrl.signal.aborted) {
+        ragLog(e instanceof Error && e.name === "AbortError" ? "查询编码已取消" : `查询编码中断: ${e}`);
+        return null;
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
+      outer?.removeEventListener("abort", onOuterAbort);
+    }
+  }
+
+  async search(query: string, topK: number = 15, opts?: { signal?: AbortSignal }): Promise<{ chunk: Chunk; score: number }[]> {
     if (this.vectors.length === 0) return [];
+    if (opts?.signal?.aborted) return [];
     let qVec: Float32Array | null = null;
 
     // Try server-side encoding first
-    try {
-      const resp = await apiFetch("/api/rag/encode", {
-        method: "POST",
-        body: JSON.stringify({ texts: [query], engine: this.engine }),
-      });
-      if (resp.ok) {
+    qVec = await this.encodeWithWatchdog(async (signal) => {
+      try {
+        const resp = await apiFetch("/api/rag/encode", {
+          method: "POST",
+          signal,
+          body: JSON.stringify({ texts: [query], engine: this.engine }),
+        });
+        if (!resp.ok) return null;   // 含 400（引擎不在服务端白名单）→ 走本地编码
         const data = (await resp.json()) as { vectors?: unknown[] };
         // 校验服务器响应结构，避免意外数据损坏
         if (Array.isArray(data.vectors) && data.vectors[0] !== undefined) {
-          qVec = new Float32Array(data.vectors[0] as number[]);
+          return new Float32Array(data.vectors[0] as number[]);
         }
+        return null;
+      } catch {
+        return null; // Server offline / 超时 / 取消 —— 一律回退本地编码
       }
-    } catch {
-      // Server offline — try client-side
-    }
+    }, opts?.signal);
 
     // Fall back to client-side encoding (offline). Runs in a Worker first.
     if (!qVec) {
       ragLog("服务器编码不可用, 尝试浏览器端编码(Worker)...");
-      qVec = await encodeQueryWithWorker(query, this.engine);
+      qVec = await this.encodeWithWatchdog(
+        (signal) => encodeQueryWithWorker(query, this.engine, { signal }).catch(() => null),
+        opts?.signal
+      );
     }
 
     if (!qVec) {
-      ragLog("查询编码失败, 返回空");
+      ragLog(opts?.signal?.aborted ? "查询已取消" : "查询编码失败, 返回空");
       return [];
     }
+    if (opts?.signal?.aborted) return [];
 
     // 验证向量维度
     if (qVec.length !== this.dim) {

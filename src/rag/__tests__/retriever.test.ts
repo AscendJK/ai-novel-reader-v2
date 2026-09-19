@@ -146,3 +146,34 @@ describe("Retriever", () => {
     });
   });
 });
+/**
+ * 并发懒构建的单飞锁（round 2 批次 4 / R-27）
+ *
+ * embedding 引擎失败时降级到 TF-IDF，会走 buildDocsIfNeeded 现算；构建过程分块
+ * 让出事件循环，两个并发检索过去会各跑一遍：docs 双写（结果成对重复）、
+ * idf 双计（排序失真）。
+ */
+describe("并发懒构建 TF-IDF", () => {
+  const chunks = Array.from({ length: 60 }, (_, i) => ({
+    id: String(i),
+    content: `第${i}段语料 人工智能 机器学习 天气 深度学习 随机森林`,
+  }));
+
+  it("两次并发 buildDocsIfNeeded 只产出一份 docs", async () => {
+    const r = new Retriever(chunks);
+    await Promise.all([r.buildDocsIfNeeded(), r.buildDocsIfNeeded()]);
+    const built = (r as unknown as { docs: { id: string }[] }).docs;
+    expect(built).toHaveLength(60);
+    expect(new Set(built.map((d) => d.id)).size).toBe(60);
+  });
+
+  it("串行调用同样只算一份，且检索结果无重复", async () => {
+    const r = new Retriever(chunks);
+    await r.buildDocsIfNeeded();
+    await r.buildDocsIfNeeded();
+    const hits = r.search("人工智能", 100);
+    expect(new Set(hits.map((h) => h.id)).size).toBe(hits.length);
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.length).toBeLessThanOrEqual(60);
+  });
+});

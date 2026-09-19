@@ -172,12 +172,30 @@ export class Retriever {
     return this.chunks.find((c) => c.id === id);
   }
 
-  /** 懒构建 TF-IDF 向量：仅在 docs 为空时执行（用于 embedding 引擎降级场景） */
+  /**
+   * 懒构建 TF-IDF 向量：仅在 docs 为空时执行（用于 embedding 引擎降级场景）。
+   * 单飞锁 + 原子落库（round 2 R-27）：分块循环里有 await 让出点，两个并发降级
+   * 检索曾经会各跑一遍构建——docs 双写导致结果重复、idf 双计导致排序失真。
+   * 现在整份构建先算在局部变量里，成功才整体赋值，失败可重来。
+   */
+  private docsBuild: Promise<void> | null = null;
+
   async buildDocsIfNeeded(): Promise<void> {
     if (this.docs.length > 0 || this.chunks.length === 0) return;
+    if (this.docsBuild) return this.docsBuild;
+    const p = this.buildDocs().catch((e) => {
+      this.docsBuild = null;   // 失败不锁死，允许下次重试
+      throw e;
+    });
+    this.docsBuild = p;
+    return p;
+  }
 
+  private async buildDocs(): Promise<void> {
     const BATCH = 200;
     const docCount = this.chunks.length;
+    const idf = new Map<string, number>();
+    const docs: { id: string; vector: Float64Array }[] = [];
 
     // Phase 1: tokenize + compute IDF (batched)
     let totalLength = 0;
@@ -190,14 +208,14 @@ export class Retriever {
         totalLength += tokens.length;
         const unique = new Set(tokens);
         for (const t of unique) {
-          this.idf.set(t, (this.idf.get(t) || 0) + 1);
+          idf.set(t, (idf.get(t) || 0) + 1);
         }
       }
       if (i + BATCH < docCount) await new Promise(ok => setTimeout(ok, 0));
     }
-    this.averageDocLength = docCount > 0 ? totalLength / docCount : 1;
-    for (const [t, df] of this.idf) {
-      this.idf.set(t, Math.log((docCount - df + 0.5) / (df + 0.5) + 1));
+    const averageDocLength = docCount > 0 ? totalLength / docCount : 1;
+    for (const [t, df] of idf) {
+      idf.set(t, Math.log((docCount - df + 0.5) / (df + 0.5) + 1));
     }
 
     // Phase 2: build document vectors (batched)
@@ -209,11 +227,11 @@ export class Retriever {
         for (const t of tokens) tf.set(t, (tf.get(t) || 0) + 1);
         const docLen = tokens.length;
         for (const [t, count] of tf) {
-          const normCount = (count * 2.2) / (count + 1.2 * (0.25 + 0.75 * (docLen / this.averageDocLength)));
+          const normCount = (count * 2.2) / (count + 1.2 * (0.25 + 0.75 * (docLen / averageDocLength)));
           tf.set(t, normCount);
         }
         const scored = Array.from(tf.entries())
-          .map(([t, f]) => ({ token: t, score: f * (this.idf.get(t) || 0) }))
+          .map(([t, f]) => ({ token: t, score: f * (idf.get(t) || 0) }))
           .sort((a, b) => b.score - a.score)
           .slice(0, 128);
         const vector = new Float64Array(128);
@@ -223,10 +241,14 @@ export class Retriever {
         }
         const norm = Math.sqrt(vector.reduce((s, v) => s + v * v, 0)) || 1;
         for (let k = 0; k < 128; k++) vector[k] /= norm;
-        this.docs.push({ id: this.chunks[j].id, vector });
+        docs.push({ id: this.chunks[j].id, vector });
       }
       if (i + BATCH < docCount) await new Promise(ok => setTimeout(ok, 0));
     }
+
+    this.idf = idf;
+    this.docs = docs;
+    this.averageDocLength = averageDocLength;
   }
 
   search(query: string, topK: number = 10): { id: string; score: number }[] {

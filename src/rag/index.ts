@@ -374,7 +374,8 @@ export async function retrieveRelevant(
   novelId: string,
   query: string,
   topK?: number,
-  engine?: string
+  engine?: string,
+  opts?: { signal?: AbortSignal }
 ): Promise<string> {
   const effectiveEngine = engine || useRAGStore.getState().engine;
   const entry = indexCache.get(`${novelId}-${effectiveEngine}`);
@@ -383,7 +384,7 @@ export async function retrieveRelevant(
   const k = topK ?? useRAGStore.getState().getTopK(entry.chunkCount);
 
   if (isEmbeddingEngine(entry.engine) && entry.embedding) {
-    const results = await entry.embedding.search(query, k);
+    const results = await entry.embedding.search(query, k, opts);
     if (results.length > 0) {
       return results.map((r) => `[相关度: ${r.score.toFixed(3)}] ${r.chunk.content}`).join("\n\n---\n\n");
     }
@@ -409,7 +410,8 @@ export async function retrieveRelevantWithDetails(
   novelId: string,
   query: string,
   topK?: number,
-  engine?: string
+  engine?: string,
+  opts?: { signal?: AbortSignal }
 ): Promise<{ text: string; results: { content: string; score: number }[]; engine: string }> {
   const effectiveEngine = engine || useRAGStore.getState().engine;
   const entry = indexCache.get(`${novelId}-${effectiveEngine}`);
@@ -418,7 +420,7 @@ export async function retrieveRelevantWithDetails(
   const k = topK ?? useRAGStore.getState().getTopK(entry.chunkCount);
 
   if (isEmbeddingEngine(entry.engine) && entry.embedding) {
-    const results = await entry.embedding.search(query, k);
+    const results = await entry.embedding.search(query, k, opts);
     if (results.length > 0) {
       return {
         engine: entry.engine,
@@ -465,7 +467,8 @@ export async function retrieveRelevantForRange(
   fromChapter: number,
   toChapter: number,
   topK?: number,
-  engine?: string
+  engine?: string,
+  opts?: { signal?: AbortSignal }
 ): Promise<{ text: string; results: { content: string; score: number }[]; engine: string }> {
   const effectiveEngine = engine || useRAGStore.getState().engine;
   const entry = indexCache.get(`${novelId}-${effectiveEngine}`);
@@ -475,7 +478,7 @@ export async function retrieveRelevantForRange(
   const inRange = (ci?: number) => ci === undefined || (ci >= fromChapter && ci <= toChapter);
 
   if (isEmbeddingEngine(entry.engine) && entry.embedding) {
-    const allResults = await entry.embedding.search(query, k * 3); // fetch extra to compensate for filtering
+    const allResults = await entry.embedding.search(query, k * 3, opts); // fetch extra to compensate for filtering
     const results = allResults.filter((r) => inRange(r.chunk.chapterIndex)).slice(0, k);
     if (results.length > 0) {
       return {
