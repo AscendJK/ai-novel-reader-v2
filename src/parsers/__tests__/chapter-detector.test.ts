@@ -95,3 +95,44 @@ ${"这是第二章的内容。".repeat(10)}
     expect(result[0].title).toBe("全文");
   });
 });
+
+/**
+ * 内容守恒（round 2 批次 1b / R-10）
+ *
+ * 旧实现在 splitByChapters 里把"正文 ≤50 字"的章节整章丢弃，短序章、只有标题
+ * 的楔子、诗体章节会永久消失——而且用户完全看不出少了东西。
+ * 这里的不变量：分割后的输出必须逐字装得下输入（忽略空白差异）。
+ */
+const squeeze = (s: string) => s.replace(/\s+/g, "");
+
+describe("splitByChapters 内容守恒", () => {
+  const samples: [string, string][] = [
+    ["短尾章被丢弃", `第一章 开端\n${"正文内容甲。".repeat(20)}\n第二章 尾声\n很短的结尾。`],
+    ["仅标题章节", `第一章 开端\n${"正文内容乙。".repeat(20)}\n第二章\n第三章 收`],
+    ["短前言", `题记一句话\n第一章 开端\n${"正文内容丙。".repeat(20)}`],
+    ["首章就短", `序章\n短。\n第一章 开端\n${"正文内容丁。".repeat(20)}`],
+  ];
+
+  for (const [name, text] of samples) {
+    it(`${name}：每个字都还在`, () => {
+      const result = splitByChapters(text, detectChapters(text));
+      expect(squeeze(result.map((c) => c.content).join(""))).toBe(squeeze(text));
+    });
+  }
+
+  it("短章节并入相邻章节而不是消失", () => {
+    const text = `第一章 开端\n${"正文内容甲。".repeat(20)}\n第二章 尾声\n很短的结尾。`;
+    const result = splitByChapters(text, detectChapters(text));
+    const all = result.map((c) => c.content).join("");
+    expect(all).toContain("很短的结尾。");
+    expect(all).toContain("第二章 尾声");
+  });
+
+  it("正常长度的章节仍各自独立（不被合并掉）", () => {
+    const text = `第一章 开端\n${"甲章正文。".repeat(20)}\n第二章 继续\n${"乙章正文。".repeat(20)}`;
+    const result = splitByChapters(text, detectChapters(text));
+    expect(result).toHaveLength(2);
+    expect(result[0].content).toContain("甲章正文。");
+    expect(result[0].content).not.toContain("乙章正文。");
+  });
+});

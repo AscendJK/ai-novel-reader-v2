@@ -5,11 +5,13 @@ import { useUIStore } from "@/stores/ui-store";
 import { useRAGStore } from "@/stores/rag-store";
 import { loadAllNovels, loadSummaries, cleanupDeletedRecords, deleteUserData, loadNovel } from "@/db/repositories";
 import { getUserDB, setCurrentUser, deleteUserDB } from "@/db/database";
-import { shouldDownloadNovel, shouldDeleteLocalNovel } from "@/sync/novel-reconciliation";
+import { shouldDownloadNovel, shouldDeleteLocalNovel, rekeyNovelOwnedRows } from "@/sync/novel-reconciliation";
 import { syncClient } from "@/sync/sync-client";
+import { flushPendingLeaves } from "@/sync/pending-leave";
 import { gatherChanges, applyServerData } from "@/sync/sync-bridge";
 import type { SyncData } from "@/sync/types";
 import { apiFetch, getEffectiveServerUrl } from "@/lib/api-client";
+import { broadcast } from "@/lib/broadcast";
 import { getAiRunning } from "@/lib/ai-state";
 import { dedupSummaries } from "@/lib/dedup-utils";
 import { downloadModel } from "@/rag/model-loader";
@@ -45,6 +47,10 @@ export function useSyncOrchestration({ onSyncReady, setLocalUsers }: SyncOrchest
     try {
       const username = localStorage.getItem("sync-username");
       if (!username) return;
+
+      // 先补发积压的 leave，再拉服务器列表：否则这次拉回来的 joined=true 会
+      // 在同一次流程里就把用户早已删掉的书重新下载（R-17）
+      await flushPendingLeaves();
 
       const resp = await apiFetch(`/api/novels?username=${encodeURIComponent(username)}`);
       if (!resp.ok) return;
@@ -111,8 +117,8 @@ export function useSyncOrchestration({ onSyncReady, setLocalUsers }: SyncOrchest
                 const mapped = remapChapterId(n.chapterId);
                 await udb!.notes.put(mapped ? { ...n, novelId: serverId, chapterId: mapped } : { ...n, novelId: serverId });
               }
-              for (const m of maps) { await udb!.maps.put({ ...m, novelId: serverId }); }
-              for (const g of graphs) { await udb!.graphs.put({ ...g, novelId: serverId }); }
+              await rekeyNovelOwnedRows(udb!.maps, maps, serverId, "maps");
+              await rekeyNovelOwnedRows(udb!.graphs, graphs, serverId, "graphs");
               // novels 行必须重键写入（旧实现只删不写，靠下载分支兜底补回；
               // 现在"novels 缺失但章节在"已改判为用户已删，缺口必须在此补上，
               // 否则认亲后的书永远进不了书架）
@@ -411,10 +417,18 @@ const applySyncData = useCallback(async (data: SyncData) => {
       syncClient.logout();
       syncStarted.current = false;
     }
+    // 回滚判定要在改身份之前拍快照：用户名列表被 addLocalUser 覆写后，
+    // 就分不清"这个用户本来就存在"还是"本次登录新建的"
+    const prevUsername = existingUser;
+    const userPreexisted = getLocalUsers().includes(username);
     localStorage.setItem("sync-username", username);
     setCurrentUser(username);
     addLocalUser(username);
     setLocalUsers(getLocalUsers());
+    // 通知其他标签页：本浏览器的身份已切换。它们各自的 _userDB 与 syncClient
+    // 用户名仍是旧值，若不重绑就会用新用户的 localStorage 键配旧用户的 IndexedDB
+    // 库继续同步（浏览器内跨用户串号，round 2 R-18）
+    broadcast.send("user-switched", username);
 
     // 切换用户必须同时清掉内存中的阅读进度与摘要缓存：
     // - readingPositions 残留旧用户进度会被下方 reloadReadingPositions 按 updatedAt
@@ -512,6 +526,35 @@ const applySyncData = useCallback(async (data: SyncData) => {
           serverSynced = true;
         } catch { /* syncOnce 内部已处理错误 */ }
       }
+    }
+
+    // 服务器明确拒绝（404 用户不存在 / 409 冲突）时必须把"身份"整体回滚，而不
+    // 只是 sync-username 那一个键：React 与 Dexie 若仍指向被拒的用户名，用户会
+    // 落进一个没有 novels 的幻影库——笔记写进幻影库、阅读进度却按上一个名字
+    // 存进 localStorage，重启后两边对不上（round 2 R-14）。
+    // 网络错误不在本分支内：那时 loginResult.error 为空，按既定设计保留用户名走离线登录。
+    if (!loginResult.success && loginResult.error) {
+      if (!userPreexisted) removeLocalUser(username);
+      setLocalUsers(getLocalUsers());
+      useNovelStore.setState({ novels: [], currentNovel: null, readingPositions: {} });
+      useSummaryStore.getState().setSummaries([]);
+      if (prevUsername && prevUsername !== username) {
+        localStorage.setItem("sync-username", prevUsername);
+        setCurrentUser(prevUsername);
+        useNovelStore.getState().reloadReadingPositions();
+        broadcast.send("user-switched", prevUsername);
+        window.alert(`登录失败：${loginResult.error}`);
+        // prepareSync 已打开登录门控，不解除就会永远不再周期同步（R-51 的门侧）
+        startSync();
+        onSyncReady();
+      } else {
+        // 之前没有登录身份：回到未登录态，留在登录界面，不启动同步
+        localStorage.removeItem("sync-username");
+        syncClient.logout();
+        syncStarted.current = false;
+        window.alert(`登录失败：${loginResult.error}`);
+      }
+      return;
     }
 
     // 登录与冲突决策均已完成（或明确失败），现在才启动周期同步（含心跳）

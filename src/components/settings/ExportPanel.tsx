@@ -29,7 +29,7 @@ export function ExportPanel() {
     setImportResult(null);
     try {
       const result = await importFromJSON(file);
-      setImportResult(`导入成功：${result.novels} 本小说，${result.chapters} 个章节，${result.summaries} 条摘要，${result.notes} 条笔记`);
+      setImportResult(`导入成功：${result.novels} 本小说，${result.chapters} 个章节，${result.summaries} 条摘要，${result.notes} 条笔记，${result.maps} 张地图，${result.graphs} 份人物图谱`);
       loadAllNovelMeta().then(setNovels);
     } catch (e) {
       setImportResult(`导入失败：${e instanceof Error ? e.message : "文件格式错误"}`);

@@ -30,6 +30,7 @@ import { resolveModelKey } from "@/rag/engines";
 import { apiFetch } from "@/lib/api-client";
 import { buildAndPollRAGIndex, downloadAndCacheIndex } from "@/rag/build-index";
 import { onCacheEviction } from "@/rag/rag-cache-utils";
+import { enqueuePendingLeave, clearPendingLeave } from "@/sync/pending-leave";
 import { NovelBuildWindow } from "@/components/common/NovelBuildWindow";
 import { NovelCard } from "./NovelCard";
 import type { NovelMeta } from "@/parsers/types";
@@ -486,9 +487,18 @@ export function BookSelect() {
   const handleDelete = useCallback(async (e: React.MouseEvent, novelId: string, title: string) => {
     e.stopPropagation();
     if (!window.confirm(`从书架移除《${title}》？\n\n将删除你关于此书的所有数据：\n- AI 总结和分析\n- 人物关系图谱\n- 笔记\n- 阅读进度\n\n小说本身仍保留在服务器书库中。`)) return;
-    apiFetch(`/api/novels/${novelId}/leave`, {
-      method: "POST",
-    }).catch((e) => console.warn("[BookSelect] leave novel failed:", e));
+    // leave 失败必须记账重试，否则服务器一直认为 joined，下次同步会把这本书
+    // 连同云端摘要/笔记一起拉回来（删除复活）。先入队，成功后出队——原来只是
+    // fire-and-forget 打个 warn，失败即永久失效
+    enqueuePendingLeave(novelId);
+    apiFetch(`/api/novels/${novelId}/leave`, { method: "POST" })
+      .then((resp) => {
+        if (resp.ok || resp.status === 404) clearPendingLeave(novelId);
+        else console.warn("[BookSelect] leave 未送达，已加入补发队列:", resp.status);
+      })
+      .catch((err) => {
+        console.warn("[BookSelect] leave novel failed，已加入补发队列:", err);
+      });
     await deleteNovel(novelId);
     useNovelStore.getState().removeNovel(novelId);
     setSavedNovels((prev) => prev.filter((n) => n.id !== novelId));

@@ -9,6 +9,7 @@
  */
 
 import type { NovelRecord, ChapterRecord } from "@/db/database";
+import type { Table } from "dexie";
 
 /**
  * 判断是否需要（重新）下载该小说的章节。
@@ -41,4 +42,30 @@ export function shouldDownloadNovel(
  */
 export function shouldDeleteLocalNovel(): boolean {
   return false;
+}
+
+/**
+ * 认亲（本地 novelId → 服务器 novelId）时迁移 maps / graphs 行。
+ *
+ * 这两张表的客户端主键**就是 novelId**，所以只改 novelId 字段而不动 id 会造成：
+ *   - loadMap/loadGraph 按 get(novelId) 取新键 → 落空，整本书的地图与人物图谱
+ *     在界面上"消失"（数据其实还在旧键下）；
+ *   - 旧键行仍带着已不存在的 novelId 每次同步重复上行，在服务端留下孤儿行。
+ * summaries/notes 的主键是各自的 UUID，不受影响，只需改 novelId/chapterId。
+ *
+ * 同名键折叠（>1 行）在正常数据里不会发生；真发生时保留最后写入的那条并告警。
+ */
+export async function rekeyNovelOwnedRows<T extends { id: string; novelId: string }>(
+  table: Table<T, string>,
+  rows: T[],
+  newNovelId: string,
+  label: string
+): Promise<void> {
+  if (rows.length === 0) return;
+  if (rows.length > 1) {
+    console.warn(`[sync] ${label} 认亲重键时发现 ${rows.length} 行（正常应为 1 行），折叠保留最后一条`);
+  }
+  for (const row of rows) await table.delete(row.id);
+  const winner = rows[rows.length - 1];
+  await table.put({ ...winner, id: newNovelId, novelId: newNovelId });
 }

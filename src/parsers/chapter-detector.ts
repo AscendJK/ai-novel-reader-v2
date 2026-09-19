@@ -84,6 +84,10 @@ export function detectChapters(text: string): DetectedChapter[] {
   return chapters;
 }
 
+/** 正文短于这个字数的章节并入上一章。旧实现直接丢弃，短序章/仅标题的楔子/
+ *  诗体章节会永久消失且用户无感（round 2 R-10） */
+const MIN_STANDALONE_CHAPTER_CHARS = 50;
+
 export function splitByChapters(text: string, detected: DetectedChapter[]): { title: string; content: string }[] {
   if (detected.length === 0) {
     return [{ title: "全文", content: text }];
@@ -91,21 +95,42 @@ export function splitByChapters(text: string, detected: DetectedChapter[]): { ti
 
   const result: { title: string; content: string }[] = [];
 
+  // 开头文本：够长就单独成"前言/简介"，否则挂到第一章正文前面——两种情况都
+  // 不能丢字。旧实现里 ≤100 字的开头直接不要了。
+  let pendingPrefix = "";
+  const preamble = text.slice(0, detected[0].startIndex).trim();
+  if (preamble.length > 100) {
+    result.push({ title: "前言/简介", content: preamble });
+  } else {
+    pendingPrefix = preamble;
+  }
+
+  // 按"原始区间"记账（不含 trim 掉的首尾空白），所以正常情况下恒为 0
+  let coveredChars = detected[0].startIndex;
   for (let i = 0; i < detected.length; i++) {
     const current = detected[i];
     const next = detected[i + 1];
-    const content = text.slice(current.startIndex, next ? next.startIndex : undefined).trim();
-    if (content.length > 50) {
+    const raw = text.slice(current.startIndex, next ? next.startIndex : undefined);
+    coveredChars += raw.length;
+    const content = (pendingPrefix ? `${pendingPrefix}\n\n` : "") + raw.trim();
+    pendingPrefix = "";
+
+    if (!content) continue;
+
+    // content 从标题行的位置切起，已自带标题行，并入时不用再补一次标题
+    const prev = result[result.length - 1];
+    if (prev && content.length < MIN_STANDALONE_CHAPTER_CHARS) {
+      prev.content += `\n\n${content}`;
+    } else {
       result.push({ title: current.title, content });
     }
   }
 
-  // Include text before the first chapter if significant
-  if (detected.length > 0 && detected[0].startIndex > 100) {
-    const preamble = text.slice(0, detected[0].startIndex).trim();
-    if (preamble.length > 100) {
-      result.unshift({ title: "前言/简介", content: preamble });
-    }
+  // 覆盖率对账：分割是连续切片，任何缺口都只可能是实现退化造成的静默丢内容
+  // （本轮 R-10 就是这么漏掉整章的）。留一行日志，避免下次又要靠人工审查发现。
+  const stripped = text.length - coveredChars;
+  if (stripped > 0) {
+    console.warn(`[parser] 章节分割未覆盖 ${stripped} 字符（不在任何切片区间内），请检查章节识别`);
   }
 
   return result;

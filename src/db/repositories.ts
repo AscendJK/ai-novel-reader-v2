@@ -578,8 +578,9 @@ async function doCleanupDeletedRecords() {
   const lastPushTime = getLastPushTime();
   try {
     // 分批收集（游标流式，不一次性加载全表到内存）
-    // chapters 不参与同步、无同步水位语义，直接按年龄清理；
-    // 其余四表要求 tombstone 已推送（updatedAt < lastPushTime）才物理删除
+    // 其余四表要求 tombstone 已推送（updatedAt < lastPushTime）才物理删除；
+    // chapters 不参与同步、无水位语义，按年龄清理，但"所属 novels 行已删除"
+    // 的墓碑必须保留标记（见下方 R-17 分支）
     const [oldChapters, oldSummaries, oldNotes, oldGraphs, oldMaps] = await Promise.all([
       collectExpired(db.chapters, cutoff),
       collectExpired(db.summaries, cutoff, lastPushTime),
@@ -601,12 +602,37 @@ async function doCleanupDeletedRecords() {
       return count;
     };
 
-    cCount = await deleteInBatches(oldChapters, db.chapters);
+    // 章节墓碑分两种处理（round 2 R-17）：
+    //   novels 行还在 → 正常按年龄物理删除；
+    //   novels 行已没了 → 这就是"用户在书架上删过这本书"的唯一证据
+    //     （syncJoinedNovels 靠"novels 缺失 + 章节墓碑在"判定不再重新下载）。
+    //     物理删掉它，一旦当初的 /leave 请求没送达（离线删书），服务端仍认为
+    //     joined，30 天后整本书连同云端摘要/笔记重新下载 = 删除复活。
+    //     但也不能整本正文永久占盘，所以清空 content、保留标记。
+    const existingNovelIds = new Set(await db.novels.toCollection().primaryKeys());
+    const deletableChapters: typeof oldChapters = [];
+    const stripTargets = oldChapters.filter((c) => !existingNovelIds.has(c.novelId) && c.content !== "");
+    for (const c of oldChapters) {
+      if (!existingNovelIds.has(c.novelId)) continue;
+      deletableChapters.push(c);
+    }
+    let stripped = 0;
+    for (let i = 0; i < stripTargets.length; i += GC_BATCH_SIZE) {
+      const batch = stripTargets.slice(i, i + GC_BATCH_SIZE);
+      await db.chapters.bulkPut(batch.map((c) => ({ ...c, content: "", startOffset: 0, endOffset: 0 })));
+      stripped += batch.length;
+      await yieldToMainThread();
+    }
+
+    cCount = await deleteInBatches(deletableChapters, db.chapters);
     sCount = await deleteInBatches(oldSummaries, db.summaries);
     nCount = await deleteInBatches(oldNotes, db.notes);
     gCount = await deleteInBatches(oldGraphs, db.graphs);
     mCount = await deleteInBatches(oldMaps, db.maps);
-    if (cCount || sCount || nCount || gCount || mCount) console.log(`[gc] cleaned ${cCount} chapters, ${sCount} summaries, ${nCount} notes, ${gCount} graphs, ${mCount} maps`);
+    if (cCount || sCount || nCount || gCount || mCount || stripped) {
+      console.log(`[gc] cleaned ${cCount} chapters, ${sCount} summaries, ${nCount} notes, ${gCount} graphs, ${mCount} maps`
+        + (stripped ? `；另有 ${stripped} 条章节墓碑因所属小说行已删除而只清正文、保留标记` : ""));
+    }
   } catch (e) { console.error("[gc] cleanupDeletedRecords failed:", e); }
 }
 
