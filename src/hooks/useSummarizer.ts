@@ -13,7 +13,7 @@ import { getProvider } from "@/api/registry";
 import { saveSummary, saveMap, deleteMap, loadChapters, loadNovel } from "@/db/repositories";
 import { getUserDB } from "@/db/database";
 import { APIError } from "@/api/error-handler";
-import { getTokenBudget, computeAvailableInput } from "@/api/token-manager";
+import { getTokenBudget, requireUsableInput } from "@/api/token-manager";
 import { buildIndex, retrieveRelevantWithDetails } from "@/rag/index";
 import { useRAGStore } from "@/stores/rag-store";
 import { syncClient } from "@/sync/sync-client";
@@ -528,7 +528,7 @@ export function useSummarizer() {
         const rangeChapters = await loadChapters(currentNovel.id, startIndex, count);
         // 根据模型 Token 预算精确计算最大字符数（可用输入 = 上下文 - 输出预算2048 - 安全余量）
         const budget = provider ? getTokenBudget(provider.model, provider.contextWindow, provider.maxTokens) : null;
-        const maxTokens = budget ? computeAvailableInput(budget, 2048) : 40000;
+        const maxTokens = budget ? requireUsableInput(budget, 2048, "范围总结") : 40000;
         const maxChars = Math.floor(maxTokens); // 中文约 1 字 = 1 token
         let combinedText = "";
         let totalChars = 0;

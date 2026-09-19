@@ -149,14 +149,19 @@ function isValidContextLength(n: number): boolean {
 
 export function extractContextLength(text: string): number | null {
   if (!text) return null;
-  // 优先匹配带单位的形式：32768 tokens / 8192 tokens
-  const withUnit = text.match(/(\d{4,8})\s*(?:token|tokens)/i);
-  if (withUnit) {
+  const lower = text.toLowerCase();
+  // "requested 4096 completion tokens" / "max_tokens must be <= 8192" 这类消息里的
+  // 数字是**输出**上限，不是上下文长度。缓存了它就等于之后所有任务都按这个小窗口
+  // 钳制输入（配合负预算即产出空白正文），且缓存只有会话内、没有失效机制。
+  const talksAboutOutputLimit = /(completion|completion_tokens|max_tokens|输出)/i.test(text);
+  // 优先匹配带单位的形式：32768 tokens / 8192 tokens——但要求消息本身在讲上下文
+  const withUnit = lower.match(/(\d{4,8})\s*(?:token|tokens)/i);
+  if (withUnit && /context|上下文|window|长度/.test(lower) && !talksAboutOutputLimit) {
     const n = parseInt(withUnit[1], 10);
     if (isValidContextLength(n)) return n;
   }
-  // 其次匹配 content length / context length 附近的数字（含中文"长度/限制"场景）
-  const nearLength = text.match(/(?:context|content|length|limit|window|上下文|长度|限制)[^0-9]{0,20}(\d{4,8})/i);
+  // 其次匹配 context/window 附近的数字（含中文"长度/限制"场景）
+  const nearLength = text.match(/(?:context|context length|window|上下文|长度|限制)[^0-9]{0,20}(\d{4,8})/i);
   if (nearLength) {
     const n = parseInt(nearLength[1], 10);
     if (isValidContextLength(n)) return n;
@@ -170,9 +175,8 @@ export function extractContextLength(text: string): number | null {
  * 记录运行时发现的服务端真实上下文长度
  */
 export function setDiscoveredContextWindow(model: string, contextWindow: number): void {
-  if (model && contextWindow > 0) {
-    discoveredContextWindows.set(model, contextWindow);
-  }
+  if (!model || !isValidContextLength(contextWindow)) return;
+  discoveredContextWindows.set(model, contextWindow);
 }
 
 /**
@@ -264,7 +268,29 @@ export function getModelMaxOutputHint(model: string): string {
 export function computeAvailableInput(budget: TokenBudget, agentMaxTokens: number): number {
   const outputBudget = Math.min(agentMaxTokens, budget.maxOutputTokens);
   const safetyMargin = Math.min(1000, Math.floor(budget.contextWindow * 0.05));
-  return budget.contextWindow - outputBudget - safetyMargin;
+  // 下限 0：预算为负时下游会算出"截断到负数字符"，正文被切光而提示语还在
+  return Math.max(0, budget.contextWindow - outputBudget - safetyMargin);
+}
+
+/** 低于这个输入预算，截断后的 prompt 只剩指令本身，模型会凭空产出正文 */
+export const MIN_USABLE_INPUT_TOKENS = 512;
+
+/**
+ * 需要真正拼进 prompt 的输入预算：不够用就直接失败。
+ *
+ * 静默截断成空正文比报错恶劣得多——模型会凭章节标题 hallucinate 出一篇"总结"
+ * 并正常入库，用户在界面上看不出任何异常（round 2 R-07）。
+ */
+export function requireUsableInput(budget: TokenBudget, agentMaxTokens: number, what = "该请求"): number {
+  const available = computeAvailableInput(budget, agentMaxTokens);
+  if (available < MIN_USABLE_INPUT_TOKENS) {
+    throw new Error(
+      `模型上下文窗口不足以生成${what}：可用输入约 ${available} tokens` +
+      `（窗口 ${budget.contextWindow}、输出预留 ${Math.min(agentMaxTokens, budget.maxOutputTokens)}）。` +
+      `请在设置中改用更长上下文的模型，或调低输出上限。`
+    );
+  }
+  return available;
 }
 
 export function canFitInContext(text: string, model: string, outputTokens: number, contextWindow?: number): boolean {

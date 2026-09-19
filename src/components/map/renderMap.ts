@@ -6,6 +6,26 @@
 import type { MapData } from "@/agents/types";
 import { forceSimulation, forceCollide, forceLink, forceManyBody, forceCenter, forceX, forceY } from "d3-force";
 
+/**
+ * 地图里的每个地名/势力/描述都是 LLM 生成的字符串，会被直接插进 SVG 标签与
+ * 属性。不转义的话，一个名为 `</text><script>` 或带引号的地点就能从文本节点
+ * 或属性里逃逸出去（round 2 R-37）。下游 sanitizeSvg 只是第二道防线——它的
+ * profile 允许 style 标签与属性，且不校验 CSS 规则体。
+ */
+const XML_ESCAPES: Record<string, string> = {
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;",
+};
+export function escapeXml(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  return String(value).replace(/[&<>"']/g, (ch) => XML_ESCAPES[ch]);
+}
+
+/** 坐标/尺寸必须是有限数：`NaN < 0 || NaN > 1000` 恒为 false，非法值能悄悄穿过校验 */
+function safeNum(value: unknown, fallback: number): number {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 // ── 配置 ──────────────────────────────────────────────────────────
 
 /** 基础地图尺寸 */
@@ -239,8 +259,8 @@ function renderPlaces(mapData: MapData, svgWidth: number = BASE_WIDTH, svgHeight
 
   return placesToRender.map((place) => {
     // 使用实际 SVG 坐标（0-1000 范围）
-    const x = PADDING + (place.x / 1000) * (svgWidth - 2 * PADDING);
-    const y = PADDING + (place.y / 1000) * (svgHeight - 2 * PADDING);
+    const x = PADDING + (safeNum(place.x, 500) / 1000) * (svgWidth - 2 * PADDING);
+    const y = PADDING + (safeNum(place.y, 500) / 1000) * (svgHeight - 2 * PADDING);
     const levelScale = getLevelScale(place.level, maxLevel);
     const color = getLayerColor(place.level);
     const size = 6 * levelScale;
@@ -250,15 +270,15 @@ function renderPlaces(mapData: MapData, svgWidth: number = BASE_WIDTH, svgHeight
 
     const fontSize = 10;
 
-    // Tooltip 内容
-    const tooltipContent = `${place.name} (${place.type})
-${place.affiliation ? `势力: ${place.affiliation}` : ""}
-重要程度: ${place.importance || 5}/10
+    // Tooltip 内容（全部转义：这些字符串都来自模型输出）
+    const tooltipContent = `${escapeXml(place.name)} (${escapeXml(place.type)})
+${place.affiliation ? `势力: ${escapeXml(place.affiliation)}` : ""}
+重要程度: ${safeNum(place.importance, 5)}/10
 
-${place.description}`;
+${escapeXml(place.description)}`;
 
     return `
-      <g class="place-group" data-id="${place.id}" style="cursor: pointer; pointer-events: auto;">
+      <g class="place-group" data-id="${escapeXml(place.id)}" style="cursor: pointer; pointer-events: auto;">
         <title>${tooltipContent}</title>
         <!-- 透明热区：略微放大命中区域，方便移动端点选 -->
         <circle cx="${x}" cy="${y}" r="${size + 10}" fill="transparent" pointer-events="all" />
@@ -269,7 +289,7 @@ ${place.description}`;
         <text x="${x}" y="${y + size + 12}"
               text-anchor="middle" fill="#3a2a0a"
               font-size="${fontSize}" font-weight="500" pointer-events="none">
-          ${place.name}
+          ${escapeXml(place.name)}
         </text>
       </g>
     `;
@@ -292,7 +312,7 @@ function renderTopLayerNames(mapData: MapData, zoom: number = 1): string {
     <text x="${centerX}" y="${startY}" text-anchor="middle" fill="#6b3a0a"
           font-size="24" font-weight="bold" font-family="serif"
           stroke="#d4a76a" stroke-width="3" paint-order="stroke">
-      ${topLayer.name}
+      ${escapeXml(topLayer.name)}
     </text>
   `;
 }
@@ -322,7 +342,7 @@ function renderSidebarContent(mapData: MapData): string {
       <g transform="translate(12, ${itemY})">
         <circle cx="8" cy="8" r="5" fill="${color}" stroke="#5a4a2a" stroke-width="1" />
         <text x="22" y="12" fill="#4a3a1a" font-size="11" font-weight="500">
-          ${layer.level}: ${layer.name}
+          ${safeNum(layer.level, 0)}: ${escapeXml(layer.name)}
         </text>
       </g>
     `;
@@ -341,7 +361,7 @@ function renderSidebarContent(mapData: MapData): string {
       <g transform="translate(12, ${itemY})">
         <circle cx="8" cy="8" r="5" fill="${color}" stroke="#5a4a2a" stroke-width="1" />
         <text x="22" y="12" fill="#4a3a1a" font-size="11" font-weight="500">
-          ${force}
+          ${escapeXml(force)}
         </text>
       </g>
     `;

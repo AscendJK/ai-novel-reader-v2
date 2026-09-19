@@ -8,7 +8,7 @@ import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
 import { buildChapterSummaryPrompt } from "@/lib/prompt-templates";
 import { sampleChapterContent, prepareAgentContext, chatWithContextRetry } from "./utils";
-import { estimateTokens, computeAvailableInput } from "@/api/token-manager";
+import { estimateTokens, computeAvailableInput, requireUsableInput } from "@/api/token-manager";
 import { APIError } from "@/api/error-handler";
 
 /**
@@ -32,7 +32,9 @@ class SummarizerAgent extends BaseAgent {
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider, budget } = env;
     // 精确计算：可用输入空间 = 上下文总长 - 输出预算 - 安全余量(5%)
-    const maxChapterChars = Math.floor(computeAvailableInput(budget, SummarizerAgent.OUTPUT_TOKENS));
+    // 不够用就直接失败：预算被算成 0 时截断出的正文只剩提示语，模型会凭章节
+    // 标题凭空产出一篇"总结"并正常入库，界面上看不出任何异常（R-07）
+    const maxChapterChars = Math.floor(requireUsableInput(budget, SummarizerAgent.OUTPUT_TOKENS, "章节总结"));
 
     const targetChapterIds = context.chapterIds || novel.chapters.map((c) => c.id);
     const chapters = novel.chapters.filter((c) => targetChapterIds.includes(c.id));
@@ -64,7 +66,7 @@ class SummarizerAgent extends BaseAgent {
         context.onStatus?.("AI 正在生成分析...");
         const response = await chatWithContextRetry(env, async (b) => {
           // 用最新预算重新计算章节截断阈值（400 自愈时预算缩小会触发更严格截断）
-          const maxChars = Math.floor(computeAvailableInput(b, SummarizerAgent.OUTPUT_TOKENS));
+          const maxChars = Math.floor(requireUsableInput(b, SummarizerAgent.OUTPUT_TOKENS, "章节总结"));
           let content = chapter.content;
           if (chapter.content.length > maxChars) {
             content = sampleChapterContent(chapter.content, maxChars);

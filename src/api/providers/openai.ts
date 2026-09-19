@@ -16,7 +16,11 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
    *  超时抛普通 Error（避免被上游当作"用户取消"吞掉） */
   async function withTimeout(req: ChatCompletionRequest, run: (signal: AbortSignal) => Promise<Response>): Promise<Response> {
     const controller = new AbortController();
-    const onAbort = () => controller.abort();
+    const onAbort = () => {
+      controller.abort();
+      // 触发过一次就摘掉自己，不留给后续请求累积
+      req.signal?.removeEventListener("abort", onAbort);
+    };
     // 已中止的 signal 不会触发新注册的 listener，必须先同步透传一次
     if (req.signal?.aborted) controller.abort();
     req.signal?.addEventListener("abort", onAbort, { once: true });
@@ -34,7 +38,10 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
       throw e;
     } finally {
       clearTimeout(timer);
-      req.signal?.removeEventListener("abort", onAbort);
+      // 这里**不能**摘掉 abort 转发监听：拿到响应头只代表连上了，SSE 正文还在
+      // 流式读取。提前摘掉后用户点"停止"就不再中断连接，读循环会一直跑到流结束
+      // （对端停滞时只能等看门狗），停止按钮形同失效（round 2 R-52）。
+      // 未发生中止的请求会留一个 once 监听器，随本次任务的 signal 一起回收。
     }
   }
 

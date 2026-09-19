@@ -186,7 +186,9 @@ export function NovelMapSection({
   const handleExport = useCallback(async () => {
     if (!mapSvg) return;
     try {
-      const blob = await renderSvgToPng(mapSvg);
+      // 导出路径同样要过 sanitize：内联显示走了 sanitizeSvg，直接塞进
+      // new Image() 的 data URL 曾是不设防的（round 2 R-37）
+      const blob = await renderSvgToPng(sanitizeSvg(mapSvg));
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;

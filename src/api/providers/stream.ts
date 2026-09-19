@@ -75,11 +75,13 @@ export async function readSSEData(response: Response): Promise<{ events: unknown
     throw e instanceof Error ? e : new Error(String(e));
   } finally {
     if (idleTimer) clearTimeout(idleTimer);
-    try {
-      await reader.cancel();
-    } catch {
-      /* 流已结束/已锁定的忽略 */
-    }
+    // 不 await cancel()：连接黑洞（NAT 静默丢包、半开 TCP）时 cancel 本身可能
+    // 永不 resolve，那样看门狗虽然 reject 了，调用方却仍卡在 finally 里出不来，
+    // 任务永远显示"生成中"——正好把要修的问题留在原地（round 2 R-55）
+    void Promise.race([
+      reader.cancel().catch(() => { /* 流已结束/已锁定 */ }),
+      new Promise((resolve) => setTimeout(resolve, 1000)),
+    ]);
   }
 
   // 处理 buffer 中残留的最后一行

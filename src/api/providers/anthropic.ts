@@ -12,7 +12,10 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
 
   async function withTimeout(req: ChatCompletionRequest, run: (signal: AbortSignal) => Promise<Response>): Promise<Response> {
     const controller = new AbortController();
-    const onAbort = () => controller.abort();
+    const onAbort = () => {
+      controller.abort();
+      req.signal?.removeEventListener("abort", onAbort);
+    };
     // 已中止的 signal 不会触发新注册的 listener，必须先同步透传一次
     if (req.signal?.aborted) controller.abort();
     req.signal?.addEventListener("abort", onAbort, { once: true });
@@ -30,7 +33,8 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
       throw e;
     } finally {
       clearTimeout(timer);
-      req.signal?.removeEventListener("abort", onAbort);
+      // 不摘 abort 转发监听：响应头到手时 SSE 正文仍在读，提前摘掉会让"停止"
+      // 按钮不再中断连接（round 2 R-52，与 openai.ts 同一处）
     }
   }
 
