@@ -179,16 +179,23 @@ export function TTSSettings() {
     if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
   }, []);
 
+  /**
+   * 试听前停掉正文朗读：通过活跃 manager 停止（同步其内部状态），
+   * 不要直接 speechSynthesis.cancel()——manager 不知情会让播放链"复活"。
+   * 判 generating 是关键：正文处于"正在生成下一段"的间隙时 playing 为 false，
+   * 只判 playing 会让试听和随后到达的正文音频叠在一起。
+   */
+  const stopReadingForPreview = useCallback(() => {
+    const state = useTTSStore.getState();
+    if (!state.playing && !state.generating) return;
+    const manager = getActiveTTSManager();
+    if (manager) manager.stop();
+    else state.reset();
+  }, []);
+
   const previewVoice = useCallback((previewVoiceId: string) => {
     if (previewing) return;
-    const state = useTTSStore.getState();
-    if (state.playing) {
-      // 与 ZipVoice/Server 试听一致：通过活跃 manager 停止朗读（同步内部状态），
-      // 避免直接 speechSynthesis.cancel() 导致 manager 不知情、播放链"复活"
-      const manager = getActiveTTSManager();
-      if (manager) manager.stop();
-      else state.reset();
-    }
+    stopReadingForPreview();
     const utterance = new SpeechSynthesisUtterance("各位村民，大家新年好。近期，湖北省武汉市等多个地区。");
     utterance.lang = "zh-CN";
     const voice = browserVoices.find(v => v.voiceURI === previewVoiceId);
@@ -198,7 +205,7 @@ export function TTSSettings() {
     setPreviewing(true);
     speechSynthesis.speak(utterance);
     previewTimerRef.current = setTimeout(() => { speechSynthesis.cancel(); previewTimerRef.current = null; setPreviewing(false); }, 30000);
-  }, [browserVoices, previewing]);
+  }, [browserVoices, previewing, stopReadingForPreview]);
 
   // ── ZipVoice 离线音色试听 ──
   const effectiveZipVoiceId = ZH_VOICES[voiceId] ? voiceId : "45";
@@ -218,13 +225,7 @@ export function TTSSettings() {
 
   const previewZipVoice = useCallback(async (previewVoiceId: string) => {
     if (zipPreviewing) return;
-    const state = useTTSStore.getState();
-    // 停止正在进行的朗读（Web Speech 或 ZipVoice），避免混音
-    if (state.playing) {
-      const manager = getActiveTTSManager();
-      if (manager) manager.stop();
-      else state.reset();
-    }
+    stopReadingForPreview();      // 停止正在进行的朗读（含生成间隙），避免混音
     setZipPreviewError(null);
     setZipPreviewing(true);
     try {
@@ -270,7 +271,7 @@ export function TTSSettings() {
       setZipPreviewError(err instanceof Error ? err.message : String(err));
       setZipPreviewing(false);
     }
-  }, [zipPreviewing]);
+  }, [zipPreviewing, stopReadingForPreview]);
 
   // ── 服务端推理（server）状态 ──
   const [serverStatus, setServerStatus] = useState<{ supported: boolean; ready: boolean; reason: string } | null>(null);
@@ -362,12 +363,7 @@ export function TTSSettings() {
   // 服务端推理音色试听
   const previewServerVoice = useCallback(async (previewVoiceId: string) => {
     if (serverPreviewing) return;
-    const state = useTTSStore.getState();
-    if (state.playing) {
-      const manager = getActiveTTSManager();
-      if (manager) manager.stop();
-      else state.reset();
-    }
+    stopReadingForPreview();
     setServerPreviewError(null);
     setServerPreviewing(true);
     try {
@@ -405,7 +401,7 @@ export function TTSSettings() {
       setServerPreviewError(err instanceof Error ? err.message : String(err));
       setServerPreviewing(false);
     }
-  }, [serverPreviewing]);
+  }, [serverPreviewing, stopReadingForPreview]);
 
   // 浏览器推理资源就绪状态（IndexedDB 缓存 + 服务器模型）
   // P2-3 fix: 旧逻辑 isModelLoaded() || !!window.indexedDB 恒真（几乎所有浏览器都支持

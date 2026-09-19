@@ -71,6 +71,21 @@ function decodeWav(arrayBuf: ArrayBuffer): { samples: Float32Array; sampleRate: 
   return { samples, sampleRate };
 }
 
+/**
+ * 客户端等待上限：必须大于服务端单次生成超时（routes/rag.js 的 TTS_PY_GEN_TIMEOUT=180s）。
+ * 客户端先放弃的话，服务端仍会把这份推理跑完并占着队列位（其他人被拖慢），
+ * 而客户端把这次失败当普通错误自动重试 3 次 → 最坏 6×120s 的重复排队。
+ */
+const SERVER_SYNTH_TIMEOUT_MS = 240_000;
+
+/** 服务端推理超时：队列繁忙或推理卡死，自动重试只会加深排队，UI 须区别对待 */
+export class ServerInferenceTimeoutError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ServerInferenceTimeoutError";
+  }
+}
+
 /** 服务端推理生成一段音频（同步请求，返回 Float32Array） */
 export async function synthesizeServer(
   text: string,
@@ -84,13 +99,25 @@ export async function synthesizeServer(
   const t0 = performance.now();
   console.log(`[TTS-server] 请求生成: ${cleanText.length} 字, sid=${sid}, speed=${options?.speed ?? 1.0}`);
   // 无超时的话：服务端 TCP 半开/推理进程僵死时该请求永不返回，播放链
-  // 永久停在"生成中"。120s 覆盖最大 2000 字的服务端推理耗时（RTF≈0.6）。
-  const res = await apiFetch("/api/rag/tts/synthesize", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: cleanText, sid, speed: options?.speed ?? 1.0 }),
-    signal: AbortSignal.timeout(120_000),
-  });
+  // 永久停在"生成中"。上限见 SERVER_SYNTH_TIMEOUT_MS。
+  let res: Response;
+  try {
+    res = await apiFetch("/api/rag/tts/synthesize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: cleanText, sid, speed: options?.speed ?? 1.0 }),
+      signal: AbortSignal.timeout(SERVER_SYNTH_TIMEOUT_MS),
+    });
+  } catch (e) {
+    const name = e instanceof Error ? e.name : "";
+    if (name === "TimeoutError" || name === "AbortError") {
+      throw new ServerInferenceTimeoutError(
+        `服务端推理超时（超过 ${Math.round(SERVER_SYNTH_TIMEOUT_MS / 1000)} 秒），队列可能繁忙`,
+        { cause: e },
+      );
+    }
+    throw e;
+  }
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
     try { const j = await res.json(); if (j?.error) msg = j.error; } catch { /* 非 JSON */ }

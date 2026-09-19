@@ -282,13 +282,15 @@ export function useAudioPlayer({
           setPlaying(false);
         }
       },
-      onError: (err) => {
+      onError: (err, info) => {
         console.error("[TTS] Error:", err);
         setGenerating(false);
         setPlaying(false);
         const count = retryCountRef.current;
         // U5: 自动重试（Web Speech API 常见瞬时错误）
-        if (count < 3) {
+        // retryable=false（服务端推理超时）时不重试：服务端仍在跑那一份请求，
+        // 重试只会把排队更长（最坏 3 次 × 超时时长），直接把错误交给用户
+        if (info?.retryable !== false && count < 3) {
           retryCountRef.current = count + 1;
           setRetryCount(count + 1);
           setError(`${err}（自动重试 ${count + 1}/3...）`);

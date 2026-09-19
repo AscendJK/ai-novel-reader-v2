@@ -5,7 +5,7 @@
  */
 
 import { loadModel, generateAudio, resetWorker } from "./zipvoice-engine";
-import { synthesizeServer, cancelServerInference } from "./server-engine";
+import { synthesizeServer, cancelServerInference, ServerInferenceTimeoutError } from "./server-engine";
 
 export type TTSEngine = "server" | "zipvoice" | "webspeech";
 
@@ -30,7 +30,11 @@ export interface TTSPlaybackCallbacks {
   onChunkStart?: (index: number, total: number, paragraphIndex: number) => void;
   onChunkEnd?: (index: number, total: number, paragraphIndex: number) => void;
   onParagraphChange?: (paragraphIndex: number) => void;
-  onError?: (error: string) => void;
+  /**
+   * 朗读出错。info.retryable=false 表示这是"重试只会更糟"的失败
+   * （服务端队列超时），UI 不应自动重试。
+   */
+  onError?: (error: string, info?: { retryable?: boolean }) => void;
   onFallback?: (from: TTSEngine, to: TTSEngine) => void;
   onModelProgress?: (progress: number) => void;
   onModelLoaded?: () => void;
@@ -730,10 +734,14 @@ export class TTSManager {
   private preparing = false;                       // 预生成阶段（开播前）
   private prepareReady = 0;                        // 预生成已完成段数
   private skipPrepareRequested = false;            // 用户点"立即播放"：提前结束预生成
-  // 预生成在途任务（chunk index → 完成通知）：现场生成时若该段预生成已在 worker 中
-  // 运行/排队，等待其完成而非重复提交（避免同一段生成两遍浪费推理）
-  private inFlightPrefetch = new Set<number>();
-  private prefetchWaiters = new Map<number, (() => void)[]>();
+  // 预生成在途任务：chunk index → 提交它的那一朗读代次。现场生成遇到同段在途时
+  // 等它完成而非重复提交。带代次是必须的——旧一轮的 finally 若无条件删标记，
+  // 会把新一轮同段的在途标记抹掉并误唤醒它的等待者（同一段被推理两遍）
+  private inFlightPrefetch = new Map<number, number>();
+  private prefetchWaiters = new Map<number, { genId: number; resolve: () => void }[]>();
+  // 生成参数（语速/倍速）epoch：变更后在飞的旧参数预生成不得再入池，
+  // 否则同一章里混着两套语速（代次不变，所以不能靠 generationId 作废）
+  private generationEpoch = 0;
 
   constructor() {
     this.webSpeech = new WebSpeechTTSEngine();
@@ -791,6 +799,7 @@ export class TTSManager {
     if (!kokoro || this.engine === "webspeech") return;
     if (this.stopped || this.prefetchCount <= 0) return;
     const genId = this.generationId;
+    const epoch = this.generationEpoch;
     const effectiveSpeed = Math.max(0.4, Math.min(3.5, this.speed * this.playbackRate));
     // 水位目标：当前播放 index + K；预生成阶段则推进到 K
     const base = this.preparing ? 0 : this.currentChunkIndex + 1;
@@ -809,9 +818,9 @@ export class TTSManager {
       const idx = cursor++;
       const chunk = this.chunks[idx];
       if (!chunk) break;
-      // 已在途（现场生成可能已插队提交同段）→ 跳过，不重复提交
-      if (this.inFlightPrefetch.has(idx)) continue;
-      this.inFlightPrefetch.add(idx);
+      // 已在途（含其他代次尚未收尾的同段）→ 跳过，不重复提交
+      if (this.inFlightPrefetch.get(idx) !== undefined) continue;
+      this.inFlightPrefetch.set(idx, genId);
       // 异步生成：完成后若未作废则入缓冲（按 index 有序插入）
       (async () => {
         try {
@@ -819,7 +828,7 @@ export class TTSManager {
             chunk.text, effectiveSpeed,
             () => this.stopped || this.generationId !== genId,
           );
-          if (this.stopped || this.generationId !== genId) return; // 作废：停止/seek/语速变更
+          if (this.stopped || this.generationId !== genId || epoch !== this.generationEpoch) return; // 作废：停止/seek/语速变更
           // 该段已播放（现场生成插队抢先完成）→ 丢弃，避免残留永不播放的缓冲
           if (this.currentChunkIndex > idx) return;
           // 有序插入（跳过已存在 index，防止重复提交竞态）
@@ -838,8 +847,9 @@ export class TTSManager {
             console.warn(`[TTS] 预生成 chunk ${idx + 1} 失败（后续播放时会重试）:`, e instanceof Error ? e.message : e);
           }
         } finally {
-          this.inFlightPrefetch.delete(idx);
-          this.notifyPrefetchDone(idx); // 唤醒等待该段的现场生成（成功→缓冲命中；失败→现场生成重试）
+          // 只收尾自己这一代的标记：新一轮可能已重新提交同一段
+          if (this.inFlightPrefetch.get(idx) === genId) this.inFlightPrefetch.delete(idx);
+          this.notifyPrefetchDone(idx, genId); // 唤醒等待该段的现场生成（成功→缓冲命中；失败→现场生成重试）
         }
       })();
     }
@@ -897,19 +907,21 @@ export class TTSManager {
   }
 
   /** 唤醒等待指定段预生成完成的现场生成（成功/失败都唤醒，调用方重新检查缓冲） */
-  private notifyPrefetchDone(idx: number): void {
-    const waiters = this.prefetchWaiters.get(idx);
-    if (waiters) {
-      this.prefetchWaiters.delete(idx);
-      for (const w of waiters) w();
-    }
+  private notifyPrefetchDone(idx: number, genId: number): void {
+    const waiting = this.prefetchWaiters.get(idx);
+    if (!waiting) return;
+    // 只唤醒同代次的等待者：别的代次只是恰好也提交了同一段，它的任务还在跑
+    const keep = waiting.filter(w => w.genId !== genId);
+    if (keep.length > 0) this.prefetchWaiters.set(idx, keep);
+    else this.prefetchWaiters.delete(idx);
+    for (const w of waiting) if (w.genId === genId) w.resolve();
   }
 
   /** 注册等待：该段预生成在途时，现场生成等待其完成（不重复提交浪费推理） */
-  private waitPrefetchDone(idx: number): Promise<void> {
+  private waitPrefetchDone(idx: number, genId: number): Promise<void> {
     return new Promise<void>((resolve) => {
       const arr = this.prefetchWaiters.get(idx) ?? [];
-      arr.push(resolve);
+      arr.push({ genId, resolve });
       this.prefetchWaiters.set(idx, arr);
     });
   }
@@ -922,7 +934,7 @@ export class TTSManager {
     this.prepareReady = 0;
     this.skipPrepareRequested = false;
     // 唤醒全部等待者：调用方会因 stopped/代次变化退出（安全），并清空等待表防泄漏
-    for (const waiters of this.prefetchWaiters.values()) for (const w of waiters) w();
+    for (const waiters of this.prefetchWaiters.values()) for (const w of waiters) w.resolve();
     this.prefetchWaiters.clear();
     this.inFlightPrefetch.clear();
     this.callbacks.onBufferChange?.(0);
@@ -960,10 +972,26 @@ export class TTSManager {
       this.generationId++;
       this.webSpeech.stop();
       this.speakFromParagraph(para);
-    } else if (this.engine !== "webspeech" && this.getKokoroEngine()?.isSpeaking()) {
-      // Kokoro（server/zipvoice）：语速是生成参数，需用新语速重新生成当前 chunk（保音高）
-      this.restartZipVoiceFromCurrentChunk();
+    } else {
+      this.applyKokoroSpeedChange();
     }
+  }
+
+  /**
+   * Kokoro（server/zipvoice）语速/倍速变更后的收尾——两种状态分开处理：
+   * - 正在播放：seek 回当前 chunk 用新语速重新生成（本段从头重播，保音高）
+   * - 暂停中 / 生成间隙：不能 seek（会把已暂停的会话直接播起来），改为作废
+   *   已入池与在飞的旧语速音频，下一段开播时按新语速补生成。
+   *   漏掉这一步的后果就是"改倍速后同一章混着两套语速"（旧代码只在播放中处理）
+   */
+  private applyKokoroSpeedChange(): void {
+    if (this.engine === "webspeech" || this.stopped || !this.zipvoice) return;
+    if (this.zipvoice.isSpeaking()) {
+      this.restartZipVoiceFromCurrentChunk();
+      return;
+    }
+    this.generationEpoch++;
+    this.clearPrefetch();
   }
 
   /**
@@ -974,13 +1002,14 @@ export class TTSManager {
    */
   setPlaybackRate(playbackRate: number) {
     this.playbackRate = Math.max(0.5, Math.min(3.0, playbackRate));
-    if (this.engine !== "webspeech" && this.getKokoroEngine()?.isSpeaking()) {
-      this.restartZipVoiceFromCurrentChunk();
-    } else if (this.engine === "webspeech" && this.webSpeech.isSpeaking()) {
+    if (this.engine === "webspeech") {
+      if (!this.webSpeech.isSpeaking()) return;
       const para = this.currentParagraphIndex;
       this.generationId++;
       this.webSpeech.stop();
       this.speakFromParagraph(para);
+    } else {
+      this.applyKokoroSpeedChange();
     }
   }
   setVolume(volume: number) { this.volume = Math.max(0, Math.min(1, volume)); }
@@ -1101,7 +1130,13 @@ export class TTSManager {
   }
 
   private async speakNextChunk(): Promise<void> {
-    if (this.currentChunkIndex >= this.chunks.length) { this.callbacks.onEnd?.(); return; }
+    if (this.currentChunkIndex >= this.chunks.length) {
+      // 章末释放缓冲池：K 段 AudioBuffer（每段可达数 MB）不该在听完之后继续占着，
+      // 浏览器推理的 worker 池另由 stop()/卸载路径释放
+      this.clearPrefetch();
+      this.callbacks.onEnd?.();
+      return;
+    }
 
     const chunk = this.chunks[this.currentChunkIndex];
     const genId = this.generationId;
@@ -1128,8 +1163,9 @@ export class TTSManager {
         try {
           // 该段预生成已在途（worker 正在跑/排队）→ 等它完成，不重复提交浪费推理；
           // 完成后缓冲命中直接播放；预生成失败则回落到现场生成（插队）。
-          if (!this.preparing && this.inFlightPrefetch.has(this.currentChunkIndex)) {
-            await this.waitPrefetchDone(this.currentChunkIndex);
+          // 只认同代次的在途标记：旧一轮残留的任务不会为这一轮产出可用音频
+          if (!this.preparing && this.inFlightPrefetch.get(this.currentChunkIndex) === genId) {
+            await this.waitPrefetchDone(this.currentChunkIndex, genId);
             if (this.stopped || this.generationId !== genId) return;
             const readyIdx = this.buffered.findIndex(b => b.index === this.currentChunkIndex);
             if (readyIdx >= 0) {
@@ -1155,7 +1191,11 @@ export class TTSManager {
           this.callbacks.onGenerating?.(false);
           if (this.stopped || this.generationId !== genId) return; // 取消静默
           const msg = err instanceof Error ? err.message : String(err);
-          this.callbacks.onError?.(`音频生成失败: ${msg}`);
+          // 服务端队列超时不标记为可重试：重试只会把排队进一步拉长
+          this.callbacks.onError?.(
+            `音频生成失败: ${msg}`,
+            { retryable: !(err instanceof ServerInferenceTimeoutError) },
+          );
           return;
         }
         this.callbacks.onGenerating?.(false);
