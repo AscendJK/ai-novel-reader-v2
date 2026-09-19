@@ -239,8 +239,8 @@ export async function buildIndex(
       // 登记 LRU（同上：按 Float64 文档向量真实驻留计尺寸）
       lruAdd(cacheKey, [], chunks, 128, chunks.length * 128 * 8);
       ragLog(`TF-IDF 已缓存: ${chunks.length}片段`);
-      // 清理超限缓存
-      await enforceIndexedDBQuota();
+      // 清理超限缓存（保护刚写入的这本，见 R-26）
+      await enforceIndexedDBQuota([novelId]);
 
       const entry: IndexEntry = { novelId, engine, retriever, chunkCount: chunks.length, buildTime: Date.now() - t0 };
       indexCache.set(cacheKey, entry);

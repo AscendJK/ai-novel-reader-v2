@@ -112,6 +112,7 @@ db.exec(`
     chunk_count INTEGER DEFAULT 0,
     build_time INTEGER DEFAULT 0,
     error_msg TEXT,
+    source_fingerprint TEXT,
     PRIMARY KEY (novel_id, engine),
     FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
   );
@@ -198,6 +199,22 @@ function migrateUserScopedKeys() {
   }
 }
 migrateUserScopedKeys();
+
+// ── 迁移：rag_indices 增加 source_fingerprint 列 ────────────────
+// 用于判断"status=ready 的索引"是否还和当前正文一致（重传/改章后旧向量必须
+// 作废，否则检索结果与用户读到的文字长期对不上且无自愈路径，round 2 R-09）。
+// 老行留 NULL 即视为"指纹未知"→ 下次构建请求触发一次重建，方向是安全的。
+{
+  const cols = db.prepare("PRAGMA table_info(rag_indices)").all().map((c) => c.name);
+  if (cols.length && !cols.includes("source_fingerprint")) {
+    try {
+      db.exec("ALTER TABLE rag_indices ADD COLUMN source_fingerprint TEXT");
+      console.log("[db] 迁移 rag_indices: 增加 source_fingerprint 列（旧索引将在下次构建时重建）");
+    } catch (e) {
+      console.error("[db] rag_indices 指纹列迁移失败:", e.message);
+    }
+  }
+}
 
 // ── Prepared statements ─────────────────────────────────────
 

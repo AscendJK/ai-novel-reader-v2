@@ -49,6 +49,9 @@ jobs:
       - name: maps/graphs 主键迁移探针 (旧库副本上验证)
         run: npm run probe:maps
 
+      - name: RAG 索引失效探针 (改章/重传后旧向量必须作废)
+        run: npm run probe:rag
+
       - name: LLM 代理流式透传探针 (SSE 不被 JSON.parse 打死)
         run: npm run probe:proxy
 

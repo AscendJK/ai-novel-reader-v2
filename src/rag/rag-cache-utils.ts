@@ -97,57 +97,84 @@ function getEvictionScore(entry: { createdAt: number; lastAccessed?: number; acc
   return ageScore * 0.4 + lastAccessScore * 0.4 + accessScore * 0.2;
 }
 
-/**
- * 淘汰最应该被删除的缓存条目
- * @param skipNovelId 要跳过的小说 ID（保护当前使用的小说）
- * @returns 淘汰的信息和释放的字节数
- */
-async function evictSmartestRagCacheEntry(skipNovelId?: string): Promise<{ freed: number; evicted?: EvictedEntry }> {
-  try {
-    const all = await db.ragCache.toArray();
+/** 淘汰决策只需要的那几个字段——绝不携带 vectorsBuffer/chunks */
+interface CacheMeta {
+  id: string;
+  novelId: string;
+  engine: string;
+  size: number;
+  createdAt: number;
+  lastAccessed?: number;
+  accessCount?: number;
+}
 
-    // 跳过当前使用的小说
-    const candidates = skipNovelId
-      ? all.filter(e => e.novelId !== skipNovelId)
-      : all;
-
-    if (candidates.length === 0) return { freed: 0 };
-
-    // 按淘汰分数排序，淘汰分数最高的
-    const scored = candidates.map(entry => ({
-      entry,
-      score: getEvictionScore(entry)
-    }));
-    scored.sort((a, b) => b.score - a.score);
-
-    const toEvict = scored[0].entry;
-    // 与 computeRagCacheSize 保持一致：向量 + 文本 chunk + extraData 都计入
-    let size = 0;
-    if (toEvict.vectorsBuffer && toEvict.dim && toEvict.chunkCount) {
-      size = toEvict.chunkCount * toEvict.dim * 4;
-      if (toEvict.chunks && toEvict.chunks.length > 0) {
-        size += toEvict.chunks.reduce((sum, c) => sum + (c.content?.length || 0) * 2, 0);
-      }
-      if (toEvict.extraData) {
-        size += toEvict.extraData.length * 2;
-      }
-    }
-
-    await db.ragCache.delete(toEvict.id);
-    useRAGStore.getState().removeCachedKey(toEvict.id);
-
-    return {
-      freed: size,
-      evicted: {
-        id: toEvict.id,
-        novelId: toEvict.novelId,
-        engine: toEvict.engine,
-        size,
-      }
-    };
-  } catch {
-    return { freed: 0 };
+/** 与 computeRagCacheSize 同口径：向量 + 文本 chunk + extraData */
+function entrySizeOf(entry: { vectorsBuffer?: ArrayBuffer; dim?: number; chunkCount?: number; chunks?: { content?: string }[]; extraData?: string }): number {
+  if (!entry.vectorsBuffer || !entry.dim || !entry.chunkCount) return 0;
+  let size = entry.chunkCount * entry.dim * 4;
+  if (entry.chunks?.length) {
+    size += entry.chunks.reduce((sum, c) => sum + (c.content?.length || 0) * 2, 0);
   }
+  if (entry.extraData) size += entry.extraData.length * 2;
+  return size;
+}
+
+/**
+ * 只取元数据的候选清单。
+ *
+ * 旧实现在**每淘汰一条**都执行一次 `db.ragCache.toArray()`：那会把整表（含
+ * vectorsBuffer 与 chunks 全文）反序列化进内存，N 条 = N 次全表载入 —— 配额
+ * 上限 500MB 时必然把标签页打死（round 2 R-08）。each() 逐条读取、读完即释放，
+ * 峰值只有"最大单条"。
+ */
+async function collectCacheMeta(protectNovelIds: ReadonlySet<string>): Promise<CacheMeta[]> {
+  const out: CacheMeta[] = [];
+  await db.ragCache.each((entry) => {
+    if (protectNovelIds.has(entry.novelId)) return;
+    out.push({
+      id: entry.id,
+      novelId: entry.novelId,
+      engine: entry.engine,
+      size: entrySizeOf(entry),
+      createdAt: entry.createdAt,
+      lastAccessed: entry.lastAccessed,
+      accessCount: entry.accessCount,
+    });
+  });
+  return out;
+}
+
+/**
+ * 按淘汰分数从高到低删除，直到腾出 needFree 字节或清单耗尽。
+ *
+ * 分数相同（或缺字段的坏条目 size=0）也要继续删：旧实现靠 `freed === 0` 退出，
+ * 一条 size 算不出来的坏记录会让整个淘汰流程原地停下，缓存就此只增不减。
+ */
+async function evictToFree(needFree: number, extraProtect: Iterable<string> = []): Promise<{ freed: number; evicted: EvictedEntry[] }> {
+  const protect = new Set<string>();
+  for (const id of extraProtect) if (id) protect.add(id);
+  const currentNovelId = getCurrentNovelId();
+  if (currentNovelId) protect.add(currentNovelId);
+
+  const candidates = (await collectCacheMeta(protect))
+    .map((m) => ({ m, score: getEvictionScore(m) }))
+    .sort((a, b) => b.score - a.score);
+
+  let freed = 0;
+  const evicted: EvictedEntry[] = [];
+  for (const { m } of candidates) {
+    if (freed >= needFree) break;
+    try {
+      await db.ragCache.delete(m.id);
+    } catch (e) {
+      console.warn("[rag] 淘汰写入失败，跳过该条:", m.id, e);
+      continue;
+    }
+    useRAGStore.getState().removeCachedKey(m.id);
+    freed += m.size;
+    evicted.push({ id: m.id, novelId: m.novelId, engine: m.engine, size: m.size });
+  }
+  return { freed, evicted };
 }
 
 // ============================================================
@@ -179,9 +206,10 @@ export async function updateAccessTime(novelId: string, engine: string) {
 /**
  * 确保有足够的缓存空间
  * @param requiredBytes 需要的字节数
+ * @param protectNovelIds 额外不许淘汰的小说（默认只有"当前正在读的那本"）
  * @returns 是否成功腾出空间
  */
-export async function ensureCacheSpace(requiredBytes: number): Promise<boolean> {
+export async function ensureCacheSpace(requiredBytes: number, protectNovelIds?: Iterable<string>): Promise<boolean> {
   const limitBytes = useRAGStore.getState().cacheSizeMB * 1024 * 1024;
   const currentSize = await computeRagCacheSize();
   const available = limitBytes - currentSize;
@@ -192,17 +220,7 @@ export async function ensureCacheSpace(requiredBytes: number): Promise<boolean> 
   // 需要腾出的空间
   const needFree = requiredBytes - available;
 
-  // 尝试淘汰
-  let freed = 0;
-  const currentNovelId = getCurrentNovelId();
-  const evicted: EvictedEntry[] = [];
-
-  while (freed < needFree) {
-    const result = await evictSmartestRagCacheEntry(currentNovelId);
-    if (result.freed === 0) break;
-    freed += result.freed;
-    if (result.evicted) evicted.push(result.evicted);
-  }
+  const { freed, evicted } = await evictToFree(needFree, protectNovelIds);
 
   // 通知用户
   notifyEviction(evicted);
@@ -240,8 +258,10 @@ let evictionChain: Promise<void> = Promise.resolve();
 /**
  * 强制执行 IndexedDB 缓存大小限制
  * 淘汰最旧或最少使用的条目，直到大小符合限制
+ * @param protectNovelIds 刚下载完的目标书也要保护，否则它会立刻被自己触发的
+ *   淘汰清掉（round 2 R-26）
  */
-export async function enforceIndexedDBQuota() {
+export async function enforceIndexedDBQuota(protectNovelIds?: Iterable<string>) {
   // Insert ourselves at the end of the chain
   const prev = evictionChain;
   let release!: () => void;
@@ -257,17 +277,9 @@ export async function enforceIndexedDBQuota() {
       return;
     }
 
-    const currentNovelId = getCurrentNovelId();
-    const evicted: EvictedEntry[] = [];
-
-    while (currentSize > limitBytes) {
-      const result = await evictSmartestRagCacheEntry(currentNovelId);
-      if (result.freed === 0) break;
-      currentSize -= result.freed;
-      if (result.evicted) evicted.push(result.evicted);
-    }
-
-    useRAGStore.getState().updateRagCacheSize(currentSize);
+    const { freed, evicted } = await evictToFree(currentSize - limitBytes, protectNovelIds);
+    currentSize -= freed;
+    useRAGStore.getState().updateRagCacheSize(Math.max(0, currentSize));
 
     // 通知用户
     notifyEviction(evicted);

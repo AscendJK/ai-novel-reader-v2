@@ -50,13 +50,36 @@ import { resolveModelKey } from "./lib/engine-config.js";
 
 const MAX_QUEUE = 10;
 
+/**
+ * 章节指纹：数量 + 正文总字数 + 标题总字数。
+ * 用一条 SQL 在 SQLite 内部算，不把正文搬进 Node 内存。
+ */
+export function chapterFingerprint(novelId) {
+  const r = db.db.prepare(`
+    SELECT COUNT(*) AS n,
+           COALESCE(SUM(LENGTH(content)), 0) AS chars,
+           COALESCE(SUM(LENGTH(title)), 0) AS tchars
+    FROM chapters WHERE novel_id = ?
+  `).get(novelId);
+  return `${r.n}:${r.chars}:${r.tchars}`;
+}
+
 /** Add a novel to the build queue */
 export function buildIndex(novelId, engine = "Xenova/bge-small-zh-v1.5") {
   const key = `${novelId}-${engine}`;
 
   // Check DB status
-  const existing = db.db.prepare("SELECT status, chunk_count, dim FROM rag_indices WHERE novel_id = ? AND engine = ?").get(novelId, engine);
-  if (existing && existing.status === "ready") return { status: "ready", chunkCount: existing.chunk_count, dim: existing.dim };
+  const existing = db.db.prepare("SELECT status, chunk_count, dim, source_fingerprint FROM rag_indices WHERE novel_id = ? AND engine = ?").get(novelId, engine);
+  if (existing && existing.status === "ready") {
+    const fingerprint = chapterFingerprint(novelId);
+    if (existing.source_fingerprint === fingerprint) {
+      return { status: "ready", chunkCount: existing.chunk_count, dim: existing.dim };
+    }
+    // 正文已经变了（重传/改章）：旧向量和现在的文字不再对应，留着会把错误的
+    // 检索结果一路发给用户，而且永远不会自愈（round 2 R-09）
+    console.log(`[rag] 章节指纹变化，索引作废重建: ${key} ${existing.source_fingerprint ?? "NULL"} → ${fingerprint}`);
+    db.db.prepare("DELETE FROM rag_indices WHERE novel_id = ? AND engine = ?").run(novelId, engine);
+  }
 
   // Don't allow duplicate
   if (buildProgress.has(key)) return { ...buildProgress.get(key), queuePosition: queue.length + (running ? 1 : 0) };
@@ -175,6 +198,9 @@ async function _doBuild(novelId, engine, key) {
   const chapters = db.db.prepare("SELECT title, content FROM chapters WHERE novel_id = ? ORDER BY index_num").all(novelId);
   console.log(`[rag] chapters: ${chapters.length}`);
   if (!chapters.length) throw new Error("No chapters found");
+  // 本次索引对应的正文指纹（与 chunk 同一时刻取样）。构建期间正文又被改写的话，
+  // 存下的指纹与结果不符 → 下次构建请求会判定为已变化并重建，方向是安全的。
+  const fingerprint = chapterFingerprint(novelId);
 
   // Chunk（包含 chapterIndex 用于范围过滤）
   const chunks = [];
@@ -204,8 +230,8 @@ async function _doBuild(novelId, engine, key) {
   }
 
   buildProgress.set(key, { status: "building", current: 0, total: chunks.length });
-  db.db.prepare("INSERT OR REPLACE INTO rag_indices (novel_id, engine, status, chunks_json, chunk_count) VALUES (?, ?, 'building', ?, ?)")
-    .run(novelId, engine, JSON.stringify(chunks), chunks.length);
+  db.db.prepare("INSERT OR REPLACE INTO rag_indices (novel_id, engine, status, chunks_json, chunk_count, source_fingerprint) VALUES (?, ?, 'building', ?, ?, ?)")
+    .run(novelId, engine, JSON.stringify(chunks), chunks.length, fingerprint);
 
   // Encode in Worker Thread with dynamic timeout (~0.3s per chunk, min 10min, max 60min)
   const modelKey = resolveModelKey(engine);
@@ -244,12 +270,22 @@ async function _doBuild(novelId, engine, key) {
   });
 
   const dim = vectors[0]?.length || 0;
+  // 落库前自校验：曾经写出过 dim=0 / 向量数与 chunk 数不符的 ready 行——客户端
+  // 每次都抛错却被告知"无法连接服务器"，而 ready 状态让服务端不再重建（R-28）
+  if (!dim || vectors.length !== chunks.length) {
+    const msg = `索引结果不完整（向量 ${vectors.length} 条 / 应为 ${chunks.length} 条，维度 ${dim}），请重新构建`;
+    console.error(`[rag] ${key}: ${msg}`);
+    db.db.prepare("UPDATE rag_indices SET status = 'error', error_msg = ? WHERE novel_id = ? AND engine = ?")
+      .run(msg, novelId, engine);
+    buildProgress.set(key, { status: "error", error: msg });
+    throw new Error(msg);
+  }
   const totalFloats = vectors.length * dim;
   const buf = new Float32Array(totalFloats);
   for (let i = 0; i < vectors.length; i++) buf.set(vectors[i], i * dim);
 
-  db.db.prepare("UPDATE rag_indices SET status = 'ready', vectors_blob = ?, dim = ?, chunk_count = ?, build_time = ? WHERE novel_id = ? AND engine = ?")
-    .run(Buffer.from(buf.buffer), dim, chunks.length, Date.now() - t0, novelId, engine);
+  db.db.prepare("UPDATE rag_indices SET status = 'ready', vectors_blob = ?, dim = ?, chunk_count = ?, build_time = ?, source_fingerprint = ?, error_msg = NULL WHERE novel_id = ? AND engine = ?")
+    .run(Buffer.from(buf.buffer), dim, chunks.length, Date.now() - t0, fingerprint, novelId, engine);
 
   buildProgress.set(key, { status: "ready", current: chunks.length, total: chunks.length, chunkCount: chunks.length });
   console.log(`[rag] done: ${key} ${chunks.length} chunks ${dim}d ${Date.now() - t0}ms`);

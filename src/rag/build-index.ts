@@ -229,8 +229,9 @@ export async function downloadAndCacheIndex(options: DownloadOptions): Promise<D
     } catch (e) { console.warn("[rag] 更新缓存 key 失败:", e); }
   }
 
-  // 清理超限缓存（合并了 ensureCacheSpace 的逻辑，只执行一次全表扫描）
-  await enforceIndexedDBQuota();
+  // 清理超限缓存；把刚下载完的这本也保护住——否则它会立刻被自己触发的这轮
+  // 淘汰清掉，之后每次检索都重新下一遍（round 2 R-26）
+  await enforceIndexedDBQuota([novelId]);
 
   ragLog(`索引下载完成: ${chunkCount} 片段 · ${dim} 维`);
 

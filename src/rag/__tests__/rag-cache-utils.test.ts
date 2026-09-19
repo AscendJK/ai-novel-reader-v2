@@ -114,68 +114,84 @@ describe("updateAccessTime", () => {
 });
 
 describe("ensureCacheSpace", () => {
+  /** 让 each 依次吐出这些条目（computeRagCacheSize 与淘汰候选共用同一数据源） */
+  const seed = (entries: unknown[]) => {
+    mockDb.ragCache.each.mockImplementation((callback: (entry: unknown) => void) => {
+      entries.forEach(callback);
+      return Promise.resolve();
+    });
+  };
+  const entryOf = (id: string, novelId: string, chunkCount: number) => ({
+    id, novelId, engine: "Xenova/bge-small-zh-v1.5", chunkCount, dim: 384,
+    vectorsBuffer: new ArrayBuffer(1), chunks: [], createdAt: 0, accessCount: 0,
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockStore.cacheSizeMB = 50;
-    mockDb.ragCache.each.mockImplementation(() => {
-      // 空缓存
-      return Promise.resolve();
-    });
+    setCurrentNovelIdGetter(() => undefined);
+    seed([]);
     mockDb.ragCache.toArray.mockResolvedValue([]);
+    mockDb.ragCache.delete.mockResolvedValue(undefined);
   });
 
   it("空间足够时直接返回 true", async () => {
-    mockDb.ragCache.each.mockImplementation((callback: (entry: unknown) => void) => {
-      // 假设当前缓存 10MB
-      callback({ vectorsBuffer: new ArrayBuffer(10), dim: 384, chunkCount: 100, chunks: [] });
-      return Promise.resolve();
-    });
-    // 10MB < 50MB limit, 需要 1MB → 够
+    seed([entryOf("k1", "novel-1", 100)]); // ~0.15MB，远小于 50MB 上限
     const result = await ensureCacheSpace(1024 * 1024);
     expect(result).toBe(true);
-    expect(mockDb.ragCache.toArray).not.toHaveBeenCalled(); // 没有淘汰
+    expect(mockDb.ragCache.delete).not.toHaveBeenCalled();
   });
 
-  it("空间不足且没有可淘汰条目时返回 false", async () => {
-    // 模拟缓存超过限制（chunkCount 35000 * dim 384 * 4 = 51.2MB > 50MB limit）
-    mockDb.ragCache.each.mockImplementation((callback: (entry: unknown) => void) => {
-      callback({ vectorsBuffer: new ArrayBuffer(1), dim: 384, chunkCount: 35000, chunks: [] });
-      return Promise.resolve();
-    });
-    // 没有可淘汰的其他条目
-    mockDb.ragCache.toArray.mockResolvedValue([]);
+  it("唯一条目正是当前在读的书时被保护，宁可不返回空间也不删它", async () => {
+    mockStore.cacheSizeMB = 1;
+    setCurrentNovelIdGetter(() => "cur");
+    seed([entryOf("cur-key", "cur", 35000)]); // ~53MB > 1MB 上限
 
     const result = await ensureCacheSpace(1024 * 1024);
     expect(result).toBe(false);
+    expect(mockDb.ragCache.delete).not.toHaveBeenCalled();
   });
 
-  it("空间不足时尝试淘汰", async () => {
-    mockStore.cacheSizeMB = 1; // 限制 1MB
-    mockDb.ragCache.each.mockImplementation((callback: (entry: unknown) => void) => {
-      // 缓存 2MB
-      callback({ vectorsBuffer: new ArrayBuffer(2 * 1024 * 1024), dim: 384, chunkCount: 100, chunks: [] });
-      return Promise.resolve();
-    });
-    mockDb.ragCache.toArray.mockResolvedValue([
-      {
-        id: "old-entry",
-        novelId: "novel-2",
-        engine: "tfidf",
-        chunkCount: 100,
-        dim: 384,
-        vectorsBuffer: new ArrayBuffer(100 * 384 * 4),
-        chunks: [],
-        createdAt: 0,
-        accessCount: 0,
-      },
-    ]);
-    mockDb.ragCache.delete.mockResolvedValue(undefined);
+  it("空间不足时淘汰最该走的旧条目并腾出空间", async () => {
+    setCurrentNovelIdGetter(() => "cur");
+    seed([entryOf("cur-key", "cur", 100), entryOf("old-key", "novel-old", 20000)]);
 
-    // 需要 1MB，但 limit 1MB, 当前 2MB → 需要淘汰
-    const result = await ensureCacheSpace(1024 * 1024);
-    // 可能返回 true 或 false 取决于淘汰后是否足够
-    expect(typeof result).toBe("boolean");
-    expect(mockDb.ragCache.toArray).toHaveBeenCalled();
+    const evicted: unknown[] = [];
+    const off = onCacheEviction((list) => evicted.push(...list));
+    const result = await ensureCacheSpace(30 * 1024 * 1024);
+    off();
+
+    expect(result).toBe(true);
+    expect(mockDb.ragCache.delete).toHaveBeenCalledWith("old-key");
+    expect(mockDb.ragCache.delete).not.toHaveBeenCalledWith("cur-key");
+    expect(mockStore.removeCachedKey).toHaveBeenCalledWith("old-key");
+    expect(evicted.map((e) => (e as { id: string }).id)).toEqual(["old-key"]);
+  });
+
+  // R-08：旧实现每淘汰一条就 toArray() 全表载入（含 vectorsBuffer 与 chunks
+  // 全文），几百 MB 配额下必然把标签页打死
+  it("一轮淘汰只扫全表常数次，绝不调用 toArray", async () => {
+    setCurrentNovelIdGetter(() => "cur");
+    seed([
+      entryOf("cur-key", "cur", 100),
+      entryOf("a", "novel-a", 20000),
+      entryOf("b", "novel-b", 20000),
+      entryOf("c", "novel-c", 20000),
+    ]);
+
+    await ensureCacheSpace(40 * 1024 * 1024);
+
+    expect(mockDb.ragCache.toArray).not.toHaveBeenCalled();
+    expect(mockDb.ragCache.each).toHaveBeenCalledTimes(2); // 一次算当前大小，一次收候选
+    expect(mockDb.ragCache.delete).not.toHaveBeenCalledWith("cur-key");
+  });
+
+  it("保护清单可以显式追加（刚下载完的目标书不被自己挤掉）", async () => {
+    mockStore.cacheSizeMB = 1;
+    seed([entryOf("keep-key", "novel-keep", 20000)]);
+    const result = await ensureCacheSpace(1024 * 1024, ["novel-keep"]);
+    expect(result).toBe(false);
+    expect(mockDb.ragCache.delete).not.toHaveBeenCalled();
   });
 });
 
