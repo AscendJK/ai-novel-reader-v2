@@ -7,7 +7,7 @@
  * fp32 推理 RTF≈5-8（int8 约 2.7），单次生成字数建议 ≤60 字。
  */
 
-import { isCacheReady, getCachedFiles, downloadAndCache, stripCachePrefix } from "./tts-cache";
+import { isCacheReady, downloadAndCache } from "./tts-cache";
 import { apiFetch } from "@/lib/api-client";
 
 // ── 模型配置 ───────────────────────────────────────────────
@@ -53,6 +53,9 @@ const workerBlobUrls = new Map<number, string>();
 // Worker 自动重建节流（崩溃后避免加载风暴）
 let lastRebuildAt = 0;
 const REBUILD_COOLDOWN_MS = 30000;
+// 节流窗口内挂起的那一次重建：没有它，崩溃只发生在最后一次在飞任务时
+// （队列为空、无后续 dispatch）就永远无人重建，只能刷新页面
+let rebuildRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
 interface Task {
   id: number;
@@ -169,6 +172,8 @@ async function createWorker(index: number): Promise<Worker> {
   ttsWorkers[index] = worker;
   worker.onmessage = (e) => handleWorkerMessage(e, index);
   worker.onerror = (e) => {
+    // 崩溃瞬间是否有人在等音频：必须在下方 reject 在飞任务之前取值
+    const demandAtCrash = hasPendingDemand();
     // 完整诊断信息：message 为空通常表示脚本 fetch 失败（404/CSP/COEP/网络）
     const detail = {
       message: e.message,
@@ -183,7 +188,7 @@ async function createWorker(index: number): Promise<Worker> {
     console.error(`[TTS Worker #${index}] error:`, msg, detail);
     modelLoaded = false;
     // 崩溃槽位失效：busy 释放 + 元素置 undefined，dispatchTask 会跳过它
-    //（后续任务派发给其他正常 worker；不自动重建，避免加载风暴）
+    //（后续任务派发给其他正常 worker；重建由下方 scheduleRebuild 统一节流处理）
     if (index >= 0 && index < workerBusy.length) workerBusy[index] = false;
     if (index >= 0 && index < ttsWorkers.length) ttsWorkers[index] = undefined as unknown as Worker;
     // 回收 blob URL，防止对象泄漏
@@ -206,67 +211,40 @@ async function createWorker(index: number): Promise<Worker> {
     readyWaiter = null;
     if (waiter) waiter.reject(new Error(msg));
     // 崩溃后自动重建（节流），避免「所有 worker 崩溃 → 任务无限排队到超时」的死锁
-    scheduleRebuild();
+    scheduleRebuild(demandAtCrash);
   };
   return worker;
 }
 
-/** 运行期 worker 崩溃后的自动重建（节流 30s，防止加载风暴） */
-function scheduleRebuild(): void {
-  const now = Date.now();
-  if (now - lastRebuildAt < REBUILD_COOLDOWN_MS) return;
+/** 当前是否有人在等音频（用于"这一刻真的需要 worker"判定） */
+function hasPendingDemand(): boolean {
+  return taskQueue.length > 0 || pendingRequests.size > 0;
+}
+
+/**
+ * 运行期 worker 崩溃后的自动重建。
+ * @param demand 调用方是否正等着出声（崩溃路径在 reject 在飞任务之前算好；
+ *               dispatch 快速失败/生成入口恒为 true）。
+ *   必须有这个门槛：resetWorker（用户停止朗读）会把 taskQueue/pendingRequests 清空，
+ *   若只判"池全死"，停止后任何迟到回调都会把 380MB 的池重新拉起来。
+ * 节流 30s 防加载风暴，但节流窗口内的真实请求要挂一个重试定时器：
+ * 崩溃常发生在"最后一个在飞任务"上（此刻队列已空、之后不再有 dispatch），
+ * 错过这一刻就永远无人重建，用户只能刷新页面。
+ */
+function scheduleRebuild(demand: boolean): void {
   if (disposed || loadingPromise) return;
   // 池中是否还有存活 worker：全崩时重建整个池；部分崩溃时补建缺失槽位
   const alive = ttsWorkers.filter(Boolean).length;
-  if (alive === 0 && !modelLoaded && taskQueue.length > 0) {
-    lastRebuildAt = now;
-    console.warn("[TTS] 所有 worker 已崩溃，尝试自动重建...");
-    void (async () => {
-      try {
-        if (disposed) return;
-        // 全池重建分支必须自己取缓存文件：`files` 在本作用域不存在（那是补建
-        // 分支 IIFE 里的局部变量），直接引用会 ReferenceError，被下方 catch 吞掉
-        // 后恢复永远失败（iOS 单 Worker 崩溃必落此分支）
-        const genAtStart = loadGeneration;
-        const files = await getCachedFiles();
-        if (files.size === 0) {
-          console.warn("[TTS] 缓存模型不可用，无法自动重建 Worker");
-          return;
-        }
-        // 读缓存（数百 ms 异步窗口）期间用户可能 stop→重新朗读：
-        // loadModel 已在建新池时本重建必须放弃，否则两套循环交叉覆写同一槽位
-        if (disposed || genAtStart !== loadGeneration || loadingPromise) return;
-        // 重建整个池（沿用上次池大小）
-        const targetSize = Math.max(1, activePoolSize || workerPoolSize);
-        ttsWorkers = new Array(targetSize) as Worker[];
-        workerBusy = new Array(targetSize).fill(false);
-        for (let idx = 0; idx < targetSize; idx++) {
-          try { await initWorker(files, idx); }
-          catch (err) { console.warn(`[TTS] 重建 Worker #${idx} 失败:`, err); break; }
-        }
-        const aliveNow = ttsWorkers.filter(Boolean).length;
-        modelLoaded = aliveNow > 0;
-        console.log(`[TTS] Worker 自动重建完成（${aliveNow}/${targetSize} 个可用）`);
-        // 重建后派发排队任务
-        while (taskQueue.length > 0) {
-          const next = taskQueue.shift();
-          if (next) dispatchTask(next);
-        }
-      } catch (err) {
-        console.warn("[TTS] Worker 自动重建失败:", err);
-      }
-    })();
-  } else if (alive > 0) {
+  if (alive > 0) {
     // 部分崩溃：补建缺失槽位（仅在排队任务堆积时）
     if (taskQueue.length >= 2) {
       const missing = ttsWorkers.findIndex(w => !w);
-      if (missing >= 0 && now - lastRebuildAt >= REBUILD_COOLDOWN_MS) {
-        lastRebuildAt = now;
+      if (missing >= 0 && Date.now() - lastRebuildAt >= REBUILD_COOLDOWN_MS) {
+        lastRebuildAt = Date.now();
         void (async () => {
           try {
-            const files = await getCachedFiles();
-            if (files.size === 0 || disposed) return;
-            await initWorker(files, missing);
+            if (disposed || loadingPromise) return;
+            await transferFilesToWorker(missing);
             console.log(`[TTS] Worker #${missing} 已自动补建`);
             while (taskQueue.length > 0) {
               const next = taskQueue.shift();
@@ -276,7 +254,53 @@ function scheduleRebuild(): void {
         })();
       }
     }
+    return;
   }
+  if (!demand) return;                     // 没人在等：留给下一次真实请求
+  const wait = lastRebuildAt + REBUILD_COOLDOWN_MS - Date.now();
+  if (wait > 0) {
+    if (!rebuildRetryTimer) {
+      rebuildRetryTimer = setTimeout(() => {
+        rebuildRetryTimer = null;
+        // 挂表时已确认有人要朗读，此处不再复查需求：在飞任务早已被 reject，
+        // 到点必然查不到。安全性由 resetWorker/dispose 撤表保证（停止即取消）。
+        scheduleRebuild(true);
+      }, wait);
+    }
+    return;
+  }
+  lastRebuildAt = Date.now();
+  console.warn("[TTS] 所有 worker 已崩溃，尝试自动重建...");
+  void (async () => {
+    try {
+      // 代次守卫：重建期间用户 stop→重新朗读会让 loadModel 另起一轮，
+      // 两套循环交叉覆写同一槽位（并把 modelLoaded 写成对方的结果）
+      const genAtStart = loadGeneration;
+      const aborted = () => disposed || genAtStart !== loadGeneration || loadingPromise !== null;
+      // 重建整个池（沿用上次池大小）。逐 worker 现读现传（同 loadModel），
+      // 不一次性把整套模型文件读进主线程 Map——那会让"恢复"这一步的内存峰值
+      // 高于正常加载（正常加载路径已经是每 worker 单独取了就走）
+      const targetSize = Math.max(1, activePoolSize || workerPoolSize);
+      ttsWorkers = new Array(targetSize) as Worker[];
+      workerBusy = new Array(targetSize).fill(false);
+      for (let idx = 0; idx < targetSize; idx++) {
+        if (aborted()) return;
+        try { await transferFilesToWorker(idx); }
+        catch (err) { console.warn(`[TTS] 重建 Worker #${idx} 失败:`, err); break; }
+      }
+      if (aborted()) return;
+      const aliveNow = ttsWorkers.filter(Boolean).length;
+      modelLoaded = aliveNow > 0;
+      console.log(`[TTS] Worker 自动重建完成（${aliveNow}/${targetSize} 个可用）`);
+      // 重建后派发排队任务
+      while (taskQueue.length > 0) {
+        const next = taskQueue.shift();
+        if (next) dispatchTask(next);
+      }
+    } catch (err) {
+      console.warn("[TTS] Worker 自动重建失败:", err);
+    }
+  })();
 }
 
 /** worker 空闲回调：分配下一个排队任务 */
@@ -307,6 +331,9 @@ function dispatchTask(task: Task): void {
         pending.reject(new Error(modelLoaded ? "所有 Worker 已崩溃，请重试" : "Kokoro 模型未加载，请先调用 loadModel()"));
       }
       console.warn(`[TTS] 任务 #${task.id} 无可用 Worker，快速失败（存活 ${ttsWorkers.filter(Boolean).length}/${ttsWorkers.length}）`);
+      // 快速失败路径同样要挂重建：这条路径本身就是"有人要朗读但池全死"，
+      // 不挂就只报一次错，用户重试还是同样的快速失败
+      scheduleRebuild(true);
       return;
     }
     // 高优先级任务（现场生成）插队到队首：播放需要立即生成的段优先于后台预生成，
@@ -333,11 +360,6 @@ function dispatchTask(task: Task): void {
   }
 }
 
-/**
- * 初始化第 index 个 Worker（创建 + 发送 init 含文件数据，等待 ready）。
- * files 会被 slice 拷贝后 transfer（零拷贝传输，原 buffer 保留可复用）。
- * 串行调用（一次一个），避免多 worker 同时加载造成内存峰值叠加。
- */
 /** iOS 设备检测：内存受限，Worker 池默认 1，UI 引导服务端推理 */
 export function isIOSDevice(): boolean {
   if (typeof navigator === "undefined") return false;
@@ -354,10 +376,13 @@ export function isIOSDevice(): boolean {
  * - 主线程不长期持有全量副本；
  * - transfer 后主线程 buffer 立即 detach 释放；
  * - 多 Worker 串行初始化时每次现读，内存峰值 = 最大单文件。
+ *
+ * 本函数负责建 worker（createWorker）再喂文件：只写 ttsWorkers 槽位不建实例的话，
+ * 首次 loadModel 与崩溃重建都会拿到 undefined 槽位并报 "Worker #N 不存在"。
  */
 async function transferFilesToWorker(index: number): Promise<void> {
-  const w = ttsWorkers[index];
-  if (!w) throw new Error(`Worker #${index} 不存在`);
+  const w = await createWorker(index);
+  if (!w) throw new Error(`Worker #${index} 创建失败`);
   const { getCachedFiles } = await import("./tts-cache");
   const files = await getCachedFiles();
   if (files.size === 0) throw new Error("模型缓存缺失（IndexedDB 为空）");
@@ -399,61 +424,6 @@ async function transferFilesToWorker(index: number): Promise<void> {
       { type: "init", files: filesObj, pageOrigin: typeof location !== "undefined" ? location.origin : "" },
       transferList
     );
-  });
-}
-
-async function initWorker(files: Map<string, ArrayBuffer>, index: number): Promise<void> {
-  const w = await createWorker(index);
-  await new Promise<void>((resolve, reject) => {
-    const waiter = { resolve, reject };
-    const timeout = setTimeout(() => {
-      if (readyWaiter === waiter) readyWaiter = null;
-      w.removeEventListener("message", handler);
-      try { w.terminate(); } catch { /* worker 可能已终止 */ }
-      // 只清自己创建的槽位：若槽位已被新会话换成了别的 worker，不能越界覆盖
-      if (ttsWorkers[index] === w) ttsWorkers[index] = undefined as unknown as Worker;
-      revokeWorkerBlob(index);
-      modelLoaded = false;
-      reject(new Error("模型加载超时（10分钟）"));
-    }, 600000);
-    const handler = (e: MessageEvent) => {
-      if (e.data.type === "sherpa-onnx-tts-ready") {
-        clearTimeout(timeout);
-        w.removeEventListener("message", handler);
-        if (readyWaiter === waiter) readyWaiter = null;
-        modelLoaded = true;
-        resolve();
-      } else if (e.data.type === "error") {
-        clearTimeout(timeout);
-        w.removeEventListener("message", handler);
-        if (readyWaiter === waiter) readyWaiter = null;
-        try { w.terminate(); } catch { /* worker 可能已终止 */ }
-        if (ttsWorkers[index] === w) ttsWorkers[index] = undefined as unknown as Worker;
-        revokeWorkerBlob(index);
-        modelLoaded = false;
-        reject(new Error(e.data.message));
-      }
-    };
-    readyWaiter = waiter;
-    w.addEventListener("message", handler);
-
-    // 构造 files 对象，用 transfer 传输大文件（零拷贝）。
-    // 注意：slice(0) 拷贝一份，避免重试时原 buffer 已被 detach。
-    // 缓存 key 带 kokoro-v1/ 前缀，传给 worker 时还原为短文件名
-    const filesObj: Record<string, ArrayBuffer> = {};
-    const transferables: ArrayBuffer[] = [];
-    for (const [key, value] of files) {
-      const copy = value.slice(0);
-      filesObj[stripCachePrefix(key)] = copy;
-      transferables.push(copy);
-    }
-    // 传递页面 origin 和模型基础路径给 Worker
-    w.postMessage({
-      type: "init",
-      files: filesObj,
-      pageOrigin: window.location.origin,
-      modelBase: "/api/rag/tts/model",
-    }, transferables);
   });
 }
 
@@ -692,7 +662,11 @@ export async function generateAudio(
 ): Promise<void> {
   if (disposed) throw new Error("TTS 已释放");
   if (!modelLoaded) {
-    throw new Error("Kokoro 模型未加载，请先调用 loadModel()");
+    // 崩溃后 modelLoaded=false。这里是"真的有人要朗读"，而自动重试走 seekToChunk
+    // （不经过 loadModel），所以必须在此挂一次重建；否则每次请求都拿到同一句
+    // "未加载"，队列里也再无 dispatch，用户只能刷新页面。
+    scheduleRebuild(true);
+    throw new Error("Kokoro 模型未加载，正在自动恢复中，请稍候重试");
   }
 
   const cleanText = normalizeText(text);
@@ -743,7 +717,8 @@ export async function generateAudioFull(
 ): Promise<ZipVoiceAudioResult> {
   if (disposed) throw new Error("TTS 已释放");
   if (!modelLoaded) {
-    throw new Error("Kokoro 模型未加载，请先调用 loadModel()");
+    scheduleRebuild(true); // 同 generateAudio：试听请求也是真实需求，见该处注释
+    throw new Error("Kokoro 模型未加载，正在自动恢复中，请稍候重试");
   }
 
   const cleanText = normalizeText(text);
@@ -794,6 +769,12 @@ export function resetWorker(): void {
   loadGeneration++; // 在途 loadModel 全部作废（见 loadGeneration 注释）
   modelLoaded = false;
   loadingPromise = null;
+  // 撤销挂起的自动重建：用户已经停了，30s 后那次重试如果再拉起整池，
+  // 就是白占数百 MB（in-flight 的 rebuild IIFE 由 loadGeneration 守卫自行退出）
+  if (rebuildRetryTimer) {
+    clearTimeout(rebuildRetryTimer);
+    rebuildRetryTimer = null;
+  }
   // 立即 reject 在途的 init 等待：不 reject 的话它要挂到 10 分钟超时才落定，
   // 期间 loadingPromise 重建、worker 池状态都可能被旧会话的迟到回调覆写
   const waiter = readyWaiter;
