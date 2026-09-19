@@ -181,6 +181,24 @@ try {
     `got=${JSON.stringify(echoJson?.gotAuthorization)}`
   );
 
+  // ── 0c. 以 fd/fc/fe80 开头的公网域名不得冒充内网 ────────
+  // 冒充成功的后果：明文 http:// 被放行，而且解析到内网时会跳过重绑定复核（R-74）。
+  const lookalike = await fetch(`${base}/api/proxy/chat`, {
+    method: "POST",
+    headers: authHeaders,
+    body: JSON.stringify({
+      url: `http://fdn.example.com/v1/chat/completions`,
+      headers: {},
+      body: { model: "m", messages: [{ role: "user", content: "hi" }] },
+    }),
+  });
+  const lookalikeJson = await lookalike.json().catch(() => null);
+  check(
+    "http://fdn.example.com 被当作外部地址要求 HTTPS",
+    lookalike.status === 400 && String(lookalikeJson?.error || "").includes("HTTPS"),
+    `status=${lookalike.status} error=${JSON.stringify(lookalikeJson?.error)}`
+  );
+
   let sse = null;
   const sseStartedAt = Date.now();
   try {

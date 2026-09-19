@@ -5,10 +5,58 @@
 
 import { Router } from "express";
 import dns from "node:dns";
+import net from "node:net";
 import { getSessionUsername } from "../middleware/auth.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 
 const router = Router();
+
+// 将点分 IPv4 转为 32 位整数；非法格式返回 null
+function ipv4ToInt(ip) {
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(ip)) return null;
+  const parts = ip.split(".").map(Number);
+  if (parts.some((p) => p > 255)) return null;
+  return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+}
+
+function isIPv4Private(ip) {
+  const int = ipv4ToInt(ip);
+  if (int === null) return false;
+  // 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10 (CGNAT), 127.0.0.0/8,
+  // 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16
+  const ranges = [
+    [0x00000000, 0x00ffffff], [0x0a000000, 0x0affffff],
+    [0x64400000, 0x647fffff], [0x7f000000, 0x7fffffff],
+    [0xa9fe0000, 0xa9feffff], [0xac100000, 0xac1fffff],
+    [0xc0a80000, 0xc0a8ffff],
+  ];
+  return ranges.some(([lo, hi]) => int >= lo && int <= hi);
+}
+
+/**
+ * 目标是"私网/回环"吗。
+ *
+ * 决定两件事：① `http://` 是否放行（外部必须 HTTPS）；② DNS 重绑定复核是否跳过。
+ * 因此这里判错的后果是放行内网访问——IPv6 的 fc/fd/fe80 前缀**只能作用在真正的
+ * IPv6 字面量上**，否则 `fdn.example.com` 这类普通公网域名就会冒充内网
+ * （round 3 R-74：旧实现直接对任意主机名做字符串前缀匹配）。
+ * 域名一律返回 false：能不能明文由下面的解析结果复核决定。
+ */
+export function isPrivateHost(rawHostname) {
+  const hostname = String(rawHostname ?? "").toLowerCase().replace(/^\[|\]$/g, "");
+  // IPv4-mapped IPv6（::ffff:x.x.x.x）先还原，避免被宽泛的前缀匹配绕过
+  const ipv4Mapped = hostname.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  const host = ipv4Mapped ? ipv4Mapped[1] : hostname;
+
+  if (host === "localhost" || host === "::" || host === "::1") return true;
+  const kind = net.isIP(host);
+  if (kind === 4) return isIPv4Private(host);
+  if (kind === 6) {
+    // fc00::/7（ULA）与 fe80::/10（链路本地）
+    return host.startsWith("fc") || host.startsWith("fd") || /^fe[89ab]/.test(host);
+  }
+  return false;
+}
 
 // POST /api/proxy/chat — proxy LLM API requests
 router.post("/chat", rateLimit(60), async (req, res) => {
@@ -39,45 +87,20 @@ router.post("/chat", rateLimit(60), async (req, res) => {
     const ipv4Mapped = hostname.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
     if (ipv4Mapped) hostname = ipv4Mapped[1];
 
-    // 将点分 IPv4 转为 32 位整数；非法格式返回 null
-    function ipv4ToInt(ip) {
-      if (!/^\d+\.\d+\.\d+\.\d+$/.test(ip)) return null;
-      const parts = ip.split(".").map(Number);
-      if (parts.some((p) => p > 255)) return null;
-      return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
-    }
-    function isIPv4Private(ip) {
-      const int = ipv4ToInt(ip);
-      if (int === null) return false;
-      // 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10 (CGNAT), 127.0.0.0/8,
-      // 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16
-      const ranges = [
-        [0x00000000, 0x00ffffff], [0x0a000000, 0x0affffff],
-        [0x64400000, 0x647fffff], [0x7f000000, 0x7fffffff],
-        [0xa9fe0000, 0xa9feffff], [0xac100000, 0xac1fffff],
-        [0xc0a80000, 0xc0a8ffff],
-      ];
-      return ranges.some(([lo, hi]) => int >= lo && int <= hi);
-    }
-
-    const isPrivateIP =
-      hostname === "localhost" ||
-      hostname === "::1" ||
-      hostname === "::" ||
-      isIPv4Private(hostname) ||
-      hostname.startsWith("fd") || // IPv6 ULA
-      hostname.startsWith("fc") ||
-      hostname.startsWith("fe80"); // IPv6 link-local
-
+    const isPrivateIP = isPrivateHost(hostname);
     // HTTP only allowed for LAN/private IPs; external must use HTTPS
     if (url.startsWith("http://") && !isPrivateIP) {
       return res.status(400).json({ error: "外部地址必须使用 HTTPS" });
     }
 
     // DNS 预解析：防御 DNS 重绑定攻击（在 IP 检查后、fetch 前二次验证）
+    // 解析结果用同一个 isPrivateHost 判，别只认 ::1/127.x——公网域名解析到
+    // fd00::/7 或 fe80::/10 同样是打进内网。
+    // 已知限制：这次 lookup 与下面 fetch 之间的 TTL 窗口内 DNS 仍可被重新指向，
+    // 彻底关掉要让 fetch 直连已解析 IP 并保留 Host 头（round 3 Q2 决定本批不做）。
     try {
       const { address } = await dns.promises.lookup(hostname, { family: 0 });
-      const resolvedIsPrivate = address === "::1" || address === "127.0.0.1" || isIPv4Private(address);
+      const resolvedIsPrivate = isPrivateHost(address);
       // 外部 URL 解析到私有 IP → 拒绝
       if (!isPrivateIP && resolvedIsPrivate) {
         console.warn(`[proxy] DNS 重绑定检测: ${hostname} → ${address}（私有 IP，已拒绝）`);
