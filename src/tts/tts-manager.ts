@@ -677,6 +677,16 @@ class ZipVoiceTTSEngine {
 
   isSpeaking(): boolean { return this.currentSource !== null && !this.paused; }
   isPaused(): boolean { return this.paused; }
+  /**
+   * 只读运行时快照（真机自检用）。iOS 上"按了继续却没声"这类问题只能靠
+   * AudioContext 状态与暂停标志判定，手机又开不了 devtools，所以把它导成一行文本。
+   */
+  describeAudio(): string {
+    const ctxState = this.audioContext ? this.audioContext.state : "(未创建)";
+    return `ctx=${ctxState} paused=${this.paused} pauseRequested=${this.pauseRequested} ` +
+      `source=${this.currentSource ? "有" : "无"} buffer=${this.currentBuffer ? "有" : "无"} ` +
+      `pendingResolve=${this.pendingPlayResolve ? "挂着(链在等恢复)" : "无"} stopped=${this.stopped}`;
+  }
   destroy(): void {
     this.stop();
     if (this.audioContext) { this.audioContext.close().catch(() => {}); this.audioContext = null; }
@@ -1331,6 +1341,18 @@ export class TTSManager {
 
   getCurrentChunkIndex(): number { return this.currentChunkIndex; }
   getCurrentGenerationId(): number { return this.generationId; }
+
+  /**
+   * 只读运行时快照（真机自检 / DebugPanel 用）：引擎、进度、缓冲池、AudioContext 状态。
+   * 不改变任何状态，也不触发加载。
+   */
+  describeRuntime(): string {
+    const kokoro = this.zipvoice ? this.zipvoice.describeAudio() : "无 Kokoro 实例";
+    return `engine=${this.engine} lastKokoro=${this.lastKokoroKind ?? "-"} ` +
+      `chunk=${this.currentChunkIndex + 1}/${this.chunks.length} para=${this.currentParagraphIndex} ` +
+      `gen=${this.generationId} userPaused=${this.userPaused} stopped=${this.stopped} ` +
+      `缓冲池=${this.buffered.length}段 在飞预生成=${this.inFlightPrefetch.size} · 音频侧[${kokoro}]`;
+  }
 
   seekToChunk(index: number): void {
     if (index >= 0 && index < this.chunks.length) {

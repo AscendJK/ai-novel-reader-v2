@@ -41,7 +41,6 @@ export function AppLayout() {
   const [syncReady, setSyncReady] = useState(() => !!localStorage.getItem("sync-username"));
   const [loginError] = useState<string | null>(null);
   const [localUsers, setLocalUsers] = useState<string[]>(getLocalUsers);
-  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
   const [showShortcutHelp, setShowShortcutHelp] = useState(false);
   const [versionMismatch, setVersionMismatch] = useState<{ frontend: string; backend: string } | null>(null);
   const dismissedVersionMismatchRef = useRef(false);
@@ -78,13 +77,6 @@ export function AppLayout() {
     { key: "?", shift: true, action: () => setShowShortcutHelp((v) => !v), description: "显示快捷键帮助" },
   ], []);
   useKeyboardShortcuts(globalShortcuts);
-
-  useEffect(() => {
-    const mql = window.matchMedia("(max-width: 767px)");
-    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-    mql.addEventListener("change", handler);
-    return () => mql.removeEventListener("change", handler);
-  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -278,7 +270,8 @@ export function AppLayout() {
           </div>
         )}
       </main>
-      {debugMode && !isMobile && <DebugPanel />}
+      {/* 手机上也要能开：iOS/Android 连线调试不可用，出问题只能靠面板取证 + 导出 */}
+      {debugMode && <DebugPanel />}
       {showShortcutHelp && (
         <ShortcutHelp
           shortcuts={[
