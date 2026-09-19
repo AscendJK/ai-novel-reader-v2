@@ -106,13 +106,31 @@ export function useAutoRead({
   }, []);
 
   // 用户干扰 → 停止：点击正文 / 滚动正文 / 触摸 / 翻页类按键
+  //
+  // 正文元素可能晚于本 effect 才存在：ChapterContent 在正文到位前走提前 return 分支，
+  // 那一帧容器还没挂上，而 contentRef 是稳定 identity，effect 不会因元素出现而重跑。
+  // 旧实现只看一次 .current → 监听永不绑定，"用户一动就停"静默失效（R-60）。
+  // 这里用有界 rAF 重试等到元素（约 2 秒；等不到说明正文本来就没渲染，无需打断）。
   useEffect(() => {
     if (!enabled) return;
     const onInterrupt = () => stop("user");
-    const el = contentRef.current;
-    el?.addEventListener("pointerdown", onInterrupt, { passive: true });
-    el?.addEventListener("wheel", onInterrupt, { passive: true });
-    el?.addEventListener("touchstart", onInterrupt, { passive: true });
+    let el: HTMLElement | null = null;
+    let raf = 0;
+    let attempts = 0;
+    let cancelled = false;
+    const attach = () => {
+      el?.addEventListener("pointerdown", onInterrupt, { passive: true });
+      el?.addEventListener("wheel", onInterrupt, { passive: true });
+      el?.addEventListener("touchstart", onInterrupt, { passive: true });
+    };
+    const bind = () => {
+      if (cancelled) return;
+      el = contentRef.current;
+      if (el) { attach(); return; }
+      if (++attempts > 120) return;
+      raf = requestAnimationFrame(bind);
+    };
+    bind();
     const onKey = (e: KeyboardEvent) => {
       if (!INTERRUPT_KEYS.has(e.key)) return;
       // 输入框中的方向键/空格是编辑操作，聚焦按钮时空格是点击，均不应打断自动阅读
@@ -122,6 +140,8 @@ export function useAutoRead({
     };
     window.addEventListener("keydown", onKey);
     return () => {
+      cancelled = true;
+      if (raf) cancelAnimationFrame(raf);
       el?.removeEventListener("pointerdown", onInterrupt);
       el?.removeEventListener("wheel", onInterrupt);
       el?.removeEventListener("touchstart", onInterrupt);

@@ -229,6 +229,42 @@ describe("useAutoRead", () => {
     hook.unmount();
   });
 
+  it("正文元素挂载晚于开关（contentRef 先为 null）→ 元素出现后仍能打断（R-60）", () => {
+    // 复现真实时序：ChapterContent 在正文未到位时走提前 return，那一帧容器不存在，
+    // 而"用户干扰即停"的绑定是一次性 effect —— 旧实现里 effect 只看一次 .current，
+    // 之后元素出现也不会再绑，功能静默失效（自动阅读被用户滚动/点击都停不下来）
+    const onStop = vi.fn();
+    const scrollRef = { current: makeScrollEl() } as React.RefObject<HTMLDivElement | null>;
+    const contentRef = { current: null } as React.RefObject<HTMLElement | null>;
+    const rendered = renderHook(() => useAutoRead({
+      enabled: true, intervalSec: 8, speedLinesPerSec: 2, lineHeightPx: 30, easeInMs: 0,
+      // 分页模式：滚动模式的 rAF 循环会占用测试里那个单槽 rAF 桩，这里只要绑定的那一帧
+      paginated: true, scrollRef, contentRef,
+      onNextPage: vi.fn(), isAtEnd: () => false, onStop,
+    }));
+
+    const el = document.createElement("div");
+    document.body.appendChild(el);
+    contentRef.current = el;
+    // 元素晚出现：下一帧的绑定时序里补上（不 rerender，只靠 rAF 重试）
+    act(() => { runFrames([0]); });
+    act(() => { el.dispatchEvent(new Event("pointerdown")); });
+    expect(onStop).toHaveBeenCalledWith("user");
+
+    document.body.removeChild(el);
+    rendered.unmount();
+  });
+
+  it("正文之外的点击不打断自动阅读", () => {
+    const { hook, onStop } = setup({ paginated: false });
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    act(() => { outside.dispatchEvent(new Event("pointerdown", { bubbles: true })); });
+    expect(onStop).not.toHaveBeenCalled();
+    document.body.removeChild(outside);
+    hook.unmount();
+  });
+
   it("翻页类按键 → 停止（user）", () => {
     const { hook, onStop } = setup();
     act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" })); });

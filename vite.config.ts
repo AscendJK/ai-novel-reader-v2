@@ -27,9 +27,13 @@ export default defineConfig({
       name: "sherpa-mime",
       configureServer(server) {
         server.middlewares.use((req, res, next) => {
-          if (req.url?.startsWith("/sherpa-tts/")) {
-            const safePath = req.url.split("?")[0]; // 去掉 query string
-            const filePath = path.join(__dirname, "public", safePath);
+          // dev 下页面挂在 base 子路径上，请求是 /ai-novel-reader-v2/sherpa-tts/...
+          // 旧实现只匹配 "/sherpa-tts/" → 浏览器推理的 wasm 拿不到
+          // application/wasm 与 CORP 头（dev 里加载失败，build 后才正常，极易误判）
+          const raw = req.url?.split("?")[0] ?? "";
+          const rel = raw.startsWith(BASE_PATH) ? raw.slice(BASE_PATH.length - 1) : raw;
+          if (rel.startsWith("/sherpa-tts/")) {
+            const filePath = path.join(__dirname, "public", rel);
             // 防路径穿越：确保解析后的路径在 public 目录内
             const publicDir = path.join(__dirname, "public");
             if (!filePath.startsWith(publicDir)) return next();

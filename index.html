@@ -4,7 +4,9 @@
     <meta charset="UTF-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss: https: http: http://localhost:* http://127.0.0.1:*; img-src 'self' data: blob:; font-src 'self';" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=overlays-content" />
+    <!-- 不锁缩放：maximum-scale/user-scalable=no 会让长文低视力用户无法放大，
+         是本项目唯一的功能性无障碍阻断项（阅读类应用正文全靠字号） -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=overlays-content" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="theme-color" content="#0a0a0a" />

@@ -23,22 +23,36 @@
     // 非导航请求交给 workbox precacheAndRoute（匹配缓存，否则走网络）。
     if (event.request.mode !== "navigate") return;
 
+    const withCoi = (response) => {
+      const newHeaders = new Headers(response.headers);
+      newHeaders.set(
+        "Cross-Origin-Embedder-Policy",
+        coepCredentialless ? "credentialless" : "require-corp"
+      );
+      newHeaders.set("Cross-Origin-Opener-Policy", "same-origin");
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: newHeaders,
+      });
+    };
+
     event.respondWith(
       fetch(event.request)
-        .then((response) => {
-          const newHeaders = new Headers(response.headers);
-          newHeaders.set(
-            "Cross-Origin-Embedder-Policy",
-            coepCredentialless ? "credentialless" : "require-corp"
-          );
-          newHeaders.set("Cross-Origin-Opener-Policy", "same-origin");
-          return new Response(response.body, {
-            status: response.status,
-            statusText: response.statusText,
-            headers: newHeaders,
-          });
+        .then(withCoi)
+        .catch(async () => {
+          // 离线冷启动兜底：navigateFallback 被显式禁用（否则 NavigationRoute 会抢在
+          // 这里之前返回不带 COOP/COEP 的缓存响应，页面永远无法 crossOriginIsolated），
+          // 所以导航请求全归本代码处理——旧实现在这里"重发同一条网络请求"，
+          // 等于离线首屏必然失败。改为回退到 workbox precache 里的 index.html，
+          // 并且必须重新补 COI 头（缓存副本里没有）。
+          const cached =
+            (await caches.match(event.request)) ||
+            (await caches.match("index.html")) ||
+            (await caches.match("./index.html"));
+          if (cached) return withCoi(cached);
+          throw new Error("导航请求失败且无可用离线缓存");
         })
-        .catch(() => fetch(event.request.clone()))
     );
   });
 })();
