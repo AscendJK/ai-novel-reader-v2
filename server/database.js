@@ -221,9 +221,22 @@ migrateUserScopedKeys();
 // ── Novels (shared library) ──
 
 export function insertNovel(novel) {
+  // 不能用 INSERT OR REPLACE：SQLite 的 REPLACE 命中同 id 时是"先 DELETE 再 INSERT"，
+  // 而 chapters/user_novels/rag_indices/maps/graphs 都挂着 ON DELETE CASCADE
+  // （foreign_keys 在文件顶部开着）——同一本书二次入库会把别人的书架关系和
+  // 已生成的地图/关系图/索引一起删掉，路由那边只重建章节。见 round 3 R-72。
+  // SET 列表刻意不含 created_at：重传带来的是客户端那份旧值，不该改写入库时间。
   const stmt = db.prepare(`
-    INSERT OR REPLACE INTO novels (id, title, author, file_name, file_format, total_chars, chapter_count, created_at, updated_at)
+    INSERT INTO novels (id, title, author, file_name, file_format, total_chars, chapter_count, created_at, updated_at)
     VALUES (@id, @title, @author, @fileName, @fileFormat, @totalChars, @chapterCount, @createdAt, @updatedAt)
+    ON CONFLICT(id) DO UPDATE SET
+      title = @title,
+      author = @author,
+      file_name = @fileName,
+      file_format = @fileFormat,
+      total_chars = @totalChars,
+      chapter_count = @chapterCount,
+      updated_at = @updatedAt
   `);
   return stmt.run(novel);
 }
