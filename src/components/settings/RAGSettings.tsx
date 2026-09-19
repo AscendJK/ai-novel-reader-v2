@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useRAGStore } from "@/stores/rag-store";
 import { useUIStore } from "@/stores/ui-store";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { ALL_ENGINES, downloadModel, getMirrorOptions } from "@/rag/model-loader";
 import { clearCache } from "@/rag/index";
 import { updateRagCacheSize } from "@/rag/rag-cache-utils";
@@ -34,7 +33,9 @@ export function RAGSettings() {
   const getTopK = useRAGStore((s) => s.getTopK);
   const graphCharacterLimit = useUIStore((s) => s.graphCharacterLimit);
   const setGraphCharacterLimit = useUIStore((s) => s.setGraphCharacterLimit);
-  const isMobile = useMediaQuery("(max-width: 767px)");
+  // 与 R-58 同一类：原先这里用 getState() 读，改成正常订阅（文案是否真会陈旧未实测出）
+  const debugMode = useUIStore((s) => s.debugMode);
+  const setDebugMode = useUIStore((s) => s.setDebugMode);
   const mountedRef = useRef(true);
   useEffect(() => { return () => { mountedRef.current = false; }; }, []);
 
@@ -375,25 +376,21 @@ export function RAGSettings() {
           </div>
         </div>
 
-        {!isMobile && (
-          <>
-            <Separator className="my-4" />
+        <Separator className="my-4" />
 
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-medium text-sm">调试模式</p>
-                <p className="text-xs text-muted-foreground">开启后在右下角显示 RAG 检索详情面板</p>
-              </div>
-              <Button
-                variant={useUIStore.getState().debugMode ? "default" : "outline"}
-                size="sm"
-                onClick={() => useUIStore.getState().setDebugMode(!useUIStore.getState().debugMode)}
-              >
-                {useUIStore.getState().debugMode ? "已开启" : "已关闭"}
-              </Button>
-            </div>
-          </>
-        )}
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="font-medium text-sm">调试模式</p>
+            <p className="text-xs text-muted-foreground">显示悬浮面板：RAG 检索详情 + 日志，以及「真机自检」（环境事实、iOS/Android 朗读清单、事件时间线、一键导出报告）。手机与电脑上都可开启</p>
+          </div>
+          <Button
+            variant={debugMode ? "default" : "outline"}
+            size="sm"
+            onClick={() => setDebugMode(!debugMode)}
+          >
+            {debugMode ? "已开启" : "已关闭"}
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );
