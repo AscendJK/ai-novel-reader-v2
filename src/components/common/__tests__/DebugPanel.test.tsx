@@ -18,6 +18,18 @@ vi.mock("@/rag/engines", () => ({ getEngineDisplayName: (e: string) => e }));
 vi.mock("@/tts/tts-manager", () => ({
   getActiveTTSManager: () => ({ describeRuntime: () => "engine=zipvoice chunk=3/12 缓冲池=2段" }),
 }));
+// 真实 collectFacts 要做 IndexedDB 实写探测，机器负载高时会超过 waitFor 默认 1s → 整条
+// 用例偶发变红。它本身在 device-check.test.ts 里有用例，这里只需要"事实能渲染进面板"。
+vi.mock("@/lib/device-check", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/device-check")>();
+  return {
+    ...actual,
+    collectFacts: async () => [
+      { label: "crossOriginIsolated", value: "false", level: "warn" as const },
+      { label: "IndexedDB 可写", value: "可以", level: "ok" as const },
+    ],
+  };
+});
 
 import { DebugPanel } from "../DebugPanel";
 import { DEVICE_CHECKLIST } from "@/lib/device-check";
