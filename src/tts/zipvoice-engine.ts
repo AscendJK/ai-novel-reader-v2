@@ -7,7 +7,7 @@
  * fp32 推理 RTF≈5-8（int8 约 2.7），单次生成字数建议 ≤60 字。
  */
 
-import { isCacheReady, downloadAndCache } from "./tts-cache";
+import { isCacheReady, downloadAndCache, takeFilesForTransfer, TTSCacheIntegrityError } from "./tts-cache";
 import { apiFetch } from "@/lib/api-client";
 
 // ── 模型配置 ───────────────────────────────────────────────
@@ -382,19 +382,17 @@ export function isIOSDevice(): boolean {
  */
 async function transferFilesToWorker(index: number): Promise<void> {
   const w = await createWorker(index);
-  if (!w) throw new Error(`Worker #${index} 创建失败`);
-  const { getCachedFiles } = await import("./tts-cache");
-  const files = await getCachedFiles();
-  if (files.size === 0) throw new Error("模型缓存缺失（IndexedDB 为空）");
-
-  const filesObj: Record<string, ArrayBuffer> = {};
-  const transferList: ArrayBuffer[] = [];
-  for (const [key, buf] of files) {
-    // 缓存 key 带 kokoro-v3/ 前缀，worker 端按短文件名取用
-    const shortKey = key.includes("/") ? key.slice(key.indexOf("/") + 1) : key;
-    filesObj[shortKey] = buf;
-    transferList.push(buf);
+  let batch: { files: Record<string, ArrayBuffer>; transferables: ArrayBuffer[] };
+  try {
+    batch = await takeFilesForTransfer();
+  } catch (err) {
+    if (!(err instanceof TTSCacheIntegrityError)) throw err;
+    // 定点补下：坏记录已在读侧删除，downloadAndCache 只重下缺失的那几条
+    console.warn(`[TTS] ${err.message}，重新拉取 ${err.keys.length} 个文件后重试 Worker #${index}`);
+    await downloadAndCache();
+    batch = await takeFilesForTransfer();
   }
+  const { files: filesObj, transferables: transferList } = batch;
 
   return new Promise<void>((resolve, reject) => {
     const waiter = { resolve, reject };

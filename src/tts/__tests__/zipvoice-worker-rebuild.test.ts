@@ -10,13 +10,17 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const cacheFiles = new Map<string, ArrayBuffer>();
-
 vi.mock("../tts-cache", () => ({
   isCacheReady: vi.fn(async () => true),
-  getCachedFiles: vi.fn(async () => new Map(cacheFiles)),
+  takeFilesForTransfer: vi.fn(async () => ({
+    files: { "model.onnx": new ArrayBuffer(64), "tokens.txt": new ArrayBuffer(32) },
+    transferables: [new ArrayBuffer(64), new ArrayBuffer(32)],
+  })),
   downloadAndCache: vi.fn(async () => {}),
-  stripCachePrefix: (k: string) => (k.includes("/") ? k.slice(k.indexOf("/") + 1) : k),
+  TTSCacheIntegrityError: class TTSCacheIntegrityError extends Error {
+    keys: string[];
+    constructor(message: string, keys: string[]) { super(message); this.keys = keys; }
+  },
 }));
 
 vi.mock("@/lib/api-client", () => ({
@@ -67,8 +71,6 @@ import { loadModel, generateAudio, isModelLoaded, resetWorker, setWorkerPoolSize
 
 beforeEach(() => {
   mockWorkers.length = 0;
-  cacheFiles.set("kokoro-v3/model.onnx", new ArrayBuffer(64));
-  cacheFiles.set("kokoro-v3/voices.bin", new ArrayBuffer(32));
   globalAny.Worker = class extends MockWorker {
     constructor() { super(); mockWorkers.push(this); }
   };

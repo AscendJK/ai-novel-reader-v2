@@ -39,7 +39,7 @@ describe("preloadZipVoice", () => {
     vi.clearAllMocks();
     mockIsLoggedIn.mockReturnValue(true);
     mockIsCacheReady.mockResolvedValue(false);
-    mockDownloadAndCache.mockResolvedValue(new Map());
+    mockDownloadAndCache.mockResolvedValue(undefined);
     mockPrepareTTS.mockResolvedValue(undefined);
     mockCheckTTSCache.mockResolvedValue({ wasmReady: true, modelReady: true, vocoderReady: true });
   });
@@ -107,7 +107,7 @@ describe("preloadZipVoice", () => {
   it("并发调用只执行一次（Promise 单例）", async () => {
     let resolveDownload: (() => void) | undefined;
     mockDownloadAndCache.mockImplementation(
-      () => new Promise((resolve) => { resolveDownload = () => resolve(new Map()); })
+      () => new Promise<void>((resolve) => { resolveDownload = () => resolve(); })
     );
     const p1 = preloadZipVoice();
     const p2 = preloadZipVoice();
