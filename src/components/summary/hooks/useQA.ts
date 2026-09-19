@@ -123,21 +123,29 @@ export function useQA({ novelId, askCustomQuestion, generateRangeSummary, clearQ
   }, [novelId, getData]);
 
   // 包装 setState：每次更新同时写入 store
+  // 基准取该书本应有的列表，不能取 React 的 prev：面板常驻不按书重挂，
+  // 回答在飞时切了书，prev 已是另一本书的消息，而写回的键还是闭包里那本 →
+  // 两本书的历史被混在一起（round 3 R-80）
+  // 界面上只跟着"当前这本书"动，迟到的回答只写进它自己那本书的 store，
+  // 否则回答会把现在正看着的那本书的历史整份替换掉。
+  const mountedNovelIdRef = useRef(novelId);
+  useEffect(() => { mountedNovelIdRef.current = novelId; }, [novelId]);
+
   const setQaMessages: typeof _setQaMessages = useCallback((value) => {
-    _setQaMessages((prev) => {
-      const next = typeof value === "function" ? value(prev) : value;
-      if (novelId) save(novelId, { qaMessages: next });
-      return next;
-    });
-  }, [novelId, save]);
+    const apply = (base: QAMessage[]) =>
+      typeof value === "function" ? (value as (prev: QAMessage[]) => QAMessage[])(base) : value;
+    const next = apply(getData(novelId).qaMessages);
+    if (novelId) save(novelId, { qaMessages: next });
+    if (mountedNovelIdRef.current === novelId) _setQaMessages(next);
+  }, [novelId, save, getData]);
 
   const setRangeResults: typeof _setRangeResults = useCallback((value) => {
-    _setRangeResults((prev) => {
-      const next = typeof value === "function" ? value(prev) : value;
-      if (novelId) save(novelId, { rangeResults: next });
-      return next;
-    });
-  }, [novelId, save]);
+    const apply = (base: RangeResult[]) =>
+      typeof value === "function" ? (value as (prev: RangeResult[]) => RangeResult[])(base) : value;
+    const next = apply(getData(novelId).rangeResults);
+    if (novelId) save(novelId, { rangeResults: next });
+    if (mountedNovelIdRef.current === novelId) _setRangeResults(next);
+  }, [novelId, save, getData]);
 
   const addMessage = useCallback((role: "user" | "assistant", content: string, tokensUsed?: number) => {
     const message: QAMessage = { id: uuid(), role, content, tokensUsed };
