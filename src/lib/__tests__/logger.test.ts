@@ -2,7 +2,7 @@
  * logger 模块测试
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { ragLog, onRagLog, log, warn, error } from "../logger";
+import { ragLog, onRagLog, log, warn, error, installConsoleCapture } from "../logger";
 
 describe("ragLog", () => {
   beforeEach(() => {
@@ -97,5 +97,63 @@ describe("log / warn / error", () => {
   it("error 调用 console.error", () => {
     error("错误消息");
     expect(console.error).toHaveBeenCalledWith("[App] 错误消息");
+  });
+});
+describe("installConsoleCapture（应用内日志转发）", () => {
+  // 安装顺序有讲究：install 时会 bind 当前的 console.xxx，所以先换成 spy 再安装，
+  // 既不让真实输出刷屏，又能观察到"原函数确实被调用"
+  function withCapturedConsole() {
+    const spies = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const originals = { log: console.log, warn: console.warn, error: console.error };
+    console.log = spies.log; console.warn = spies.warn; console.error = spies.error;
+    const uninstall = installConsoleCapture();
+    const seen: string[] = [];
+    const off = onRagLog((m) => { seen.push(m); });
+    const restore = () => {
+      off(); uninstall();
+      console.log = originals.log; console.warn = originals.warn; console.error = originals.error;
+    };
+    return { spies, seen, restore };
+  }
+
+  it("既有 console.log 调用被转发给监听器，且原输出照常", () => {
+    const { spies, seen, restore } = withCapturedConsole();
+    try {
+      console.log("同步开始", { a: 1 });
+      expect(spies.log).toHaveBeenCalledWith("同步开始", { a: 1 });
+      expect(seen).toHaveLength(1);
+      expect(seen[0]).toContain("同步开始");
+      expect(seen[0]).toMatch(/ LOG\]/);
+    } finally { restore(); }
+  });
+
+  it("warn/error 也转发并带级别；Error 与循环对象不会抛异常", () => {
+    const { seen, restore } = withCapturedConsole();
+    try {
+      const circular: Record<string, unknown> = {};
+      circular.self = circular;
+      console.warn("警告", circular);
+      console.error("失败", new Error("boom"));
+      expect(seen.some((l) => / WARN\]/.test(l) && l.includes("[object Object]"))).toBe(true);
+      expect(seen.some((l) => / ERROR\]/.test(l) && l.includes("boom"))).toBe(true);
+    } finally { restore(); }
+  });
+
+  it("ragLog 自身的输出不被双份转发", () => {
+    const { seen, restore } = withCapturedConsole();
+    try {
+      ragLog("只应出现一次");
+      expect(seen.filter((l) => l.includes("只应出现一次"))).toHaveLength(1);
+    } finally { restore(); }
+  });
+
+  it("重复安装不叠加包装（同一条日志不会被转发两次）", () => {
+    const { seen, restore } = withCapturedConsole();
+    try {
+      const second = installConsoleCapture();     // 第二次应为 no-op
+      console.log("一条消息");
+      expect(seen.filter((l) => l.includes("一条消息"))).toHaveLength(1);
+      second();
+    } finally { restore(); }
   });
 });

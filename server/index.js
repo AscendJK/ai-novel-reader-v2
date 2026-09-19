@@ -290,7 +290,9 @@ createBackup().catch((e) => console.error("[backup] 启动备份失败:", e?.mes
 
 // WAL checkpoint every 30 minutes
 setInterval(() => {
-  try { checkpointWAL(); } catch { /* ignore */ }
+  // 这里不静默：checkpoint 长期失败会让 -wal 无限增长（磁盘与恢复时间都受影响），
+  // 而进程仍在正常服务，没人会主动去看
+  try { checkpointWAL(); } catch (e) { console.warn("[wal] 周期 checkpoint 失败:", e?.message ?? e); }
 }, 30 * 60 * 1000);
 
 // Backup at configured interval（管理后台修改配置时经 onBackupConfigChanged 触发重建定时器，立即生效）
@@ -308,7 +310,8 @@ scheduleBackup();
 
 // Cleanup deleted records every 24 hours
 setInterval(() => {
-  try { cleanupDeletedRecords(); } catch { /* ignore */ }
+  // 静默失败等于墓碑永久不清理（库只增不减），必须留一行
+  try { cleanupDeletedRecords(); } catch (e) { console.warn("[gc] 周期清理失败:", e?.message ?? e); }
 }, 24 * 60 * 60 * 1000);
 
 // Graceful shutdown
