@@ -129,26 +129,31 @@ describe("R-46 预生成在途标记的代次归属", () => {
     manager.seekToChunk(0);
     await flush(30);
     releaseAll("第一段内容");
-    await flush(120);
+    await flush(150);
     releaseAll("第二段内容");
-    // 新一轮推进到第三段（此刻它要么在等自己的预生成，要么已在现场生成）
-    await flush(400);
 
-    // 关键时点：放行 A 那份迟到的第三段。旧实现会无条件删标记并叫醒该段所有
-    // 等待者 → 新一轮被提前叫醒、发现缓冲是空的，于是再现场生成一遍（同段三遍）
-    if (staleThird) {
-      const i = gates.indexOf(staleThird);
-      if (i >= 0) gates.splice(i, 1);
-      doneLog.push({ text: staleThird.text, speed: staleThird.speed });
-      staleThird.resolve(new Float32Array(24000));
+    // 等新一轮真的推进到第三段（挂在自家预生成上、或已在现场生成都算到位），
+    // 这样 A 那份迟到任务的收尾才正好落在"新一轮正在等"的窗口里
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline && !cb.onChunkStart.mock.calls.some(([i]) => i === 2)) {
+      await flush(50);
     }
-    await flush(300);
-    releaseAll("第三段内容");
-    await flush(300);
+    expect(cb.onChunkStart.mock.calls.some(([i]) => i === 2)).toBe(true);
+
+    // 关键时点：只放行 A 那份迟到的第三段，其余仍在飞。旧实现会无条件删标记并
+    // 叫醒该段所有等待者 → 新一轮被提前叫醒、发现缓冲是空的，于是再现场生成一遍
+    const attemptsBefore = doneLog.filter(g => g.text === "第三段内容").length
+      + gates.filter(g => g.text === "第三段内容").length;
+    const staleIdx = gates.indexOf(staleThird as Gate);
+    if (staleIdx >= 0) gates.splice(staleIdx, 1);
+    doneLog.push({ text: staleThird!.text, speed: staleThird!.speed });
+    staleThird!.resolve(new Float32Array(24000));
+    await flush(500);
 
     const thirdAttempts = doneLog.filter(g => g.text === "第三段内容").length
       + gates.filter(g => g.text === "第三段内容").length;
-    expect(thirdAttempts).toBeLessThanOrEqual(2);   // A 的作废任务 + 新一轮一次
+    // 放行 A 的任务不该新增任何一份生成：A 的作废任务 + 新一轮自己的那一份
+    expect(thirdAttempts).toBeLessThanOrEqual(attemptsBefore);
     expect(cb.onError).not.toHaveBeenCalled();
 
     releaseAll("第一段内容");

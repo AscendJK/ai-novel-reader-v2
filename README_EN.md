@@ -488,7 +488,7 @@ An offline inference engine based on sherpa-onnx WASM with a bilingual Chinese/E
 2. **Server cache** (`server/data/tts-cache/`): **Automatically checked and downloaded after server startup** (triggered after a 5s delay; failures do not block startup and retry with backoff; can also be triggered manually via `/api/rag/tts/prepare`)
 3. **Browser cache (IndexedDB)**: **Automatically checked after login**; if not cached locally, ~380MB is fetched file-by-file through the authenticated backend API into the browser's IndexedDB — only once, then fully offline
 
-**Fix history**: Early versions crashed during generation (C++ 11903128) due to a vocoder sample-rate mismatch (22kHz vocoder with a 24kHz decoder). Fixed by switching to the official `vocos_24khz.onnx` (24kHz); a Node reproduction script (`scripts/repro-zipvoice.cjs`) is included for regression verification.
+**Fix history**: Early versions crashed during generation (C++ 11903128) due to a vocoder sample-rate mismatch (22kHz vocoder with a 24kHz decoder). Fixed by switching to the official `vocos_24khz.onnx` (24kHz).
 
 **Deployment requirements:**
 
