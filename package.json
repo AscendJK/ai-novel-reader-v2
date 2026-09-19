@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json",
     "build": "npm run typecheck && vite build && node scripts/inject-coi.cjs",
     "pack:backend": "powershell -NoProfile -ExecutionPolicy Bypass -File pack-backend.ps1",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings=0",
     "preview": "vite preview",
     "test": "vitest run",
     "verify": "npm run typecheck && npm run lint && npm test && npm run probe:backup && npm run probe:maps && npm run probe:rag && npm run probe:proxy && npm run probe:boot",

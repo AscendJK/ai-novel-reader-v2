@@ -3,8 +3,6 @@
 // 1. 参数隔离：不同 sid/speed/text 的请求互不串扰（返回各自对应的音频）
 // 2. 排队行为：Python 进程串行处理，后来的请求等待前者完成
 // 3. 总耗时与单请求耗时的关系
-import { createSession } from "../server/sync-handler.js";
-
 const base = "http://127.0.0.1:5173";
 
 async function register(username) {

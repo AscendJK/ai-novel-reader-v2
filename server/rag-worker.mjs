@@ -49,7 +49,7 @@ async function run() {
       current: Math.min((b + 1) * batchSize, chunks.length),
       total: chunks.length,
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => { setImmediate(resolve); });
   }
 
   parentPort.postMessage({ type: "done", vectors, dim });

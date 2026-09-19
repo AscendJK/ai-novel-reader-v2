@@ -46,7 +46,7 @@ const child = spawn(process.execPath, [path.join(repoRoot, "server", "index.js")
 let logs = "";
 child.stdout.on("data", (c) => { logs += c.toString(); });
 child.stderr.on("data", (c) => { logs += c.toString(); });
-const exited = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
+const exited = new Promise((resolve) => { child.on("exit", (code, signal) => resolve({ code, signal })); });
 
 try {
   // 等端口起来（最多 20s）
@@ -56,7 +56,7 @@ try {
       const r = await get("/api/version");
       if (r.status === 200) { up = true; break; }
     } catch { /* 还没监听 */ }
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => { setTimeout(r, 200); });
   }
   check("服务器启动并响应 /api/version", up);
   if (!up) throw new Error("启动失败，日志：\n" + logs.slice(-2000));
@@ -84,7 +84,7 @@ try {
   child.kill("SIGTERM");
   const exitInfo = await Promise.race([
     exited,
-    new Promise((r) => setTimeout(() => r({ code: "TIMEOUT", signal: null }), 8000)),
+    new Promise((r) => { setTimeout(() => r({ code: "TIMEOUT", signal: null }), 8000); }),
   ]);
   check("SIGTERM 干净退出", exitInfo.code === 0 || exitInfo.signal === "SIGTERM", JSON.stringify(exitInfo));
   check("进程日志无 unhandledRejection/uncaughtException", !/unhandledRejection|uncaughtException/.test(logs));

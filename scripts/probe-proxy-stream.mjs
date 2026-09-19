@@ -27,10 +27,11 @@ function check(name, ok, detail = "") {
   console.log(`${ok ? "  PASS" : "  FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`);
 }
 
-let upstreamClosed = false;
+let upstreamClosed;   // 由 SSE 分支的 res close 置真；未触发即保持 undefined
 const upstream = http.createServer((req, res) => {
-  let body = "";
-  req.on("data", (c) => { body += c; });
+  // 必须挂 data 监听把请求体排空：只挂 end 的话流不进入 flowing 模式，
+  // 带 JSON body 的 POST 永远不触发 end，探针会看到 504（值本身用不上）
+  req.on("data", () => { /* 排空请求体 */ });
   req.on("end", () => {
     if (req.url === "/sse") {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
@@ -55,7 +56,7 @@ const upstream = http.createServer((req, res) => {
     res.end(JSON.stringify({ choices: [{ message: { content: "非流式回答" } }], usage: {} }));
   });
 });
-await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+await new Promise((resolve) => { upstream.listen(0, "127.0.0.1", resolve); });
 const upstreamPort = upstream.address().port;
 
 const server = spawn(process.execPath, [path.join(repoRoot, "server", "index.js")], {
@@ -80,7 +81,7 @@ async function waitForServer() {
       const r = await fetch(`${base}/api/version`);
       if (r.ok) return true;
     } catch { /* 还没起 */ }
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => { setTimeout(r, 200); });
   }
   return false;
 }
@@ -178,7 +179,7 @@ try {
   await r2.read();          // 只读一块就走
   await r2.cancel("client-gone");
   abort.abort();
-  await new Promise((r) => setTimeout(r, 600));
+  await new Promise((r) => { setTimeout(r, 600); });
   check("客户端断开后代理不再挂着上游", upstreamClosed === true, `closed=${upstreamClosed}`);
 
   check("后端全程未崩溃", server.exitCode === null, `exit=${server.exitCode}`);
@@ -186,7 +187,7 @@ try {
 } finally {
   server.kill("SIGKILL");
   upstream.close();
-  await new Promise((r) => setTimeout(r, 100));
+  await new Promise((r) => { setTimeout(r, 100); });
   fs.rmSync(workDir, { recursive: true, force: true });
 }
 

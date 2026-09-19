@@ -151,13 +151,9 @@ router.get("/statuses/all", (req, res) => {
 router.get("/tts/status", async (req, res) => {
   const wasmExists = fs.existsSync(path.join(TTS_WASM_CACHE, "sherpa-onnx-wasm-main-tts.wasm"));
   const modelExists = fs.existsSync(path.join(TTS_MODEL_CACHE, "model.onnx"));
-  // 服务端推理可用性（不触发下载，仅探测）
-  let serverInference = { supported: false, ready: false, reason: "" };
-  try {
-    serverInference = await checkServerInferenceReady();
-  } catch (e) {
-    serverInference = { supported: false, ready: false, reason: e.message };
-  }
+  // 服务端推理可用性（不触发下载，仅探测）；探测失败按"不支持"上报
+  const serverInference = await checkServerInferenceReady()
+    .catch((e) => ({ supported: false, ready: false, reason: e.message }));
   res.json({
     wasmReady: wasmExists,
     modelReady: modelExists,
@@ -336,11 +332,6 @@ function getMirrorHosts() {
   return [...new Set(hosts)];
 }
 
-/** 兼容旧接口：返回第一个镜像（主要用于日志/兼容） */
-function getMirrorHost() {
-  return getMirrorHosts()[0] || "https://hf-mirror.com/";
-}
-
 // Normalize cache path: strip "resolve/main/" to match Transformers.js directory structure
 // e.g., "Xenova/bge-small-zh-v1.5/resolve/main/config.json" → "Xenova/bge-small-zh-v1.5/config.json"
 function toCachePath(subPath) {
@@ -359,9 +350,6 @@ router.get("/model-proxy/{*path}", rateLimit(10), async (req, res) => {
     if (!subPath || !VALID_MODEL_PATH.test(subPath)) {
       return res.status(400).json({ error: "invalid model path" });
     }
-
-    const mirrorHost = getMirrorHost();
-    const targetUrl = `${mirrorHost}${subPath}`;
 
     // Check local cache first (use normalized path for Transformers.js compatibility)
     const cachePath = path.join(MODEL_CACHE_DIR, toCachePath(subPath));
@@ -485,7 +473,6 @@ try {
 // ── 下载源配置 ──
 // 方案4: 分离式标准部署 — 通用 WASM 运行时 + 独立模型文件
 const TTS_RELEASE_TAG = "Kokoro_fp32_v1.0";
-const SHERPA_VER = "v1.13.6";
 // 分离式标准部署：WASM 运行时（精简 data 含 espeak-ng-data）+ 独立模型文件
 // WASM 运行时文件名（用户上传到 Gitee 的实际名称）
 const WASM_ARCHIVE_NAME = "sherpa-onnx-wasm-simd-1.13.6-kokoro-slim";
@@ -544,19 +531,6 @@ function isValid7z(buffer) {
 /** 校验 bzip2 文件头（BZ） */
 function isValidBz2(buffer) {
   return buffer.length > 2 && buffer[0] === 0x42 && buffer[1] === 0x5A;
-}
-
-/** 校验 tar 文件（ustar magic） */
-function isValidTar(buffer) {
-  // tar 在 257 字节处有 "ustar" 标记
-  if (buffer.length < 300) return false;
-  const magic = buffer.slice(257, 262).toString();
-  return magic === "ustar";
-}
-
-/** 校验 zip 文件头（PK） */
-function isValidZip(buffer) {
-  return buffer.length > 2 && buffer[0] === 0x50 && buffer[1] === 0x4B;
 }
 
 // ── 解压后文件校验 ────────────────────────────────────────
@@ -736,8 +710,8 @@ async function downloadFromGitee(partNames, archiveName, targetDir, requiredFile
     try {
       await execFileAsync("7z", ["x", archivePath, `-o${extractRoot}`, "-y"], { timeout: 120000 });
     } catch (e) {
-      if (e.code === "ENOENT") throw new Error("7z 未安装。请安装 7-Zip (Windows) 或 p7zip-full (Linux/macOS) 后重试。");
-      throw new Error(`7z 解压失败: ${e.message}`);
+      if (e.code === "ENOENT") throw new Error("7z 未安装。请安装 7-Zip (Windows) 或 p7zip-full (Linux/macOS) 后重试。", { cause: e });
+      throw new Error(`7z 解压失败: ${e.message}`, { cause: e });
     }
 
     // 5. 复制到目标目录（整体复制，dict/ 等子目录全部保留）
@@ -809,57 +783,14 @@ async function downloadFromGitHubTar(url, archiveName, targetDir, requiredFiles,
     try {
       await execFileAsync("tar", ["xjf", archivePath, "-C", TTS_TEMP_DIR], { timeout: 120000 });
     } catch (e) {
-      if (e.code === "ENOENT") throw new Error("tar 未安装。请安装 tar (Linux/macOS) 或 7-Zip (Windows) 后重试。");
-      throw new Error(`tar 解压失败: ${e.message}`);
+      if (e.code === "ENOENT") throw new Error("tar 未安装。请安装 tar (Linux/macOS) 或 7-Zip (Windows) 后重试。", { cause: e });
+      throw new Error(`tar 解压失败: ${e.message}`, { cause: e });
     }
 
     onProgress?.("复制文件", "写入缓存目录");
     if (!fs.existsSync(extractedDir)) {
       throw new Error(`解压后找不到目录: ${archiveName}`);
     }
-    fs.cpSync(extractedDir, targetDir, { recursive: true });
-
-    onProgress?.("校验文件", "检查完整性");
-    validateExtractedFiles(targetDir, requiredFiles);
-  } finally {
-    try { fs.unlinkSync(archivePath); } catch {}
-    try { fs.rmSync(extractedDir, { recursive: true }); } catch {}
-  }
-}
-
-/**
- * 从 GitHub 下载 zip → 校验 → 解压 → 校验解压结果
- */
-async function downloadFromGitHubZip(url, archiveName, targetDir, requiredFiles, onProgress, { signal } = {}) {
-  if (!fs.existsSync(TTS_TEMP_DIR)) fs.mkdirSync(TTS_TEMP_DIR, { recursive: true });
-  if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-
-  const archivePath = path.join(TTS_TEMP_DIR, archiveName + ".zip");
-  const extractedDir = path.join(TTS_TEMP_DIR, archiveName);
-
-  try {
-    onProgress?.("下载中 (GitHub)", "zip 格式");
-    await downloadFile(url, archivePath, 1024 * 1024, (pct) => {
-      onProgress?.(`下载中 ${pct}% (GitHub)`, "zip 格式");
-    }, { signal });
-
-    onProgress?.("校验压缩包", "检查文件格式");
-    const headerBuf = Buffer.alloc(2);
-    const fd = fs.openSync(archivePath, "r");
-    try { fs.readSync(fd, headerBuf, 0, 2, 0); } finally { fs.closeSync(fd); }
-    if (!isValidZip(headerBuf)) {
-      throw new Error("下载的文件不是有效的 zip 格式（文件头校验失败）");
-    }
-
-    onProgress?.("解压中", "zip 解压...");
-    try {
-      await execFileAsync("7z", ["x", archivePath, `-o${TTS_TEMP_DIR}`, "-y"], { timeout: 120000 });
-    } catch (e) {
-      if (e.code === "ENOENT") throw new Error("7z 未安装。请安装 7-Zip (Windows) 或 p7zip-full (Linux/macOS) 后重试。");
-      throw new Error(`zip 解压失败: ${e.message}`);
-    }
-
-    onProgress?.("复制文件", "写入缓存目录");
     fs.cpSync(extractedDir, targetDir, { recursive: true });
 
     onProgress?.("校验文件", "检查完整性");

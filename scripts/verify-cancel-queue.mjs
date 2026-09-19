@@ -1,6 +1,4 @@
 // 验证取消协议 + 队列上限
-import { createSession } from "../server/sync-handler.js";
-
 // 通过 register 获取 token（与服务器进程共享 session 存储）
 async function register(username) {
   const res = await fetch("http://127.0.0.1:5173/api/sync/register", {
@@ -31,7 +29,7 @@ async function cancel(token) {
   return res.json();
 }
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
+const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
 
 async function main() {
   const userA = await register("cancel-test-a");

@@ -241,42 +241,42 @@ export function insertChapters(chapters) {
 
 export function listNovels() {
   return db.prepare(`
-    SELECT id, title, author, file_name AS \"fileName\", file_format AS \"fileFormat\",
-           total_chars AS \"totalChars\", chapter_count AS \"chapterCount\",
-           created_at AS \"createdAt\", updated_at AS \"updatedAt\"
+    SELECT id, title, author, file_name AS "fileName", file_format AS "fileFormat",
+           total_chars AS "totalChars", chapter_count AS "chapterCount",
+           created_at AS "createdAt", updated_at AS "updatedAt"
     FROM novels ORDER BY updated_at DESC
   `).all();
 }
 
 export function getNovel(novelId) {
   return db.prepare(`
-    SELECT id, title, author, file_name AS \"fileName\", file_format AS \"fileFormat\",
-           total_chars AS \"totalChars\", chapter_count AS \"chapterCount\",
-           created_at AS \"createdAt\", updated_at AS \"updatedAt\"
+    SELECT id, title, author, file_name AS "fileName", file_format AS "fileFormat",
+           total_chars AS "totalChars", chapter_count AS "chapterCount",
+           created_at AS "createdAt", updated_at AS "updatedAt"
     FROM novels WHERE id = ?
   `).get(novelId);
 }
 
 export function getChapterList(novelId) {
   return db.prepare(`
-    SELECT id, novel_id AS \"novelId\", index_num AS \"index\", title,
-           start_offset AS \"startOffset\", end_offset AS \"endOffset\"
+    SELECT id, novel_id AS "novelId", index_num AS "index", title,
+           start_offset AS "startOffset", end_offset AS "endOffset"
     FROM chapters WHERE novel_id = ? ORDER BY index_num
   `).all(novelId);
 }
 
 export function getAllChapters(novelId) {
   return db.prepare(`
-    SELECT id, novel_id AS \"novelId\", index_num AS \"index\", title, content,
-           start_offset AS \"startOffset\", end_offset AS \"endOffset\"
+    SELECT id, novel_id AS "novelId", index_num AS "index", title, content,
+           start_offset AS "startOffset", end_offset AS "endOffset"
     FROM chapters WHERE novel_id = ? ORDER BY index_num
   `).all(novelId);
 }
 
 export function getChapter(novelId, indexNum) {
   return db.prepare(`
-    SELECT id, novel_id AS \"novelId\", index_num AS \"index\", title, content,
-           start_offset AS \"startOffset\", end_offset AS \"endOffset\"
+    SELECT id, novel_id AS "novelId", index_num AS "index", title, content,
+           start_offset AS "startOffset", end_offset AS "endOffset"
     FROM chapters WHERE novel_id = ? AND index_num = ?
   `).get(novelId, indexNum);
 }
@@ -347,7 +347,7 @@ export function createUser(username) {
 
 export function getProgress(username) {
   const rows = db.prepare(`
-    SELECT novel_id AS \"novelId\", chapter_id AS \"chapterId\", chapter_index AS \"chapterIndex\", last_opened AS \"lastOpened\", updated_at AS \"updatedAt\"
+    SELECT novel_id AS "novelId", chapter_id AS "chapterId", chapter_index AS "chapterIndex", last_opened AS "lastOpened", updated_at AS "updatedAt"
     FROM reading_progress WHERE username = ?
   `).all(username);
   const readingPositions = {};
@@ -688,7 +688,7 @@ export async function restoreBackup(filename) {
       probe.close();
     }
   } catch (e) {
-    throw new Error(`备份文件无法读取，已中止恢复: ${e?.message ?? e}`);
+    throw new Error(`备份文件无法读取，已中止恢复: ${e?.message ?? e}`, { cause: e });
   }
 
   // 1. 恢复前快照：必须 await 完成再 close，否则 close 会杀死异步备份，
@@ -700,7 +700,7 @@ export async function restoreBackup(filename) {
     console.log(`[backup] pre-restore snapshot: ${snapshotPath}`);
   } catch (e) {
     // 快照失败：数据库未被触碰，直接中止（比覆盖后无快照可回退安全得多）
-    throw new Error(`恢复前快照失败，已中止恢复: ${e?.message ?? e}`);
+    throw new Error(`恢复前快照失败，已中止恢复: ${e?.message ?? e}`, { cause: e });
   }
 
   // 2. 先把备份复制成同卷暂存文件。这一步主库连接完好，任何失败都能干净中止；
@@ -710,7 +710,7 @@ export async function restoreBackup(filename) {
     fs.copyFileSync(backupPath, stagingPath);
   } catch (e) {
     try { fs.rmSync(stagingPath, { force: true }); } catch { /* ignore */ }
-    throw new Error(`备份复制失败，数据库未做任何改动: ${e?.message ?? e}`);
+    throw new Error(`备份复制失败，数据库未做任何改动: ${e?.message ?? e}`, { cause: e });
   }
 
   // 3. 换库。不再尝试"重开连接"：better-sqlite3 的 db.open 是布尔属性不是方法，
@@ -730,7 +730,8 @@ export async function restoreBackup(filename) {
     try { fs.rmSync(stagingPath, { force: true }); } catch { /* ignore */ }
     setTimeout(() => process.exit(1), 500);
     throw new Error(
-      `备份恢复在换库阶段失败，服务即将退出。人工回退：停服后把 ${snapshotPath} 复制覆盖为 ${DB_PATH} 再重启`
+      `备份恢复在换库阶段失败，服务即将退出。人工回退：停服后把 ${snapshotPath} 复制覆盖为 ${DB_PATH} 再重启`,
+      { cause: e }
     );
   }
 
