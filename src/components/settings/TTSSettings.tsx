@@ -22,12 +22,25 @@ import { isCacheReady } from "@/tts/tts-cache";
 import { apiFetch } from "@/lib/api-client";
 
 export function TTSSettings() {
-  const {
-    voiceId, speed, pitch, autoNextChapter, browserVoices, engine, chunkSize,
-    prefetchCount, workerCount,
-    setVoiceId, setSpeed, setPitch, setAutoNextChapter, setBrowserVoices, setEngine, setChunkSize,
-    setPrefetchCount, setWorkerCount,
-  } = useTTSStore();
+  // R-58：逐字段订阅（整仓订阅时正文朗读的每次进度上报都会重渲染整个设置页）
+  const voiceId = useTTSStore((s) => s.voiceId);
+  const speed = useTTSStore((s) => s.speed);
+  const pitch = useTTSStore((s) => s.pitch);
+  const autoNextChapter = useTTSStore((s) => s.autoNextChapter);
+  const browserVoices = useTTSStore((s) => s.browserVoices);
+  const engine = useTTSStore((s) => s.engine);
+  const chunkSize = useTTSStore((s) => s.chunkSize);
+  const prefetchCount = useTTSStore((s) => s.prefetchCount);
+  const workerCount = useTTSStore((s) => s.workerCount);
+  const setVoiceId = useTTSStore((s) => s.setVoiceId);
+  const setSpeed = useTTSStore((s) => s.setSpeed);
+  const setPitch = useTTSStore((s) => s.setPitch);
+  const setAutoNextChapter = useTTSStore((s) => s.setAutoNextChapter);
+  const setBrowserVoices = useTTSStore((s) => s.setBrowserVoices);
+  const setEngine = useTTSStore((s) => s.setEngine);
+  const setChunkSize = useTTSStore((s) => s.setChunkSize);
+  const setPrefetchCount = useTTSStore((s) => s.setPrefetchCount);
+  const setWorkerCount = useTTSStore((s) => s.setWorkerCount);
 
   const [loading, setLoading] = useState(false);
   const [loadAttempted, setLoadAttempted] = useState(false);

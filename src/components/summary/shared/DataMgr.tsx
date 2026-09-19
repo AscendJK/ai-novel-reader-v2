@@ -38,7 +38,7 @@ export function DataMgr({
   noteCount,
   onNotesChanged,
 }: DataMgrProps) {
-  const { setSummaries } = useSummaryStore();
+  const setSummaries = useSummaryStore((s) => s.setSummaries);
 
   // 删除指定类型的总结
   const del = async (type: string, label: string) => {

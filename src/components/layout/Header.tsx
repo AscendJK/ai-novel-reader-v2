@@ -14,7 +14,10 @@ interface HeaderProps {
 }
 
 export const Header = memo(function Header({ inBook, bookTitle, onBack, onSettings, onNotes }: HeaderProps) {
-  const { theme, toggleTheme, offlineMode, setOfflineMode } = useUIStore();
+  const theme = useUIStore((s) => s.theme);
+  const toggleTheme = useUIStore((s) => s.toggleTheme);
+  const offlineMode = useUIStore((s) => s.offlineMode);
+  const setOfflineMode = useUIStore((s) => s.setOfflineMode);
   const username = syncClient.user || localStorage.getItem("sync-username");
   const [showUser, setShowUser] = useState(false);
   const [showOfflineTip, setShowOfflineTip] = useState(false);
@@ -185,7 +188,8 @@ export const Header = memo(function Header({ inBook, bookTitle, onBack, onSettin
 });
 
 function ModelDownloadIndicator() {
-  const { currentDownload, downloadProgress } = useRAGStore();
+  const currentDownload = useRAGStore((s) => s.currentDownload);
+  const downloadProgress = useRAGStore((s) => s.downloadProgress);
 
   if (!currentDownload) return null;
 

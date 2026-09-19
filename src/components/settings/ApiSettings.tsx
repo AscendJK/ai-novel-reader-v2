@@ -23,8 +23,13 @@ function newId(): string {
 }
 
 export function ApiSettings({ onBack }: { onBack?: () => void }) {
-  const { providers, addProvider, removeProvider, activeProviderId, setActiveProvider } = useAPIStore();
-  const { offlineMode, setOfflineMode } = useUIStore();
+  const providers = useAPIStore((s) => s.providers);
+  const addProvider = useAPIStore((s) => s.addProvider);
+  const removeProvider = useAPIStore((s) => s.removeProvider);
+  const activeProviderId = useAPIStore((s) => s.activeProviderId);
+  const setActiveProvider = useAPIStore((s) => s.setActiveProvider);
+  const offlineMode = useUIStore((s) => s.offlineMode);
+  const setOfflineMode = useUIStore((s) => s.setOfflineMode);
   const [editing, setEditing] = useState<ProviderConfig | null>(null);
   const modelInfo = editing?.model ? getMatchedModelInfo(editing.model) : null;
 

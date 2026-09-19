@@ -87,11 +87,15 @@ interface UseQAOptions {
 }
 
 export function useQA({ novelId, askCustomQuestion, generateRangeSummary, clearQaCache }: UseQAOptions): UseQAReturn {
-  const store = useQADataStore();
+  // R-58：只取三个 action（稳定 identity）。原先订阅整个 store，任何一次 save 都会
+  // 让下面所有 useCallback 重建并连带 QA 面板整体重渲染
+  const getData = useQADataStore((st) => st.getData);
+  const save = useQADataStore((st) => st.save);
+  const clear = useQADataStore((st) => st.clear);
 
   // 当 novelId 变化时，从 store 恢复数据
   const prevNovelIdRef = useRef(novelId);
-  const initialData = store.getData(novelId);
+  const initialData = getData(novelId);
 
   const [qaMessages, _setQaMessages] = useState<QAMessage[]>(initialData.qaMessages);
   const [rangeResults, _setRangeResults] = useState<RangeResult[]>(initialData.rangeResults);
@@ -107,7 +111,7 @@ export function useQA({ novelId, askCustomQuestion, generateRangeSummary, clearQ
     const prevId = prevNovelIdRef.current;
     if (prevId && prevId !== novelId) {
       // 新小说的数据从 store 获取（每次 addMessage/setQaMessages 都会同步到 store）
-      const restored = store.getData(novelId);
+      const restored = getData(novelId);
       _setQaMessages(restored.qaMessages);
       _setRangeResults(restored.rangeResults);
       setCustomQuestion("");
@@ -116,24 +120,24 @@ export function useQA({ novelId, askCustomQuestion, generateRangeSummary, clearQ
       setQaError(null);
     }
     prevNovelIdRef.current = novelId;
-  }, [novelId, store]);
+  }, [novelId, getData]);
 
   // 包装 setState：每次更新同时写入 store
   const setQaMessages: typeof _setQaMessages = useCallback((value) => {
     _setQaMessages((prev) => {
       const next = typeof value === "function" ? value(prev) : value;
-      if (novelId) store.save(novelId, { qaMessages: next });
+      if (novelId) save(novelId, { qaMessages: next });
       return next;
     });
-  }, [novelId, store]);
+  }, [novelId, save]);
 
   const setRangeResults: typeof _setRangeResults = useCallback((value) => {
     _setRangeResults((prev) => {
       const next = typeof value === "function" ? value(prev) : value;
-      if (novelId) store.save(novelId, { rangeResults: next });
+      if (novelId) save(novelId, { rangeResults: next });
       return next;
     });
-  }, [novelId, store]);
+  }, [novelId, save]);
 
   const addMessage = useCallback((role: "user" | "assistant", content: string, tokensUsed?: number) => {
     const message: QAMessage = { id: uuid(), role, content, tokensUsed };
@@ -204,8 +208,8 @@ export function useQA({ novelId, askCustomQuestion, generateRangeSummary, clearQ
     _setQaMessages([]);
     _setRangeResults([]);
     setQaError(null);
-    if (novelId) store.clear(novelId);
-  }, [clearQaCache, novelId, store]);
+    if (novelId) clear(novelId);
+  }, [clearQaCache, novelId, clear]);
 
   return {
     qaMessages,

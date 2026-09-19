@@ -35,7 +35,7 @@ export function AppLayout() {
   const currentNovel = useNovelStore((s) => s.currentNovel);
   const setCurrentNovel = useNovelStore((s) => s.setCurrentNovel);
   const addNovel = useNovelStore((s) => s.addNovel);
-  const { setSummaries } = useSummaryStore();
+  const setSummaries = useSummaryStore((s) => s.setSummaries);
   const [showSettings, setShowSettings] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const [syncReady, setSyncReady] = useState(() => !!localStorage.getItem("sync-username"));

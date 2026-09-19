@@ -58,15 +58,34 @@ export function useAudioPlayer({
   // 调 manager.seekToChunk 前必须减去该偏移，否则 seek 目标会向后跳过起始的若干 chunk
   const startChunkOffsetRef = useRef(0);
 
-  const {
-    playing, paused, generating, speed, playbackRate, pitch, voiceId, engine, autoNextChapter, chunkSize,
-    prefetchCount, workerCount,
-    currentNovelId, currentChapterIndex,
-    setPlaying, setPaused, setCurrentChapter,
-    setParagraphProgress, setGenerating, setEngine,
-    setModelDownloaded, setModelDownloading, setBrowserVoices, reset,
-    setPrepareProgress, setBufferedChunks,
-  } = useTTSStore();
+  // R-58：逐字段订阅。整仓订阅时任何一个无关字段变化（如缓冲水位上报）都会
+  // 重建本 hook 的几十个 useCallback 并让朗读界面整体重渲染
+  const playing = useTTSStore((s) => s.playing);
+  const paused = useTTSStore((s) => s.paused);
+  const generating = useTTSStore((s) => s.generating);
+  const speed = useTTSStore((s) => s.speed);
+  const playbackRate = useTTSStore((s) => s.playbackRate);
+  const pitch = useTTSStore((s) => s.pitch);
+  const voiceId = useTTSStore((s) => s.voiceId);
+  const engine = useTTSStore((s) => s.engine);
+  const autoNextChapter = useTTSStore((s) => s.autoNextChapter);
+  const chunkSize = useTTSStore((s) => s.chunkSize);
+  const prefetchCount = useTTSStore((s) => s.prefetchCount);
+  const workerCount = useTTSStore((s) => s.workerCount);
+  const currentNovelId = useTTSStore((s) => s.currentNovelId);
+  const currentChapterIndex = useTTSStore((s) => s.currentChapterIndex);
+  const setPlaying = useTTSStore((s) => s.setPlaying);
+  const setPaused = useTTSStore((s) => s.setPaused);
+  const setCurrentChapter = useTTSStore((s) => s.setCurrentChapter);
+  const setParagraphProgress = useTTSStore((s) => s.setParagraphProgress);
+  const setGenerating = useTTSStore((s) => s.setGenerating);
+  const setEngine = useTTSStore((s) => s.setEngine);
+  const setModelDownloaded = useTTSStore((s) => s.setModelDownloaded);
+  const setModelDownloading = useTTSStore((s) => s.setModelDownloading);
+  const setBrowserVoices = useTTSStore((s) => s.setBrowserVoices);
+  const reset = useTTSStore((s) => s.reset);
+  const setPrepareProgress = useTTSStore((s) => s.setPrepareProgress);
+  const setBufferedChunks = useTTSStore((s) => s.setBufferedChunks);
 
   // 初始化/销毁 TTS 管理器
   useEffect(() => {

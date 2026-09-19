@@ -6,7 +6,9 @@ import { useAPIStore } from "@/stores/api-store";
 import { Badge } from "@/components/ui/badge";
 
 export function ProviderSelect() {
-  const { providers, activeProviderId, setActiveProvider } = useAPIStore();
+  const providers = useAPIStore((s) => s.providers);
+  const activeProviderId = useAPIStore((s) => s.activeProviderId);
+  const setActiveProvider = useAPIStore((s) => s.setActiveProvider);
   const configured = providers.filter((p) => p.apiKey);
 
   return (

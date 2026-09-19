@@ -487,6 +487,16 @@ export function BookSelect() {
     [processFiles]
   );
 
+  /**
+   * R-58：提到 useCallback。原来这里是 map 里的内联 async 箭头——每次渲染都给
+   * 每张 NovelCard 一个新函数身份，NovelCard 的 memo 于是永远不命中，
+   * 书越多越明显（阅读进度上报一刷新整片书架重排）。
+   */
+  const handleOpenNovel = useCallback(async (novelId: string, chapterIndex?: number) => {
+    const full = await loadNovel(novelId, chapterIndex);
+    if (full) setCurrentNovel(full);
+  }, [setCurrentNovel]);
+
   const handleDelete = useCallback(async (e: React.MouseEvent, novelId: string, title: string) => {
     e.stopPropagation();
     if (!window.confirm(`从书架移除《${title}》？\n\n将删除你关于此书的所有数据：\n- AI 总结和分析\n- 人物关系图谱\n- 笔记\n- 阅读进度\n\n小说本身仍保留在服务器书库中。`)) return;
@@ -642,10 +652,7 @@ export function BookSelect() {
                   builds={builds}
                   buildStatuses={buildStatuses}
                   offlineMode={offlineMode}
-                  onOpen={async (novelId, chapterIndex) => {
-                    const full = await loadNovel(novelId, chapterIndex);
-                    if (full) setCurrentNovel(full);
-                  }}
+                  onOpen={handleOpenNovel}
                   onDelete={handleDelete}
                   onBuild={handleBuild}
                 />

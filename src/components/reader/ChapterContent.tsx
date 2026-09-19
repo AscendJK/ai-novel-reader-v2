@@ -44,7 +44,10 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   const setSelectedChapter = useNovelStore((s) => s.setSelectedChapter);
   const addChapters = useNovelStore((s) => s.addChapters);
   const saveScrollTop = useNovelStore((s) => s.saveScrollTop);
-  const { getSummariesByNovel } = useSummaryStore();
+  // R-58：订阅到渲染真正用到的分片。注意必须订阅 summaries 本身而不是只拿
+  // getSummariesByNovel 这个函数引用——函数是稳定 identity，那样总结更新后
+  // 本组件不再重渲染，界面会停在旧数据（下方 618 行是在 render 期读的）
+  const allSummaries = useSummaryStore((s) => s.summaries);
   const fontSize = useUIStore((s) => s.fontSize);
   const setFontSize = useUIStore((s) => s.setFontSize);
   const fontWeight = useUIStore((s) => s.fontWeight);
@@ -616,7 +619,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   }
 
   const summaries = currentNovel
-    ? getSummariesByNovel(currentNovel.id).filter((s) => s.chapterId === chapter.id)
+    ? allSummaries.filter((s) => s.novelId === currentNovel.id && s.chapterId === chapter.id)
     : [];
   const currentWeightLabel = FONT_WEIGHTS.find((w) => w.value === fontWeight)?.label || "正常";
   const textStyles: React.CSSProperties = { fontSize: `${fontSize}px`, lineHeight, fontWeight, fontFamily };

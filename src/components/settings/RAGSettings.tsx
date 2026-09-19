@@ -16,12 +16,24 @@ import {
 } from "lucide-react";
 
 export function RAGSettings() {
-  const {
-    engine, setEngine, downloadedModels, currentDownload, downloadProgress: globalProgress,
-    cacheSizeMB, ragCacheSizeBytes, setCacheSizeMB,
-    topKDefault, topKTiers, setTopKDefault, setTopKTiers, resetTopKConfig, getTopK,
-  } = useRAGStore();
-  const { graphCharacterLimit, setGraphCharacterLimit } = useUIStore();
+  // R-58：逐字段订阅（原为整仓订阅，任何无关字段变化都会重渲染这个重设置页）。
+  // getTopK 只读 topKTiers/topKDefault，两者都已单独订阅，故函数引用不会读到陈旧值
+  const engine = useRAGStore((s) => s.engine);
+  const setEngine = useRAGStore((s) => s.setEngine);
+  const downloadedModels = useRAGStore((s) => s.downloadedModels);
+  const currentDownload = useRAGStore((s) => s.currentDownload);
+  const globalProgress = useRAGStore((s) => s.downloadProgress);
+  const cacheSizeMB = useRAGStore((s) => s.cacheSizeMB);
+  const ragCacheSizeBytes = useRAGStore((s) => s.ragCacheSizeBytes);
+  const setCacheSizeMB = useRAGStore((s) => s.setCacheSizeMB);
+  const topKDefault = useRAGStore((s) => s.topKDefault);
+  const topKTiers = useRAGStore((s) => s.topKTiers);
+  const setTopKDefault = useRAGStore((s) => s.setTopKDefault);
+  const setTopKTiers = useRAGStore((s) => s.setTopKTiers);
+  const resetTopKConfig = useRAGStore((s) => s.resetTopKConfig);
+  const getTopK = useRAGStore((s) => s.getTopK);
+  const graphCharacterLimit = useUIStore((s) => s.graphCharacterLimit);
+  const setGraphCharacterLimit = useUIStore((s) => s.setGraphCharacterLimit);
   const isMobile = useMediaQuery("(max-width: 767px)");
   const mountedRef = useRef(true);
   useEffect(() => { return () => { mountedRef.current = false; }; }, []);

@@ -19,7 +19,7 @@ interface NovelBuildWindowProps {
 }
 
 export function NovelBuildWindow({ build, onRetry, onFallbackToTFIDF }: NovelBuildWindowProps) {
-  const { dismissWindow } = useBuildStore();
+  const dismissWindow = useBuildStore((s) => s.dismissWindow);
   const { novelId, engine, status, message, current, total, error, queuePosition, open } = build;
 
   if (!open) return null;
