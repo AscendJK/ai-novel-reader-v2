@@ -18,6 +18,8 @@ import { useRAGStore } from "@/stores/rag-store";
 
 // 全局构建锁，防止重复构建
 const activeBuilds = new Map<string, Promise<DownloadResult>>();
+// 同一份构建的多个等待者各自订阅进度广播（共享任务不属于任何一个调用方）
+const buildListeners = new Map<string, Set<(p: BuildProgress) => void>>();
 
 // ============================================================
 // 类型定义
@@ -273,34 +275,57 @@ export async function buildAndPollRAGIndex(options: BuildOptions): Promise<Downl
   const buildKey = `${novelId}-${engine}`;
 
   // 检查是否已有构建任务在运行
-  const existingBuild = activeBuilds.get(buildKey);
-  if (existingBuild) {
+  let shared = activeBuilds.get(buildKey);
+  if (!shared) {
+    ragLog(`启动构建任务: ${buildKey}`);
+    shared = doBuild({
+      novelId,
+      engine,
+      pollInterval,
+      timeout,
+      maxFailCount,
+      buildKey,
+      // 不把发起者的 signal 交给共享任务：任何一个人的取消只该让他自己退出等待，
+      // 其余等待者仍在等同一份构建（旧实现首个预取被取消会连带 reject 所有人）
+      signal: undefined,
+      onProgress: (p) => {
+        for (const listener of buildListeners.get(buildKey) ?? []) {
+          try { listener(p); } catch { /* 单个订阅者出错不影响其他人 */ }
+        }
+      },
+    }).finally(() => {
+      activeBuilds.delete(buildKey);
+      buildListeners.delete(buildKey);
+    });
+    activeBuilds.set(buildKey, shared);
+  } else {
     ragLog(`构建任务已存在: ${buildKey}，等待完成...`);
-    return existingBuild;
   }
 
-  // 创建新的构建任务
-  const buildPromise = doBuild({
-    novelId,
-    engine,
-    onProgress,
-    signal,
-    pollInterval,
-    timeout,
-    maxFailCount,
-    buildKey,
-  });
+  if (!onProgress) return await raceWithAbort(shared, signal);
 
-  // 存储到活跃构建 Map
-  activeBuilds.set(buildKey, buildPromise);
-
+  const listeners = buildListeners.get(buildKey) ?? new Set<NonNullable<BuildOptions["onProgress"]>>();
+  listeners.add(onProgress);
+  buildListeners.set(buildKey, listeners);
   try {
-    const result = await buildPromise;
-    return result;
+    return await raceWithAbort(shared, signal);
   } finally {
-    // 清理活跃构建记录
-    activeBuilds.delete(buildKey);
+    listeners.delete(onProgress);
   }
+}
+
+/** 调用方取消时只让自己退出；共享构建继续为其他等待者跑完 */
+async function raceWithAbort<T>(shared: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return await shared;
+  if (signal.aborted) throw new Error("操作已取消");
+  return await new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new Error("操作已取消"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    shared.then(
+      (v) => { signal.removeEventListener("abort", onAbort); resolve(v); },
+      (e) => { signal.removeEventListener("abort", onAbort); reject(e); }
+    );
+  });
 }
 
 /**
