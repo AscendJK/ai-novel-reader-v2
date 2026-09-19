@@ -16,7 +16,8 @@ router.post("/chat", rateLimit(60), async (req, res) => {
   try {
     const { url, headers, body } = req.body;
     if (!url) return res.status(400).json({ error: "url required" });
-    if (body && JSON.stringify(body).length > 1_000_000) {
+    // 上限按"整本书目录 + RAG 片段"的量级放宽：1MB 会拒掉长任务的代理请求
+    if (body && JSON.stringify(body).length > 8_000_000) {
       return res.status(413).json({ error: "请求体过大" });
     }
 
@@ -96,6 +97,19 @@ router.post("/chat", rateLimit(60), async (req, res) => {
     console.log(`[proxy] 请求: ${url}`);
     const startTime = Date.now();
 
+    // 客户端断开要一并掐掉上游，否则半开的到服务商连接会一直挂到 3 分钟超时。
+    // 注意监听对象：req 的 close 在**请求体读完**时就会触发（不等于客户端断开），
+    // 用它会把正常请求自己掐死；必须是 res 的 close 且响应尚未写完。
+    const clientAbort = new AbortController();
+    const onResponseClosed = () => {
+      if (!res.writableEnded) clientAbort.abort();
+    };
+    res.on("close", onResponseClosed);
+    const timeoutSignal = AbortSignal.timeout(180000); // 3 分钟超时
+    const signal = typeof AbortSignal.any === "function"
+      ? AbortSignal.any([timeoutSignal, clientAbort.signal])
+      : timeoutSignal;
+
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -104,7 +118,7 @@ router.post("/chat", rateLimit(60), async (req, res) => {
       },
       body: JSON.stringify(body),
       redirect: "error", // 禁止跟随重定向，防止 SSRF 绕过
-      signal: AbortSignal.timeout(180000), // 3 分钟超时
+      signal,
     });
 
     const elapsed = Date.now() - startTime;
@@ -118,6 +132,29 @@ router.post("/chat", rateLimit(60), async (req, res) => {
         error: `API 返回错误: ${response.status} ${response.statusText}`,
         details: errorText
       });
+    }
+
+    // 上游是 SSE 流时必须原样透传。客户端默认 stream:true（ModelScope 等强制要求），
+    // 而旧实现无条件 response.text() + JSON.parse → 对 SSE 体必然解析失败返回 500，
+    // 于是"只能走代理的服务商"整条 AI 链路全部不可用（round 2 R-06）
+    const upstreamType = response.headers.get("content-type") || "";
+    if (upstreamType.includes("text/event-stream")) {
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.flushHeaders?.();
+      console.log(`[proxy] 透传 SSE 流: ${url}`);
+      try {
+        for await (const chunk of response.body) {
+          if (res.writableEnded || res.destroyed) break;
+          res.write(chunk);
+        }
+      } catch (e) {
+        console.warn("[proxy] SSE 透传中断:", e.message);
+      } finally {
+        if (!res.writableEnded) res.end();
+      }
+      return;
     }
 
     const responseText = await response.text();

@@ -178,7 +178,9 @@ router.post("/tts/synthesize", requireAuth, rateLimit(60), async (req, res) => {
     const voiceId = Number.isInteger(Number(sid)) ? Math.max(0, Math.min(102, Number(sid))) : 45;
 
     // 客户端断开（关页面/停止朗读/网络断）就把这条请求出队：否则 Python 仍会
-    // 跑满最长 180s，把音频交给一个已经不存在的响应，还占着队列位
+    // 跑满最长 180s，把音频交给一个已经不存在的响应，还占着队列位。
+    // ⚠️ 监听 res 而不是 req——Node 在"请求体读完"时就会 emit req 的 close，
+    // 用 req 会把每一个正常请求刚进来就判定为断开、立刻出队。
     const pyRef = {};
     const onClientGone = () => {
       if (res.writableEnded) return;
@@ -188,7 +190,7 @@ router.post("/tts/synthesize", requireAuth, rateLimit(60), async (req, res) => {
         p.reject(new Error("客户端已断开"));
       }
     };
-    req.on("close", onClientGone);
+    res.on("close", onClientGone);
     try {
       const result = await pyGenerate(text, voiceId, s, req.username, pyRef);
       const wavBuf = Buffer.from(result.wavBase64, "base64");
@@ -197,7 +199,7 @@ router.post("/tts/synthesize", requireAuth, rateLimit(60), async (req, res) => {
       res.setHeader("Cache-Control", "no-cache");
       res.send(wavBuf);
     } finally {
-      req.removeListener("close", onClientGone);
+      res.removeListener("close", onClientGone);
     }
   } catch (e) {
     console.error("[tts-py] synthesize error:", e.message);
@@ -1423,7 +1425,12 @@ router.get("/tts/prepare", requireAuth, async (req, res) => {
 
   let clientDisconnected = false;
   const abortController = new AbortController();
-  req.on("close", () => {
+  // ⚠️ 必须监听 res 而不是 req：Node 的 IncomingMessage 在"请求被读完"时就会
+  // emit close（GET 无体 → 几乎立刻触发），拿它当"客户端断开"会让这条 SSE 在
+  // 第一帧之前就自我判定为已断开，前端再也收不到进度事件（实测：同结构的
+  // req.on("close") 会让响应永远不结束）。round 2 R-66。
+  res.on("close", () => {
+    if (res.writableEnded) return; // 正常写完，不是断开
     clientDisconnected = true;
     abortController.abort();
   });
