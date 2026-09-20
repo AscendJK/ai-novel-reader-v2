@@ -104,8 +104,8 @@ function runVitest(filter) {
 const PROBE_FOR = {
   "server/index.js": ["probe:boot", "probe:proxy"],
   "server/admin.js": ["probe:boot"],
-  "server/sync-handler.js": ["probe:maps"],
-  "server/routes/sync.js": ["probe:maps"],
+  "server/sync-handler.js": ["probe:maps", "probe:sync"],
+  "server/routes/sync.js": ["probe:sync"],
   "server/routes/proxy.js": ["probe:proxy"],
   "server/routes/rag.js": ["probe:rag"],
   "server/rag-builder.js": ["probe:rag"],
