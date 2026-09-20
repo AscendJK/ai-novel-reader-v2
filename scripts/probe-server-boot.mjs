@@ -119,6 +119,47 @@ try {
   check("响应带 nosniff", publicOrigin.headers.get("x-content-type-options") === "nosniff",
     `XCTO=${publicOrigin.headers.get("x-content-type-options")}`);
 
+  // ── RAG 编码/建库端点的入参守卫（这些 400 都在下载模型之前，跑起来不联网）──
+  async function postJson(pathname, body, token) {
+    const res = await fetch(`http://127.0.0.1:${PORT}${pathname}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(body),
+    });
+    let json = null;
+    try { json = await res.clone().json(); } catch { /* 非 JSON */ }
+    return { status: res.status, json };
+  }
+
+  const encNoAuth = await postJson("/api/rag/encode", { texts: ["甲"] });
+  check("未登录时不开放编码端点（局域网里能白嫖嵌入算力的口子）", encNoAuth.status === 401, `status=${encNoAuth.status}`);
+
+  const reg = await postJson("/api/sync/register", { username: "probe-rag", clientId: "probe-rag-c1", mode: "create" });
+  const sessionToken = reg.json?.token;
+  check("探针取得会话 token 以继续（前置条件）", !!sessionToken, `status=${reg.status}`);
+
+  const encEmpty = await postJson("/api/rag/encode", { texts: [] }, sessionToken);
+  check("encode 空 texts 时 400", encEmpty.status === 400, `status=${encEmpty.status}`);
+
+  const encTooMany = await postJson("/api/rag/encode", { texts: Array.from({ length: 21 }, (_, i) => `文本${i}`) }, sessionToken);
+  check("encode 超过 20 条时 400（这条上限守着服务端内存）", encTooMany.status === 400,
+    `status=${encTooMany.status} ${String(encTooMany.json?.error || "").slice(0, 40)}`);
+
+  const encTooLong = await postJson("/api/rag/encode", { texts: ["甲".repeat(10001)] }, sessionToken);
+  check("encode 单条超 10000 字时 400", encTooLong.status === 400, `status=${encTooLong.status}`);
+
+  const encNotString = await postJson("/api/rag/encode", { texts: [{ nope: 1 }] }, sessionToken);
+  check("encode 收到非字符串条目时 400 而不是拿去编码", encNotString.status === 400, `status=${encNotString.status}`);
+
+  const badEngine = await postJson("/api/rag/encode", { texts: ["甲"], engine: "evil/model" }, sessionToken);
+  check("白名单外引擎在编码侧被拒并回可选项（不许静默换成默认模型）",
+    badEngine.status === 400 && Array.isArray(badEngine.json?.allowed) && badEngine.json.allowed.length > 0,
+    `status=${badEngine.status} allowed=${JSON.stringify(badEngine.json?.allowed)?.slice(0, 60)}`);
+
+  const badBuild = await postJson("/api/rag/book-1/build", { engine: "evil/model" }, sessionToken);
+  check("白名单外引擎在建库侧同样被拒（两侧同判据，否则库与查询向量不同空间）",
+    badBuild.status === 400, `status=${badBuild.status}`);
+
   child.kill("SIGTERM");
   const exitInfo = await Promise.race([
     exited,
