@@ -8,6 +8,7 @@
  * 另外再用真 socket 复现一次停流——假桩自补故障的话，光靠假上游是看不见的。
  */
 import { describe, it, expect, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
@@ -24,35 +25,40 @@ const { createDownloader } = mod as {
 
 const silent = { log: vi.fn(), error: vi.fn(), warn: vi.fn() };
 
-/** 假 write stream：记录写入、destroy、以及 finish/error 的触发方式 */
-function fakeWs(behavior: { errorOnEnd?: Error } = {}) {
-  const ws = {
+/** 假 write stream：用真 EventEmitter，才演得出"drain 什么时候来 / 等多久" */
+function fakeWs(behavior: { errorOnEnd?: Error; writeResult?: boolean } = {}) {
+  const ws = Object.assign(new EventEmitter(), {
     chunks: [] as Buffer[],
     destroyed: false,
     ended: false,
-    handlers: {} as Record<string, (e?: unknown) => void>,
-    write(b: Uint8Array) { ws.chunks.push(Buffer.from(b)); return true; },
+    writes: 0,
+    write(b: Uint8Array) {
+      ws.writes++;
+      ws.chunks.push(Buffer.from(b));
+      return behavior.writeResult ?? true;      // false = "我队列满了，先别发"
+    },
     end() {
       ws.ended = true;
       setImmediate(() => {
-        if (behavior.errorOnEnd) ws.handlers.error?.(behavior.errorOnEnd);
-        else ws.handlers.finish?.();
+        if (behavior.errorOnEnd) ws.emit("error", behavior.errorOnEnd);
+        else ws.emit("finish");
       });
     },
-    on(ev: string, cb: (e?: unknown) => void) { ws.handlers[ev] = cb; },
     destroy() { ws.destroyed = true; },
-  };
+  });
   return ws;
 }
 
-function fakeFsImpl(opts: { errorOnEnd?: Error; created?: ReturnType<typeof fakeWs>[] } = {}) {
+type FakeWs = ReturnType<typeof fakeWs>;
+
+function fakeFsImpl(opts: { errorOnEnd?: Error; created?: FakeWs[]; writeResult?: boolean } = {}) {
   const created = opts.created ?? [];
   const unlinked: string[] = [];
   const paths: string[] = [];
   const fsImpl = {
     createWriteStream: (p: string) => {
       paths.push(p);
-      const ws = fakeWs({ errorOnEnd: opts.errorOnEnd });
+      const ws = fakeWs({ errorOnEnd: opts.errorOnEnd, writeResult: opts.writeResult });
       created.push(ws);
       return ws;
     },
@@ -64,7 +70,7 @@ function fakeFsImpl(opts: { errorOnEnd?: Error; created?: ReturnType<typeof fake
 type Step = { bytes?: Uint8Array; ms?: number; failWith?: Error; hang?: true };
 
 /** 假上游：按剧本一帧帧给 body；hang 那一帧会尊重 AbortSignal（真 fetch 就是这样） */
-function scriptedFetch(steps: Step[], { ok = true, status = 200, contentLength }: { ok?: boolean; status?: number; contentLength?: number } = {}) {
+function scriptedFetch(steps: Step[], { ok = true, status = 200, contentLength, stats }: { ok?: boolean; status?: number; contentLength?: number; stats?: { reads: number } } = {}) {
   return (_url: string, init?: { signal?: AbortSignal }) => {
     if (!ok) {
       return Promise.resolve({
@@ -81,12 +87,16 @@ function scriptedFetch(steps: Step[], { ok = true, status = 200, contentLength }
         getReader() {
           return {
             read(): Promise<{ done: boolean; value?: Uint8Array }> {
+              if (stats) stats.reads++;
               const step = steps[i++];
               if (!step) return Promise.resolve({ done: true, value: undefined });
               if (step.failWith) return Promise.reject(step.failWith);
               if (step.hang) {
                 return new Promise((_resolve, reject) => {
-                  signal?.addEventListener("abort", () => reject(new Error("AbortError: signal aborted")));
+                  const onAbort = () => reject(new Error("AbortError: signal aborted"));
+                  // 真 fetch 在"已经 abort 的流"上 read 会立刻 reject，不是等下一次 abort
+                  if (signal?.aborted) { onAbort(); return; }
+                  signal?.addEventListener("abort", onAbort);
                 });
               }
               const bytes = step.bytes ?? new Uint8Array();
@@ -211,6 +221,62 @@ describe("停流与失败必须掐断并清理", () => {
     const dl = downloader({ fetchImpl: scriptedFetch([{ bytes: repeat(10) }], { contentLength: 10 }), fsImpl });
     await expect(dl("https://x/tiny", "/tmp/tiny", 1024)).rejects.toThrow("下载的文件太小 (10 字节)");
     expect(unlinked).toEqual([]);   // 与抽出前一致：这条在 try 之外，交由上层清理
+  });
+});
+
+describe("背压：盘写不动时不许一直从网络读", () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it("write() 返回 false 就停下来等 drain（不理会会把整卷 80MB 堆进堆外内存）", async () => {
+    const stats = { reads: 0 };
+    const created: FakeWs[] = [];
+    const { fsImpl } = fakeFsImpl({ created, writeResult: false });
+    const steps: Step[] = [{ bytes: repeat(10) }, { bytes: repeat(10) }, { bytes: repeat(10) }];
+    const dl = downloader({ fetchImpl: scriptedFetch(steps, { contentLength: 30, stats }), fsImpl, stallMs: 60000 });
+    const p = dl("https://x/bp", "/tmp/bp", 1);
+    await sleep(20);
+    expect(stats.reads).toBe(1);            // 第一帧没落盘，就不该再要第二帧
+    const ws = created[0];
+    ws.emit("drain");
+    await sleep(20);
+    expect(stats.reads).toBe(2);
+    ws.emit("drain");
+    await sleep(20);
+    expect(stats.reads).toBe(3);
+    ws.emit("drain");
+    await expect(p).resolves.toBeUndefined();
+    expect(stats.reads).toBe(4);            // 第 4 次读到 done
+    expect(ws.writes).toBe(3);
+  });
+
+  it("等 drain 期间流报错：必须当场失败并删掉残缺文件，绝不能挂死", async () => {
+    const created: FakeWs[] = [];
+    const { fsImpl, unlinked } = fakeFsImpl({ created, writeResult: false });
+    const dl = downloader({ fetchImpl: scriptedFetch([{ bytes: repeat(10) }, { bytes: repeat(10) }], { contentLength: 20 }), fsImpl, stallMs: 60000 });
+    const p = dl("https://x/eio", "/tmp/eio", 1);
+    await sleep(20);
+    created[0].emit("error", new Error("EIO"));
+    await expect(p).rejects.toThrow("EIO");
+    expect(unlinked).toEqual(["/tmp/eio"]);   // 半截文件不能留给下次当缓存
+    expect(created[0].destroyed).toBe(true);
+  });
+
+  it("盘一直写不动、网络也不再发：看门狗必须还能掐断它（等 drain 不等于脱离看门狗）", async () => {
+    const created: FakeWs[] = [];
+    const { fsImpl, unlinked } = fakeFsImpl({ created, writeResult: false });
+    // 第一帧把 write 卡住；此后上游也没有第二帧
+    const stats = { reads: 0 };
+    const dl = downloader({
+      fetchImpl: scriptedFetch([{ bytes: repeat(10) }, { hang: true }], { contentLength: 1000, stats }),
+      fsImpl, stallMs: 60,
+    });
+    const t0 = Date.now();
+    const p = dl("https://x/wedged", "/tmp/wedged", 1024);
+    // 全程没人发 drain、也没人 abort 调用方 signal：唯一的出路是空闲看门狗
+    await expect(p).rejects.toBeTruthy();
+    expect(Date.now() - t0).toBeLessThan(3000);
+    expect(created[0].destroyed).toBe(true);
+    expect(unlinked).toEqual(["/tmp/wedged"]);
   });
 });
 

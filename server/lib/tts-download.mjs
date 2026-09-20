@@ -39,6 +39,29 @@ export function createDownloader(options = {}) {
       const contentLength = parseInt(response.headers.get("content-length") || "0");
       const reader = response.body.getReader();
       const ws = fsImpl.createWriteStream(destPath);
+      // 写失败当场记住：只等最后 end() 的 error 事件的话，中途坏掉的流还会继续被
+      // 喂数据，最后那个 error 也未必还发得出来
+      let wsError = null;
+      ws.on("error", (e) => { wsError = e; });
+      // 背压：write() 返回 false 是流在说"内部队列满了"。不理会就是边收网络边把没
+      // 落盘的字节全堆在堆外（实测一卷 80MB，--max-old-space-size 拦不住）。
+      // 等 drain 必须同时等 error/close/abort——流报错之后 drain 永远不会来，只等
+      // drain 就等于把"涨内存"换成"永久挂死"。abort 那一路尤其要紧：卡在 write 上
+      // 时循环不再调用 reader.read()，空闲看门狗没有着力点，除非它能把这次等待叫醒。
+      const waitDrain = () => new Promise((resolve) => {
+        const onInternalAbort = () => resolve();
+        const done = () => {
+          ws.removeListener("drain", done);
+          ws.removeListener("error", done);
+          ws.removeListener("close", done);
+          controller.signal.removeEventListener("abort", onInternalAbort);
+          resolve();
+        };
+        ws.on("drain", done);
+        ws.on("error", done);
+        ws.on("close", done);
+        controller.signal.addEventListener("abort", onInternalAbort, { once: true });
+      });
       const armBodyWatchdog = () => {
         if (bodyWatchdog) clearTimeout(bodyWatchdog);
         bodyWatchdog = setTimeout(() => {
@@ -53,14 +76,18 @@ export function createDownloader(options = {}) {
           const { done, value } = await reader.read();
           if (done) break;
           armBodyWatchdog(); // 收到数据即重置
-          ws.write(Buffer.from(value));
+          if (!ws.write(Buffer.from(value))) await waitDrain();
+          if (wsError) throw wsError;   // 走下面的 catch：destroy + 删掉残缺文件
           received += value.length;
           if (onProgress && contentLength > 0) {
             onProgress(Math.round((received / contentLength) * 100));
           }
         }
         ws.end();
-        await new Promise((resolve, reject) => { ws.on("finish", resolve); ws.on("error", reject); });
+        if (!wsError) {
+          await new Promise((resolve, reject) => { ws.on("finish", resolve); ws.on("error", reject); });
+        }
+        if (wsError) throw wsError;
       } catch (e) {
         ws.destroy();
         // 下载中断/失败时删除残缺文件，避免后续 size 校验误判为有效缓存
