@@ -773,3 +773,32 @@ export async function deleteUserData(username: string) {
   // 7. 从本地用户列表移除
   removeLocalUser(username);
 }
+
+/**
+ * 改名时把 sharedDB 里按用户名分键的 API 配置搬过去，与 deleteUserData 的第 6 步成对。
+ *
+ * 只列白名单不做后缀扫描：用户名允许出现 ":"，`key.endsWith(":" + user)` 会把
+ * "api-providers:甲:乙" 这类键错认成用户"乙"的。这两只键也正好是应用自己按名写的，
+ * 同步下来的其他设置重新同步就能拿回来，而 API 配置永不上服务器——落下就取不回来。
+ *
+ * 目标键已存在时保留目标、来源原样留着：改名撞进一个已有用户是可能的，
+ * 静默覆盖等于毁掉一边，宁可留一份看得见的残留。
+ */
+export async function renameUserScopedSettings(oldUsername: string, newUsername: string): Promise<number> {
+  const prefixes = ["api-providers:", "api-active-provider:"];
+  let moved = 0;
+  for (const prefix of prefixes) {
+    const from = prefix + oldUsername;
+    const to = prefix + newUsername;
+    const [source, target] = await Promise.all([sharedDB.settings.get(from), sharedDB.settings.get(to)]);
+    if (!source) continue;
+    if (target) {
+      console.warn(`[repositories] ${to} 已有配置，改名不覆盖（${from} 原样保留，请手动处理）`);
+      continue;
+    }
+    await sharedDB.settings.put({ key: to, value: source.value });
+    await sharedDB.settings.delete(from);
+    moved++;
+  }
+  return moved;
+}

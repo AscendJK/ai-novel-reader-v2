@@ -17,7 +17,7 @@ import { getAiRunning } from "@/lib/ai-state";
 import { dedupSummaries } from "@/lib/dedup-utils";
 import { downloadModel } from "@/rag/model-loader";
 import { showToast } from "@/lib/toast-store";
-import { addLocalUser, removeLocalUser, getLocalUsers } from "@/db/repositories";
+import { addLocalUser, removeLocalUser, getLocalUsers, renameUserScopedSettings } from "@/db/repositories";
 
 interface SyncOrchestrationOptions {
   onSyncReady: () => void;
@@ -304,6 +304,10 @@ const applySyncData = useCallback(async (data: SyncData) => {
     setCurrentUser(newUsername);
     localStorage.setItem("sync-username", newUsername);
     renameUserScopedKeys(oldUsername, newUsername);
+    await renameUserScopedSettings(oldUsername, newUsername);
+    // 身份已经换了，内存里的服务商列表要跟着库走：搬过去时两边内容相同，而"新名字
+    // 已有配置、按名不覆盖"那一格若不去重读，界面会继续挂着旧用户那一份
+    await useAPIStore.getState().loadFromDB();
     addLocalUser(newUsername);
     const newDb = getUserDB();
     await newDb.transaction("rw", [newDb.novels, newDb.chapters, newDb.summaries, newDb.notes, newDb.maps, newDb.graphs], async () => {

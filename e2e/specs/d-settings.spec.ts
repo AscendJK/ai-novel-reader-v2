@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { stubBackend, idleTtsStatus } from "../fixtures/backend";
 import { sel, openApp, expectUnblocked } from "../pages/app";
+import { importFiles, miniNovel, shelfCard, txtFile } from "../pages/shelf";
 
 /**
  * D 组：设置与 API Key。守两条铁律——
@@ -202,4 +203,40 @@ test("D6 只填裸 IP：探到 HTTPS 在跑就定 :8443，两边都不通退回 
 
   const probed = backend.seen().filter((s) => s.path === "/api/sync/check-user/test").length;
   expect(probed, "裸 IP 要先探 HTTPS，不通再探 HTTP").toBeGreaterThanOrEqual(3);
+});
+
+test("D8 改用户名：API 配置跟着搬到新名字下，旧名的键不许留在共享库里", async ({ page }) => {
+  // 走到"改名"这条路要三个条件同时成立（useSyncOrchestration.ts:501-517）：登录成功
+  // + 服务器侧数得出书 + 本地也有书。所以这本试验书要真导入，落进 A 的 IndexedDB 库。
+  const backend = await stubBackend(page, {
+    ...idleTtsStatus,
+    "POST /api/sync/register": { body: { isNew: false, clientId: "e2e-client", token: "e2e-token", activeCount: 1, data: null } },
+    "* /api/novels": { body: [{ id: "srv-1", title: "服务器上的那本书" }] },
+    "/api/sync/**": { body: { ok: true } },
+  });
+
+  await importFiles(page, [txtFile("改名试验.txt", miniNovel())]);
+  await expect(shelfCard(page, "改名试验")).toBeVisible();
+  await openSettings(page);
+  await addProvider(page, { name: "跟着改名的配置", key: FAKE_KEY });
+
+  await signOut(page);
+  // 两次 prompt：先答"3 - 改名"，再填新用户名
+  const answers = ["3", USER_B];
+  page.on("dialog", async (d) => {
+    if (d.type() !== "prompt") return await d.accept();
+    const a = answers.shift();
+    if (a === undefined) return await d.dismiss();
+    await d.accept(a);
+  });
+  await signIn(page, USER_A);
+  expect(backend.seen().some((s) => s.path === "/api/novels"), "前提：登录时真去数过服务器侧的书").toBe(true);
+  expect(answers, "两次 prompt 都该被答掉；剩下没答的说明根本没走到改名的分支").toEqual([]);
+
+  await openSettings(page);
+  await expect(page.getByText("跟着改名的配置").first()).toBeVisible();
+  expect(await readSharedSetting<{ name: string }[]>(page, `api-providers:${USER_B}`)).toMatchObject([
+    { name: "跟着改名的配置" },
+  ]);
+  expect(await readSharedSetting(page, `api-providers:${USER_A}`), "旧名的键留下就是永远取不回来的残留").toBeUndefined();
 });
