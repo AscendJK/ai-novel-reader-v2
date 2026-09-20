@@ -19,6 +19,7 @@ import {
   chatWithContextRetry,
   executeAgentTask,
   formatAgentError,
+  PRE_RETRIEVED_MIN_CHARS,
 } from "../utils";
 
 // ── 边界依赖全部拦掉：不发请求、不开 IndexedDB ──
@@ -139,9 +140,9 @@ describe("getRelevantContent — 预检索与回退采样两条路径", () => {
     expect(sampledTitles(r.content)).toEqual([]);
   });
 
-  it("阈值边界：恰好 100 字符算预检索，99 字符必须回退采样", () => {
-    expect(getRelevantContent(ctx("a".repeat(100)), chapters(13)).label).toBe("语义检索相关段落");
-    const short = getRelevantContent(ctx("a".repeat(99)), chapters(13));
+  it("阈值边界：恰好到门槛算预检索，差一个字符必须回退采样", () => {
+    expect(getRelevantContent(ctx("a".repeat(PRE_RETRIEVED_MIN_CHARS)), chapters(13)).label).toBe("语义检索相关段落");
+    const short = getRelevantContent(ctx("a".repeat(PRE_RETRIEVED_MIN_CHARS - 1)), chapters(13));
     expect(short.label).toBe("内容样本");
     expect(short.content).toContain("第13章");
   });

@@ -111,6 +111,16 @@ export function sampleChaptersContent(
 }
 
 /**
+ * 预检索文本的可用性门槛，同时管三件事：够长才拿它当"相关内容"、够长才敢不整本加载
+ * 正文、以及 prompt 标签该怎么写。几处判定必须同进同退，所以只留这一个常量。
+ */
+export const PRE_RETRIEVED_MIN_CHARS = 100;
+
+export function usablePreRetrieval(preRetrieved?: string): string | null {
+  return preRetrieved && preRetrieved.length >= PRE_RETRIEVED_MIN_CHARS ? preRetrieved : null;
+}
+
+/**
  * 获取相关内容（预检索或回退采样）
  *
  * @param context Agent 上下文
@@ -121,8 +131,9 @@ export function getRelevantContent(
   context: AgentContext,
   chapters: Array<{ title: string; content: string }>
 ): { content: string; label: string } {
-  if (context.preRetrieved && context.preRetrieved.length >= 100) {
-    return { content: context.preRetrieved, label: "语义检索相关段落" };
+  const pre = usablePreRetrieval(context.preRetrieved);
+  if (pre) {
+    return { content: pre, label: "语义检索相关段落" };
   }
   return { content: sampleChaptersContent(chapters), label: "内容样本" };
 }

@@ -7,7 +7,7 @@ import type { Agent, AgentContext, AgentResult } from "./types";
 import type { AIProvider } from "@/api/types";
 import type { TokenBudget } from "@/api/token-manager";
 import type { Novel } from "@/parsers/types";
-import { prepareAgentContext } from "./utils";
+import { prepareAgentContext, usablePreRetrieval } from "./utils";
 import { normalizeError, getUserFriendlyMessage } from "@/lib/error-handler";
 
 /** Agent 运行环境 */
@@ -68,7 +68,7 @@ export abstract class BaseAgent implements Agent {
     | { success: true; novel: Novel; provider: AIProvider; budget: TokenBudget; modelName: string }
     | { success: false; error: string }
   > {
-    const hasRetrieved = !!context.preRetrieved && context.preRetrieved.length >= 100;
+    const hasRetrieved = !!usablePreRetrieval(context.preRetrieved);
     return prepareAgentContext(context, { loadAllContent: hasRetrieved ? false : undefined });
   }
 
@@ -97,7 +97,7 @@ export function createSimpleAgent(
     name,
     description,
     async run(context: AgentContext): Promise<AgentResult> {
-      const hasRetrieved = !!context.preRetrieved && context.preRetrieved.length >= 100;
+      const hasRetrieved = !!usablePreRetrieval(context.preRetrieved);
       const envResult = await prepareAgentContext(context, { loadAllContent: hasRetrieved ? false : undefined });
       if (!envResult.success) {
         return { success: false, error: envResult.error };

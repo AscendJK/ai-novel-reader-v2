@@ -7,7 +7,7 @@ import { TaskType } from "./types";
 import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
 import { buildChapterSummaryPrompt } from "@/lib/prompt-templates";
-import { sampleChapterContent, prepareAgentContext, chatWithContextRetry, isAbortError, sampleChapterTitles } from "./utils";
+import { sampleChapterContent, prepareAgentContext, chatWithContextRetry, isAbortError, sampleChapterTitles, usablePreRetrieval } from "./utils";
 import { estimateTokens, computeAvailableInput, requireUsableInput } from "@/api/token-manager";
 import { APIError } from "@/api/error-handler";
 
@@ -167,11 +167,11 @@ class GlobalSummarizerAgent extends BaseAgent {
     const chapterList = sampleChapterTitles(chapterLines, Math.floor(computeAvailableInput(budget, 4096) * 0.25)).text;
 
     // Use pre-retrieved relevant text from RAG if available, else fall back to samples
-    const relevantContent = context.preRetrieved && context.preRetrieved.length >= 100
-      ? context.preRetrieved
-      : this.sampleChapters(novel.chapters);
-
-    const promptLabel = context.preRetrieved ? "语义检索相关段落" : "内容样本（开头几章+中间+结尾的片段）";
+    const pre = usablePreRetrieval(context.preRetrieved);
+    const relevantContent = pre ?? this.sampleChapters(novel.chapters);
+    // 标签必须与上面的取值同源：曾经这里只看"有没有 preRetrieved"，几十字的预检索
+    // 被判成不可用换成样本，标签却仍写"语义检索相关段落"，模型把样本当检索证据引用
+    const promptLabel = pre ? "语义检索相关段落" : "内容样本（开头几章+中间+结尾的片段）";
 
     const metadataPrompt = this.buildMetadataPrompt(novel, chapterList, promptLabel, relevantContent);
 
