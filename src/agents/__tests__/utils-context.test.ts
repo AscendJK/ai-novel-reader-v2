@@ -271,6 +271,27 @@ describe("chatWithContextRetry — context_length 自愈", () => {
     await expect(chatWithContextRetry(env("selfheal-model-5", 128000), attempt as never)).rejects.toThrow("上下文超长");
     expect(attempt).toHaveBeenCalledTimes(1);
   });
+
+  it("自愈只换上下文窗口，不许顺手把用户的输出上限换成表里的默认值", async () => {
+    // 用户在设置里把输出上限调到 16384（预算不足时的官方建议动作就是这个）。
+    // 旧实现在重试处调 getTokenBudget(env.modelName) 不带参数，输出上限被抹回 4096。
+    const seen: Array<{ contextWindow: number; maxOutputTokens: number }> = [];
+    const attempt = vi.fn(async (b: { contextWindow: number; maxOutputTokens: number }) => {
+      seen.push({ contextWindow: b.contextWindow, maxOutputTokens: b.maxOutputTokens });
+      if (seen.length === 1) throw new APIError("This model's maximum context length is 8192 tokens", "context_length");
+      return { content: "ok", tokensUsed: { input: 1, output: 1, total: 2 } } as never;
+    });
+    const e = {
+      novel: makeNovel("n", "书"),
+      provider: { format: "openai", chat: vi.fn() },
+      budget: { contextWindow: 128000, maxOutputTokens: 16384 },
+      modelName: "selfheal-model-9",
+    } as never;
+    await chatWithContextRetry(e, attempt as never);
+    expect(seen).toHaveLength(2);
+    expect(seen[1].contextWindow).toBe(8192);
+    expect(seen[1].maxOutputTokens).toBe(16384);
+  });
 });
 
 // ============================================================

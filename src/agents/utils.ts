@@ -260,7 +260,9 @@ export async function chatWithContextRetry(
       const real = extractContextLength(raw);
       if (real && real > 0) {
         setDiscoveredContextWindow(env.modelName, real);
-        budget = getTokenBudget(env.modelName);
+        // 只换上下文窗口：输出上限沿用本次任务已经在用的值（可能是用户在设置里定的），
+        // 直接 getTokenBudget(modelName) 会把它抹回表里的默认值，重试反而更容易截断。
+        budget = getTokenBudget(env.modelName, undefined, env.budget.maxOutputTokens);
         // 用新预算重试一次（重新裁剪 + 重建 prompt）
         return await attempt(budget);
       }
