@@ -1,13 +1,11 @@
 import Database from "better-sqlite3";
 import path from "node:path";
 import fs from "node:fs";
-import { fileURLToPath } from "node:url";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import { dataPath } from "./lib/data-paths.mjs";
 
 // 支持通过环境变量覆盖 DB 路径（测试时可用 ":memory:" 避免污染生产库）
-const DB_PATH = process.env.NOVEL_READER_DB_PATH
-  || path.join(__dirname, "data", "novels.db");
+const DB_PATH = process.env.NOVEL_READER_DB_PATH || dataPath("novels.db");
+export { DB_PATH };
 
 // Ensure data directory exists
 const dataDir = path.dirname(DB_PATH);

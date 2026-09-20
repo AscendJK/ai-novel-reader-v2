@@ -13,6 +13,7 @@ import { resolveModelKey, isAllowedEngine, allowedEngineList } from "../lib/engi
 import { cleanTtsText } from "../lib/tts-text-cleaner.mjs";
 import { resolveMirrorHosts } from "../lib/model-mirrors.mjs";
 import { isAllowedModelPath, resolveModelCachePath, toCachePath } from "../lib/model-paths.mjs";
+import { dataPath } from "../lib/data-paths.mjs";
 import { createTtsPyWorker } from "../lib/tts-py-worker.mjs";
 import {
   isValid7z, isValidBz2, readHeadSync, checkExtractedFiles, checkDiskSpace, assertPartsInOrder,
@@ -47,7 +48,7 @@ async function getEncodePipeline(engine) {
   const p = (async () => {
     const { pipeline, env } = await import("@xenova/transformers");
     env.allowRemoteModels = true;
-    env.cacheDir = path.resolve(__dirname, "../data/models-cache");
+    env.cacheDir = dataPath("models-cache");
     // 依次尝试镜像源：磁盘缓存（cacheDir）未命中时 → 配置/环境变量 → hf-mirror → HuggingFace
     let lastErr = null;
     for (const host of getMirrorHosts()) {
@@ -312,7 +313,7 @@ router.get("/:novelId/index", (req, res) => {
 // ── Model Proxy ────────────────────────────────────────────
 // Proxies model file requests to HuggingFace mirror (bypasses browser CORS)
 
-const MODEL_CACHE_DIR = path.resolve(__dirname, "../data/models-cache");
+const MODEL_CACHE_DIR = dataPath("models-cache");
 
 /**
  * 获取按优先级排列的镜像源列表（磁盘缓存命中后按此顺序回源下载）：
@@ -323,7 +324,7 @@ const MODEL_CACHE_DIR = path.resolve(__dirname, "../data/models-cache");
  */
 function getMirrorHosts() {
   return resolveMirrorHosts({
-    configPath: path.resolve(__dirname, "../data/rag-config.json"),
+    configPath: dataPath("rag-config.json"),
     envHost: process.env.HF_MIRROR,
   });
 }
@@ -438,10 +439,10 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-const TTS_CACHE_DIR = path.resolve(__dirname, "../data/tts-cache");
+const TTS_CACHE_DIR = dataPath("tts-cache");
 const TTS_WASM_CACHE = path.join(TTS_CACHE_DIR, "wasm");
 const TTS_MODEL_CACHE = path.join(TTS_CACHE_DIR, "model");
-const TTS_TEMP_DIR = path.resolve(__dirname, "../data/tts-temp");
+const TTS_TEMP_DIR = dataPath("tts-temp");
 
 // 这个目录只是下载/解压的中转区，进程被强杀后里面全是半成品（模型包一次可达数百 MB，
 // 实测本机就留着一个上次的 -extract 目录）。启动时清空一次，避免只增不减地吃磁盘。

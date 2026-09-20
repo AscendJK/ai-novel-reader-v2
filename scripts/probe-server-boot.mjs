@@ -34,6 +34,48 @@ async function get(pathname, token, origin) {
 }
 
 const adminTokenFile = path.join(workDir, ".admin_token");
+// 真实 server/data 里那几个探针可能碰到的文件：探针一旦把数据目录指错，这里就是证据
+const REAL_DATA_DIR = path.join(repoRoot, "server", "data");
+const WATCHED_IN_REAL_DIR = ["cert.pem", "key.pem", ".admin_token", "rag-config.json", "tts-cache", "tts-temp", "models-cache"];
+function snapshotRealDataDir() {
+  const snap = {};
+  for (const name of WATCHED_IN_REAL_DIR) {
+    try {
+      const st = fs.statSync(path.join(REAL_DATA_DIR, name));
+      snap[name] = `${st.size}:${Math.round(st.mtimeMs)}`;
+    } catch { snap[name] = "<absent>"; }
+  }
+  return snap;
+}
+const realDirBefore = snapshotRealDataDir();
+
+// 结构判据：证书与 tts 中转目录在启动期不一定有写动作（观测不到），所以用"不许再出现
+// 硬编码 data 目录"来盯——任何人把某处写回硬路径，这里立刻红。
+// 两种拼法都算：字符串里带 `/data/`（`"../data/x"`、`new URL("./data/x", …)`），
+// 以及 `path.join(__dirname, "data", …)`。刻意不匹配 `"data"` 单独成词——
+// 流事件 `on("data", …)` 到处在用，那样会把判据淹成噪音。
+const DATA_HARDCODE = /["'`][^"'`\n]*\/data\/|__dirname\s*,\s*["']data["']/;
+// 注释里出现 `../../data/key.pem` 这种说法是写给后人看的，不算硬编码。
+// 先去块注释、再丢掉以 // 或 * 开头的行——判据要抓的是会执行的那一行。
+const codeOnly = (text) =>
+  text
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+    .join("\n");
+const hardcoded = [];
+for (const sub of ["", "routes", "lib"]) {
+  const dir = path.join(repoRoot, "server", sub);
+  for (const f of fs.readdirSync(dir)) {
+    if (!/\.(js|mjs)$/.test(f)) continue;
+    if (path.posix.join(sub, f) === "lib/data-paths.mjs") continue;
+    if (DATA_HARDCODE.test(codeOnly(fs.readFileSync(path.join(dir, f), "utf8")))) {
+      hardcoded.push(`server/${sub ? `${sub}/` : ""}${f}`);
+    }
+  }
+}
+check("server/ 里除 data-paths.mjs 外不再硬编码 data 目录", hardcoded.length === 0, hardcoded.join(", "));
+
 const child = spawn(process.execPath, [path.join(repoRoot, "server", "index.js")], {
   cwd: repoRoot,
   env: {
@@ -41,10 +83,10 @@ const child = spawn(process.execPath, [path.join(repoRoot, "server", "index.js")
     PORT: String(PORT),
     // 后端总会起 HTTPS；不给空闲端口，探针在"应用正在跑"时必然启动失败
     HTTPS_PORT: String(await freePort()),
-    NOVEL_READER_DB_PATH: path.join(workDir, "novels.db"),
-    NOVEL_READER_BACKUP_DIR: path.join(workDir, "backups"),
-    // 探针绝不触碰真实的 server/data/.admin_token
-    NOVEL_READER_ADMIN_TOKEN_FILE: adminTokenFile,
+    // 一只 env 退掉全部落盘位置：DB、备份、.admin_token、证书、rag-config、tts 缓存与中转。
+    // 原先这里逐只文件设 NOVEL_READER_DB_PATH / _BACKUP_DIR / _ADMIN_TOKEN_FILE，
+    // 而证书与 tts-temp 根本没有 env 可退——探针于是在制作人真目录下跑。
+    NOVEL_READER_DATA_DIR: workDir,
     // 用户自定义前端来源（第二条故意带前导空格——正是过去会被静默丢掉的那种写法）
     CORS_ORIGINS: "https://probe-allowed.example, https://probe-spaced.example",
   },
@@ -81,6 +123,12 @@ try {
   const token = fs.existsSync(adminTokenFile) ? fs.readFileSync(adminTokenFile, "utf8").trim() : "";
   const admin = await get("/api/admin/stats", token);
   check("管理后台带 token 可读", admin.status === 200, `status=${admin.status}`);
+
+  // 接线判据：一只 env 到底管不管用，看的是文件落在哪——不是"日志里提过一句"。
+  // 摘掉 admin.js / database.js 任一处对 dataPath 的使用，这两条就会红。
+  check("NOVEL_READER_DATA_DIR 把口令文件带进了临时目录（admin.js 接线）", fs.existsSync(adminTokenFile));
+  check("NOVEL_READER_DATA_DIR 把库文件带进了临时目录（database.js 接线）",
+    fs.existsSync(path.join(workDir, "novels.db")));
 
   const badJson = await fetch(`http://127.0.0.1:${PORT}/api/sync/push`, {
     method: "POST",
@@ -169,6 +217,13 @@ try {
   check("进程日志无 unhandledRejection/uncaughtException", !/unhandledRejection|uncaughtException/.test(logs));
 } finally {
   if (child.exitCode === null && !child.killed) child.kill("SIGKILL");
+  // 等它真退出再比对，否则会漏掉一笔在途写
+  await Promise.race([exited.catch(() => {}), new Promise((r) => { setTimeout(r, 5000); })]);
+  const realDirAfter = snapshotRealDataDir();
+  const changed = WATCHED_IN_REAL_DIR.filter((n) => realDirAfter[n] !== realDirBefore[n]);
+  check("整轮探针没碰真实 server/data（证书/口令/缓存的 size+mtime 全不变）",
+    changed.length === 0,
+    changed.length ? `被改动：${changed.join(", ")}——数据目录没退干净，或有别的进程在写` : `观测 ${WATCHED_IN_REAL_DIR.length} 项`);
   fs.rmSync(workDir, { recursive: true, force: true });
 }
 

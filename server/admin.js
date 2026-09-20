@@ -1,15 +1,12 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import * as db from "./database.js";
 import { getTimeoutConfig, setPerChunkTimeout } from "./rag-builder.js";
 import { getUsersOnlineStatus, getUserDevices } from "./sync-handler.js";
+import { dataPath } from "./lib/data-paths.mjs";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 可通过环境变量重定向，便于测试/探针在不触碰真实口令文件的前提下启动服务器
-const TOKEN_FILE = process.env.NOVEL_READER_ADMIN_TOKEN_FILE
-  || path.join(__dirname, "data", ".admin_token");
+const TOKEN_FILE = process.env.NOVEL_READER_ADMIN_TOKEN_FILE || dataPath(".admin_token");
 
 function getOrCreateToken() {
   if (fs.existsSync(TOKEN_FILE)) return fs.readFileSync(TOKEN_FILE, "utf-8").trim();
@@ -33,8 +30,10 @@ export function mountAdminRoutes(app, hooks = {}) {
 
   app.get("/api/admin/stats", (req, res) => {
     if (!auth(req, res)) return;
-    const dbPath = path.join(__dirname, "data", "novels.db");
-    const dbSize = fs.existsSync(dbPath) ? fs.statSync(dbPath).size : 0;
+    // 报的是"当前真正打开的那只库"，不是仓库里的 server/data/novels.db——
+    // 探针与任何用 NOVEL_READER_DB_PATH/NOVEL_READER_DATA_DIR 换过位置的启动，之前
+    // 这里都会显示生产库的体积
+    const dbSize = fs.existsSync(db.DB_PATH) ? fs.statSync(db.DB_PATH).size : 0;
     const userCount = db.db.prepare("SELECT COUNT(*) as c FROM users").get().c;
     const novelCount = db.db.prepare("SELECT COUNT(*) as c FROM novels").get().c;
     const summaryCount = db.db.prepare("SELECT COUNT(*) as c FROM summaries").get().c;
@@ -150,7 +149,7 @@ export function mountAdminRoutes(app, hooks = {}) {
 
   // ── Mirror Config ──
 
-  const RAG_CONFIG_FILE = path.join(__dirname, "data", "rag-config.json");
+  const RAG_CONFIG_FILE = dataPath("rag-config.json");
   const DEFAULT_MIRROR = "https://hf-mirror.com/";
   const MIRRORS = {
     "huggingface": "https://huggingface.co/",

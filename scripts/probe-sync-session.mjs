@@ -36,9 +36,8 @@ const server = spawn(process.execPath, [path.join(repoRoot, "server", "index.js"
     ...process.env,
     PORT: String(HTTP_PORT),
     HTTPS_PORT: String(await freePort()),
-    NOVEL_READER_DB_PATH: path.join(workDir, "novels.db"),
-    NOVEL_READER_BACKUP_DIR: path.join(workDir, "backups"),
-    NOVEL_READER_ADMIN_TOKEN_FILE: path.join(workDir, ".admin_token"),
+    // 一只 env 退掉全部落盘位置（DB / 备份 / 口令 / 证书 / rag-config / tts 缓存与中转）
+    NOVEL_READER_DATA_DIR: workDir,
   },
 });
 let logs = "";

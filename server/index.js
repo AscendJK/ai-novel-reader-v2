@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { checkpointWAL, createBackup, cleanupDeletedRecords, getBackupConfig, isRestoringBackup } from "./database.js";
 import { novelsRouter, ragRouter, syncRouter, proxyRouter, versionRouter } from "./routes/index.js";
 import { extraAllowedOrigins, isOriginAllowed } from "./lib/cors-policy.mjs";
+import { resolveDataDir } from "./lib/data-paths.mjs";
 
 import { mountAdminRoutes } from "./admin.js";
 
@@ -107,7 +108,7 @@ app.use((err, req, res, _next) => {
 
 const PORT = process.env.PORT || 5173;
 const HTTPS_PORT = process.env.HTTPS_PORT || 8443;
-const dataDir = path.join(__dirname, "data");
+const dataDir = resolveDataDir();
 
 // Check for SSL certificate
 const certPath = path.join(dataDir, "cert.pem");
