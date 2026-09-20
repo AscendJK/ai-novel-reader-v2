@@ -18,6 +18,7 @@ import {
   isValid7z, isValidBz2, readHeadSync, checkExtractedFiles, checkDiskSpace, assertPartsInOrder,
 } from "../lib/tts-archive-checks.mjs";
 import { createDownloader } from "../lib/tts-download.mjs";
+import { createResourceGate } from "../lib/tts-resource-gate.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -770,42 +771,27 @@ async function downloadAndExtract(giteeParts, githubUrl, archiveName, targetDir,
   throw new Error("Gitee 下载失败，且无 GitHub 备选源。请检查 Gitee Release 文件。");
 }
 
-/** 确保 WASM 文件已缓存 */
-let wasmReady = false;
-let wasmReadyPromise = null;
-let wasmLastFailure = 0;
-export async function ensureWasmReady(onProgress, { signal, force = false } = {}) {
-  // force 只在"当前没有下载在跑"时生效：另起一份会和在跑的那次写同一批临时文件，互相踩坏
-  if (force && !wasmReadyPromise) wasmReady = false;
-  if (wasmReady) return;
-  if (wasmReadyPromise) { await wasmReadyPromise; return; }
-  if (Date.now() - wasmLastFailure < 30000) throw new Error("上次下载失败，请 30 秒后重试");
-  // 下载用独立的 controller：这是全服务器共享的一次性下载，某个标签页离开设置页
-  // 不应该打断它（否则所有人重下 + 各自吃 30s 冷却）；断开只影响事件推送，
-  // 由 /tts/prepare 的 clientDisconnected 负责
-  const internal = new AbortController();
-  wasmReadyPromise = downloadAndExtract(
-    GITEE_WASM_PARTS, null, WASM_ARCHIVE_NAME, TTS_WASM_CACHE, WASM_REQUIRED_FILES, onProgress, { signal: internal.signal, force }
-  ).then(() => { wasmReady = true; })
-   .catch((e) => { wasmLastFailure = Date.now(); wasmReadyPromise = null; internal.abort(); throw e; });
-  await wasmReadyPromise;
+/**
+ * 确保 WASM 文件已缓存。状态机（共享一趟下载 / 失败冷却 / force 不重叠）在
+ * lib/tts-resource-gate.mjs——那里有用例，改坏了会有东西红。
+ */
+const wasmGate = createResourceGate({
+  download: (onProgress, options) => downloadAndExtract(
+    GITEE_WASM_PARTS, null, WASM_ARCHIVE_NAME, TTS_WASM_CACHE, WASM_REQUIRED_FILES, onProgress, options
+  ),
+});
+export function ensureWasmReady(onProgress, options = {}) {
+  return wasmGate.ensure(onProgress, options);
 }
 
-/** 确保模型文件已缓存 */
-let modelReady = false;
-let modelReadyPromise = null;
-let modelLastFailure = 0;
-export async function ensureModelReady(onProgress, { signal, force = false } = {}) {
-  if (force && !modelReadyPromise) modelReady = false;
-  if (modelReady) return;
-  if (modelReadyPromise) { await modelReadyPromise; return; }
-  if (Date.now() - modelLastFailure < 30000) throw new Error("上次下载失败，请 30 秒后重试");
-  const internal = new AbortController();
-  modelReadyPromise = downloadAndExtract(
-    GITEE_MODEL_PARTS, GITHUB_MODEL_URL, MODEL_ARCHIVE_NAME, TTS_MODEL_CACHE, MODEL_REQUIRED_FILES, onProgress, { signal: internal.signal, force }
-  ).then(() => { modelReady = true; })
-   .catch((e) => { modelLastFailure = Date.now(); modelReadyPromise = null; internal.abort(); throw e; });
-  await modelReadyPromise;
+/** 确保模型文件已缓存（同上） */
+const modelGate = createResourceGate({
+  download: (onProgress, options) => downloadAndExtract(
+    GITEE_MODEL_PARTS, GITHUB_MODEL_URL, MODEL_ARCHIVE_NAME, TTS_MODEL_CACHE, MODEL_REQUIRED_FILES, onProgress, options
+  ),
+});
+export function ensureModelReady(onProgress, options = {}) {
+  return modelGate.ensure(onProgress, options);
 }
 
 /**
