@@ -1,6 +1,7 @@
 import { useCallback, useRef } from "react";
 import { useNovelStore } from "@/stores/novel-store";
 import { useSummaryStore } from "@/stores/summary-store";
+import { useAPIStore } from "@/stores/api-store";
 import { useUIStore } from "@/stores/ui-store";
 import { useRAGStore } from "@/stores/rag-store";
 import { loadAllNovels, loadSummaries, cleanupDeletedRecords, deleteUserData, loadNovel } from "@/db/repositories";
@@ -460,6 +461,11 @@ const applySyncData = useCallback(async (data: SyncData) => {
     // - summary store 残留旧用户摘要会混入新用户的 AI 上下文与界面
     useNovelStore.setState({ novels: [], currentNovel: null, readingPositions: {} });
     useSummaryStore.getState().setSummaries([]);
+    // API 配置按用户名分键存在 sharedDB.settings，而 api-store 只在 AppLayout 挂载时
+    // loadFromDB 一次。其他标签页靠上面那条 broadcast→reload 拿到新用户的配置，本标签页
+    // 不重读就一直停在旧用户的列表上：症状是"退出→换名登录→再登回来"设置页显示
+    // "暂无 API 配置"，而数据其实还在库里，手动刷新一下才有。
+    void useAPIStore.getState().loadFromDB();
 
     // 重新从 localStorage 加载当前用户的阅读进度。
     // 阅读进度存于 localStorage（key 带用户名后缀），但 store 只在模块加载时

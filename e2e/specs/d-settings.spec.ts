@@ -126,10 +126,6 @@ test("D3 换一个用户名：服务商列表跟着换，不许串到别人账�
 
   await signOut(page);
   await signIn(page, USER_A);
-  // 为什么这里要 reload 一次：不刷新的话设置页还停在"上一个用户"的 store 上，看不到
-  // 自己的配置——这是本轮 E2E 抓到的产品缺陷（已另报制作人），不是用例偷懒。
-  // 修好之后这条用例照样通过（刷新只会更稳）。
-  await page.reload();
   await openSettings(page);
   await expect(page.getByText("A 专用配置").first()).toBeVisible();
 });
@@ -166,6 +162,20 @@ test("D5 离线开关：切到手动离线之后，书架照样点得到", async
   await expect(page.getByText("手动离线")).toBeVisible();
   // 这条真正的判据：离线不是"锁住界面"
   await expectUnblocked(sel.folderImportButton(page));
+});
+
+test("D7 展开用户名菜单之后，「退出登录」必须还点得动", async ({ page }) => {
+  await page.getByTitle(USER_A, { exact: true }).click();
+
+  // 缺陷②：菜单那层 `div.fixed.inset-0.z-40`（Header.tsx:157）会盖住没有 z-index 的
+  // 退出按钮，真实鼠标点下去只关菜单。判据用命中测试，不用 toBeVisible——
+  // 被盖住的元素在 Playwright 眼里照样"可见"。
+  const logoutButton = page.getByTitle("退出登录");
+  await expectUnblocked(logoutButton);
+
+  page.once("dialog", (d) => d.accept());
+  await logoutButton.click();
+  await expect(sel.loginGate(page)).toBeVisible();
 });
 
 test("D6 只填裸 IP：探到 HTTPS 在跑就定 :8443，两边都不通退回 :5173", async ({ page }) => {

@@ -6,7 +6,10 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist', 'release', 'server/data', 'public/models', 'public/sherpa-tts', '.fetch']),
+  // playwright-report / test-results 是 E2E 跑出来的产物：里面是打包后的压缩 JS，
+  // 每跑一次用例就重生成一次。不忽略的话 `eslint .` 会把它们当源码扫出几百条 no-undef，
+  // 把整道 verify 闸门砸掉
+  globalIgnores(['dist', 'release', 'server/data', 'public/models', 'public/sherpa-tts', '.fetch', 'playwright-report', 'test-results']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [

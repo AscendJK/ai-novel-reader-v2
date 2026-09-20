@@ -160,7 +160,9 @@ export const Header = memo(function Header({ inBook, bookTitle, onBack, onSettin
                 </div>
               </>
             )}
-            <Button variant="ghost" size="icon" className="min-h-[44px] min-w-[44px] p-1 md:h-8 md:w-8 md:p-0" onClick={handleLogout} title="退出登录">
+            {/* relative z-50：用户名菜单展开时那层 fixed inset-0 z-40 是"点外面关掉菜单"的
+                遮罩，没有层叠上下文的按钮会被它盖住——症状是"退出登录点一次只关菜单"。 */}
+            <Button variant="ghost" size="icon" className="relative z-50 min-h-[44px] min-w-[44px] p-1 md:h-8 md:w-8 md:p-0" onClick={handleLogout} title="退出登录">
               <LogOut className="h-3.5 w-3.5" />
             </Button>
           </div>
