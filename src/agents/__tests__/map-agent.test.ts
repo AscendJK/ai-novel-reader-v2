@@ -456,6 +456,14 @@ describe("父级对不上时的可见降级", () => {
     expect(map.parentMissing).toEqual(["孤山"]);
   });
 
+  it("parentId 写着自己：id 存在不等于父级成立，地点不能当自己的上级", async () => {
+    const r = await runWithMap(mapWith([place({ parentId: "9" })]));
+    expect(r.success).toBe(true);
+    const map = (r.data as { mapData: { places: { id: string; parentId: string; level: number }[]; parentMissing?: string[] } }).mapData;
+    expect(map.places.find((p) => p.id === "9")).toMatchObject({ parentId: "", level: 1 });
+    expect(map.parentMissing).toEqual(["黑木崖"]);
+  });
+
   it("降级不豁免其它判据：level 依然无效时还是整图失败", async () => {
     const r = await runWithMap(mapWith([place({ level: 0, parentId: "ghost" })]));
     expect(r.success).toBe(false);

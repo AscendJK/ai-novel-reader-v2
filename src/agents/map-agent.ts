@@ -39,11 +39,14 @@ export function normalizePlaceParents(places: MapData["places"]): string[] {
   const ids = new Set(places.map((p) => p.id));
   const missing: string[] = [];
   for (const place of places) {
-    if (place.parentId && !ids.has(place.parentId)) {
+    // 自己也算"存在的 id"，所以父级写着自己时必须单独排除：否则地点成为自己的上级，
+    // 详情面板会显示"上级：黑木崖 / 下级：黑木崖"，而这张图在库里永远修不好。
+    const parent = place.parentId;
+    if (parent && (parent === place.id || !ids.has(parent))) {
       place.parentId = "";
       if (place.level > 1) place.level = 1;
       missing.push(place.name);
-    } else if (place.level > 1 && !place.parentId) {
+    } else if (place.level > 1 && !parent) {
       place.level = 1;
       missing.push(place.name);
     }
