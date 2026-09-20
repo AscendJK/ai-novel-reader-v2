@@ -14,6 +14,9 @@ import { cleanTtsText } from "../lib/tts-text-cleaner.mjs";
 import { resolveMirrorHosts } from "../lib/model-mirrors.mjs";
 import { isAllowedModelPath, resolveModelCachePath, toCachePath } from "../lib/model-paths.mjs";
 import { createTtsPyWorker } from "../lib/tts-py-worker.mjs";
+import {
+  isValid7z, isValidBz2, readHeadSync, checkExtractedFiles, checkDiskSpace, assertPartsInOrder,
+} from "../lib/tts-archive-checks.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -503,17 +506,7 @@ function getTtsContentType(filename) {
   return "application/octet-stream";
 }
 
-// ── 压缩包校验 ────────────────────────────────────────────
-
-/** 校验 7z 文件头（37 7A BC AF 27 1C） */
-function isValid7z(buffer) {
-  return buffer.length > 4 && buffer[0] === 0x37 && buffer[1] === 0x7A && buffer[2] === 0xBC && buffer[3] === 0xAF;
-}
-
-/** 校验 bzip2 文件头（BZ） */
-function isValidBz2(buffer) {
-  return buffer.length > 2 && buffer[0] === 0x42 && buffer[1] === 0x5A;
-}
+// ── 压缩包校验（判据在 lib/tts-archive-checks.mjs，那边有用例）──
 
 // ── 解压后文件校验 ────────────────────────────────────────
 
@@ -549,32 +542,16 @@ const MODEL_REQUIRED_FILES = {
 };
 
 /**
- * 校验解压后的文件完整性
+ * 校验解压后的文件完整性（判定在 lib，IO 留在这里）
  * @param {string} dir - 目标目录
  * @param {Object} requiredFiles - { 文件名: 最小字节数 }
  */
 function validateExtractedFiles(dir, requiredFiles) {
-  const missing = [];
-  const tooSmall = [];
-
-  for (const [filename, minSize] of Object.entries(requiredFiles)) {
+  return checkExtractedFiles(requiredFiles, (filename) => {
     const filePath = path.join(dir, filename);
-    if (!fs.existsSync(filePath)) {
-      missing.push(filename);
-    } else {
-      const size = fs.statSync(filePath).size;
-      if (size < minSize) {
-        tooSmall.push(`${filename} (${(size / 1024).toFixed(0)}KB < ${(minSize / 1024).toFixed(0)}KB)`);
-      }
-    }
-  }
-
-  if (missing.length > 0) {
-    throw new Error(`解压后缺少文件: ${missing.join(", ")}`);
-  }
-  if (tooSmall.length > 0) {
-    throw new Error(`解压后文件异常（可能损坏）: ${tooSmall.join(", ")}`);
-  }
+    if (!fs.existsSync(filePath)) return null;
+    return fs.statSync(filePath).size;
+  });
 }
 
 // ── 下载和解压 ────────────────────────────────────────────
@@ -648,6 +625,8 @@ async function downloadFile(url, destPath, minSize = 1024, onProgress, { signal 
  * @param {Function} onProgress - 进度回调 (step, detail)
  */
 async function downloadFromGitee(partNames, archiveName, targetDir, requiredFiles, onProgress, { signal } = {}) {
+  // 先验顺序再花钱：拼接是按数组顺序流式写入的，顺序错要等几百 MB 下完、7z 解压时才炸
+  assertPartsInOrder(partNames);
   if (!fs.existsSync(TTS_TEMP_DIR)) fs.mkdirSync(TTS_TEMP_DIR, { recursive: true });
   if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
 
@@ -678,10 +657,9 @@ async function downloadFromGitee(partNames, archiveName, targetDir, requiredFile
     ws.end();
     await new Promise((resolve, reject) => { ws.on("finish", resolve); ws.on("error", reject); });
 
-    // 3. 校验 7z 文件头
+    // 3. 校验 7z 文件头（只读开头 6 字节：整包 readFileSync 会把 322MB 全塞进内存）
     onProgress?.("校验压缩包", "检查文件格式");
-    const archiveBuffer = fs.readFileSync(archivePath);
-    if (!isValid7z(archiveBuffer)) {
+    if (!isValid7z(readHeadSync(archivePath, 6))) {
       throw new Error("拼接后的文件不是有效的 7z 格式（文件头校验失败）");
     }
 
@@ -754,10 +732,7 @@ async function downloadFromGitHubTar(url, archiveName, targetDir, requiredFiles,
     if (lastErr) throw lastErr;
 
     onProgress?.("校验压缩包", "检查文件格式");
-    const headerBuf = Buffer.alloc(4);
-    const fd = fs.openSync(archivePath, "r");
-    try { fs.readSync(fd, headerBuf, 0, 4, 0); } finally { fs.closeSync(fd); }
-    if (!isValidBz2(headerBuf)) {
+    if (!isValidBz2(readHeadSync(archivePath, 4))) {
       throw new Error("下载的文件不是有效的 bzip2 格式（文件头校验失败）");
     }
 
@@ -790,32 +765,10 @@ async function downloadFromGitHubTar(url, archiveName, targetDir, requiredFiles,
 const MIN_DISK_SPACE_BYTES = 500 * 1024 * 1024; // 500MB
 
 /**
- * 下载前的磁盘余量守卫。
- * fs.statfsSync 返回的是 bsize/bavail/blocks——没有 available 与 size 字段，
- * 拿它们相乘得到 NaN，`NaN < 阈值` 恒为 false，等于这道守卫从未生效过。
+ * 下载前的磁盘余量守卫（判据在 lib，那边有用例）
  */
 function assertDiskSpace(dir) {
-  // 目标目录可能还不存在，statfsSync 要求已存在的路径：逐级上溯到存在的祖先
-  let probeDir = dir;
-  for (let i = 0; i < 6 && !fs.existsSync(probeDir); i++) probeDir = path.dirname(probeDir);
-  let freeBytes;
-  try {
-    const s = fs.statfsSync(probeDir);
-    freeBytes = Number(s.bsize) * Number(s.bavail);
-  } catch (e) {
-    console.warn(`[tts-proxy] 无法检查磁盘余量（${e.message}），跳过检查`);
-    return;
-  }
-  if (!Number.isFinite(freeBytes) || freeBytes <= 0) {
-    console.warn(`[tts-proxy] 磁盘余量读数异常（${freeBytes}），跳过检查`);
-    return;
-  }
-  if (freeBytes < MIN_DISK_SPACE_BYTES) {
-    throw new Error(
-      `磁盘空间不足：需要至少 ${Math.round(MIN_DISK_SPACE_BYTES / 1024 / 1024)}MB，` +
-      `${probeDir} 当前可用 ${Math.round(freeBytes / 1024 / 1024)}MB`
-    );
-  }
+  return checkDiskSpace({ dir, minBytes: MIN_DISK_SPACE_BYTES, fsImpl: fs });
 }
 
 async function downloadAndExtract(giteeParts, githubUrl, archiveName, targetDir, requiredFiles, onProgress, { signal, force = false } = {}) {
