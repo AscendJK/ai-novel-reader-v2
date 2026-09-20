@@ -13,6 +13,7 @@ import { resolveModelKey, isAllowedEngine, allowedEngineList } from "../lib/engi
 import { cleanTtsText } from "../lib/tts-text-cleaner.mjs";
 import { resolveMirrorHosts } from "../lib/model-mirrors.mjs";
 import { isAllowedModelPath, resolveModelCachePath, toCachePath } from "../lib/model-paths.mjs";
+import { createTtsPyWorker } from "../lib/tts-py-worker.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -176,7 +177,7 @@ router.post("/tts/synthesize", requireAuth, rateLimit(60), async (req, res) => {
     }
     if (text.length > 2000) return res.status(400).json({ error: "单次最多 2000 字" });
     // 队列上限：防止大量前端同时朗读导致排队无限堆积
-    if (pyQueue.size >= TTS_PY_QUEUE_LIMIT) {
+    if (pyWorker.isQueueFull()) {
       return res.status(503).json({ error: "服务器推理繁忙，请稍后再试" });
     }
     const s = Math.max(0.4, Math.min(3.5, Number(speed) || 1.0));
@@ -189,15 +190,11 @@ router.post("/tts/synthesize", requireAuth, rateLimit(60), async (req, res) => {
     const pyRef = {};
     const onClientGone = () => {
       if (res.writableEnded) return;
-      const p = pyRef.id != null ? pyQueue.get(pyRef.id) : null;
-      if (p) {
-        dropPyRequest(pyRef.id);
-        p.reject(new Error("客户端已断开"));
-      }
+      pyWorker.abortQueued(pyRef.id);
     };
     res.on("close", onClientGone);
     try {
-      const result = await pyGenerate(text, voiceId, s, req.username, pyRef);
+      const result = await pyWorker.generate(text, voiceId, s, req.username, pyRef);
       const wavBuf = Buffer.from(result.wavBase64, "base64");
       res.setHeader("Content-Type", "audio/wav");
       res.setHeader("Content-Length", wavBuf.length);
@@ -241,7 +238,7 @@ router.post("/tts/debug", requireAuth, (req, res) => {
 // 前端停止朗读时调用，立即释放队列位置（其他用户无需等待作废请求生成完）。
 router.post("/tts/cancel", requireAuth, (req, res) => {
   try {
-    const cancelled = cancelPyRequests(req.username);
+    const cancelled = pyWorker.cancelForUser(req.username);
     res.json({ cancelled });
   } catch (e) {
     res.status(500).json({ error: "取消失败: " + e.message });
@@ -431,7 +428,7 @@ router.get("/model-proxy/{*path}", rateLimit(10), async (req, res) => {
 // GitHub: tar.bz2 格式，需要 tar 解压
 // 下载后自动解压到服务器缓存，后续请求直接从缓存读取
 
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -928,286 +925,44 @@ export async function ensureTTSResources(onProgress, options = {}) {
 // 浏览器 wasm 单线程推理 RTF≈12-13（29 字要 69s），无法边听边推理；
 // Python 原生 8 线程 RTF≈0.6（18 字只要 2.5s），生成比播放快 1.5 倍。
 // 由 server/tts-worker.py 常驻进程提供，通过 stdin/stdout JSON 行通信。
-const TTS_WORKER_PY = path.resolve(__dirname, "../tts-worker.py");
-const TTS_PY_THREADS = 8;
-const TTS_PY_START_TIMEOUT = 30000;   // 进程启动 + 模型加载超时（本地实测约 3s）
-const TTS_PY_GEN_TIMEOUT = 180000;    // 单次生成超时（60 字 chunk 8 线程约 10s，预留余量）
+// 进程与队列的生命周期本身在 lib/tts-py-worker.mjs（那里才测得到子进程行为）。
 const TTS_PY_QUEUE_LIMIT = 30;        // 排队上限：超过直接 503，防止多前端堆积拖垮所有人
 
-let pyProc = null;            // Python 子进程
-let pyReady = false;          // 是否收到 ready 消息
-let pyStartPromise = null;    // 启动去重
-let pyBuffer = "";            // stdout 行缓冲
-let pyQueue = new Map();      // id → { resolve, reject, timer }
-let pyNextId = 1;
-let pyLastError = "";         // 上次失败原因（status 接口展示）
-let pyStartFailedAt = 0;      // 上次启动失败时刻：冷却期内不再反复 spawn（每个约 925MB）
-const PY_START_COOLDOWN = 30000;
-let pyCandidates = ["python", "python3", "py"]; // 依次探测可用的 Python 命令
-
-/** 探测可用的 python 命令（缓存 60s：部署后装好 Python 无需重启即可生效） */
-let _pyCmdCache = null;
-let _pyCmdCacheAt = 0;
-async function detectPythonCommand() {
-  if (_pyCmdCache !== null && Date.now() - _pyCmdCacheAt < 60000) return _pyCmdCache;
-  for (const cmd of pyCandidates) {
-    try {
-      const { stdout } = await execFileAsync(cmd, ["-c", "import sherpa_onnx; print('ok')"], { timeout: 15000, windowsHide: true });
-      if (String(stdout).trim() === "ok") {
-        _pyCmdCache = cmd;
-        _pyCmdCacheAt = Date.now();
-        return cmd;
-      }
-    } catch { /* 尝试下一个 */ }
-  }
-  _pyCmdCache = "";
-  _pyCmdCacheAt = Date.now();
-  return _pyCmdCache;
-}
+const pyWorker = createTtsPyWorker({
+  workerPy: path.resolve(__dirname, "../tts-worker.py"),
+  modelCache: TTS_MODEL_CACHE,
+  threads: 8,
+  queueLimit: TTS_PY_QUEUE_LIMIT,
+  ensureModelReady: () => ensureModelReady(),
+});
 
 /** 检查服务端推理是否可用（Python + sherpa_onnx + 模型文件就绪）。
  *  ⚠️ 只检查文件存在性，绝不触发下载（ensureModelReady 会下载 350MB，
  *  status 轮询被设置页每 30s 调用，一旦误触发就违背"模型按需下载"）。 */
 export async function checkServerInferenceReady() {
-  const pyCmd = await detectPythonCommand();
+  const pyCmd = await pyWorker.detectPythonCommand();
   if (!pyCmd) return { supported: false, ready: false, reason: "服务器未安装 Python 或 sherpa-onnx（pip install sherpa-onnx）" };
   const modelExists = fs.existsSync(path.join(TTS_MODEL_CACHE, "model.onnx"));
   if (!modelExists) return { supported: true, ready: false, reason: "模型未下载（设置页启用服务端推理时自动下载）" };
   return { supported: true, ready: true, reason: "" };
 }
 
-/** 确保 Python 推理进程已启动（模型就绪 + 进程 ready） */
-async function ensurePyProcess() {
-  const pyCmd = await detectPythonCommand();
-  if (!pyCmd) throw new Error("服务器未安装 Python 或 sherpa-onnx，无法使用服务端推理。请运行: pip install sherpa-onnx");
-  if (pyProc && pyReady) return pyProc;
-  if (pyStartPromise) return pyStartPromise;
-  // 启动失败冷却：前端会自动重试多次，没有冷却就会反复 spawn 每个约 925MB 的进程
-  if (Date.now() - pyStartFailedAt < PY_START_COOLDOWN) {
-    throw new Error(pyLastError || `服务端推理启动失败，请 ${PY_START_COOLDOWN / 1000} 秒后重试`);
-  }
-
-  pyStartPromise = (async () => {
-    // 先确保模型文件在服务器上就绪（懒下载：仅在启用服务端推理时触发）
-    await ensureModelReady();
-    if (pyProc && pyReady) return pyProc;
-
-    pyReady = false;
-    pyBuffer = "";
-    // 显式强制 UTF-8：中文 Windows 默认 ANSI 代码页 936(GBK)，若不注入
-    // PYTHONUTF8，Node 写入的 UTF-8 字节会被 Python 按 GBK 解码成乱码，
-    // Kokoro 对乱码汉字硬拼音素 → 音色/语速正常但内容胡话（乱读）。
-    // 不依赖部署机全局环境变量，一处改动根治。
-    const proc = spawn(pyCmd, [TTS_WORKER_PY, TTS_MODEL_CACHE, String(TTS_PY_THREADS)], {
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-      env: { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
-    });
-    pyProc = proc;
-
-    // stdin 必须挂 error 监听：进程死亡瞬间，exit 事件置空 pyProc 与 socket
-    // 真正关闭之间存在异步窗口，此刻 pyGenerate 的 stdin.write 会触发 EPIPE——
-    // Stream 无 error 监听时按 uncaughtException 处理，整个 Node 后端崩溃退出。
-    // 挂上监听后 EPIPE 被吞掉，未完成请求由下方 exit 处理器统一 reject。
-    proc.stdin.on("error", () => {});
-
-    proc.stdout.on("data", (chunk) => {
-      pyBuffer += chunk.toString("utf8");
-      let idx;
-      while ((idx = pyBuffer.indexOf("\n")) >= 0) {
-        const line = pyBuffer.slice(0, idx).trim();
-        pyBuffer = pyBuffer.slice(idx + 1);
-        if (!line) continue;
-        try {
-          const msg = JSON.parse(line);
-          if (msg.type === "ready") {
-            pyReady = true;
-            pyLastError = "";
-            pyStartFailedAt = 0;
-            console.log(`[tts-py] 服务端推理就绪 (numSpeakers=${msg.numSpeakers})`);
-          } else if (msg.type === "result") {
-            const pending = pyQueue.get(msg.id);
-            if (pending) {
-              clearTimeout(pending.timer);
-              pyQueue.delete(msg.id);
-              pending.resolve(msg);
-            }
-            if (pyQueue.size === 0) schedulePyIdleShutdown(); // 队列清空：开始计空闲
-          } else if (msg.type === "error") {
-            const pending = pyQueue.get(msg.id);
-            if (pending) {
-              clearTimeout(pending.timer);
-              pyQueue.delete(msg.id);
-              pending.reject(new Error(msg.message));
-            }
-            if (pyQueue.size === 0) schedulePyIdleShutdown(); // 队列清空：开始计空闲
-          }
-        } catch { /* 非 JSON 行忽略 */ }
-      }
-    });
-    proc.stderr.on("data", (chunk) => {
-      const s = String(chunk).trim();
-      if (s) console.warn("[tts-py] stderr:", s.slice(0, 500));
-    });
-    // 所有状态回写都要认进程身份：超时/停止会让 pyProc 指向**新**进程，
-    // 旧进程稍后才 exit，无条件清空就会把新进程的引用抹掉 → 新进程成孤儿
-    proc.on("exit", (code) => {
-      console.warn(`[tts-py] 进程退出 code=${code}`);
-      if (pyProc === proc) {
-        pyProc = null;
-        pyReady = false;
-        pyStartPromise = null;
-      }
-      // 未完成请求全部失败
-      for (const [id, p] of pyQueue) {
-        clearTimeout(p.timer);
-        pyQueue.delete(id);
-        p.reject(new Error("服务端推理进程已退出"));
-      }
-    });
-    proc.on("error", (err) => {
-      pyLastError = err.message;
-      console.error("[tts-py] 进程错误:", err.message);
-      if (pyProc === proc) {
-        pyProc = null;
-        pyReady = false;
-        pyStartPromise = null;
-      }
-    });
-
-    // 等待 ready（含模型加载，约 3s）
-    await new Promise((resolve, reject) => {
-      const t0 = Date.now();
-      const timer = setInterval(() => {
-        if (pyReady) { clearInterval(timer); resolve(); }
-        else if (Date.now() - t0 > TTS_PY_START_TIMEOUT) {
-          clearInterval(timer);
-          // 超时必须杀掉刚起的进程：只 reject 会让它带着 ~925MB 常驻，
-          // 下次 ensurePyProcess 又起一个，反复触发直到 OOM
-          try { proc.kill(); } catch { /* 已退出 */ }
-          reject(new Error(pyLastError || `服务端推理启动超时（${TTS_PY_START_TIMEOUT / 1000}s）`));
-        }
-      }, 200);
-    });
-    return pyProc;
-  })().catch((e) => {
-    pyStartFailedAt = Date.now();
-    pyLastError = e?.message ?? String(e);
-    pyStartPromise = null;
-    throw e;
-  });
-
-  return pyStartPromise;
-}
-
-/** 提交一次生成请求，返回 { sampleRate, wavBase64 }。
- *  username 用于取消协议：前端停止时按用户清掉排队中的请求。
- *  先入队（等待 Python 就绪期间也可被 cancel 取消），进程就绪后再写入 stdin。 */
-async function pyGenerate(text, sid, speed, username = "", idRef = null) {
-  cancelPyIdleShutdown(); // 有新请求：取消空闲关闭计划
-  const id = pyNextId++;
-  if (idRef) idRef.id = id; // 同步回填：调用方要在 await 之前就能拿到 id 做出队
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      if (dropPyRequest(id)) {
-        reject(new Error(`服务端推理超时（${TTS_PY_GEN_TIMEOUT / 1000}s）`));
-      }
-    }, TTS_PY_GEN_TIMEOUT);
-    pyQueue.set(id, { resolve, reject, timer, username, started: false });
-    // 异步等进程就绪后写入；期间被 cancel 移除则静默放弃（reject 已由 cancel 触发）
-    (async () => {
-      try {
-        await ensurePyProcess();
-        if (!pyQueue.has(id)) return; // 已被 cancel 取消
-        pyQueue.get(id).started = true;
-        pyProc.stdin.write(JSON.stringify({ id, text, sid, speed }) + "\n");
-      } catch (e) {
-        if (dropPyRequest(id)) {
-          reject(e instanceof Error ? e : new Error(String(e)));
-        }
-      }
-    })();
-  });
-}
-
-/** 取消某用户所有排队中的请求（前端停止朗读时调用）。
- *  - 未开始的请求：直接从队列移除，Python 不再生成（释放队列位置给其他用户）
- *  - 正在生成的请求：无法中断 Python，但结果返回时队列中已无该 id，自动丢弃
- *  ⚠️ 不依赖 pyReady：Python 启动窗口内（pyReady=false）也有排队中的请求需要取消。
- * 返回被取消的请求数。 */
-export function cancelPyRequests(username) {
-  if (!username) return 0;
-  let cancelled = 0;
-  for (const [id, p] of pyQueue) {
-    if (p.username === username) {
-      dropPyRequest(id);
-      p.reject(new Error("服务端推理已取消"));
-      cancelled++;
-    }
-  }
-  if (cancelled > 0) console.log(`[tts-py] 用户 ${username} 取消 ${cancelled} 个排队请求`);
-  return cancelled;
-}
-
-// ── 进程生命周期管理 ────────────────────────────────
+// ── 进程生命周期 ────────────────────────────────────────
 // Python 推理进程占 ~925MB 内存，不应无限常驻：
-//  - 空闲超时自动关闭：默认 10 分钟无请求 → 优雅关闭，释放内存；下次朗读懒启动（约 3s）
+//  - 空闲超时自动关闭：lib 内实现，默认 10 分钟无请求 → 优雅关闭，下次朗读懒启动（约 3s）
 //  - 后端退出显式清理：立即 kill，不等当前生成完成 / stdin EOF
-// 可用环境变量 TTS_PY_IDLE_SECONDS 覆盖（测试/部署调优用）
-const TTS_PY_IDLE_TIMEOUT = (Number(process.env.TTS_PY_IDLE_SECONDS) || 600) * 1000;
-
-let pyIdleTimer = null;
-
-/** 计划空闲关闭（仅当队列为空时调用） */
-function schedulePyIdleShutdown() {
-  clearTimeout(pyIdleTimer);
-  pyIdleTimer = setTimeout(() => {
-    console.log(`[tts-py] 空闲 ${TTS_PY_IDLE_TIMEOUT / 1000}s 无请求，关闭推理进程（释放内存）`);
-    shutdownPyProcess("idle");
-  }, TTS_PY_IDLE_TIMEOUT);
-}
-
-/** 取消空闲关闭计划（新请求到来时调用） */
-function cancelPyIdleShutdown() {
-  if (pyIdleTimer) {
-    clearTimeout(pyIdleTimer);
-    pyIdleTimer = null;
-  }
-}
-
-/**
- * 从队列移除一条请求。超时/cancel/启动失败都必须走这里——空闲关闭计划原先
- * 只挂在 stdout 的 result/error 分支上，客户端停止朗读后队列被清空却排不上
- * 关闭计划，~925MB 的进程就无限常驻了。
- */
-function dropPyRequest(id) {
-  const p = pyQueue.get(id);
-  if (!p) return false;
-  clearTimeout(p.timer);
-  pyQueue.delete(id);
-  if (pyQueue.size === 0) schedulePyIdleShutdown();
-  return true;
-}
-
-/** 关闭 Python 推理进程（空闲超时 / 后端退出时调用） */
-function shutdownPyProcess(reason = "shutdown") {
-  cancelPyIdleShutdown();
-  if (!pyProc) return;
-  console.log(`[tts-py] 关闭推理进程 (${reason})`);
-  try { pyProc.kill(); } catch { /* 已退出 */ }
-  // pyProc.on("exit") 会重置 pyProc/pyReady/pyStartPromise；队列为空时无 pending 可 reject
-}
-
+//  - 可用环境变量 TTS_PY_IDLE_SECONDS 覆盖（测试/部署调优用）
+// 信号处理留在本文件：工厂内注册会随实例数堆积监听器。
 // 后端退出（含 SIGINT/SIGTERM → process.exit → exit 事件）时立即终止 worker，
 // 避免等待当前生成完成或 stdin EOF 才退出
-process.on("exit", () => shutdownPyProcess("server-exit"));
+process.on("exit", () => pyWorker.shutdown("server-exit"));
 // 双保险：SIGINT/SIGTERM 时直接终止 worker（不依赖 index.js 的 process.exit 链路，
 // 防止退出链路被改动后 Python 推理进程残留占内存/锁模型文件）
-process.on("SIGINT", () => shutdownPyProcess("server-sigint"));
-process.on("SIGTERM", () => shutdownPyProcess("server-sigterm"));
+process.on("SIGINT", () => pyWorker.shutdown("server-sigint"));
+process.on("SIGTERM", () => pyWorker.shutdown("server-sigterm"));
 // Windows Ctrl+Break / 终端关闭时同样终止 worker（覆盖用户直接关窗口的退出路径）
-process.on("SIGBREAK", () => shutdownPyProcess("server-sigbreak"));
-process.on("SIGHUP", () => shutdownPyProcess("server-sighup"));
+process.on("SIGBREAK", () => pyWorker.shutdown("server-sigbreak"));
+process.on("SIGHUP", () => pyWorker.shutdown("server-sighup"));
 
 /**
  * 辅助函数：流式发送文件（带错误处理）
