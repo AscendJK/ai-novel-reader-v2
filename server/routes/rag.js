@@ -17,6 +17,7 @@ import { createTtsPyWorker } from "../lib/tts-py-worker.mjs";
 import {
   isValid7z, isValidBz2, readHeadSync, checkExtractedFiles, checkDiskSpace, assertPartsInOrder,
 } from "../lib/tts-archive-checks.mjs";
+import { createDownloader } from "../lib/tts-download.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -558,67 +559,10 @@ function validateExtractedFiles(dir, requiredFiles) {
 
 /**
  * 从 URL 下载文件（流式写入磁盘，带超时、大小校验、进度回调）
+ * 实现连同"响应头超时 + 响应体空闲看门狗 + 失败删残缺文件"这套判据都在
+ * lib/tts-download.mjs——那里用假上游和真 socket 两头都锁过。
  */
-async function downloadFile(url, destPath, minSize = 1024, onProgress, { signal } = {}) {
-  console.log(`[tts-proxy] 下载: ${url}`);
-  const controller = new AbortController();
-  // 响应头 5 分钟超时；拿到响应头后清除，改用响应体"空闲看门狗"——
-  // 跨境链路常见中途断流，reader.read() 会永久挂起且不报错，没有看门狗
-  // 整条下载通道（共享 promise）会卡死到进程重启
-  const timeout = setTimeout(() => controller.abort(), 300000);
-  const onAbort = () => controller.abort();
-  signal?.addEventListener("abort", onAbort);
-  let bodyWatchdog = null;
-  // 函数作用域声明：下载完成后 minSize 校验在 try/finally 之外引用它
-  let received = 0;
-  try {
-    const response = await fetch(url, { redirect: "follow", signal: controller.signal });
-    clearTimeout(timeout);
-    if (!response.ok) throw new Error(`下载失败: HTTP ${response.status}`);
-
-    const contentLength = parseInt(response.headers.get("content-length") || "0");
-    const reader = response.body.getReader();
-    const ws = fs.createWriteStream(destPath);
-    const armBodyWatchdog = () => {
-      if (bodyWatchdog) clearTimeout(bodyWatchdog);
-      bodyWatchdog = setTimeout(() => {
-        console.error(`[tts-proxy] 下载停滞超过 60s，中断: ${url}`);
-        controller.abort();
-      }, 60000);
-    };
-
-    try {
-      armBodyWatchdog();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        armBodyWatchdog(); // 收到数据即重置
-        ws.write(Buffer.from(value));
-        received += value.length;
-        if (onProgress && contentLength > 0) {
-          onProgress(Math.round((received / contentLength) * 100));
-        }
-      }
-      ws.end();
-      await new Promise((resolve, reject) => { ws.on("finish", resolve); ws.on("error", reject); });
-    } catch (e) {
-      ws.destroy();
-      // 下载中断/失败时删除残缺文件，避免后续 size 校验误判为有效缓存
-      try { fs.unlinkSync(destPath); } catch {}
-      throw e;
-    } finally {
-      if (bodyWatchdog) clearTimeout(bodyWatchdog);
-    }
-  } finally {
-    clearTimeout(timeout);
-    signal?.removeEventListener("abort", onAbort);
-  }
-
-  if (received < minSize) {
-    throw new Error(`下载的文件太小 (${received} 字节)，可能不是有效文件`);
-  }
-  console.log(`[tts-proxy] 已下载: ${(received / 1024 / 1024).toFixed(1)} MB`);
-}
+const downloadFile = createDownloader();
 
 /**
  * 从 Gitee 下载 7z 分卷 → 拼接 → 校验 → 解压 → 校验解压结果

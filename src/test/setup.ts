@@ -126,7 +126,9 @@ if (!globalThis.crypto.randomUUID) {
   };
 }
 
-// Mock fetch
+// Mock fetch —— 同时把原始实现留一只引用：验证真 socket 行为（停流看门狗、真实
+// AbortSignal）的用例绕开这个桩，不然桩会替被测代码把故障补好
+(globalThis as unknown as { __nodeFetch: typeof fetch }).__nodeFetch = globalThis.fetch;
 globalThis.fetch = async () => {
   throw new Error("fetch not mocked");
 };
