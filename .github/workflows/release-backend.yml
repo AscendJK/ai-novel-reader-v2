@@ -34,6 +34,24 @@ jobs:
       - name: Unit tests
         run: npm test
 
+      # 浏览器层只进这里，不进 npm run verify（闸门一慢就会被跳过）。只跑 A 组冒烟 5 条：
+      # 它盯的是桩之外接没接上——真挂载、真 IndexedDB 落盘、真遮挡，jsdom 一样都给不了。
+      # 刻意不加 retries：一条时灵时不灵的用例等于没有判据，宁可让它红一次并当场查根。
+      - name: Browser smoke (A 组冒烟)
+        run: |
+          npx playwright install --with-deps chromium
+          npm run e2e:smoke
+
+      - name: Upload browser report (只在失败时留证据)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-smoke-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
       # 探针要在临时库上真开 SQLite；上面的 npm ci --ignore-scripts 没编译原生模块
       - name: Rebuild better-sqlite3 for probes
         run: npm rebuild better-sqlite3
