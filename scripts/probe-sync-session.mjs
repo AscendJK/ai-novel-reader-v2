@@ -52,7 +52,7 @@ async function waitForServer() {
       const r = await fetch(`${base}/api/version`);
       if (r.ok) return true;
     } catch { /* 还没起来 */ }
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => { setTimeout(r, 200); });
   }
   return false;
 }
@@ -75,7 +75,7 @@ const heartbeat = (username, clientId, token) => api("POST", "/api/sync/heartbea
 const push = (username, clientId, token, changes, lastSyncTime) =>
   api("POST", "/api/sync/push", { username, clientId, token, changes, lastSyncTime });
 
-let exitInfo = null;
+let exitInfo;
 try {
   check("后端已启动", await waitForServer(), logs.slice(-240));
 
@@ -165,6 +165,20 @@ try {
 
   const stillAlive = await push("bob", "c-bob-1", bobToken, null);
   check("bob 的会话在两次推送之后仍然可用", stillAlive.status === 200, `status=${stillAlive.status}`);
+
+  // ── 入参守卫：这几条一旦被"顺手放宽"，症状是静默少校验而不是立刻报错 ──
+  const hbNoClient = await heartbeat("bob", undefined, bobToken);
+  check("heartbeat 少带 clientId 时 400", hbNoClient.status === 400, `status=${hbNoClient.status}`);
+  const pushNoUser = await api("POST", "/api/sync/push", { clientId: "c-bob-1", token: bobToken, changes: null });
+  check("push 少带 username 时 400", pushNoUser.status === 400, `status=${pushNoUser.status}`);
+  const discNoToken = await api("POST", "/api/sync/disconnect", { username: "bob", clientId: "c-bob-1" });
+  check("disconnect 少带 token 时 400（不许只凭用户名就拆别人的会话）", discNoToken.status === 400,
+    `status=${discNoToken.status}`);
+  const stillUsable = await push("bob", "c-bob-1", bobToken, null);
+  check("上面那次缺 token 的 disconnect 确实没有拆掉 bob 的会话", stillUsable.status === 200,
+    `status=${stillUsable.status}`);
+  const tooLong = await api("GET", `/api/sync/check-user/${"很长的用户名".repeat(7)}`);
+  check("check-user 用户名超长时 400", tooLong.status === 400, `status=${tooLong.status}`);
 } catch (e) {
   check("探针自身没有抛出", false, String(e && e.message ? e.message : e));
 } finally {
