@@ -53,7 +53,17 @@ foreach ($f in $serverFiles) {
 # 复制目录
 Copy-Item "server/routes/*.js" "backend-pack-tmp/server/routes/"
 Copy-Item "server/middleware/*.js" "backend-pack-tmp/server/middleware/"
-Copy-Item "server/lib/engine-config.js" "backend-pack-tmp/server/lib/"
+# server/lib 按扩展名整体复制，不再逐个枚举：早先只写 engine-config.js 那一行时，
+# 后来抽出的 rag-worker-core.mjs / tts-text-cleaner.mjs 都不在包里——发版包启动即
+# ERR_MODULE_NOT_FOUND，而开发机上源目录文件都在，六只探针全绿，永远看不出来。
+Copy-Item "server/lib/*.js" "backend-pack-tmp/server/lib/"
+Copy-Item "server/lib/*.mjs" "backend-pack-tmp/server/lib/"
+
+# 出包闸门：把包内每个 js/mjs 的本地依赖（相对 import、path.join(__dirname, …)）解析
+# 一遍，缺文件就中止。这样"新增被 import 的文件却忘了进清单"当场就响，而不是让用户
+# 在解压后才发现。
+node scripts/check-server-pack.mjs "backend-pack-tmp/server"
+if ($LASTEXITCODE -ne 0) { throw "pack-check FAILED: package is missing referenced files (see list above)" }
 
 # 复制并重命名配置和脚本
 # 后端包版本号跟随主 package.json（单一事实来源），避免前后端版本不一致
