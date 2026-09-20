@@ -54,3 +54,34 @@ describe("renderMapToSvg 注入防护", () => {
     expect(svg).not.toContain("NaN");
   });
 });
+
+/**
+ * 连线路径单独一组：上面那份 fixture 里两个地点都没有 parentId，
+ * renderConnections 直接把它们过滤掉了——所以 "不出现 NaN" 那条断言一直没看过连线代码。
+ */
+describe("renderMapToSvg 父子连线", () => {
+  const linked: MapData = {
+    places: [
+      { id: "a", name: "天下", type: "域", x: 300, y: 400, level: 1, importance: 9, affiliation: "", description: "" },
+      { id: "b", name: "洛阳", type: "都城", x: 500, y: 500, level: 2, parentId: "a", importance: 8, affiliation: "", description: "" },
+      // 模型漏坐标是真实形态：x 是 NaN、y 是字符串，旧实现拼出 x2="NaN"，整条线不渲染
+      { id: "c", name: "虎牢关", type: "关隘", x: Number.NaN, y: "620", level: 3, parentId: "b", importance: 7, affiliation: "", description: "" },
+    ],
+    layers: [
+      { id: "l1", name: "天下", level: 1 },
+      { id: "l2", name: "州郡", level: 2 },
+      { id: "l3", name: "关隘", level: 3 },
+    ],
+    connections: [],
+  } as unknown as MapData;
+
+  const svg = renderMapToSvg(linked);
+
+  it("带父级的地点确实渲染出了连线（否则下面的断言是空过）", () => {
+    expect(svg).toContain("<line");
+  });
+
+  it("非法坐标的连线退化到中心，不产出 x2=\"NaN\" 让线消失", () => {
+    expect(svg).not.toContain("NaN");
+  });
+});

@@ -12,6 +12,20 @@ import { prepareAgentContext, chatWithContextRetry, sampleChapterTitles } from "
 import { computeAvailableInput } from "@/api/token-manager";
 
 /**
+ * 模型偶尔把坐标写成 `"620"` 这种数字字符串——今天它照样能渲染，所以收下并归一。
+ * 但缺失 / null / 空串 / `"abc"` / Infinity 必须判失败：`x < 0 || x > 1000` 对它们恒为
+ * false，会一路通过校验入库，最后在连线处拼出 `x2="NaN"`，父子线静默消失。
+ */
+function toCoord(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string" && value.trim() !== "") {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/**
  * 地图生成 Agent
  */
 class MapAgent extends BaseAgent {
@@ -292,9 +306,16 @@ ${chapterList}
         place.parentId = "";
         place.level = 1; // 降级为顶级地点
       }
-      if (place.x < 0 || place.x > 1000 || place.y < 0 || place.y > 1000) {
-        return `地点 ${place.name} 的坐标超出范围: (${place.x}, ${place.y})`;
+      const x = toCoord(place.x);
+      const y = toCoord(place.y);
+      if (x === null || y === null) {
+        return `地点 ${place.name} 的坐标不是有效数字: (x=${String(place.x)}, y=${String(place.y)})`;
       }
+      if (x < 0 || x > 1000 || y < 0 || y > 1000) {
+        return `地点 ${place.name} 的坐标超出范围: (${x}, ${y})`;
+      }
+      place.x = x;
+      place.y = y;
     }
 
     // 验证势力引用的地点（自动过滤无效引用）

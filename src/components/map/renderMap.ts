@@ -228,11 +228,12 @@ function renderConnections(mapData: MapData, svgWidth: number = BASE_WIDTH, svgH
       // 取消 level 1 和 level 2 之间的连线
       if (parent.level === topLevel) return "";
 
-      // 使用实际 SVG 坐标（0-1000 范围）
-      const x1 = PADDING + (parent.x / 1000) * (svgWidth - 2 * PADDING);
-      const y1 = PADDING + (parent.y / 1000) * (svgHeight - 2 * PADDING);
-      const x2 = PADDING + (place.x / 1000) * (svgWidth - 2 * PADDING);
-      const y2 = PADDING + (place.y / 1000) * (svgHeight - 2 * PADDING);
+      // 使用实际 SVG 坐标（0-1000 范围）。非法坐标必须兜底：NaN 进属性会拼出
+      // x1="NaN"，浏览器直接不渲染这条线，界面上只是"看不出少了什么"。
+      const x1 = PADDING + (safeNum(parent.x, 500) / 1000) * (svgWidth - 2 * PADDING);
+      const y1 = PADDING + (safeNum(parent.y, 500) / 1000) * (svgHeight - 2 * PADDING);
+      const x2 = PADDING + (safeNum(place.x, 500) / 1000) * (svgWidth - 2 * PADDING);
+      const y2 = PADDING + (safeNum(place.y, 500) / 1000) * (svgHeight - 2 * PADDING);
 
       // 连线颜色：使用父级的层级颜色
       const color = getLayerColor(parent.level);

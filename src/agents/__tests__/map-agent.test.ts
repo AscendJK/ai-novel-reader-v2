@@ -277,6 +277,42 @@ describe("地图结构校验", () => {
     }
   });
 
+  it("坐标是 \"abc\" / null / 缺失 / Infinity 时必须拒绝", async () => {
+    // 旧判据 `x < 0 || x > 1000` 对非数字恒为 false：非法坐标能一路穿过校验入库，
+    // 最后在 renderConnections 里拼出 x2="NaN"，父子连线静默消失（界面只看不出少了线）。
+    for (const bad of [
+      { x: "abc", y: 520 },
+      { x: null, y: 520 },
+      { y: 520 },
+      { x: 600, y: "" },
+      { x: 600, y: Number.POSITIVE_INFINITY },
+    ]) {
+      chat.mockResolvedValue(reply(validMap({
+        places: [
+          { id: "1", name: "洛阳", type: "城", level: 1, parentId: "", description: "", importance: 5, x: 500, y: 500, affiliation: "" },
+          { id: "2", name: "虎牢关", type: "关", level: 2, parentId: "1", description: "", importance: 5, ...bad, affiliation: "" },
+        ],
+      })));
+      const r = await run();
+      expect(r.success, `坐标 ${JSON.stringify(bad)} 不该被收下`).toBe(false);
+      expect(r.error).toContain("地点 虎牢关 的坐标不是有效数字");
+    }
+  });
+
+  it("模型把坐标写成 \"620\" 这种数字字符串时收下，并归一成 number 再入库", async () => {
+    const r = await runWithMap(validMap({
+      places: [
+        { id: "1", name: "洛阳", type: "城", level: 1, parentId: "", description: "", importance: 5, x: 500, y: 500, affiliation: "" },
+        { id: "2", name: "虎牢关", type: "关", level: 2, parentId: "1", description: "", importance: 5, x: "620", y: "480", affiliation: "" },
+      ],
+    }));
+    expect(r.success).toBe(true);
+    const places = (r.data as { mapData: { places: { id: string; x: unknown; y: unknown }[] } }).mapData.places;
+    const gate = places.find((p) => p.id === "2")!;
+    expect(gate.x).toBe(620);
+    expect(gate.y).toBe(480);
+  });
+
   it("parentId 指向不存在的地点时降级为顶级并清空父引用，有效父子关系不动", async () => {
     const r = await runWithMap(validMap());
     expect(r.success).toBe(true);
