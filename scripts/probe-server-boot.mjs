@@ -22,12 +22,15 @@ function check(name, ok, detail = "") {
   console.log(`${ok ? "  PASS" : "  FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`);
 }
 
-async function get(pathname, token) {
+async function get(pathname, token, origin) {
+  const headers = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (origin) headers.Origin = origin;
   const res = await fetch(`http://127.0.0.1:${PORT}${pathname}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    headers: Object.keys(headers).length ? headers : undefined,
   });
   const text = await res.text();
-  return { status: res.status, text };
+  return { status: res.status, text, headers: res.headers };
 }
 
 const adminTokenFile = path.join(workDir, ".admin_token");
@@ -42,6 +45,8 @@ const child = spawn(process.execPath, [path.join(repoRoot, "server", "index.js")
     NOVEL_READER_BACKUP_DIR: path.join(workDir, "backups"),
     // 探针绝不触碰真实的 server/data/.admin_token
     NOVEL_READER_ADMIN_TOKEN_FILE: adminTokenFile,
+    // 用户自定义前端来源（第二条故意带前导空格——正是过去会被静默丢掉的那种写法）
+    CORS_ORIGINS: "https://probe-allowed.example, https://probe-spaced.example",
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -83,6 +88,36 @@ try {
     body: "{ not json",
   });
   check("畸形 JSON 不会打穿进程", badJson.status >= 400 && badJson.status < 600, `status=${badJson.status}`);
+
+  // ── CORS：判据本身有单测，这里查的是"中间件真的按判据接线" ──
+  const lan = await get("/api/version", undefined, "http://192.168.1.100:8443");
+  check("局域网来源被放过（回显具体 Origin，不是 *）",
+    lan.headers.get("access-control-allow-origin") === "http://192.168.1.100:8443",
+    `ACAO=${lan.headers.get("access-control-allow-origin")}`);
+  check("X-Proxy-Auth 在 expose 名单里（否则前端分不清后端 401 与厂商 401）",
+    String(lan.headers.get("access-control-expose-headers") || "").includes("X-Proxy-Auth"),
+    `AEH=${lan.headers.get("access-control-expose-headers")}`);
+
+  const publicOrigin = await get("/api/version", undefined, "https://evil.example.com");
+  check("公网来源拿不到 CORS 放行头",
+    publicOrigin.headers.get("access-control-allow-origin") === null,
+    `ACAO=${publicOrigin.headers.get("access-control-allow-origin")}`);
+
+  const suffix = await get("/api/version", undefined, "http://192.168.1.1.evil.com");
+  check("拿局域网字样做后缀混淆的来源也被拒",
+    suffix.headers.get("access-control-allow-origin") === null,
+    `ACAO=${suffix.headers.get("access-control-allow-origin")}`);
+
+  // 用户在 CORS_ORIGINS 里配的来源必须真的生效——包括逗号后带空格这种写法
+  for (const o of ["https://probe-allowed.example", "https://probe-spaced.example"]) {
+    const custom = await get("/api/version", undefined, o);
+    check(`CORS_ORIGINS 配置生效：${o}`,
+      custom.headers.get("access-control-allow-origin") === o,
+      `ACAO=${custom.headers.get("access-control-allow-origin")}`);
+  }
+
+  check("响应带 nosniff", publicOrigin.headers.get("x-content-type-options") === "nosniff",
+    `XCTO=${publicOrigin.headers.get("x-content-type-options")}`);
 
   child.kill("SIGTERM");
   const exitInfo = await Promise.race([

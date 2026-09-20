@@ -13,6 +13,7 @@ import https from "node:https";
 import { fileURLToPath } from "node:url";
 import { checkpointWAL, createBackup, cleanupDeletedRecords, getBackupConfig, isRestoringBackup } from "./database.js";
 import { novelsRouter, ragRouter, syncRouter, proxyRouter, versionRouter } from "./routes/index.js";
+import { extraAllowedOrigins, isOriginAllowed } from "./lib/cors-policy.mjs";
 
 import { mountAdminRoutes } from "./admin.js";
 
@@ -27,24 +28,10 @@ process.on("unhandledRejection", (reason) => {
 });
 
 // ── CORS: restrict to specific origins ──
-const ALLOWED_ORIGINS = [
-  // 开发环境
-  "http://localhost:5173", "http://127.0.0.1:5173",
-  "http://localhost:4173", "http://127.0.0.1:4173",
-  "https://localhost", "https://127.0.0.1",
-  // GitHub Pages
-  "https://ascendjk.github.io",
-  // 用户自定义前端域名（可通过环境变量配置）
-  ...(process.env.CORS_ORIGINS || "").split(",").filter(Boolean),
-];
+// 判据在 server/lib/cors-policy.mjs（有用例钉着：局域网放过、公网来源不放过）
+const EXTRA_CORS_ORIGINS = extraAllowedOrigins(process.env.CORS_ORIGINS);
 app.use(cors({
-  origin: (origin, cb) => {
-    // Allow no-origin (same-origin, curl, mobile apps) and localhost
-    if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
-    // Allow any LAN/private IP (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
-    if (/^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/.test(origin)) return cb(null, true);
-    cb(null, false);
-  },
+  origin: (origin, cb) => cb(null, isOriginAllowed(origin, EXTRA_CORS_ORIGINS)),
   allowedHeaders: ["Content-Type", "Authorization", "x-api-key", "anthropic-version"],
   // X-Proxy-Auth 必须暴露：GitHub Pages 前端 + 局域网后端是跨源的，不在这里列出
   // 客户端就读不到，于是"后端会话失效"与"厂商 401"又分不开了
