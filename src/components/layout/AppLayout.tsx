@@ -173,8 +173,11 @@ export function AppLayout() {
         }
       }),
       broadcast.onUserSwitched((username) => {
-        const currentUser = localStorage.getItem('sync-username');
-        if (currentUser !== username) {
+        // 比的是本页内存里的身份，不是 localStorage：同一浏览器的标签页共享 localStorage，
+        // 发起方在广播之前就把新名字写进去了，于是这个比较恒为假——广播在它唯一要管的
+        // 场景（同一浏览器换用户）里失效，别的标签页会继续拿旧用户的 _userDB 配新身份的
+        // 键同步（round 2 R-18）。syncClient.user 才是"这一页当前绑着谁"。
+        if (syncClient.user !== username) {
           window.location.reload();
         }
       }),

@@ -119,6 +119,15 @@ test("B7 读到第三章：回书架显示进度，刷新后进度还在（真 l
 
   // 这条用例只有一本书，所以进度文案全局唯一；不靠卡片祖先节点定位（那种 xpath 一改布局就碎）
   const progress = page.getByText("已读至第 3 章");
+  // 读整个 main 的文本，而不是 shelfCard(...).innerText()：卡片不在时后者会一直抛错，
+  // expect.poll 把抛错当"还没满足"重试到超时，报错里只剩一句 Timeout waiting on the
+  // predicate，看不出是"进度没记上"还是"根本没回到书架"。读 main 才有真值可看。
+  await expect
+    .poll(async () => (await page.locator("main").innerText()).replace(/\s+/g, " ").slice(0, 300), {
+      timeout: 20_000,
+      message: "回书架之后应当看到第三章的进度",
+    })
+    .toContain("已读至第 3 章");
   await expect(progress).toBeVisible();
 
   await page.reload();

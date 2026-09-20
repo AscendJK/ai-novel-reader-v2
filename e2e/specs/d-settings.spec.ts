@@ -32,14 +32,16 @@ async function signIn(page: Page, username: string): Promise<void> {
   await sel.usernameSelect(page).selectOption({ value: "__new__" });
   await sel.newUsername(page).fill(username);
   await sel.loginSubmit(page).click();
-  await expect(sel.loginGate(page)).toHaveCount(0);
+  // 20 秒：满并发的"重 boot + 拉书架"实测要走十几秒（B7 量过），这条判据要红在
+  // "永远进不去"上，而不是红在"这台机器此刻很忙"
+  await expect(sel.loginGate(page)).toHaveCount(0, { timeout: 20_000 });
 }
 
 async function signOut(page: Page): Promise<void> {
   // 不接 dialog 的话 Playwright 默认 dismiss，等于用户点了"取消"，根本退不出去
   page.once("dialog", (d) => d.accept());
   await page.getByTitle("退出登录").click();
-  await expect(sel.loginGate(page)).toBeVisible();
+  await expect(sel.loginGate(page)).toBeVisible({ timeout: 20_000 });
 }
 
 async function openSettings(page: Page): Promise<void> {
