@@ -10,6 +10,8 @@ import { describe, it, expect } from "vitest";
 import {
   requireUsableInput,
   computeAvailableInput,
+  getTokenBudget,
+  setDiscoveredContextWindow,
   MIN_USABLE_INPUT_TOKENS,
   type TokenBudget,
 } from "../token-manager";
@@ -18,6 +20,39 @@ import {
 const budget = (contextWindow: number, maxOutputTokens: number): TokenBudget => ({
   contextWindow,
   maxOutputTokens,
+});
+
+describe("getTokenBudget 的用户自定义输出上限", () => {
+  // 报错文案让用户"调低输出上限"，而这个值在模型命中预算表时被丢掉——两条路径必须一致
+  it("模型命中预算表时，用户填的输出上限仍然算数", () => {
+    const b = getTokenBudget("gpt-4o", undefined, 4096);
+    expect(b.maxOutputTokens).toBe(4096);
+    expect(b.contextWindow).toBe(128000); // 窗口仍取表里的
+  });
+
+  it("版本化模型走前缀匹配时也一样", () => {
+    const b = getTokenBudget("gpt-4o-mini-2024-07-18", undefined, 2048);
+    expect(b.maxOutputTokens).toBe(2048);
+    expect(b.contextWindow).toBe(128000);
+  });
+
+  it("服务端自报过上下文长度时，用户上限也不能被表值顶掉", () => {
+    setDiscoveredContextWindow("某未知模型-x", 32000);
+    const b = getTokenBudget("某未知模型-x", undefined, 1024);
+    expect(b.contextWindow).toBe(32000);
+    expect(b.maxOutputTokens).toBe(1024);
+  });
+
+  it("不填用户上限时保持表值（不许凭空造一个）", () => {
+    expect(getTokenBudget("gpt-4o").maxOutputTokens).toBe(16384);
+  });
+
+  it("用户调低输出上限要真的换回更多输入空间", () => {
+    // 唯一变量是设置里的上限：agentMax 两次都给 16384，预算不同才说明用户值被采纳了
+    const wide = computeAvailableInput(getTokenBudget("gpt-4o", undefined, 16384), 16384);
+    const tight = computeAvailableInput(getTokenBudget("gpt-4o", undefined, 2048), 16384);
+    expect(tight).toBeGreaterThan(wide);
+  });
 });
 
 describe("requireUsableInput", () => {

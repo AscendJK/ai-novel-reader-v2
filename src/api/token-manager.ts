@@ -200,7 +200,7 @@ export function getTokenBudget(model: string, contextWindow?: number, maxOutputT
   if (maxOutputTokens && maxOutputTokens > 0) {
     knownOutput = maxOutputTokens;
   }
-  // User-configured context window takes priority for input tokens
+  // 用户配置的上下文窗口优先
   if (contextWindow && contextWindow > 0) {
     return { contextWindow, maxOutputTokens: knownOutput };
   }
@@ -209,13 +209,19 @@ export function getTokenBudget(model: string, contextWindow?: number, maxOutputT
   if (discovered) {
     return { contextWindow: discovered, maxOutputTokens: knownOutput };
   }
+  // 表命中路径必须带走上面算好的 knownOutput：过去直接 return 表对象，用户在设置里
+  // 调的输出上限对已知模型完全不生效，而预算不足的报错文案正是让他去调这个。
+  const withUserCap = (b: TokenBudget): TokenBudget => ({
+    contextWindow: b.contextWindow,
+    maxOutputTokens: knownOutput,
+  });
   // Exact match first
-  if (MODEL_LIMITS[model]) return MODEL_LIMITS[model];
+  if (MODEL_LIMITS[model]) return withUserCap(MODEL_LIMITS[model]);
   // Prefix match for versioned models (e.g. "gpt-4o-mini-2024-07-18" → "gpt-4o-mini")
   for (const [key, budget] of SORTED_MODEL_ENTRIES) {
-    if (model.startsWith(key)) return budget;
+    if (model.startsWith(key)) return withUserCap(budget);
   }
-  return DEFAULT_BUDGET;
+  return withUserCap(DEFAULT_BUDGET);
 }
 
 /**
