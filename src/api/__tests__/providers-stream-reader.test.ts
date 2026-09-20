@@ -25,10 +25,6 @@ type ReaderScript = {
 /** 只实现 readSSEData 真正用到的那一小块 ReadableStream 接口 */
 function fakeStream(script: ReaderScript) {
   let i = 0;
-  let releaseCancel: (() => void) | null = null;
-  const cancelPromise = new Promise<unknown>((resolve) => {
-    releaseCancel = resolve;
-  });
   const reader = {
     cancelled: false,
     read(): Promise<{ done: boolean; value?: Uint8Array }> {
@@ -43,14 +39,12 @@ function fakeStream(script: ReaderScript) {
     },
     cancel(): Promise<unknown> {
       reader.cancelled = true;
-      if (script.cancelHangs) {
-        // 黑洞：cancel() 自己不返回，且没有计时器会替它兜底
-        return new Promise(() => {
-          /* 永不 resolve */
-        });
-      }
-      releaseCancel?.();
-      return cancelPromise;
+      // 黑洞场景 cancel() 自己不返回，且没有计时器替它兜底
+      return script.cancelHangs
+        ? new Promise(() => {
+            /* 永不 resolve */
+          })
+        : Promise.resolve();
     },
   };
   const response = { body: { getReader: () => reader } } as unknown as Response;
