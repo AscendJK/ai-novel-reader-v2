@@ -1,6 +1,63 @@
 import type { ParseResult, ParserOptions } from "./types";
 import { detectChapters, splitByChapters } from "./chapter-detector";
 
+function isCjkHighByte(b: number): boolean {
+  // 中文字符在 UTF-16 里的高位字节只会是这几处：0x30 中文标点、0x4E–0x9F CJK、0xFF 全角
+  return b === 0x30 || b === 0xff || (b >= 0x4e && b <= 0x9f);
+}
+
+/** 非空白字符里中文（含中文标点/全角）的占比 */
+function cjkShare(s: string): number {
+  let total = 0;
+  let cjk = 0;
+  for (const ch of s) {
+    if (total >= 2000) break;
+    const c = ch.codePointAt(0) ?? 0;
+    if (c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d) continue;
+    total++;
+    if (
+      (c >= 0x4e00 && c <= 0x9fff) ||
+      (c >= 0x3000 && c <= 0x303f) ||
+      (c >= 0xff00 && c <= 0xffef)
+    ) {
+      cjk++;
+    }
+  }
+  return total ? cjk / total : 0;
+}
+
+/**
+ * 无 BOM 的纯中文 UTF-16 用 0x00 分布判不出来：“剑”=U+5251 → 字节 51 52，一个 0 都没有。
+ * 换判据：CJK 高位字节必定密集出现在**其中一列**（LE 在奇列、BE 在偶列），另一列是低字节，
+ * 分布均匀。实测中文 UTF-16 = 93%/29%，而英文为主的 GBK/Big5 两列都是 ~72%（'N'–'z' 撞进
+ * 同一区间）——所以只看单列达标会误伤英文书，必须同时要求两列拉开 2 倍差距。
+ */
+function detectUtf16ByParity(bytes: Uint8Array): string | null {
+  const len = Math.min(bytes.length, 4096);
+  if (len < 64) return null;
+  let evenHit = 0;
+  let oddHit = 0;
+  let evenN = 0;
+  let oddN = 0;
+  for (let i = 0; i < len; i += 2) {
+    evenN++;
+    if (isCjkHighByte(bytes[i])) evenHit++;
+  }
+  for (let i = 1; i < len; i += 2) {
+    oddN++;
+    if (isCjkHighByte(bytes[i])) oddHit++;
+  }
+  const even = evenHit / Math.max(1, evenN);
+  const odd = oddHit / Math.max(1, oddN);
+  const high = Math.max(even, odd);
+  if (high < 0.55 || Math.min(even, odd) > high * 0.5) return null;
+  const label = odd > even ? "UTF-16LE" : "UTF-16BE";
+  // 奇偶偏置只是必要条件：再确认按它解出来确实是一片中文
+  const decoded = decodeWith(bytes.subarray(0, len), label);
+  if (decoded === null || cjkShare(decoded) < 0.5) return null;
+  return label;
+}
+
 function detectEncoding(bytes: Uint8Array): string {
   // BOM detection
   if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "UTF-8";
@@ -23,6 +80,9 @@ function detectEncoding(bytes: Uint8Array): string {
     // 0x00 集中在偶数位 → 高位字节在前 → BE；否则 LE
     return zerosEven > zeros / 2 ? "UTF-16BE" : "UTF-16LE";
   }
+
+  const byParity = detectUtf16ByParity(bytes);
+  if (byParity) return byParity;
 
   // 启发式打分：采样窗口不能太小——GBK 文件常以长英文版权页/序言开头，
   // 前 500 字节几乎全 ASCII（utf8/gbk 同分），会被误判成 UTF-8，正文全乱码
