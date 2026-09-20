@@ -11,6 +11,8 @@ import { rateLimit } from "../middleware/rateLimit.js";
 import { buildIndex, getProgress, getIndexData, getStatuses, getAllStatuses } from "../rag-builder.js";
 import { resolveModelKey, isAllowedEngine, allowedEngineList } from "../lib/engine-config.js";
 import { cleanTtsText } from "../lib/tts-text-cleaner.mjs";
+import { resolveMirrorHosts } from "../lib/model-mirrors.mjs";
+import { isAllowedModelPath, resolveModelCachePath, toCachePath } from "../lib/model-paths.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -318,46 +320,28 @@ const MODEL_CACHE_DIR = path.resolve(__dirname, "../data/models-cache");
  * 4. HuggingFace 官方（最后兜底）
  */
 function getMirrorHosts() {
-  const hosts = [];
-  const norm = (h) => (h.endsWith("/") ? h : h + "/");
-  try {
-    const configPath = path.resolve(__dirname, "../data/rag-config.json");
-    if (fs.existsSync(configPath)) {
-      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-      if (config.mirrorHost) hosts.push(norm(config.mirrorHost));
-    }
-  } catch { /* ignore */ }
-  if (process.env.HF_MIRROR) hosts.push(norm(process.env.HF_MIRROR));
-  hosts.push("https://hf-mirror.com/");
-  hosts.push("https://huggingface.co/");
-  return [...new Set(hosts)];
-}
-
-// Normalize cache path: strip "resolve/main/" to match Transformers.js directory structure
-// e.g., "Xenova/bge-small-zh-v1.5/resolve/main/config.json" → "Xenova/bge-small-zh-v1.5/config.json"
-function toCachePath(subPath) {
-  return subPath.replace(/\/resolve\/main\//, "/");
+  return resolveMirrorHosts({
+    configPath: path.resolve(__dirname, "../data/rag-config.json"),
+    envHost: process.env.HF_MIRROR,
+  });
 }
 
 // GET /api/rag/model-proxy/{*path} — proxy model file from mirror
-// Only allows Xenova/ and onnx-community/ model paths to prevent open proxy abuse
-const VALID_MODEL_PATH = /^(Xenova|onnx-community)\/[^/]+\/resolve\/main\/.+/;
+// 白名单与缓存路径判据在 server/lib/model-paths.mjs（有用例钉着，见那边注释）
 
 router.get("/model-proxy/{*path}", rateLimit(10), async (req, res) => {
   console.log(`[model-proxy] 请求: ${req.originalUrl}`);
   try {
     // Express 5 + path-to-regexp v8: {*path} returns an array of segments
     const subPath = Array.isArray(req.params.path) ? req.params.path.join("/") : req.params.path;
-    if (!subPath || !VALID_MODEL_PATH.test(subPath)) {
+    if (!isAllowedModelPath(subPath)) {
       return res.status(400).json({ error: "invalid model path" });
     }
 
     // Check local cache first (use normalized path for Transformers.js compatibility)
-    const cachePath = path.join(MODEL_CACHE_DIR, toCachePath(subPath));
-    // 防路径穿越：确保解析后的路径在缓存目录内
-    const resolvedCachePath = path.resolve(cachePath);
-    const resolvedModelDir = path.resolve(MODEL_CACHE_DIR);
-    if (!resolvedCachePath.startsWith(resolvedModelDir + path.sep) && resolvedCachePath !== resolvedModelDir) {
+    // 防路径穿越：解析后仍在缓存目录内才继续，越界一律 400
+    const cachePath = resolveModelCachePath({ modelDir: MODEL_CACHE_DIR, subPath });
+    if (cachePath === null) {
       return res.status(400).json({ error: "invalid path" });
     }
     if (fs.existsSync(cachePath)) {

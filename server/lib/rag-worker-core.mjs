@@ -1,20 +1,11 @@
-import fs from "node:fs";
-
-const DEFAULT_MIRROR_HOST = "https://hf-mirror.com/";
+import { resolveMirrorHosts } from "./model-mirrors.mjs";
 
 /**
  * 模型下载源：配置文件 > 环境变量 > 默认镜像。
- * 配置坏了不能拖死整次索引，所以解析失败一律退回默认值。
+ * 顺序判据与 routes/rag.js 共用 model-mirrors.mjs，这里只取列表第一项。
  */
 export function resolveMirrorHost({ configPath, envHost }) {
-  let host = envHost || DEFAULT_MIRROR_HOST;
-  try {
-    if (configPath && fs.existsSync(configPath)) {
-      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-      if (config.mirrorHost) host = config.mirrorHost;
-    }
-  } catch { /* 忽略：坏配置按无配置处理 */ }
-  return host.endsWith("/") ? host : `${host}/`;
+  return resolveMirrorHosts({ configPath, envHost })[0];
 }
 
 /**
