@@ -5,6 +5,7 @@
  *  1) 喂给模型的目录错了（序号错位 / 千章书不抽样直接把请求顶到 400 / 拿成另一本书）；
  *  2) 模型返回的 JSON 被"善意补全"成看起来合法、实则残缺的地图（少一半地点、势力引用被清空）。
  * 地图一旦校验不通过就必须整体失败——结果会直接 saveMap 入库，半成品没有回头路。
+ * 唯一的例外是父级对不上：那种坏法降级 + 记进 parentMissing（见"父级对不上时的可见降级"）。
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -242,17 +243,6 @@ describe("地图结构校验", () => {
     expect(r.error).toContain("地点缺少 id 或 name");
   });
 
-  it("level 大于 1 却没有 parentId 时拒绝", async () => {
-    const r = await runWithMap(validMap({
-      places: [
-        { id: "1", name: "洛阳", type: "城", level: 1, parentId: "", description: "", importance: 5, x: 100, y: 100, affiliation: "" },
-        { id: "2", name: "虎牢关", type: "关", level: 2, parentId: "", description: "", importance: 5, x: 200, y: 200, affiliation: "" },
-      ],
-    }));
-    expect(r.success).toBe(false);
-    expect(r.error).toBe("地点 虎牢关 的 level > 1 但没有 parentId");
-  });
-
   it("坐标落在 0/1000 边界上是合法的（边界值不是越界）", async () => {
     const r = await runWithMap(validMap({
       places: [
@@ -406,5 +396,69 @@ describe("地图的重试与错误分类", () => {
     const r = await run();
     expect(r.success).toBe(true);
     expect(promptOf(1)).toContain("API 请求超时");
+  });
+});
+
+describe("父级对不上时的可见降级", () => {
+  async function runWithMap(map: string) {
+    chat.mockResolvedValue(reply(map));
+    return await run();
+  }
+  const place = (over: Record<string, unknown>) => ({
+    id: "9", name: "黑木崖", type: "秘境", level: 2, parentId: "1",
+    description: "", importance: 5, x: 300, y: 300, affiliation: "", ...over,
+  });
+  const mapWith = (places: unknown[]) => validMap({
+    places: [
+      { id: "1", name: "洛阳", type: "都城", level: 1, parentId: "", description: "", importance: 9, x: 500, y: 500, affiliation: "" },
+      ...places,
+    ],
+  });
+
+  it("parentId 指向不存在的地点：降级成顶级并记进 parentMissing（以前只往控制台打一行）", async () => {
+    const r = await runWithMap(mapWith([place({ parentId: "ghost" })]));
+    expect(r.success).toBe(true);
+    const map = (r.data as { mapData: { places: { id: string; parentId: string; level: number }[]; parentMissing?: string[] } }).mapData;
+    expect(map.places.find((p) => p.id === "9")).toMatchObject({ parentId: "", level: 1 });
+    expect(map.parentMissing).toEqual(["黑木崖"]);
+  });
+
+  it("自称 level 2 却没写 parentId：不再整图失败，同样降级并记录", async () => {
+    const before = await runWithMap(mapWith([place({ parentId: "" })]));
+    expect(before.success).toBe(true);   // 旧行为：error = "地点 黑木崖 的 level > 1 但没有 parentId"
+    const map = (before.data as { mapData: { places: { id: string; level: number }[]; parentMissing?: string[] } }).mapData;
+    expect(map.places.find((p) => p.id === "9")!.level).toBe(1);
+    expect(map.parentMissing).toEqual(["黑木崖"]);
+  });
+
+  it("父子关系正常时不带 parentMissing（旧地图也不会突然多出一行提示）", async () => {
+    const r = await runWithMap(validMap());
+    expect(r.success).toBe(true);
+    const map = (r.data as { mapData: { parentMissing?: string[] } }).mapData;
+    expect(map.parentMissing).toBeUndefined();
+  });
+
+  it("两种坏法同时出现时记在同一份清单里（判据同源，不许再分叉）", async () => {
+    const r = await runWithMap(mapWith([
+      place({ id: "9", name: "黑木崖", parentId: "ghost" }),
+      place({ id: "10", name: "梅庄", parentId: "" }),
+    ]));
+    expect(r.success).toBe(true);
+    const map = (r.data as { mapData: { parentMissing?: string[] } }).mapData;
+    expect(map.parentMissing).toEqual(["黑木崖", "梅庄"]);
+  });
+
+  it("顶级地点带一个不存在的上级：只清引用、level 仍是 1，也要记下来", async () => {
+    const r = await runWithMap(mapWith([place({ level: 1, parentId: "ghost", name: "孤山" })]));
+    expect(r.success).toBe(true);
+    const map = (r.data as { mapData: { places: { id: string; level: number; parentId: string }[]; parentMissing?: string[] } }).mapData;
+    expect(map.places.find((p) => p.id === "9")).toMatchObject({ level: 1, parentId: "" });
+    expect(map.parentMissing).toEqual(["孤山"]);
+  });
+
+  it("降级不豁免其它判据：level 依然无效时还是整图失败", async () => {
+    const r = await runWithMap(mapWith([place({ level: 0, parentId: "ghost" })]));
+    expect(r.success).toBe(false);
+    expect(r.error).toContain("level 无效");
   });
 });

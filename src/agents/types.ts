@@ -107,4 +107,9 @@ export interface MapData {
     type: string;
     places: string[];
   }>;
+  /**
+   * 模型给的上级对不上（parentId 不存在、或自称子地点却没给父级）时被降级成顶级
+   * 地点的地点名。界面据此提示"这几处的上下级是 AI 猜的"，而不是把降级当成事实。
+   */
+  parentMissing?: string[];
 }

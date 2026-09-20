@@ -26,6 +26,32 @@ function toCoord(value: unknown): number | null {
 }
 
 /**
+ * 父级对不上的统一处理：清掉无效父级、把地点降级成顶级，并回报被降级的地点名。
+ *
+ * 两种坏法以前待遇不同——parentId 指向不存在的 id 会被静默降级，而"自称 level 2
+ * 却没写 parentId"会让整张图判失败去重试。同一个幻觉两种结果是分叉，现在都走这里。
+ * 为什么不选"报错重试"：一张图几十个点、id 全由模型自己编，坏父级是常态；硬失败等于
+ * 整图重来，重来还可能引入新的坏 id，撞重试上限后用户一张图都拿不到。降级至少给出一张
+ * 九成正确的图——但"上下级是 AI 猜的"必须让用户看见，所以记进 mapData.parentMissing，
+ * 而不是只往控制台打一行。
+ */
+export function normalizePlaceParents(places: MapData["places"]): string[] {
+  const ids = new Set(places.map((p) => p.id));
+  const missing: string[] = [];
+  for (const place of places) {
+    if (place.parentId && !ids.has(place.parentId)) {
+      place.parentId = "";
+      if (place.level > 1) place.level = 1;
+      missing.push(place.name);
+    } else if (place.level > 1 && !place.parentId) {
+      place.level = 1;
+      missing.push(place.name);
+    }
+  }
+  return missing;
+}
+
+/**
  * 地图生成 Agent
  */
 class MapAgent extends BaseAgent {
@@ -292,19 +318,19 @@ ${chapterList}
       placeIds.add(place.id);
     }
 
+    // 父级对不上的地点：降级成顶级地点并记进 parentMissing（界面会提示，见函数注释）
+    const parentMissing = normalizePlaceParents(mapData.places);
+    if (parentMissing.length > 0) {
+      console.warn(`[MapAgent] ${parentMissing.length} 个地点的上级对不上，已按顶级地点放置: ${parentMissing.join("、")}`);
+      mapData.parentMissing = parentMissing;
+    } else {
+      delete mapData.parentMissing;
+    }
+
     // 验证地点层级和父子关系
     for (const place of mapData.places) {
       if (!place.level || place.level < 1) {
         return `地点 ${place.name} 的 level 无效: ${place.level}`;
-      }
-      if (place.level > 1 && !place.parentId) {
-        return `地点 ${place.name} 的 level > 1 但没有 parentId`;
-      }
-      // 自动修复无效的 parentId
-      if (place.parentId && !placeIds.has(place.parentId)) {
-        console.warn(`[MapAgent] 地点 ${place.name} 的 parentId 不存在: ${place.parentId}，自动清空`);
-        place.parentId = "";
-        place.level = 1; // 降级为顶级地点
       }
       const x = toCoord(place.x);
       const y = toCoord(place.y);

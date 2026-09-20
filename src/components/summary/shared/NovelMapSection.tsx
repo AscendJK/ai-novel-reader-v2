@@ -458,6 +458,13 @@ export function NovelMapSection({
                   {mapData.regions.length > 0 && (
                     <p>区域：{mapData.regions.map(r => r.name).join("、")}</p>
                   )}
+                  {mapData.parentMissing && mapData.parentMissing.length > 0 && (
+                    <p className="text-amber-600 dark:text-amber-400">
+                      {mapData.parentMissing.length} 个地点的上级没找到，已按顶级地点放置：
+                      {mapData.parentMissing.slice(0, 3).join("、")}
+                      {mapData.parentMissing.length > 3 ? " 等" : ""}
+                    </p>
+                  )}
                 </>
               )}
               {updatedAt && (
