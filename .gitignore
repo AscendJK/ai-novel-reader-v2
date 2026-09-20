@@ -87,3 +87,8 @@ TOOLS.md
 
 # ZCode local workspace
 .zcode/
+
+# Playwright 浏览器端到端测试产物：截图/trace、HTML 报告，以及 e2e/.auth 里的登录态
+test-results/
+playwright-report/
+e2e/.auth/

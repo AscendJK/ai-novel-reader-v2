@@ -8,7 +8,7 @@
     "server": "node server/index.js",
     "start": "npm run build && node server/index.js --full",
     "dev:5175": "vite --host 0.0.0.0 --port 5175",
-    "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.e2e.json",
     "build": "npm run typecheck && vite build && node scripts/inject-coi.cjs",
     "pack:backend": "powershell -NoProfile -ExecutionPolicy Bypass -File pack-backend.ps1",
     "lint": "eslint . --max-warnings=0",
@@ -27,7 +27,11 @@
     "audit:discrimination": "node scripts/audit-discrimination.mjs",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
-    "test:coverage": "vitest --coverage"
+    "test:coverage": "vitest --coverage",
+    "e2e": "playwright test --config e2e/playwright.config.ts",
+    "e2e:smoke": "playwright test --config e2e/playwright.config.ts specs/a-smoke.spec.ts",
+    "e2e:headed": "playwright test --config e2e/playwright.config.ts --headed",
+    "e2e:report": "playwright show-report"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",
@@ -69,6 +73,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "~1.58.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",

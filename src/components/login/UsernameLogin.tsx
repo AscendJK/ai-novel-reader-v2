@@ -124,7 +124,7 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
 
   if (syncing) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+      <div data-testid="login-gate" className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
         <Card className="w-full max-w-sm mx-4">
           <CardContent className="py-8 text-center space-y-3">
             <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto" />
@@ -136,7 +136,7 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+    <div data-testid="login-gate" className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
       <Card className="w-full max-w-sm mx-4">
         <CardHeader className="text-center">
           <BookOpen className="h-10 w-10 text-primary mx-auto mb-2" />
@@ -277,6 +277,7 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
               {/* Action buttons */}
               <div className="flex gap-2">
                 <Button
+                  data-testid="login-submit"
                   className="flex-1"
                   onClick={handleSubmit}
                   disabled={loading || !canSubmit}
