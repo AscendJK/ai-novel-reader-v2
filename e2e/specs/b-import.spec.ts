@@ -111,6 +111,7 @@ test("B6 打开书：三章全渲染、每章正文在自己的段落里；点�
 });
 
 test("B7 读到第三章：回书架显示进度，刷新后进度还在（真 localStorage 落盘）", async ({ page }) => {
+  test.setTimeout(60_000); // 刷新后的两条判据各给 20 秒，整条测试的天花板要跟着抬
   await importFiles(page, [txtFile("进度测试.txt", miniNovel())]);
   await openBook(page, "进度测试");
   await navChapter(page, 2).click();
@@ -121,15 +122,19 @@ test("B7 读到第三章：回书架显示进度，刷新后进度还在（真 l
   await expect(progress).toBeVisible();
 
   await page.reload();
-  await expect(shelfCard(page, "进度测试")).toBeVisible();
-  await expect(progress).toBeVisible();
+  // 刷新之后要等的是"整页重 boot + 从 IndexedDB 读回书架"，实测耗时随并发线性恶化
+  // （10 worker 下这一条要走 14.6 秒，单跑 5 秒），所以这里的预算单给 20 秒。
+  // 刻意不用 retries 兜：判据红的原因是"永远读不回来"，多给时间不改变它会不会红。
+  await expect(shelfCard(page, "进度测试")).toBeVisible({ timeout: 20_000 });
+  await expect(progress).toBeVisible({ timeout: 20_000 });
 });
 
 test("B8 刷新后书架不空：导入的结果落在浏览器本地库里", async ({ page }) => {
+  test.setTimeout(60_000); // 见 B7 那条注释：满并行时"重 boot + 读回"要走十几秒
   await importFiles(page, [txtFile("刷新测试.txt", miniNovel())]);
   await expect(shelfCard(page, "刷新测试")).toBeVisible();
 
   await page.reload();
-  await expect(shelfCard(page, "刷新测试")).toBeVisible();
-  await expect(page.getByText("3 章")).toBeVisible();
+  await expect(shelfCard(page, "刷新测试")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("3 章")).toBeVisible({ timeout: 20_000 });
 });

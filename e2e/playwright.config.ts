@@ -17,6 +17,9 @@ export default defineConfig({
   testDir: "./specs",
   outputDir: path.join(repoRoot, "test-results"),
   timeout: 30_000,
+  // 5s 是给"点了之后应当立刻有反应"那类判据的。刷新之后等书架回来不在此列——
+  // 那条路径实测会随并发拉长（10 worker 下 B7 全程 14.6s，单跑 5.0s），
+  // 所以那种断言各自显式给 `{ timeout: 20_000 }`，别把全局预算抬成掩盖真问题的余量。
   expect: { timeout: 5_000 },
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
