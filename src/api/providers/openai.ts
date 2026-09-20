@@ -13,10 +13,20 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
   // 直连超时会走代理重试（catch 分支），代理也超时则把超时错误抛给调用方。
   // 响应体阶段由 SSE 看门狗（stream.ts）保护。
   const REQUEST_TIMEOUT_MS = 120_000;
+  // 直连只是"探路"（不经过后端能不能打通厂商），挂在这里时必须在几秒内让位给代理，
+  // 否则两条腿各等 120 秒串起来 = 用户盯着转圈四分钟。
+  const DIRECT_STREAM_TIMEOUT_MS = 30_000;
+
+  const isStreaming = (req: ChatCompletionRequest) => req.stream ?? config.stream !== false;
 
   /** 给 fetch 包一层超时：用户取消（signal 已中止）原样抛 AbortError，
    *  超时抛普通 Error（避免被上游当作"用户取消"吞掉） */
-  async function withTimeout(req: ChatCompletionRequest, run: (signal: AbortSignal) => Promise<Response>): Promise<Response> {
+  async function withTimeout(
+    req: ChatCompletionRequest,
+    leg: "直连" | "代理",
+    timeoutMs: number,
+    run: (signal: AbortSignal) => Promise<Response>
+  ): Promise<Response> {
     const controller = new AbortController();
     const onAbort = () => {
       controller.abort();
@@ -30,12 +40,12 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
     const timer = setTimeout(() => {
       timedOut = true;
       controller.abort();
-    }, REQUEST_TIMEOUT_MS);
+    }, timeoutMs);
     try {
       return await run(controller.signal);
     } catch (e) {
       if (timedOut && !req.signal?.aborted) {
-        throw new Error(`请求超时（${REQUEST_TIMEOUT_MS / 1000} 秒无响应），请检查网络或 API 地址`, { cause: e });
+        throw new Error(`${leg}超时（${timeoutMs / 1000} 秒无响应），请检查网络或 API 地址`, { cause: e });
       }
       throw e;
     } finally {
@@ -53,8 +63,9 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
       messages: req.messages,
       max_tokens: req.max_tokens ?? config.maxTokens ?? 2048,
       temperature: req.temperature ?? 0.7,
-      // 默认开启流式（ModelScope 强制要求）；可在 API 设置中关闭，支持请求级覆盖
-      stream: req.stream ?? config.stream !== false,
+      // 默认开启流式（ModelScope 强制要求）；可在 API 设置中关闭，支持请求级覆盖。
+      // 与直连超时预算共用 isStreaming：判成流式却发非流式，短超时就会咬错地方
+      stream: isStreaming(req),
     };
     // 思考模式开关：仅当显式关闭（thinking=false）时发送 disabled，避免影响不支持该参数的模型
     if (config.thinking === false) {
@@ -64,7 +75,10 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
   }
 
   async function doDirect(req: ChatCompletionRequest): Promise<Response> {
-    return withTimeout(req, (signal) =>
+    // 非流式的响应头要等模型把整段写完才回来，跟着缩会直连白打一次、代理再打一次
+    // （同一份 token 花两遍），所以只有流式请求才用短预算。
+    const timeoutMs = isStreaming(req) ? DIRECT_STREAM_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
+    return withTimeout(req, "直连", timeoutMs, (signal) =>
       fetch(`${baseUrl}/chat/completions`, {
         method: "POST",
         signal,
@@ -79,7 +93,7 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
 
   async function doProxy(req: ChatCompletionRequest): Promise<Response> {
     return proxyWithSessionRetry(() =>
-      withTimeout(req, (signal) =>
+      withTimeout(req, "代理", REQUEST_TIMEOUT_MS, (signal) =>
         apiFetch("/api/proxy/chat", {
           method: "POST",
           signal,

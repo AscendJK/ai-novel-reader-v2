@@ -11,8 +11,16 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
 
   // 请求头超时（同 openai.ts：直连挂起时中断，超时错误区别于用户取消）
   const REQUEST_TIMEOUT_MS = 120_000;
+  const DIRECT_STREAM_TIMEOUT_MS = 30_000;
 
-  async function withTimeout(req: ChatCompletionRequest, run: (signal: AbortSignal) => Promise<Response>): Promise<Response> {
+  const isStreaming = (req: ChatCompletionRequest) => req.stream ?? config.stream !== false;
+
+  async function withTimeout(
+    req: ChatCompletionRequest,
+    leg: "直连" | "代理",
+    timeoutMs: number,
+    run: (signal: AbortSignal) => Promise<Response>
+  ): Promise<Response> {
     const controller = new AbortController();
     const onAbort = () => {
       controller.abort();
@@ -25,12 +33,12 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
     const timer = setTimeout(() => {
       timedOut = true;
       controller.abort();
-    }, REQUEST_TIMEOUT_MS);
+    }, timeoutMs);
     try {
       return await run(controller.signal);
     } catch (e) {
       if (timedOut && !req.signal?.aborted) {
-        throw new Error(`请求超时（${REQUEST_TIMEOUT_MS / 1000} 秒无响应），请检查网络或 API 地址`, { cause: e });
+        throw new Error(`${leg}超时（${timeoutMs / 1000} 秒无响应），请检查网络或 API 地址`, { cause: e });
       }
       throw e;
     } finally {
@@ -73,15 +81,18 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
       // 丢弃会导致默认 ~1.0 的高随机性、JSON 解析失败率上升
       temperature: req.temperature ?? 0.7,
       messages,
-      // 默认开启流式；可在 API 设置中关闭，支持请求级覆盖
-      stream: req.stream ?? config.stream !== false,
+      // 默认开启流式；可在 API 设置中关闭，支持请求级覆盖（与直连超时预算共用判据）
+      stream: isStreaming(req),
     };
     if (systemPrompt) body.system = systemPrompt;
     return body;
   }
 
   async function doDirect(req: ChatCompletionRequest): Promise<Response> {
-    return withTimeout(req, (signal) =>
+    // 非流式的响应头等整段生成完才回来，跟着缩会直连白打一次、代理重打一次
+    // （同一份 token 花两遍），所以只有流式请求用短预算
+    const timeoutMs = isStreaming(req) ? DIRECT_STREAM_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
+    return withTimeout(req, "直连", timeoutMs, (signal) =>
       fetch(`${baseUrl}/messages`, {
         method: "POST",
         signal,
@@ -97,7 +108,7 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
 
   async function doProxy(req: ChatCompletionRequest): Promise<Response> {
     return proxyWithSessionRetry(() =>
-      withTimeout(req, (signal) =>
+      withTimeout(req, "代理", REQUEST_TIMEOUT_MS, (signal) =>
         apiFetch("/api/proxy/chat", {
           method: "POST",
           signal,
