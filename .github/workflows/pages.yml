@@ -52,6 +52,9 @@ jobs:
       - name: 小说重传不删派生数据探针 (同 id 二次入库不得级联删书架关系/地图/索引)
         run: npm run probe:reupload
 
+      - name: 同步会话探针 (跨用户写入 403 / kicked 与 session_expired 不混 / 坏载荷过半 422)
+        run: npm run probe:sync
+
       - name: RAG 索引失效探针 (改章/重传后旧向量必须作废)
         run: npm run probe:rag
 

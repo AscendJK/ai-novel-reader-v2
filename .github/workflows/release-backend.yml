@@ -38,11 +38,12 @@ jobs:
       - name: Rebuild better-sqlite3 for probes
         run: npm rebuild better-sqlite3
 
-      - name: Server probes (备份恢复 / 地图迁移 / 重传不删库 / RAG 指纹 / 代理流式 / 后端启动)
+      - name: Server probes (备份恢复 / 地图迁移 / 重传不删库 / 同步会话 / RAG 指纹 / 代理流式 / 后端启动)
         run: |
           npm run probe:backup
           npm run probe:maps
           npm run probe:reupload
+          npm run probe:sync
           npm run probe:rag
           npm run probe:proxy
           npm run probe:boot
