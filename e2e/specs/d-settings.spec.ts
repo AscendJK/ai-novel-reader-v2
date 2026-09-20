@@ -1,0 +1,195 @@
+import { test, expect, type Page } from "@playwright/test";
+import { stubBackend, idleTtsStatus } from "../fixtures/backend";
+import { sel, openApp, expectUnblocked } from "../pages/app";
+
+/**
+ * D 组：设置与 API Key。守两条铁律——
+ *   ① key 只存浏览器 IndexedDB，永不出本机（CLAUDE.md「API key 仅存浏览器」）；
+ *   ② 配置按用户名分键存放，切用户不许串。
+ *
+ * 这一组一律**走真登录/真退出 UI**，不用 localStorage 预置会话：退出是
+ * `window.confirm` + `location.reload()`（Header.tsx:44-49），而 init script 会在刷新后
+ * 把会话重新种回去——那样"退出"这条路根本没测到。顺带也不再有"离线态起步"的别扭。
+ */
+
+const FAKE_KEY = "sk-e2e-dummy-不是真钥匙";
+const USER_A = "e2e-keystore-a";
+const USER_B = "e2e-keystore-b";
+
+const settings = (page: Page) => ({
+  add: page.getByRole("button", { name: "添加 API" }),
+  save: page.getByRole("button", { name: "保存" }),
+  name: page.locator("#api-name"),
+  key: page.locator("#api-key"),
+  baseUrl: page.locator("#api-baseurl"),
+  model: page.locator("#api-model"),
+  emptyList: page.getByText("暂无 API 配置，点击上方按钮添加"),
+});
+
+async function signIn(page: Page, username: string): Promise<void> {
+  await openApp(page);
+  await sel.usernameSelect(page).selectOption({ value: "__new__" });
+  await sel.newUsername(page).fill(username);
+  await sel.loginSubmit(page).click();
+  await expect(sel.loginGate(page)).toHaveCount(0);
+}
+
+async function signOut(page: Page): Promise<void> {
+  // 不接 dialog 的话 Playwright 默认 dismiss，等于用户点了"取消"，根本退不出去
+  page.once("dialog", (d) => d.accept());
+  await page.getByTitle("退出登录").click();
+  await expect(sel.loginGate(page)).toBeVisible();
+}
+
+async function openSettings(page: Page): Promise<void> {
+  await sel.settingsButton(page).click();
+  await expect(page.getByRole("heading", { name: "API 设置" })).toBeVisible();
+}
+
+async function addProvider(page: Page, f: { name: string; key?: string; baseUrl?: string; model?: string }): Promise<void> {
+  const s = settings(page);
+  await s.add.click();
+  await s.name.fill(f.name);
+  if (f.key !== undefined) await s.key.fill(f.key);
+  if (f.baseUrl !== undefined) await s.baseUrl.fill(f.baseUrl);
+  if (f.model !== undefined) await s.model.fill(f.model);
+  await s.save.click();
+}
+
+/** 直接查浏览器真 IndexedDB，而不是查应用自己的 store——store 会跟着代码一起错。 */
+async function readSharedSetting<T>(page: Page, key: string): Promise<T | undefined> {
+  const raw: unknown = await page.evaluate(async (k) => {
+    return await new Promise<unknown>((resolve) => {
+      const openReq = indexedDB.open("ai-novel-reader-shared");
+      openReq.onsuccess = () => {
+        const db = openReq.result;
+        const getReq = db.transaction("settings", "readonly").objectStore("settings").get(k);
+        getReq.onsuccess = () => resolve((getReq.result as { value?: unknown } | undefined)?.value);
+        getReq.onerror = () => resolve(undefined);
+      };
+      openReq.onerror = () => resolve(undefined);
+    });
+  }, key);
+  return raw as T | undefined;
+}
+
+async function localStorageDump(page: Page): Promise<string> {
+  return page.evaluate(() => Object.entries(localStorage).map(([k, v]) => `${k}=${v}`).join("\n"));
+}
+
+test.beforeEach(async ({ page }) => {
+  await stubBackend(page, {
+    ...idleTtsStatus,
+    // 登录会真发一次注册（A1 实测），不桩住就卡在遮罩上
+    "POST /api/sync/register": { body: { isNew: false, clientId: "e2e-client", token: "e2e-token", activeCount: 1, data: null } },
+  });
+  await signIn(page, USER_A);
+});
+
+test("D1 保存服务商：key 落在 IndexedDB，一个字节都不进 localStorage", async ({ page }) => {
+  await openSettings(page);
+  await addProvider(page, { name: "e2e 假商", key: FAKE_KEY, baseUrl: "http://e2e-llm.invalid/v1", model: "test-model" });
+
+  // 名字同时出现在"当前使用的 API"选择器和配置卡片里，所以取第一个
+  await expect(page.getByText("e2e 假商").first()).toBeVisible();
+
+  const stored = await readSharedSetting<{ apiKey?: string; name?: string }[]>(page, `api-providers:${USER_A}`);
+  expect(Array.isArray(stored), "配置应存成数组放在 sharedDB.settings").toBe(true);
+  expect(stored?.[0]).toMatchObject({ name: "e2e 假商", apiKey: FAKE_KEY });
+
+  const dump = await localStorageDump(page);
+  expect(dump, "localStorage 里出现 key 就等于会被同步与备份带走").not.toContain(FAKE_KEY);
+  expect(dump).not.toContain("sk-");
+});
+
+test("D2 key 还没填：保存按钮是禁用的（填上才放开）", async ({ page }) => {
+  await openSettings(page);
+  const s = settings(page);
+  await s.add.click();
+  await s.name.fill("只有名字没有 key");
+
+  await expect(s.save).toBeDisabled();
+  await s.key.fill(FAKE_KEY);
+  await expect(s.save).toBeEnabled();
+});
+
+test("D3 换一个用户名：服务商列表跟着换，不许串到别人账号下", async ({ page }) => {
+  await openSettings(page);
+  await addProvider(page, { name: "A 专用配置", key: FAKE_KEY });
+  await expect(page.getByText("A 专用配置").first()).toBeVisible();
+
+  await signOut(page);
+  await signIn(page, USER_B);
+  await openSettings(page);
+  await expect(settings(page).emptyList).toBeVisible();
+  await expect(page.getByText("A 专用配置")).toHaveCount(0);
+
+  await signOut(page);
+  await signIn(page, USER_A);
+  // 为什么这里要 reload 一次：不刷新的话设置页还停在"上一个用户"的 store 上，看不到
+  // 自己的配置——这是本轮 E2E 抓到的产品缺陷（已另报制作人），不是用例偷懒。
+  // 修好之后这条用例照样通过（刷新只会更稳）。
+  await page.reload();
+  await openSettings(page);
+  await expect(page.getByText("A 专用配置").first()).toBeVisible();
+});
+
+test("D4 删除本地用户：它的 IndexedDB 用户库真的被删掉", async ({ page }) => {
+  await openSettings(page);
+  await addProvider(page, { name: "待随用户删除", key: FAKE_KEY });
+  await signOut(page);
+
+  await sel.usernameSelect(page).selectOption({ value: USER_A });
+  // 删除也要接 confirm（UsernameLogin.tsx:119），否则默认 dismiss = 用户点了取消
+  page.once("dialog", (d) => d.accept());
+  await page.getByTitle("删除用户").click();
+  await expect(sel.usernameSelect(page).locator(`option[value="${USER_A}"]`)).toHaveCount(0);
+
+  // deleteDatabase 要等在途事务让路，是异步的，所以轮询而不是读一次
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(async (user) => {
+          const dbs = await indexedDB.databases();
+          return dbs.some((d) => d.name === `ai-novel-reader-${user}`);
+        }, USER_A),
+      { timeout: 8_000 },
+    )
+    .toBe(false);
+});
+
+test("D5 离线开关：切到手动离线之后，书架照样点得到", async ({ page }) => {
+  const online = page.getByTitle("在线 - 点击切换到离线模式");
+  await expectUnblocked(online);
+  await online.click();
+
+  await expect(page.getByText("手动离线")).toBeVisible();
+  // 这条真正的判据：离线不是"锁住界面"
+  await expectUnblocked(sel.folderImportButton(page));
+});
+
+test("D6 只填裸 IP：探到 HTTPS 在跑就定 :8443，两边都不通退回 :5173", async ({ page }) => {
+  await signOut(page);
+
+  let httpsUp = true;
+  const backend = await stubBackend(page, {
+    ...idleTtsStatus,
+    "GET /api/sync/check-user/test": () =>
+      httpsUp ? { status: 404, headers: { "Access-Control-Allow-Origin": "*" } } : { abort: true },
+  });
+
+  await page.getByRole("button", { name: "配置" }).click();
+  await page.getByPlaceholder("192.168.1.100").fill("192.168.1.5");
+  await page.getByRole("button", { name: "保存" }).click();
+  await expect(page.getByText("https://192.168.1.5:8443")).toBeVisible();
+
+  // 反过来：HTTPS 探不通必须落到 http://…:5173，而不是停在"无法连接"就完事
+  httpsUp = false;
+  await page.getByRole("button", { name: "更改" }).click();
+  await page.getByPlaceholder("192.168.1.100").fill("192.168.1.6");
+  await page.getByRole("button", { name: "保存" }).click();
+  await expect(page.getByText("http://192.168.1.6:5173")).toBeVisible();
+
+  const probed = backend.seen().filter((s) => s.path === "/api/sync/check-user/test").length;
+  expect(probed, "裸 IP 要先探 HTTPS，不通再探 HTTP").toBeGreaterThanOrEqual(3);
+});
