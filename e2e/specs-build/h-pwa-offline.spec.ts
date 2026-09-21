@@ -17,8 +17,21 @@ import { chapterSection, importFiles, miniNovel, openBook, shelfCard, txtFile } 
 
 const USER = "h-pwa-user";
 
-test.beforeEach(async ({ page }) => {
+// 这一组只能串行跑：H3 的「换一版 SW」和 H5 的「SW 装得慢」都是**服务器进程级**的开关
+// （SW 脚本的抓取不受页面级拦截管辖，开关只能做在服务器上，见 setServedSwRev 那段）。
+// 并跑时实测过：H5 把 sw.js 拖慢 6 秒的那十几秒里，H3/H4 的上下文一起被拖进去 →
+// 三条同红，红的却不是它们各自的判据。串行 5 条约 35 秒，换得到这份干净。
+test.describe.configure({ mode: "serial" });
+
+test.beforeEach(async ({ page, baseURL }) => {
   test.setTimeout(120_000);
+  // 台架自证：`reuseExistingServer` 复用的是那台进程**启动时**做过的 freshness 检查，
+  // 之后改了源码它不会再建（实测踩过：变异改完照跑，五条全绿，量的其实是旧 dist）。
+  // 所以每条用例开跑前先问一句产物新不新，旧就直接红，不出假绿。
+  const stale = await (await fetch(new URL("__e2e-dist-stale", baseURL ?? "").href)).text();
+  if (stale !== "fresh") {
+    throw new Error(`dist/ 比源码旧（${stale}）：先 npm run build，或把手工挂着的 e2e/serve-dist.mjs 停掉再跑`);
+  }
   await stubBackend(page, idleTtsStatus);
   await seedSession(page, { username: USER });
   await openApp(page);
@@ -99,9 +112,18 @@ function swProbe(page: Page): () => Promise<string> {
  * undefined）。SW 脚本的抓取不归页面级拦截管，所以开关只能做在服务器上。
  */
 async function setServedSwRev(rev: string): Promise<void> {
+  await switchServer("rev", rev);
+}
+
+/** 让 `sw.js` 晚 N 毫秒到手（"" = 不拖）：模拟慢手机上 SW 装得慢。 */
+async function setServedSwDelay(ms: string): Promise<void> {
+  await switchServer("delay", ms);
+}
+
+async function switchServer(which: "rev" | "delay", value: string): Promise<void> {
   const base = test.info().project.use.baseURL ?? "";
-  const res = await fetch(new URL("__e2e-sw-rev", base).href, { method: "POST", body: rev });
-  if (!res.ok) throw new Error(`设置 SW 版本号失败: ${res.status}`);
+  const res = await fetch(new URL(`__e2e-sw-${which}`, base).href, { method: "POST", body: value });
+  if (!res.ok) throw new Error(`设置 SW ${which} 失败: ${res.status}`);
 }
 
 test("H1 构建产物首屏：SW 注册并接管，跨源隔离靠 SW 注入，自刷不超过 3 次", async ({ page }) => {
@@ -213,4 +235,35 @@ test("H4 TTS worker 不进 precache：产物里的 sherpa-tts 走网络，别的
 
   const status = await page.evaluate(async () => (await fetch("sherpa-tts/sherpa-onnx-tts.worker.js")).status);
   expect(status, "worker 文件本身得还在产物里：它不该被 precache，但要能走网络拿到").toBe(200);
+});
+
+test("H5 SW 装得慢也只做一次刷新：刷新预算不许在'接管之前'就烧掉", async ({ browser }) => {
+  // 产品的形状是：`ensureCrossOriginIsolated()` 挂在 `serviceWorker.ready` 之后
+  // （`main.tsx:51-56`），所以那 3 次预算是从"SW 就绪"才开始烧的——实测把 sw.js
+  // 拖慢 6 秒，仍然只刷 1 次、8.1 秒就隔离到位。
+  //
+  // 这条判据钉的是那个**先后关系**：谁要是把刷新挪到开机就发（脱离 ready），慢接管
+  // 就会把 3 次预算烧光，然后永久停在非隔离态——浏览器朗读起不动模型，症状像 TTS 坏。
+  // 实测那一刀（DOMContentLoaded 里也调一次）：H5 红在"再也拿不到隔离"，H3/H4 跟着红
+  // （它们也等隔离），H1 反倒还绿——它只判"≤3 次"，预算被烧光这件事它看不见。
+  // 所以"刷新只能花在等接管之后"这一半，只有 H5 钉得住。
+  const base = test.info().project.use.baseURL ?? "";
+  await setServedSwDelay("6000");
+  try {
+    // 每次导航都要重新过这条桩：刷新会把上一次装的丢掉
+    const context = await browser.newContext({ baseURL: base });
+    const page = await context.newPage();
+    await stubBackend(page, idleTtsStatus);
+    await seedSession(page, { username: USER });
+    await page.goto(base);
+
+    await expect
+      .poll(swState(page), { timeout: 45_000, message: "SW 装得慢就再也拿不到隔离" })
+      .toEqual({ ctrl: true, coi: true, reloads: expect.any(Number) });
+    const { reloads } = await swState(page)();
+    expect(reloads, `接管本来就是一次性的，刷了 ${reloads} 次说明刷新没等接管`).toBeLessThanOrEqual(1);
+    await context.close();
+  } finally {
+    await setServedSwDelay("");
+  }
 });

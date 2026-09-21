@@ -103,28 +103,52 @@ const REV_PATH = `${BASE}__e2e-sw-rev`;
 const revMarker = (rev) =>
   `\nself.addEventListener("fetch",(e)=>{if(e.request.url.endsWith("/__e2e_sw_rev"))e.respondWith(new Response(${JSON.stringify(rev)},{headers:{"Content-Type":"text/plain"}}))});\n`;
 
-createServer((req, res) => {
-  const url = new URL(req.url ?? "/", `http://127.0.0.1:${PORT}`);
-  if (url.pathname === REV_PATH) {
-    // 只绑在 127.0.0.1 上，且这个路径不是应用会请求的，不存在"线上多一个后门"
-    if (req.method === "POST") {
-      let body = "";
-      req.on("data", (c) => { body += c; });
-      req.on("end", () => {
-        const value = body.trim();
-        swRev = value === "" ? null : (/^[\w-]{1,32}$/.test(value) ? value : null);
-        if (body.trim() !== "" && swRev === null) {
-          res.writeHead(400, { "Content-Type": "text/plain" });
-          res.end("bad rev");
-          return;
-        }
-        res.writeHead(204);
-        res.end();
-      });
+/**
+ * H5 的另一只开关：让 `sw.js` 这一份响应晚 N 毫秒到手，等于"SW 装得慢"。
+ * 用它去量产品的兜底到底够不够用（慢手机、慢盘、弱网），默认 0 = 不拖。
+ */
+let swDelayMs = 0;
+const DELAY_PATH = `${BASE}__e2e-sw-delay`;
+/** 只回一个词：产物比源码旧 = `stale`。用例用它自证没在跑旧构建。 */
+const STALE_PATH = `${BASE}__e2e-dist-stale`;
+
+/** 两条开关都只在 127.0.0.1 上、路径都不是应用会请求的，不存在"线上多一个后门"。 */
+function handleSwitch(req, res, current, apply) {
+  if (req.method !== "POST") {
+    res.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
+    res.end(String(current()));
+    return;
+  }
+  let body = "";
+  req.on("data", (c) => { body += c; });
+  req.on("end", () => {
+    const value = body.trim();
+    if (value !== "" && !/^[\w-]{1,32}$/.test(value)) {
+      res.writeHead(400, { "Content-Type": "text/plain" });
+      res.end("bad value");
       return;
     }
+    apply(value);
+    res.writeHead(204);
+    res.end();
+  });
+}
+
+createServer((req, res) => {
+  const url = new URL(req.url ?? "/", `http://127.0.0.1:${PORT}`);
+  if (url.pathname === STALE_PATH) {
+    // 让用例自己查证产物新不新：`reuseExistingServer` 复用的是**启动时**做过的检查，
+    // 之后改了源码它不会再建（实测踩过：变异改完照跑，5 条全绿，因为跑的还是旧 dist）。
     res.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
-    res.end(swRev ?? "");
+    res.end(sourcesNewerThanDist() ? "stale" : "fresh");
+    return;
+  }
+  if (url.pathname === REV_PATH) {
+    handleSwitch(req, res, () => swRev ?? "", (v) => { swRev = v === "" ? null : v; });
+    return;
+  }
+  if (url.pathname === DELAY_PATH) {
+    handleSwitch(req, res, () => swDelayMs, (v) => { swDelayMs = v === "" ? 0 : Math.min(30_000, Number(v) || 0); });
     return;
   }
   if (url.pathname === "/" || url.pathname === "") {
@@ -154,15 +178,19 @@ createServer((req, res) => {
   // 一律用 Buffer：Content-Length 要的是字节数，字符串的 length 是字符数
   const raw = readFileSync(file);
   const body = rel === "sw.js" && swRev ? Buffer.from(raw.toString("utf8") + revMarker(swRev), "utf8") : raw;
-  // 没有 COOP/COEP：这两项在真线上只能由 SW 注入，判据要测的就是注入本身
-  res.writeHead(200, {
-    "Content-Type": MIME[path.extname(file)] ?? "application/octet-stream",
-    "Content-Length": body.length,
-    "Cache-Control": "no-store",
-    // 页面带 COEP 时，未被 SW 缓存的子资源需要 CORP 才允许加载
-    "Cross-Origin-Resource-Policy": "same-origin",
-  });
-  res.end(body);
+  const send = () => {
+    // 没有 COOP/COEP：这两项在真线上只能由 SW 注入，判据要测的就是注入本身
+    res.writeHead(200, {
+      "Content-Type": MIME[path.extname(file)] ?? "application/octet-stream",
+      "Content-Length": body.length,
+      "Cache-Control": "no-store",
+      // 页面带 COEP 时，未被 SW 缓存的子资源需要 CORP 才允许加载
+      "Cross-Origin-Resource-Policy": "same-origin",
+    });
+    res.end(body);
+  };
+  if (rel === "sw.js" && swDelayMs > 0) setTimeout(send, swDelayMs);
+  else send();
 }).listen(PORT, "127.0.0.1", () => {
   console.log(`[serve-dist] http://127.0.0.1:${PORT}${BASE}`);
 });
