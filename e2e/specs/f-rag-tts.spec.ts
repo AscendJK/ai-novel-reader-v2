@@ -351,9 +351,12 @@ test("F5 服务器拒了这次合成：拒的那句原话必须到用户眼前�
   // "正在预生成 0/2 段"整 60 秒（无进展兜底），60.3s 才转成"朗读出错"，
   // 自动重试 3 次跑完、Toast 带着原话在 66.3s 才出现，5 秒后自己收掉。
   // 现在给 20 秒：够跑完重试链（3 次 × 2 秒）的余量，而 60 秒那条老路必定超。
-  // 原因目前只活在那只 5 秒 Toast 里；播放栏自己只印"朗读出错"四个字
-  // （`AudioPlayer.tsx:197` 的 span 不带原因）——这是现状，先由 Toast 这一路钉住。
-  await expect(page.getByText("pip install sherpa-onnx").first()).toBeVisible({ timeout: 20_000 });
+  const reasonHere = page.getByText(/pip install sherpa-onnx/).first();
+  await expect(reasonHere).toBeVisible({ timeout: 20_000 });
+  // 但"出现过"不算数：Toast 5 秒就自己收（`toast-store.ts:34-37`），用户回头只看得到
+  // 播放栏那四个字。等过 Toast 的寿命再判一次，还在的只能是常驻在栏子里的那一处。
+  await page.waitForTimeout(6_500);
+  await expect(reasonHere).toBeVisible();
   // 反向判据：出错之后不能变成死角——播放栏还在，且带着"重试"这个出口
   await expect(page.getByTitle("重试", { exact: true })).toBeVisible();
   // 2 段预生成 + 现场生成 1 次 + 自动重试 3 次

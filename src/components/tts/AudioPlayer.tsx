@@ -194,7 +194,10 @@ export function AudioPlayer({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             {error ? (
-              <span className="text-[11px] sm:text-xs text-destructive truncate">朗读出错{retryCount > 0 ? `（已重试${retryCount}次）` : ""}</span>
+              // 原因必须常驻在栏子里：Toast 5 秒就自己收，用户回头只看得到"朗读出错"四个字，
+              // 而服务器给的那句（比如"未装 sherpa-onnx，pip install …"）恰恰是他下一步要用的。
+              // 窄栏放不下整句，`truncate` 截断，整句挂在 `title` 上。
+              <span className="text-[11px] sm:text-xs text-destructive truncate" title={error}>朗读出错{retryCount > 0 ? `（已重试${retryCount}次）` : ""}：{error}</span>
             ) : (
               <>
                 <span className="text-[11px] sm:text-xs text-muted-foreground truncate">
