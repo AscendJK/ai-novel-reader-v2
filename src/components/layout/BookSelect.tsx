@@ -523,6 +523,9 @@ export function BookSelect() {
         console.warn("[BookSelect] leave novel failed，已加入补发队列:", err);
       });
     await deleteNovel(novelId);
+    // 只改本页 state 的话，另一个标签页的卡片会一直挂着，点进去读的是已经不存在的记录。
+    // 导入那头是 `useFileParser.ts` 发的，删除这头得自己喊，两边才对称。
+    broadcast.send("data-changed", { kind: "novel-deleted", id: novelId });
     useNovelStore.getState().removeNovel(novelId);
     setSavedNovels((prev) => prev.filter((n) => n.id !== novelId));
     setServerNovels((prev) => prev.map((n) => n.id === novelId ? { ...n, joined: false } : n));

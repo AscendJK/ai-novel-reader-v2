@@ -322,8 +322,7 @@ test("E8 两个标签页同一个用户：A 页导入的书必须出现在 B 页
   // （`useFileParser.ts` 在 `addNovel` 之后），收端在 `BookSelect.tsx` 的 `onDataChanged`
   // 里重读一次——书架的数据源是 BookSelect 自己的 state，不是 novel-store 那份列表，
   // 所以第一版把重读接在 store 上时这条照样红（接错地方等于没接）。
-  // 重读失败时保留原列表（不会把书架刷成空）；但"B 页删一本书、A 页的卡片仍留着"
-  // 这个反向缺口还在，那条要另立判据，别拿这条当全解决。
+  // 重读失败时保留原列表（不会把书架刷成空）。反向那一半（删除）由 E9 钉。
   // 变异：摘掉 send → 红；摘掉 onDataChanged 订阅 → 红。
   await signInOnline(page, baseTable());
 
@@ -342,4 +341,37 @@ test("E8 两个标签页同一个用户：A 页导入的书必须出现在 B 页
   // 要么 B 从服务器把这本 pull 回来合上。20 秒是给"广播 → 重扫"的余量：
   // A 导入完就会 push 并广播 sync-complete，那一跳本来该是秒级。
   await expect(shelfCard(second, "A 新装的书")).toBeVisible({ timeout: 20_000 });
+});
+
+test("E9 两个标签页同一个用户：A 页删掉的书必须从 B 页书架上自己消失，并且真的通知了服务器", async ({ page, context }) => {
+  // E8 的对称那一半：导入那头有广播（`useFileParser.ts:155` 在 `addNovel` 之后发），
+  // 删除这头（`BookSelect.tsx` 的 `handleDelete`）只改本页 state，于是 B 页卡片还挂着，
+  // 点进去读的是已经被删掉的库记录。
+  //
+  // 这条顺带是"删除"在浏览器层的唯一判据，所以把反复活那道闸也钉住：删除必须把
+  // `/leave` 送到服务器（`src/sync/pending-leave.ts` 那本账），否则服务器一直认为还
+  // joined，下次同步把这本书连云端摘要/笔记一起拉回来——症状是"删了又自己长回来"。
+  const backend = await signInOnline(page, baseTable({ "POST /api/novels/**": { body: { ok: true } } }));
+
+  const second = await context.newPage();
+  await stubBackend(second, baseTable());
+  await openApp(second);
+  await expect(sel.loginGate(second)).toHaveCount(0, { timeout: 20_000 });
+
+  await importFiles(page, [txtFile("会被删掉的书.txt", miniNovel())]);
+  await expect(shelfCard(page, "会被删掉的书")).toBeVisible({ timeout: 20_000 });
+  await expect(shelfCard(second, "会被删掉的书")).toBeVisible({ timeout: 20_000 });
+
+  const leaves = () => backend.seen().filter((s) => s.method === "POST" && s.path.endsWith("/leave")).length;
+  page.once("dialog", (d) => void d.accept());
+  await page.getByTitle("删除此书", { exact: true }).click();
+
+  // leave 是点下去之后 fire-and-forget 发的，所以等它而不是当场数
+  await expect.poll(leaves, { timeout: 10_000, message: "删除之后没向服务器发 leave，这本书下次同步会复活" }).toBe(1);
+  await expect(shelfCard(page, "会被删掉的书")).toHaveCount(0);
+
+  await expect(shelfCard(second, "会被删掉的书")).toHaveCount(0, { timeout: 20_000 });
+  // 再钉一次：`toHaveCount(0)` 看到一次成立就通过，抓不住"消失之后又长回来"（E8 踩过）
+  await second.waitForTimeout(1_500);
+  await expect(shelfCard(second, "会被删掉的书")).toHaveCount(0);
 });
