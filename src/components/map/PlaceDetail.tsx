@@ -52,8 +52,12 @@ export function PlaceDetail({ place, layers, parentPlace, childPlaces, forces, o
   const layerName = layers.find(l => l.level === place.level)?.name || `层级 ${place.level}`;
 
   return (
-    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50">
-      <Card className="w-full max-w-md mx-4">
+    // 遮罩这一层必须自己能滚：原来是 `flex items-center justify-center`，卡片比视口高时
+    // （模型给一段长描述就会）带关闭按钮的顶栏被顶出屏幕上沿，而这一层没有滚动条——
+    // 手机上就是一副关不掉的弹窗。`my-auto` 在空间够的时候居中，不够时收成 0，
+    // 于是长内容从顶部开始排，配 `overflow-y-auto` 就能滚到关闭按钮。
+    <div className="fixed inset-0 z-[10000] flex overflow-y-auto bg-black/50 p-4">
+      <Card className="w-full max-w-md mx-auto my-auto shrink-0" data-testid="place-detail">
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">

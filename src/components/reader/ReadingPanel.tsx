@@ -42,6 +42,9 @@ export function ReadingPanel() {
     setMobileAiOpen(true);
   }, []);
 
+  // 抽屉里点定章节就把自己收掉：稳定引用，`ChapterNav` 是 memo 的，桌面那份不传这个 prop
+  const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
+
   return (
     <div className="flex h-full relative">
       <div className="hidden md:flex shrink-0" data-sidebar="chapter-nav">
@@ -131,20 +134,20 @@ export function ReadingPanel() {
       {mobileNavOpen && (
         <>
           <div className="md:hidden fixed inset-0 bg-black/40 z-40" onClick={() => setMobileNavOpen(false)} />
-          <div className="md:hidden fixed top-0 left-0 h-dvh w-[min(280px,80vw)] bg-card z-50 shadow-xl animate-in slide-in-from-left flex flex-col">
+          <div className="md:hidden fixed top-0 left-0 h-dvh w-[min(280px,80vw)] bg-card z-50 shadow-xl animate-in slide-in-from-left flex flex-col" data-mobile-nav-drawer>
             <div className="flex items-center justify-between p-3 border-b shrink-0">
               <span className="font-semibold text-sm">目录</span>
               <button onClick={() => setMobileNavOpen(false)} aria-label="关闭目录" className="p-1 rounded hover:bg-accent"><X className="h-4 w-4" /></button>
             </div>
             <div className="flex-1 min-h-0">
-              <ChapterNav scrollControlRef={scrollControlRef} />
+              <ChapterNav scrollControlRef={scrollControlRef} onPicked={closeMobileNav} />
             </div>
           </div>
         </>
       )}
 
       {/* Mobile: AI panel (fullscreen) — kept mounted for running tasks */}
-      <div className="md:hidden fixed top-0 left-0 right-0 h-dvh z-50 bg-card flex flex-col" style={{ display: mobileAiOpen ? undefined : "none" }}>
+      <div className="md:hidden fixed top-0 left-0 right-0 h-dvh z-50 bg-card flex flex-col" data-mobile-ai-panel style={{ display: mobileAiOpen ? undefined : "none" }}>
           <div className="flex items-center justify-between p-3 border-b shrink-0">
             <span className="font-semibold text-sm">AI 分析</span>
             <button onClick={() => setMobileAiOpen(false)} aria-label="关闭 AI 分析" className="p-1 rounded hover:bg-accent"><X className="h-4 w-4" /></button>

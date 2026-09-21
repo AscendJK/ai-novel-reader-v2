@@ -743,6 +743,7 @@ export class TTSManager {
   private generateWatermark = 0;                   // 已提交生成的最高 index+1（水位推进）
   private preparing = false;                       // 预生成阶段（开播前）
   private prepareReady = 0;                        // 预生成已完成段数
+  private prepareFailed = 0;                       // 预生成已失败的段数（等它们不会等来进展）
   private skipPrepareRequested = false;            // 用户点"立即播放"：提前结束预生成
   // 预生成在途任务：chunk index → 提交它的那一朗读代次。现场生成遇到同段在途时
   // 等它完成而非重复提交。带代次是必须的——旧一轮的 finally 若无条件删标记，
@@ -854,6 +855,10 @@ export class TTSManager {
           console.log(`[TTS] ⏩ 缓冲 +1（index=${idx + 1}, 水位=${this.buffered.length}）`);
         } catch (e) {
           if (!this.stopped && this.generationId === genId) {
+            // 记一笔"这段已经死了"：预生成的等待循环只看 `prepareReady` 的话，服务器
+            // 一口回绝（503/未装 sherpa-onnx）时 0/K 段会一直干等到 60 秒无进展兜底才
+            // 开始播放——真正的原因要在那一分钟之后才露头。
+            this.prepareFailed++;
             console.warn(`[TTS] 预生成 chunk ${idx + 1} 失败（后续播放时会重试）:`, e instanceof Error ? e.message : e);
           }
         } finally {
@@ -882,15 +887,16 @@ export class TTSManager {
     const genId = this.generationId;
     this.preparing = true;
     this.prepareReady = 0;
+    this.prepareFailed = 0;
     this.skipPrepareRequested = false;
     const total = this.prepareTotal();
     this.callbacks.onPrepareProgress?.(0, total);
     this.pumpPrefetch(); // 并行提交前 K 段生成（worker 池自动并行）
-    // 等待：全部完成 或 用户立即播放（至少 1 段就绪）或 被停止
-    // 兜底：60s 无新进展（全部失败/卡死）则用已就绪的段开始播放，缺失段播放时现场生成
+    // 等待：全部完成（失败也算"有了结果"）或用户立即播放（至少 1 段就绪）或被停止
+    // 兜底：60s 无新进展（真卡死）则用已就绪的段开始播放，缺失段播放时现场生成
     let lastReady = this.prepareReady;
     let lastProgressAt = Date.now();
-    while (this.preparing && this.prepareReady < total) {
+    while (this.preparing && this.prepareReady + this.prepareFailed < total) {
       if (this.stopped || this.generationId !== genId) { this.preparing = false; return; }
       if (this.skipPrepareRequested && this.prepareReady >= 1) { this.preparing = false; break; }
       if (this.prepareReady > lastReady) { lastReady = this.prepareReady; lastProgressAt = Date.now(); }
@@ -901,8 +907,12 @@ export class TTSManager {
       await new Promise(r => setTimeout(r, 100));
     }
     this.preparing = false;
-    this.callbacks.onPrepareProgress?.(this.prepareReady, total);
+    // 这一句必须在 `onPrepareProgress` 之前：那次回调会把 UI 拨回"生成中"
+    // （`useAudioPlayer.ts:265-268`），而在预生成阶段点"停止"时代次已经变了、
+    // 这一代的朗读不会再推进 UI——先报进度再检查停止，播放栏就被重新点亮成
+    // "生成中"并永久挂在那里。停止之后 F6 那条判据要的是"栏子收了就不再回来"。
     if (this.stopped || this.generationId !== genId) return;
+    this.callbacks.onPrepareProgress?.(this.prepareReady, total);
     console.log(`[TTS] ▶ 预生成完成：${this.prepareReady}/${total} 段就绪，开始播放（缓冲 ${this.buffered.length} 段）`);
   }
 
@@ -942,6 +952,7 @@ export class TTSManager {
     this.generateWatermark = 0;
     this.preparing = false;
     this.prepareReady = 0;
+    this.prepareFailed = 0;
     this.skipPrepareRequested = false;
     // 唤醒全部等待者：调用方会因 stopped/代次变化退出（安全），并清空等待表防泄漏
     for (const waiters of this.prefetchWaiters.values()) for (const w of waiters) w.resolve();

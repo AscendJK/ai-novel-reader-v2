@@ -13,6 +13,9 @@ import { ragLog } from "@/lib/logger";
 /** API 错误响应格式 */
 interface ApiErrorResponse {
   error?: string;
+  /** 白名单拒绝时服务端会带回被拒的那只引擎与可选清单 */
+  engine?: string;
+  allowed?: unknown;
 }
 import { useRAGStore } from "@/stores/rag-store";
 
@@ -92,9 +95,17 @@ async function triggerBuild(novelId: string, engine: string): Promise<BuildTrigg
 
   if (!resp.ok) {
     const err: ApiErrorResponse = await resp.json().catch(() => ({}));
+    const allowed = (Array.isArray(err.allowed) ? err.allowed : []).filter((e) => typeof e === "string");
     return {
       status: "error",
-      error: err.error || `构建请求失败 (${resp.status})`,
+      // 服务端拒掉这只引擎时（`routes/rag.js:275-277` 回 error + engine + allowed）必须把
+      // "是哪只、能换哪几只"一起显示：这条错误最常见的来源就是两侧白名单不同步，只报
+      // "不支持的嵌入引擎"等于让用户自己猜该换成谁。
+      error: err.error
+        ? allowed.length
+          ? `${err.error}：${err.engine ?? engine}。可选：${allowed.join("、")}`
+          : err.error
+        : `构建请求失败 (${resp.status})`,
     };
   }
 

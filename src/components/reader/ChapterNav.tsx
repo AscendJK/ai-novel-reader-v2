@@ -11,9 +11,11 @@ const TOGGLE_W = "w-8";
 interface ChapterNavProps {
   scrollControlRef?: React.RefObject<{ scrollToChapter: (chapterId: string, chapterOffset?: number) => void; suppressIO: (targetChapterId?: string) => () => void } | null>;
   immersive?: boolean;
+  /** 用户在本实例里点定了某一章之后调用（移动端抽屉用它把自己收掉；桌面那份不传） */
+  onPicked?: () => void;
 }
 
-export const ChapterNav = memo(function ChapterNav({ scrollControlRef, immersive }: ChapterNavProps) {
+export const ChapterNav = memo(function ChapterNav({ scrollControlRef, immersive, onPicked }: ChapterNavProps) {
   const currentNovel = useNovelStore((s) => s.currentNovel);
   const selectedChapterId = useNovelStore((s) => s.selectedChapterId);
   const setSelectedChapter = useNovelStore((s) => s.setSelectedChapter);
@@ -47,6 +49,9 @@ export const ChapterNav = memo(function ChapterNav({ scrollControlRef, immersive
     if (chapter && chapter.content) {
       // 已加载：使用 scrollToChapter（抑制 IO 干扰）
       setSelectedChapter(chapterId);
+      // 抽屉那份导航必须在"选定了"这一刻让开：390px 上它宽 min(280px,80vw)，
+      // 不关掉就永远压着正文的 72%，用户还得再摸一次遮罩
+      onPicked?.();
       if (scrollControlRef?.current) {
         const release = scrollControlRef.current.suppressIO(chapterId);
         scrollControlRef.current.scrollToChapter(chapterId);
@@ -65,6 +70,7 @@ export const ChapterNav = memo(function ChapterNav({ scrollControlRef, immersive
         const release = scrollControlRef?.current?.suppressIO(chapterId);
         addChapters(loaded);
         setSelectedChapter(chapterId);
+        onPicked?.();
         if (scrollControlRef?.current) {
           scrollControlRef.current.scrollToChapter(chapterId);
         } else {
@@ -82,7 +88,7 @@ export const ChapterNav = memo(function ChapterNav({ scrollControlRef, immersive
         setLoadingChapter(null);
       }
     }
-  }, [currentNovel, setSelectedChapter, addChapters, scrollControlRef]);
+  }, [currentNovel, setSelectedChapter, addChapters, scrollControlRef, onPicked]);
 
   if (!currentNovel) return null;
 

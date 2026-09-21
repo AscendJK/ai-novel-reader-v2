@@ -9,6 +9,7 @@ import type { Page, Request } from "@playwright/test";
  */
 export type Reply = {
   status?: number;
+  /** JSON 用例给对象；二进制下载（RAG 索引）给 Buffer——原样送出，不再 JSON.stringify */
   body?: unknown;
   headers?: Record<string, string>;
   /** 响应的 content-type。默认 `application/json`；SSE 那类要靠它分流（openai.ts:161） */
@@ -49,9 +50,15 @@ function resolveKey(table: StubTable, method: string, pathname: string): string 
   const anyMethod = `* ${pathname}`;
   if (anyMethod in table) return anyMethod;
   for (const key of Object.keys(table)) {
-    // 只支持 `"/api/xxx/**"` 这一种前缀写法，别再造第二种匹配语法
-    if (!key.startsWith("/") || !key.endsWith("/**")) continue;
-    if (pathname.startsWith(key.slice(0, -3))) return key;
+    // 只支持 `"/api/xxx/**"` 或 `"POST /api/xxx/**"` 这一种前缀写法，别再造第二种匹配语法。
+    // 带方法的那一版是给"同一个前缀下不同动词要走不同剧本"用的（F 组：POST 建库 /
+    // GET 查状态与下载索引都挂在 `/api/rag/**` 下面）。
+    const space = key.indexOf(" ");
+    const methodPart = space < 0 ? "*" : key.slice(0, space);
+    const pathPart = space < 0 ? key : key.slice(space + 1);
+    if (!pathPart.startsWith("/") || !pathPart.endsWith("/**")) continue;
+    if (methodPart !== "*" && methodPart !== method) continue;
+    if (pathname.startsWith(pathPart.slice(0, -3))) return key;
   }
   return undefined;
 }
@@ -96,7 +103,9 @@ export async function stubBackend(page: Page, table: StubTable): Promise<Backend
     await settle(route.fulfill({
       status: reply.status ?? 200,
       contentType: reply.contentType ?? "application/json",
-      body: typeof reply.body === "string" ? reply.body : JSON.stringify(reply.body ?? {}),
+      body: typeof reply.body === "string" || Buffer.isBuffer(reply.body)
+        ? reply.body
+        : JSON.stringify(reply.body ?? {}),
       headers: {
         // dev server 带 `Cross-Origin-Embedder-Policy: require-corp`（vite.config.ts:133-139），
         // 任何跨源的桩响应不给 CORP 就会被浏览器拦下，症状是"桩没生效"。

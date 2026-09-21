@@ -316,3 +316,35 @@ test("E5 同一浏览器换用户：另一个标签页必须真的重绑到新�
   await expect(shelfCard(second, "A 的书")).toHaveCount(0);
   await expect(second.getByTitle(OTHER, { exact: true })).toBeVisible({ timeout: 20_000 });
 });
+
+test("E8 两个标签页同一个用户：A 页导入的书必须出现在 B 页的书架上，B 页不重新加载", async ({ page, context }) => {
+  // 已知不通过（计划 §8.5 ② 那一条，第 4 批把它写成了判据）。
+  //
+  // 现状实测：同一用户的 IndexedDB 是同一份，A 页导入写完就 push 并广播 `sync-complete`，
+  // 而 B 页收到之后只做一件事——`syncClient.pushNow()`（`AppLayout.tsx:170-174`）。
+  // B 页内存里那份 `novels` 是开机时读的一次（`useSyncOrchestration.ts:75`），此后没人再读，
+  // 于是 B 页的书架停在"还没有这本书"，用户得自己刷新。
+  // 修的两条路：收到广播后重扫本地共库；或把服务器 pull 回来的那份合进列表
+  // （`useSyncOrchestration.ts:233` 那条 `addNovel`）。两条都要动 store 的装载入口，
+  // 超出"E2E 判据批次"的范围，所以这条先挂着。
+  //
+  // 用 `fixme` 而不是删掉：判据连同"该怎么做"一起留在这里，修的人把这一行删了就是一条用例。
+  test.fixme();
+  await signInOnline(page, baseTable());
+
+  const second = await context.newPage();
+  await stubBackend(second, baseTable());
+  await openApp(second);
+  // 同一个 context 共享 localStorage，所以 B 页直接就是登录态；它开机时那本书还不存在
+  await expect(sel.loginGate(second)).toHaveCount(0, { timeout: 20_000 });
+  await expect(sel.emptyShelf(second)).toBeVisible();
+
+  await importFiles(page, [txtFile("A 新装的书.txt", miniNovel())]);
+  await expect(shelfCard(page, "A 新装的书")).toBeVisible({ timeout: 20_000 });
+
+  // 判据：用户在另一个标签页里看到的书架必须是真的那份库的书架。两条路都算数——
+  // 要么 B 收到广播后重扫本地共库（同一个用户的 IndexedDB 本来就是同一份），
+  // 要么 B 从服务器把这本 pull 回来合上。20 秒是给"广播 → 重扫"的余量：
+  // A 导入完就会 push 并广播 sync-complete，那一跳本来该是秒级。
+  await expect(shelfCard(second, "A 新装的书")).toBeVisible({ timeout: 20_000 });
+});

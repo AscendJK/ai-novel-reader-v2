@@ -323,10 +323,13 @@ test("B10 连点目录 20 次：每次的当前章都必须落回刚点的那一
     if (corrupt) inWindow.push(`点第${idx + 1}章 → 窗内 +${Math.round(corrupt.t - t0)}ms 当前章=第${corrupt.i + 1}章`);
 
     if (atWindowEnd !== idx) {
-      if (await settlesTo(page, idx, 3_000)) {
-        late.push(`点第${idx + 1}章 → 1.4 秒时=第${atWindowEnd + 1}章，再给 3 秒绕回来了`);
+      // 8 秒不是放水：缺陷的形状是"停在错的那一章不动"（检测已出窗、没有后续事件会
+      // 再来一次），所以永久错的版本给多久都不会自己回来；而满负载下一次懒加载点击
+      // 落地可以超过 3 秒（实测并发下红过一次）。
+      if (await settlesTo(page, idx, 8_000)) {
+        late.push(`点第${idx + 1}章 → 1.4 秒时=第${atWindowEnd + 1}章，后面绕回来了`);
       } else {
-        terminal.push(`点第${idx + 1}章 → 出窗后停在第${atWindowEnd + 1}章，再给 3 秒也没回来`);
+        terminal.push(`点第${idx + 1}章 → 出窗后停在第${atWindowEnd + 1}章，再给 8 秒也没回来`);
       }
     }
     log.push(`${idx + 1}${lazy ? "懒" : "同"}${corrupt ? " 窗内≠" : ""}${atWindowEnd === idx ? "" : " 出窗≠"}`);

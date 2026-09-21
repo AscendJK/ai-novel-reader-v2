@@ -1,6 +1,7 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import { stubBackend, idleTtsStatus, type Backend, type StubTable } from "../fixtures/backend";
 import { chatRequests, PROXY_CHAT_PATH, vendorBaseUrl, vendorTable, VENDOR_CHAT_PATH } from "../fixtures/vendor";
+import { MAP_PLACES, mapFixture } from "../fixtures/map";
 import { openApp, seedSession } from "../pages/app";
 import { addProvider, leaveSettings, openSettings, openSummaryPanel } from "../pages/settings";
 import { panel } from "../pages/panel";
@@ -206,37 +207,6 @@ test("C3 人物关系图谱：几人几条边就显示几，边不许指向不�
     .evaluate((el) => [...el.querySelectorAll("text")].map((t) => t.textContent || ""));
   for (const name of ["令狐冲", "岳不群", "左冷禅"]) expect(drawn).toContain(name);
   expect(backend.count("POST", VENDOR_CHAT_PATH)).toBe(1);
-});
-
-const mapPlace = (id: string, name: string, level: number, parentId: string, x: number, y: number) => ({
-  id, name, level, parentId, x, y, type: "城池", description: `${name}的说明`, importance: 5, affiliation: "",
-});
-
-/**
- * 一个顶级 + 一个二级 + 两个三级。
- *
- * 顶级地点在图上不画圆点（`NovelMapSection.tsx:76` 与 `renderMap` 一致），所以"父级是
- * 顶级地点"的那条连线也不画——数连线时必须按这个口径来，否则判据会对不上：
- * 这份数据画出来的父子虚线是 洛阳→东郡 与 虎牢→东郡 两条。
- */
-const MAP_PLACES = [
-  mapPlace("p1", "中州", 1, "", 500, 500),
-  mapPlace("p2", "东郡", 2, "p1", 700, 400),
-  // 洛阳的 x 故意写成数字字符串：模型常这么输出，`toCoord` 要归一成数字（map-agent.ts:16），
-  // 归一不了就整图判失败——这条形状让 C4 对"坐标必须有限数"那道守卫真的有判别力
-  mapPlace("p3", "洛阳", 3, "p2", "760" as unknown as number, 460),
-  mapPlace("p4", "虎牢", 3, "p2", 780, 560),
-];
-
-const mapFixture = (places: ReturnType<typeof mapPlace>[]) => ({
-  layers: [
-    { level: 1, name: "天下", description: "" },
-    { level: 2, name: "郡", description: "" },
-    { level: 3, name: "城", description: "" },
-  ],
-  places,
-  regions: [],
-  forces: [],
 });
 
 /**
