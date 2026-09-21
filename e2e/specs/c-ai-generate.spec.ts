@@ -157,8 +157,10 @@ test("C9 直连不通自动走代理；厂商 401 与后端 401 各说各的", a
 
   await chat.click();
   await expect(panel.text(page, /认证失败/)).toBeVisible({ timeout: 20_000 });
-  // 厂商自己拒了 key，这时候提"会话失效"就是甩锅给后端（M6 变异：摘掉 openai.ts 里
-  // "认证错误不走代理"那道判断，代理会被再打一次，文案也换成本地会话失效）
+  // 厂商自己拒了 key，这时候提"会话失效"就是甩锅给后端。变异：把 `openai.ts` 的解析挪回
+  // 换腿判断里（`try { return await parseResponse(...) }`）→ 这条红在 162 行：文案变成
+  // "会话已失效"，代理也被多打了一次。**别**照旧注释去删"认证错误不走代理"那道守卫——
+  // 它早就不在那儿了，解析阶段的错现在结构上就进不了换腿分支。
   await expect(panel.text(page, /会话已失效/)).toHaveCount(0);
   expect(proxy, "厂商说 key 不对，再走一遍代理也不会对").toBe(1);
 

@@ -214,23 +214,25 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
         return parseResponse(await doDirect(req));
       }
 
+      // 换腿只解决"这条路走不通"（CORS、断网、挂起），不解决"厂商答了但答得不对"：
+      // 厂商一旦答过，再换代理打一次就是把同一份 token 花两遍（401/429/超限都是这种形状）。
+      // 所以解析放在两段 catch 之外——写成 `try { return parseResponse(...) }` 的话，
+      // async 里 `return` 一个没 await 的 promise 不进 catch，这段分工只是看着像在。
+      let response: Response;
       try {
-        // 先尝试直连
-        return parseResponse(await doDirect(req));
+        response = await doDirect(req);
       } catch (err) {
-        // 如果是取消请求，直接抛出
+        // 用户取消：绝不能再打一次
         if (err instanceof DOMException && err.name === "AbortError") throw err;
-        // 如果是认证错误，直接抛出（代理也无法解决）
-        if (err instanceof APIError && (err.apiCode === "auth" || err.code === "AUTH")) throw err;
-        // 其他错误（包括 CORS、网络错误等）都走代理
         try {
-          return parseResponse(await doProxy(req));
+          response = await doProxy(req);
         } catch (proxyErr) {
           // 代理在解析前就失败：会话失效要如实报（它最贴近真相），其余保留原始错误
           if (proxyErr instanceof APIError && proxyErr.apiCode === "auth") throw proxyErr;
           throw err;
         }
       }
+      return parseResponse(response);
     },
   };
 }

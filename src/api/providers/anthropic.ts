@@ -231,22 +231,23 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
         return parseResponse(await doDirect(req));
       }
 
+      // 与 openai.ts 同一处：换腿只解决"这条路走不通"，厂商答过之后再打一次就是
+      // 把同一份 token 花两遍，所以解析留在两段 catch 之外。
+      let response: Response;
       try {
-        return parseResponse(await doDirect(req));
+        response = await doDirect(req);
       } catch (err) {
-        // 如果是取消请求，直接抛出
+        // 用户取消：绝不能再打一次
         if (err instanceof DOMException && err.name === "AbortError") throw err;
-        // 如果是认证错误，直接抛出（代理也无法解决）
-        if (err instanceof APIError && (err.apiCode === "auth" || err.code === "AUTH")) throw err;
-        // 其他错误（包括 CORS、网络错误等）都走代理
         try {
-          return parseResponse(await doProxy(req));
+          response = await doProxy(req);
         } catch (proxyErr) {
           // 代理在解析前就失败：会话失效要如实报（它最贴近真相），其余保留原始错误
           if (proxyErr instanceof APIError && proxyErr.apiCode === "auth") throw proxyErr;
           throw err;
         }
       }
+      return parseResponse(response);
     },
   };
 }
