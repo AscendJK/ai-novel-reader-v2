@@ -56,13 +56,14 @@ function baseTable(extra: StubTable = {}): StubTable {
  * `/<modelKey>/` 的响应，再写标记。这样 `ensureModelReady` 直接返回 true，用例不必去
  * 真下 26MB 权重——F 组要量的是状态机与界面，不是权重。
  */
-async function openOnline(page: Page, opts: { engine?: string; ttsEngine?: string } = {}): Promise<void> {
-  const { engine = ENGINE, ttsEngine } = opts;
+async function openOnline(page: Page, opts: { engine?: string; ttsEngine?: string; modelCached?: boolean } = {}): Promise<void> {
+  const { engine = ENGINE, ttsEngine, modelCached = true } = opts;
   await page.addInitScript(
-    async ({ username, ragEngine, tts }) => {
+    async ({ username, ragEngine, tts, withModel }) => {
       localStorage.setItem("sync-username", username);
       localStorage.setItem("sync-token", "e2e-token");
       localStorage.setItem("novel-reader-rag-engine", ragEngine);
+      if (!withModel) return;
       localStorage.setItem("novel-reader-downloaded-models", JSON.stringify([ragEngine]));
       // 键名与形状照 `tts-store.ts:108/167-172`：`loadSettings` 逐字段读，缺的一律回默认值，
       // 所以这里只写 engine 一项就够（不写就是默认的 webspeech）
@@ -73,7 +74,7 @@ async function openOnline(page: Page, opts: { engine?: string; ttsEngine?: strin
         new Response("{}", { headers: { "content-length": "2" } }),
       );
     },
-    { username: USER, ragEngine: engine, tts: ttsEngine },
+    { username: USER, ragEngine: engine, tts: ttsEngine, withModel: modelCached },
   );
   await openApp(page);
   // 拿书架自己的锚点判"进来了"：白屏也能让"遮罩不存在"成立（§4.5 第 2 条）
@@ -211,6 +212,41 @@ test("F2 服务端拒掉这只引擎：界面要说清是哪只、可选是哪�
   expect(pathsOf(backend, "GET", "/index"), "失败之后不许去下载索引").toHaveLength(0);
   const builds = pathsOf(backend, "POST", "/build");
   expect(builds.map((r) => r.body), "只该按用户选的那只引擎请求一次").toEqual([`{"engine":"${refused}"}`]);
+});
+
+/**
+ * F7：嵌入模型下不来时点「构建」，界面必须说清"为什么没动"。
+ *
+ * 形状是真后端那一档量出来的（`e2e/specs-real` 的 R-C1）：`/api/rag/model-proxy` 上挂着
+ * `rateLimit(10)`（`rag.js:337`），而浏览器开机就会为预取打它两次，于是几分钟之内多点几
+ * 本书、或者家里几台设备同时开着，用户真点「构建」时那趟取模型会拿到 **429**。
+ * `ensureModelReady` 于是返回 false，而 `BookSelect.tsx:285-288` 的处理是
+ * `console.warn(...) 然后 return` —— 界面上什么都没有：不转圈、不报错、徽章还停在"未构建"，
+ * 按钮还留在焦点上。用户能得到的唯一反馈就是"再点一次，还是没反应"。
+ * 修复口径：把这条失败交给既有的失败分支（`failBuild`），让卡片显示"BGE 失败"和原因。
+ */
+test("F7 模型下不来时点「构建」：界面要给出原因，不许一动不动", async ({ page }) => {
+  test.setTimeout(120_000);
+  const backend = await stubBackend(
+    page,
+    baseTable({
+      // 真后端上就是这只接口先撞上 10 次/分钟的闸门
+      "GET /api/rag/model-proxy/**": { status: 429, body: { error: "请求过于频繁" } },
+      "GET /api/rag/**": ragRouter({ status: () => ({ body: { status: "none" } }) }),
+    }),
+  );
+  // `modelCached: false` 是关键：不种"模型已经下过"的标记，也不往 Cache Storage 里放假响应，
+  // 于是 `ensureModelReady` 真会去打那只 429 的桩
+  await openOnline(page, { modelCached: false });
+  await importOne(page, "下不来模型");
+
+  await page.getByRole("button", { name: "构建", exact: true }).click();
+
+  await expect(page.getByText("BGE 失败")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(/模型/).first()).toBeVisible({ timeout: 10_000 });
+  // 反向：不许悄悄算成功——徽章不能停在中间态，也不许自己"就绪"
+  await expect(page.getByText(/BGE (构建中|就绪|已缓存)/)).toHaveCount(0);
+  expect(backend.count("POST", "/api/rag/tts/prepare"), "这条用例不该碰 TTS 资源").toBe(0);
 });
 
 /** 44 字节头的单声道 PCM WAV：够把"服务器给了音频"这条事实演真，不含任何真实语音。 */

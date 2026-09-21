@@ -277,20 +277,26 @@ export function BookSelect() {
   const handleBuild = useCallback(async (novelId: string) => {
     // Capture the engine at build start so polling stays consistent even if user switches engines
     const buildEngine = engine;
+    // `startBuild` 必须在模型门**之前**：`failBuild` 只改已有条目
+    // （`stores/build-store.ts:126-143` 那句 `if (existing)`），门后面才失败的话
+    // 卡片上连"失败"都不会出现——这正是原来那次"点了没反应"的第二个原因。
+    const buildStore = useBuildStore.getState();
+    buildStore.startBuild(novelId, buildEngine);
 
     try {
       // Ensure engine model is downloaded before building
       const modelKey = resolveModelKey(buildEngine);
       const modelReady = modelKey ? await ensureModelReady(modelKey) : true;
       if (!modelReady) {
-        console.warn("[BookSelect] 模型下载失败，无法构建索引");
-        return;
+        // 必须是"看得见的失败"。原来这里只 console.warn 然后 return：界面一动不动——
+        // 不转圈、不报错、徽章还停在「未构建」，用户唯一的反馈是"再点一次还是没反应"。
+        // 真后端上量到的触发路径：/api/rag/model-proxy 挂着 rateLimit(10)/分钟（rag.js:337），
+        // 而浏览器开机为预取就会打它两次，几台设备同时开着时用户那次取模型会被掐成 429。
+        // 交给下面既有的 catch → failBuild，卡片变成「BGE 失败」并带上原因。
+        throw new Error("嵌入模型没能从服务器下载完成（服务器可能限流或网络中断），稍后再点一次构建");
       }
 
       // 使用新的 build store
-      const buildStore = useBuildStore.getState();
-      buildStore.startBuild(novelId, buildEngine);
-
       await buildAndPollRAGIndex({
         novelId,
         engine: buildEngine,
