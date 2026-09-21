@@ -39,6 +39,9 @@ const LOAD_BATCH = 10;
  */
 export const SUPPRESS_RELEASE_MS = 500;
 
+/** 纠正的死区：小于这个像素数的差不去追，否则亚像素的 scrollTop 会让纠正停不下来。 */
+const SETTLE_EPSILON_PX = 1;
+
 /**
  * 从章节 rect 列表中选出第一个与视口检测区相交的章节。
  * rects 按 DOM 顺序（章节 index 升序）；zoneTop/zoneBottom 为检测区上下界。
@@ -161,38 +164,43 @@ export function useContinuousScroll({
     [novelId, enabled, addChapters]
   );
 
-  // ── 滚动到指定章节（可选章节内偏移量）────────────────────
+  // ── 滚动到指定章节（把章节顶部钉到容器顶部 + 章节内偏移）────────────
+  // 每次跳章作废上一轮的逐帧纠正，否则两次跳章的纠正循环会互相抢 scrollTop
+  const settleTokenRef = useRef(0);
   const scrollToChapter = useCallback(
     (chapterId: string, chapterOffset?: number) => {
       const container = containerRef.current;
       if (!container) return;
 
       const applyScroll = (el: Element) => {
-        if (chapterOffset !== undefined) {
-          // 先滚动到章节附近：scrollIntoView 会触发浏览器渲染目标章节，
-          // 消除 contentVisibility:auto 的估算高度（containIntrinsicSize 500px）误差
-          el.scrollIntoView({ behavior: "instant", block: "start" });
-          // 双 rAF 等待目标章节渲染、布局更新后校正位置，再加章节内偏移
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              // 容器带 scroll-smooth class，程序化 scrollTop 赋值也会走平滑动画，
-              // 校正必须瞬移落地，否则动画期间的高度变化/用户滚动会放大偏差
-              const prevBehavior = container.style.scrollBehavior;
-              container.style.scrollBehavior = "auto";
-              try {
-                const rect = el.getBoundingClientRect();
-                const cRect = container.getBoundingClientRect();
-                // 校正：把章节顶部精确对齐到视口顶部
-                container.scrollTop += rect.top - cRect.top;
-                container.scrollTop += chapterOffset;
-              } finally {
-                container.style.scrollBehavior = prevBehavior;
-              }
-            });
-          });
-        } else {
-          el.scrollIntoView({ behavior: "instant", block: "start" });
-        }
+        // 落点要跟到静默窗结束为止，而不是"跳一次就不管"：章节盒带
+        // `content-visibility:auto` + `contain-intrinsic-size:0 500px`（ChapterContent.tsx:845），
+        // 跳过去的瞬间上方章节还按 500px 估算记账，落到视口附近才塌成真实高度，
+        // 浏览器的 scroll anchoring 又会为"留住眼前内容"反向改 scrollTop——实测
+        // 点第 11 章会停在第 11 章顶部下方 119px 处，检测区里躺着的是第 10 章，
+        // 于是目录高亮和阅读进度都记成第 10 章（E2E B10）。
+        // 代价是这 500ms 里用户自己滚会被拽回去：刚点完目录，这一跳就是意图本身。
+        const want = chapterOffset ?? 0;
+        const token = ++settleTokenRef.current;
+        el.scrollIntoView({ behavior: "instant", block: "start" });
+
+        // 纠正的判据是"目标章节在视口里的位置"，不是"它在文档里的坐标"：后者对滚动天生
+        // 不变，而把落点搞错的正是浏览器改 scrollTop 这件事本身（scroll anchoring 为了
+        // "留住眼前内容"反向拉），拿它当哨兵一帧都不会触发——那样写过，B10 红。
+        // 循环要活到静默窗结束：漂移不是一帧到位的，只纠正头两帧的版本 B10 同样红。
+        const until = performance.now() + SUPPRESS_RELEASE_MS;
+        const settle = () => {
+          // token 变了 = 后来的跳章接管；元素脱挂 = 书已切换
+          if (settleTokenRef.current !== token || !el.isConnected || performance.now() >= until) return;
+          const drift = el.getBoundingClientRect().top - container.getBoundingClientRect().top - want;
+          if (Math.abs(drift) > SETTLE_EPSILON_PX) {
+            // 显式 instant：容器带 .scroll-smooth，而 useAutoRead 也会临时改这只容器的
+            // 内联 scrollBehavior——改内联样式再抄回来会把别人的值当成原值存走。
+            container.scrollTo({ top: container.scrollTop + drift, behavior: "instant" });
+          }
+          requestAnimationFrame(settle);
+        };
+        requestAnimationFrame(settle);
       };
 
       const target = container.querySelector(

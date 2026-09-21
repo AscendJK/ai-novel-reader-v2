@@ -4,11 +4,14 @@ import { seedSession, openApp } from "../pages/app";
 import {
   CHAPTER_TITLES,
   backToShelf,
+  chapterRendered,
   chapterSection,
   epubFile,
   importFiles,
+  longNovel,
   miniNovel,
   navChapter,
+  navEntry,
   openBook,
   shelfCard,
   txtFile,
@@ -198,4 +201,140 @@ test("B9 读到全书最末：最后一章再短也算读到它，停在中间�
   await backToShelf(page);
   await expect(page.getByText("已读至第 3 章")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText("100.00%")).toBeVisible();
+});
+
+/**
+ * 定长伪随机点击序列（不用 Math.random）：同一份种子每次跑出同一串，红的时候能复现，
+ * 也不会某天靠运气躲开缺陷。乘数取小是为了让 `state * A` 不超过 2^53——JS 只有
+ * Number 没有整数溢出，溢出之后序列就不是确定性的了。
+ */
+function clickSequence(count: number, chapters: number, seed = 20260921): number[] {
+  let state = seed % 4294967296;
+  const next = () => {
+    state = (state * 1664525 + 1013904223) % 4294967296;
+    return state / 4294967296;
+  };
+  const picks: number[] = [];
+  let prev = -1;
+  while (picks.length < count) {
+    const i = Math.floor(next() * chapters);
+    if (i !== prev) {
+      picks.push(i);
+      prev = i;
+    }
+  }
+  return picks;
+}
+
+/** 当前章在多久之后落回点的那一章（true = 落回来了，哪怕绕了一圈） */
+async function settlesTo(page: import("@playwright/test").Page, index: number, ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  do {
+    if ((await storedChapterIndex(page)) === index) return true;
+    await page.waitForTimeout(100);
+  } while (Date.now() < deadline);
+  return false;
+}
+
+/** 产品侧的静默窗长度，见 `useContinuousScroll.ts` 的 `SUPPRESS_RELEASE_MS`。 */
+const SUPPRESS_WINDOW_MS = 500;
+
+/** 页内一次采样：t 用页面时钟（performance.now），i 是那一刻 store 里的当前章 */
+interface Sample {
+  t: number;
+  i: number;
+}
+
+/**
+ * 静默窗只能让页面自己量：CDP 一次 evaluate 往返就要几十到几百毫秒，"点完再读一次"
+ * 根本落不进 500ms 窗里——第一版就是这么写的，报出来的"窗内 0 次"是假数。
+ * 这里每 16ms 抄一份 localStorage，点完再一次性取回，按采样自己的时间轴对齐。
+ */
+async function startWindowSampling(page: import("@playwright/test").Page): Promise<void> {
+  await page.evaluate((user: string) => {
+    const w = window as unknown as { __b10?: Sample[]; __b10Timer?: number };
+    w.__b10 = [];
+    clearInterval(w.__b10Timer);
+    w.__b10Timer = window.setInterval(() => {
+      const positions = JSON.parse(localStorage.getItem(`novel-reader-positions:${user}`) || "{}");
+      const values = Object.values(positions) as { chapterIndex: number }[];
+      w.__b10?.push({ t: performance.now(), i: values.length === 1 ? values[0].chapterIndex : -1 });
+    }, 16);
+  }, USER);
+}
+
+async function stopWindowSampling(page: import("@playwright/test").Page): Promise<Sample[]> {
+  return page.evaluate(() => {
+    const w = window as unknown as { __b10?: Sample[]; __b10Timer?: number };
+    clearInterval(w.__b10Timer);
+    const samples = w.__b10 ?? [];
+    w.__b10 = undefined;
+    return samples;
+  });
+}
+
+/**
+ * B10（§8.5 ①）：25 章的书连点 20 次目录，每一次"当前章"都必须落回刚点的那一章。
+ * 真实时钟，不 mock rAF、不 mock 计时；25 章是为了越过 `LOAD_BATCH = 10` 这条懒加载
+ * 分界——三章小样本走不到 `ChapterNav.tsx:58-84` 的异步分支。
+ *
+ * 两条读数分开：
+ * - 判据（终态）：点完之后当前章必须等于点的那一章，红 = 用户看得见"点 A 得 B"。
+ *   实测就是它抓到的：跳章落点被 content-visibility 的估算高度塌成真实高度 + 浏览器
+ *   scroll anchoring 拉走 119px，检测区里躺着上一章。
+ * - 观测（窗内）：静默窗本该让检测闭嘴，`suppressIO` 之后到出窗之前当前章被改写就说明
+ *   窗没生效。这条**只打印不断言**——它现在是 0 次，把它焊成硬判据等于替一次
+ *   还没发生的改动押注；红了再说（§8.5 ① 记的就是这个决定）。
+ */
+test("B10 连点目录 20 次：每次的当前章都必须落回刚点的那一章", async ({ page }) => {
+  test.setTimeout(180_000); // 20 次点击 × 真实静默窗，量出来的就是时间
+  const CHAPTERS = 25;
+  await importFiles(page, [txtFile("长书压力.txt", longNovel(CHAPTERS))]);
+  await openBook(page, "长书压力");
+  // 等过"打开书时恢复位置"的静默期，理由同 B9：那 600ms 里检测根本不该跑
+  await page.waitForTimeout(900);
+
+  const terminal: string[] = [];
+  const late: string[] = [];
+  const inWindow: string[] = [];
+  const log: string[] = [];
+
+  for (const idx of clickSequence(20, CHAPTERS)) {
+    const entry = navEntry(page, idx + 1);
+    const chapterId = await entry.getAttribute("data-chapter-id");
+    const lazy = chapterId ? !(await chapterRendered(page, chapterId)) : false;
+
+    await startWindowSampling(page);
+    await entry.click();
+    await page.waitForTimeout(1_400); // 盖住整个静默窗 + 出窗后那次主动检测
+    const samples = await stopWindowSampling(page);
+    const atWindowEnd = await storedChapterIndex(page);
+
+    // 窗的起点 = 页内采样第一次读到"点的那一章"的那一刻，也就是点击写进 store 的时刻
+    const t0 = samples.find((s) => s.i === idx)?.t;
+    if (t0 === undefined) {
+      terminal.push(`点第${idx + 1}章 → 1.4 秒内当前章从没等于它（此刻=第${atWindowEnd + 1}章）`);
+      log.push(`${idx + 1}${lazy ? "懒" : "同"}✗没落地`);
+      continue;
+    }
+    const corrupt = samples.find(
+      (s) => s.t > t0 && s.t - t0 < SUPPRESS_WINDOW_MS && s.i >= 0 && s.i !== idx,
+    );
+    if (corrupt) inWindow.push(`点第${idx + 1}章 → 窗内 +${Math.round(corrupt.t - t0)}ms 当前章=第${corrupt.i + 1}章`);
+
+    if (atWindowEnd !== idx) {
+      if (await settlesTo(page, idx, 3_000)) {
+        late.push(`点第${idx + 1}章 → 1.4 秒时=第${atWindowEnd + 1}章，再给 3 秒绕回来了`);
+      } else {
+        terminal.push(`点第${idx + 1}章 → 出窗后停在第${atWindowEnd + 1}章，再给 3 秒也没回来`);
+      }
+    }
+    log.push(`${idx + 1}${lazy ? "懒" : "同"}${corrupt ? " 窗内≠" : ""}${atWindowEnd === idx ? "" : " 出窗≠"}`);
+  }
+
+  console.log(`[B10] 序列 ${log.join(" | ")}`);
+  console.log(`[B10] 窗内被改写 ${inWindow.length} 次：${inWindow.join("；") || "无"}`);
+  console.log(`[B10] 出窗抖动后自愈 ${late.length} 次：${late.join("；") || "无"}`);
+
+  expect(terminal, `${terminal.length}/20 次点目录之后当前章不是点的那一章`).toEqual([]);
 });

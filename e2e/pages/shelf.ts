@@ -20,6 +20,25 @@ export function miniNovel(): string {
   ].join("\n\n");
 }
 
+/** 长书样本的标题格式，`navEntry` 的定位锚点与它同源 */
+export function longChapterTitle(n: number): string {
+  return `第${n}章 渡口${n}`;
+}
+
+/**
+ * `chapterCount` 章的长书。为什么要超过 10 章：滚动 hook 的懒加载批是 `LOAD_BATCH = 10`，
+ * 打开书时窗口外的章节没有 content，点它走的是 `ChapterNav.tsx:58-84` 那条"先异步读库、
+ * 再抑制、再滚动"的分支——三章小样本（`miniNovel`）永远碰不到这条路。
+ */
+export function longNovel(chapterCount = 25): string {
+  const sentence =
+    "石阶被水泡过了三道，缆桩上系着的麻绳换了两回，等船的人始终没有来，只有船家每天把篷布掀开又盖上，天黑了才回屋。";
+  return Array.from({ length: chapterCount }, (_, i) => {
+    const n = i + 1;
+    return `${longChapterTitle(n)}\n渡口${n}这一站的第一句。${sentence}${sentence}`;
+  }).join("\n\n");
+}
+
 export function txtFile(name: string, text: string) {
   return { name, mimeType: "text/plain", buffer: Buffer.from(text, "utf8") };
 }
@@ -88,4 +107,16 @@ export async function backToShelf(page: Page): Promise<void> {
 export function navChapter(page: Page, index: number) {
   // 必须限定在侧栏容器里：移动端那份目录抽屉（ReadingPanel.tsx:134-146）也挂着同名按钮
   return page.locator('[data-sidebar="chapter-nav"]').getByRole("button", { name: new RegExp(CHAPTER_TITLES[index]) });
+}
+
+/** 目录侧栏里 `longNovel` 的第 n 章（n 从 1 起）。收尾锚定，避免"第 2 章"前缀撞上"第 25 章"。 */
+export function navEntry(page: Page, n: number) {
+  return page
+    .locator('[data-sidebar="chapter-nav"]')
+    .getByRole("button", { name: new RegExp(`${longChapterTitle(n)}$`) });
+}
+
+/** 这一章的内容此刻在不在阅读 DOM 里（在 = 点它走同步分支，不在 = 走懒加载分支） */
+export async function chapterRendered(page: Page, chapterId: string): Promise<boolean> {
+  return (await page.locator(`.chapter-section[data-chapter-id="${chapterId}"]`).count()) > 0;
 }
