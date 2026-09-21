@@ -20,7 +20,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { importFiles, miniNovel, openBook, shelfCard, txtFile } from "../pages/shelf";
-import { openSettings } from "../pages/settings";
+import { leaveSettings, openSettings } from "../pages/settings";
 import { DATA_DIR, ORIGIN, RUN, signIn } from "./fixtures";
 
 const USER = `r组真听书-${RUN}`;
@@ -97,10 +97,16 @@ test.describe.serial("真后端：模型真下载、SSE 真逐帧、音频真出
     // 说明上一轮没清干净或者路径漂了，后面的"真下载"判据全部作废。
     await expect(page.getByText("服务端推理可用，但模型尚未下载到服务器")).toBeVisible({ timeout: 30_000 });
 
+    // 逐帧采样：读的是那一行进度文案所在的段落（`TTSSettings.tsx:545-547` 的
+    // `serverPrepareStep + serverPrepareDetail`，琥珀色那一截）。
+    // 不读 `.first()` 的泛匹配——那会把同一枚常驻标签反复计成"新文案"。
     const steps = new Set<string>();
     const sampler = setInterval(async () => {
-      const t = await page.getByText(/下载中|\d+%|模型|语音引擎|引擎:/).first().innerText().catch(() => "");
-      if (t.trim()) steps.add(t.replace(/\s+/g, " ").trim());
+      for (const t of await page.locator("p.text-amber-500").allInnerTexts()) {
+        const s = t.replace(/\s+/g, " ").trim();
+        // 那句"可用但没下模型"是常驻提示（`:537`），不算推进
+        if (s && !s.startsWith("服务端推理可用")) steps.add(s);
+      }
     }, 1_000);
     try {
       await page.getByRole("button", { name: "启用服务端推理（下载模型）" }).click();
@@ -126,7 +132,10 @@ test.describe.serial("真后端：模型真下载、SSE 真逐帧、音频真出
 
   test("R-D2 服务端真合成一句中文：回来的 WAV 有非零采样，界面上播放栏真的在走", async ({ page, baseURL }) => {
     test.setTimeout(6 * 60_000);
-    await signIn(page, baseURL!, USER);
+    // 引擎必须显式选"服务端推理"：默认是 webspeech，headless 里没有语音合成引擎，
+    // 那样这条判据红的会是引擎选错，而不是服务端没出声。
+    await openSettingsWithEngine(page, baseURL!, "朗读引擎：服务端推理");
+    await leaveSettings(page);
     await importFiles(page, [txtFile(`${BOOK}.txt`, miniNovel())]);
     await expect(shelfCard(page, BOOK)).toBeVisible({ timeout: 30_000 });
 
@@ -146,17 +155,40 @@ test.describe.serial("真后端：模型真下载、SSE 真逐帧、音频真出
     await page.getByTitle("语音朗读").click();
     const bar = page.getByTitle("上一章", { exact: true });
     await expect(bar).toBeVisible({ timeout: 60_000 });
+    // 读"第几段"而不是"0:0X"，而且必须读那枚计数 `<span>` 本身：
+    //  - `title="上一章"` 那枚是**图标按钮**，`innerText()` 恒为空（F6 只拿它判"栏子在不在"），
+    //    我第一版拿它读时间，采到的永远是空串；
+    //  - 服务端一次合成一句只有 1~3 秒（实测 `36150 samples → 1.5s 音频`），而 `elapsed`
+    //    是**本段**已播秒数，还没到 1 秒就换段了，用时间判"有没有真放声"会稳定误判。
+    // 段号前进（`AudioPlayer.tsx:205-209`）才等价于"上一段真放完了、下一段开始了"。
+    // 顺带把台架能力钉住：headless Chromium 的 AudioContext 是真在跑的（一次性探针量到
+    // `state:"running"`、1.2 秒墙钟里 currentTime 走 1.131、buffer 的 onended 触发），
+    // 所以这一条不是"环境演不出来"。
+    const counter = page.getByText(/\d+\s*\/\s*\d+\s*段/).first();
+    let sawSegment = 0;
     await expect
-      .poll(async () => (await bar.locator("xpath=ancestor-or-self::*[1]").innerText()).replace(/\s+/g, " "), {
-        timeout: 90_000,
-        message: "播放栏一直是 0:00 —— 浏览器没有真的把这段音频放出来",
-      })
-      .toMatch(/0:[1-9][0-9]/);
+      .poll(
+        async () => {
+          const m = (await counter.innerText().catch(() => "")).match(/(\d+)\s*\/\s*(\d+)/);
+          if (m) sawSegment = Math.max(sawSegment, Number(m[1]));
+          return sawSegment;
+        },
+        { timeout: 120_000, intervals: [300], message: "播放栏的段号没前进 —— 浏览器没有真的把音频放出来" },
+      )
+      .toBeGreaterThanOrEqual(2);
     await expect(page.getByText(/朗读出错/)).toHaveCount(0);
-    await page.getByTitle(/停止/).first().click();
+    await page.getByTitle(/停止/).first().click().catch(() => {});
   });
 
-  test("R-D3 浏览器推理：380MB 资源真预载进 IndexedDB，界面进入可离线就绪", async ({ page, baseURL }) => {
+  /**
+   * R-D3：浏览器推理这条腿一次跑完——380MB 资源真预载 → wasm 真合成 → 播放真的推进。
+   *
+   * 原计划把"预载"和"出声"分成两条（R-D3/R-D4）。合体的理由是台架事实：
+   * IndexedDB 与 Cache Storage 都跟着 **context** 走，而 Playwright 每条用例一个新 context，
+   * 拆成两条就要在两台机器上各下 380MB。判据一条没少：就绪文案、本地库里有货、
+   * 段号前进（= 上一段真放完了）、没出现"朗读出错"。
+   */
+  test("R-D3 浏览器推理：380MB 真预载进本地库，wasm 真合成并放出声", async ({ page, baseURL }) => {
     test.setTimeout(15 * 60_000);
     await openSettingsWithEngine(page, baseURL!, "朗读引擎：浏览器推理（离线）");
     await expect(page.getByText("需先下载语音模型到浏览器")).toBeVisible({ timeout: 30_000 });
@@ -182,29 +214,34 @@ test.describe.serial("真后端：模型真下载、SSE 真逐帧、音频真出
       return { dbs: dbs.map((d) => d.name), store: count };
     });
     expect(cached.store, `浏览器本地库里没有语音资源（库名：${JSON.stringify(cached.dbs)}）`).toBeGreaterThan(3);
-  });
 
-  test("R-D4 浏览器推理真出声：wasm 在隔离页里算出非零音频，播放栏计时在走", async ({ page, baseURL }) => {
-    test.setTimeout(15 * 60_000);
-    await signIn(page, baseURL!, USER);
-    await openSettings(page);
-    await page.getByLabel("朗读引擎：浏览器推理（离线）").click();
-    await expect(page.getByText("语音资源已就绪，可离线使用")).toBeVisible({ timeout: 30_000 });
-    await page.getByRole("button", { name: "关闭设置", exact: true }).click().catch(() => page.keyboard.press("Escape"));
-
+    // 出声：这一腿不需要服务器参与（离线推理），所以先把 R-D2 那句"服务端回的真音频"隔开——
+    // 这里能推进只可能是 wasm 算出来的
+    await leaveSettings(page);
     await expect(shelfCard(page, BOOK)).toBeVisible({ timeout: 30_000 });
     await openBook(page, BOOK);
+    // 反向记账：这一腿必须是**浏览器算的**。段号前进这件事本身不区分引擎——
+    // 若产品悄悄回落到 `/tts/synthesize`（服务端），界面照样会一格格往前走，
+    // 那我就把"浏览器 wasm 真出声"判成了"服务器真出声"。
+    let serverSynths = 0;
+    page.on("request", (r) => {
+      if (r.url().includes("/api/rag/tts/synthesize")) serverSynths++;
+    });
     await page.getByTitle("语音朗读").click();
-    const bar = page.getByTitle("上一章", { exact: true });
-    await expect(bar).toBeVisible({ timeout: 5 * 60_000 });
-    // RTF≈12（`TTSSettings.tsx:510`）：一句中文要生成几十秒，所以预算给到分钟级
+    const counter = page.getByText(/\d+\s*\/\s*\d+\s*段/).first();
+    let sawSegment = 0;
     await expect
-      .poll(async () => (await bar.innerText()).replace(/\s+/g, " "), {
-        timeout: 8 * 60_000,
-        message: "浏览器 wasm 推理没把播放推进（一直是 0:00）",
-      })
-      .toMatch(/0:[1-9][0-9]/);
+      .poll(
+        async () => {
+          const m = (await counter.innerText().catch(() => "")).match(/(\d+)\s*\/\s*(\d+)/);
+          if (m) sawSegment = Math.max(sawSegment, Number(m[1]));
+          return sawSegment;
+        },
+        { timeout: 8 * 60_000, intervals: [500], message: "浏览器 wasm 推理没把播放推进（段号一直不动）" },
+      )
+      .toBeGreaterThanOrEqual(2);
     await expect(page.getByText(/朗读出错/)).toHaveCount(0);
-    await page.getByTitle(/停止/).first().click();
+    expect(serverSynths, "浏览器推理这一腿偷偷回落到服务端合成了（判据判的就不是 wasm）").toBe(0);
+    await page.getByTitle(/停止/).first().click().catch(() => {});
   });
 });
