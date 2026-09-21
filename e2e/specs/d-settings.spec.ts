@@ -117,6 +117,7 @@ test("D2 key 还没填：保存按钮是禁用的（填上才放开）", async (
 });
 
 test("D3 换一个用户名：服务商列表跟着换，不许串到别人账号下", async ({ page }) => {
+  test.setTimeout(60_000); // 同 B7/B8：两次退出+登录在混跑全套时要 30 秒以上，单跑 7.5 秒
   await openSettings(page);
   await addProvider(page, { name: "A 专用配置", key: FAKE_KEY });
   await expect(page.getByText("A 专用配置").first()).toBeVisible();
