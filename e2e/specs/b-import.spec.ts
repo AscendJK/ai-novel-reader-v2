@@ -147,3 +147,55 @@ test("B8 刷新后书架不空：导入的结果落在浏览器本地库里", as
   await expect(shelfCard(page, "刷新测试")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText("3 章")).toBeVisible({ timeout: 20_000 });
 });
+
+/**
+ * 把阅读容器瞬移到某个位置，并补足检测所需的滚动事件。
+ *
+ * 两步都是必要的：容器带 `scroll-smooth` 类，程序化赋值也走平滑动画（产品自己在
+ * `useContinuousScroll.ts:180` 同样先临时关掉再滚），不瞬移落地量到的就是路上那一帧；
+ * 而检测按 rAF 节流、每 3 帧才跑一次（同文件 :423），一次跳变只产生一个滚动事件，
+ * 静止位置反而永远不被检测看过一次。
+ */
+async function scrollToAndSettle(page: import("@playwright/test").Page, top: number | "max"): Promise<void> {
+  await page.locator(".chapter-scroll-container").evaluate(async (el, value) => {
+    el.style.scrollBehavior = "auto";
+    el.scrollTop = value === "max" ? el.scrollHeight : value;
+    for (let i = 0; i < 4; i++) {
+      el.dispatchEvent(new Event("scroll"));
+      await new Promise<void>((resolve) => { requestAnimationFrame(() => { resolve(); }); });
+    }
+  }, top);
+}
+
+/** 进度此刻记在第几章（书架卡片显示的就是它，直接在阅读器里读同一份状态） */
+function storedChapterIndex(page: import("@playwright/test").Page): Promise<number> {
+  return page.evaluate((user: string) => {
+    const positions = JSON.parse(localStorage.getItem(`novel-reader-positions:${user}`) || "{}");
+    const values = Object.values(positions) as { chapterIndex: number }[];
+    return values.length === 1 ? values[0].chapterIndex : -1;
+  }, USER);
+}
+
+test("B9 读到全书最末：最后一章再短也算读到它，停在中间时又不许提前跳到末章", async ({ page }) => {
+  // 本机实测的几何：容器 523 高，三章 193/258/258。滚到底 scrollTop=269 已是上限，
+  // 第三章顶部落在容器内 182px 处，而检测区是顶部 5%~15%（26~78px）——末章够不到检测区，
+  // 检测把"当前章"判成第二章，进度从 100% 退回 66.67%。jsdom 量不到布局，只有浏览器层看得见。
+  test.setTimeout(60_000);
+  await importFiles(page, [txtFile("末章测试.txt", miniNovel())]);
+  await openBook(page, "末章测试");
+  // 等过"打开书时恢复位置"的静默期：useContinuousScroll 在恢复期间把检测整个关掉
+  // （100ms 定位 + 500ms 解锁），这 600ms 里滚动，检测根本不会跑，测的就不是检测了。
+  await page.waitForTimeout(800);
+
+  // 反向判据：末尾兜底不能写成"永远算最后一章"。停在第二章占检测区的位置（200px）时，
+  // 进度必须是第二章。
+  await scrollToAndSettle(page, 200);
+  await expect.poll(() => storedChapterIndex(page), { timeout: 10_000 }).toBe(1);
+
+  await scrollToAndSettle(page, "max");
+  await expect.poll(() => storedChapterIndex(page), { timeout: 10_000 }).toBe(2);
+
+  await backToShelf(page);
+  await expect(page.getByText("已读至第 3 章")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("100.00%")).toBeVisible();
+});

@@ -362,6 +362,23 @@ export function useContinuousScroll({
       }
       if (markerCount === 0) return;
 
+      // 滚到最底的兜底：检测区是容器顶部 5%~15%，而末章顶部最低只能停在
+      // "视口高 − 底部留白 − 末章高"处（scrollTop 已到上限）。末章比这短时就永远
+      // 进不了检测区，检测会把当前章判成倒数第二章——目录点末章被弹回去、
+      // 进度卡在 (N-1)/N、读完到不了 100%。此时"最下面那章"就是用户正在读的那章。
+      // 只在真滚得动的文档上生效：内容不足一屏时到不到"底"都一样，交给检测区判定。
+      const atEnd =
+        container.scrollHeight - container.clientHeight > 1 &&
+        container.scrollTop + container.clientHeight >= container.scrollHeight - 2;
+      if (atEnd) {
+        const tailId = cachedMarkers[markerCount - 1].getAttribute("data-chapter-id") || "";
+        if (tailId && tailId !== lastDetectedChapterRef.current) {
+          lastDetectedChapterRef.current = tailId;
+          onChapterChangeRef.current(tailId);
+        }
+        return;
+      }
+
       const containerRect = container.getBoundingClientRect();
       const zoneTop = containerRect.top + containerRect.height * 0.05;
       const zoneBottom = containerRect.top + containerRect.height * 0.15;
