@@ -7,6 +7,7 @@ import { isQuotaError } from "@/lib/quota-guard";
 import { useNovelStore } from "@/stores/novel-store";
 import { apiFetch } from "@/lib/api-client";
 import { showToast } from "@/lib/toast-store";
+import { broadcast } from "@/lib/broadcast";
 import { clearCache } from "@/rag/index";
 import type { Novel } from "@/parsers/types";
 
@@ -149,6 +150,9 @@ export function useFileParser() {
 
       setProgress(100);
       addNovel(novel);
+      // 通知同浏览器的其他标签页重读书架：它们内存里那份列表是各自开机时读的，
+      // 不喊一声就一直停在"还没有这本书"（本地库是同一份，缺的只是重读）
+      broadcast.send("data-changed", { kind: "novel-added", id: novel.id });
       return novel;
     } catch (err) {
       const msg = err instanceof Error ? err.message : "文件解析失败";

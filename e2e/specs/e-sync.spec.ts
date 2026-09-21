@@ -318,18 +318,13 @@ test("E5 同一浏览器换用户：另一个标签页必须真的重绑到新�
 });
 
 test("E8 两个标签页同一个用户：A 页导入的书必须出现在 B 页的书架上，B 页不重新加载", async ({ page, context }) => {
-  // 已知不通过（计划 §8.5 ② 那一条，第 4 批把它写成了判据）。
-  //
-  // 现状实测：同一用户的 IndexedDB 是同一份，A 页导入写完就 push 并广播 `sync-complete`，
-  // 而 B 页收到之后只做一件事——`syncClient.pushNow()`（`AppLayout.tsx:170-174`）。
-  // B 页内存里那份 `novels` 是开机时读的一次（`useSyncOrchestration.ts:75`），此后没人再读，
-  // 于是 B 页的书架停在"还没有这本书"，用户得自己刷新。
-  // 修的两条路：收到广播后重扫本地共库；或把服务器 pull 回来的那份合进列表
-  // （`useSyncOrchestration.ts:233` 那条 `addNovel`）。两条都要动 store 的装载入口，
-  // 超出"E2E 判据批次"的范围，所以这条先挂着。
-  //
-  // 用 `fixme` 而不是删掉：判据连同"该怎么做"一起留在这里，修的人把这一行删了就是一条用例。
-  test.fixme();
+  // 这条原本是 §8.5 ② 挂着红的判据，现在修好了：导入方 `broadcast.send("data-changed")`
+  // （`useFileParser.ts` 在 `addNovel` 之后），收端在 `BookSelect.tsx` 的 `onDataChanged`
+  // 里重读一次——书架的数据源是 BookSelect 自己的 state，不是 novel-store 那份列表，
+  // 所以第一版把重读接在 store 上时这条照样红（接错地方等于没接）。
+  // 重读失败时保留原列表（不会把书架刷成空）；但"B 页删一本书、A 页的卡片仍留着"
+  // 这个反向缺口还在，那条要另立判据，别拿这条当全解决。
+  // 变异：摘掉 send → 红；摘掉 onDataChanged 订阅 → 红。
   await signInOnline(page, baseTable());
 
   const second = await context.newPage();

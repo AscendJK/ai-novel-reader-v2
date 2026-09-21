@@ -10,6 +10,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatCharCount } from "@/lib/text-utils";
 import { useBuildStore, type BuildStatusType } from "@/stores/build-store";
+import { broadcast } from "@/lib/broadcast";
 import type { BuildStatus } from "@/rag/build-index";
 
 /** 服务器返回的构建状态（字段可选） */
@@ -86,21 +87,29 @@ export function BookSelect() {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
 
-  useEffect(() => {
+  /**
+   * 书架的数据源是这个组件自己的 state（不是 novel-store 那份列表），所以"重读一次"
+   * 必须落在这里，落在 store 上界面不动。
+   */
+  const reloadShelf = useCallback(() => {
   	    // 只有在用户登录后才加载数据
-  	    const username = localStorage.getItem("sync-username");
-  	    if (!username) return;
-  	    let active = true;
+  	    if (!localStorage.getItem("sync-username")) return;
   	    loadAllNovelMeta().then((novels) => {
-  	      if (!active) return;
   	      const lastOpened = getLastOpenedTimes();
   	      novels.sort((a, b) => (lastOpened[b.id] || 0) - (lastOpened[a.id] || 0));
   	      setSavedNovels(novels);
   	    }).catch((err) => {
+  	      // 读失败就留着原来那份：把书架刷成空，比停在旧列表上更糟
   	      console.error("loadAllNovelMeta failed:", err);
   	    });
-  	    return () => { active = false; };
-  	  }, [lastOpenedVersion]);
+  	  }, []);
+
+  useEffect(() => { reloadShelf(); }, [reloadShelf, lastOpenedVersion]);
+
+  // 另一个标签页导入完会喊一声 `data-changed`（`useFileParser.ts` 在 addNovel 之后发）。
+  // 同一个用户的 IndexedDB 本来就是同一份库，缺的只是"这一页重读一次"——不接这一声，
+  // B 页会一直停在"书架上还没有书"，用户得自己刷新。E8 钉的就是这条。
+  useEffect(() => broadcast.onDataChanged(() => reloadShelf()), [reloadShelf]);
 
   const filteredNovels = useMemo(() => {
     if (!searchQuery.trim()) return savedNovels;
