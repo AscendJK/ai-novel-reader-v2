@@ -10,6 +10,32 @@ import { APP_VERSION } from "@/config/version";
 const RECENT_URLS_KEY = "novel-reader-recent-urls";
 const MAX_RECENT = 5;
 
+/**
+ * 登录页草稿。存在的唯一理由：装成 PWA 之后，首启那一次导航发生在 Service Worker
+ * 接管**之前**，拿不到跨源隔离头，于是 `main.tsx` 的 `ensureCrossOriginIsolated` 会让页面
+ * 自己再刷一次（实测约 1.8 秒）。登录页只有一个输入框，用户基本都在那一秒里开始打字，
+ * 刷完敲进去的用户名就没了 —— 症状是"我明明输了名字，按钮又灰回去了"。
+ *
+ * 用 sessionStorage 不用 localStorage：这只该救"同一次开机的那一刷"，
+ * 不该在用户下次开标签页时把一个旧名字塞回登录框。
+ */
+const LOGIN_DRAFT_KEY = "login-draft";
+
+function readLoginDraft(): { selected: string; typed: string } {
+  try {
+    const raw = sessionStorage.getItem(LOGIN_DRAFT_KEY);
+    if (!raw) return { selected: "", typed: "" };
+    const d = JSON.parse(raw) as { selected?: unknown; typed?: unknown };
+    return {
+      // 只恢复"创建新用户"这条路：选中的老用户在下拉里本来就在
+      selected: d.selected === "__new__" ? "__new__" : "",
+      typed: typeof d.typed === "string" ? d.typed.slice(0, 30) : "",
+    };
+  } catch {
+    return { selected: "", typed: "" };
+  }
+}
+
 function getRecentUrls(): string[] {
   try {
     return JSON.parse(localStorage.getItem(RECENT_URLS_KEY) || "[]");
@@ -38,8 +64,8 @@ interface Props {
 }
 
 export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, offlineLogin }: Props) {
-  const [selectedUser, setSelectedUser] = useState("");
-  const [newUsername, setNewUsername] = useState("");
+  const [selectedUser, setSelectedUser] = useState(() => readLoginDraft().selected);
+  const [newUsername, setNewUsername] = useState(() => readLoginDraft().typed);
   const [loading, setLoading] = useState(false);
   const [serverUrl, setServerUrlState] = useState(getServerUrl());
   const [serverStatus, setServerStatus] = useState<"unknown" | "checking" | "ok" | "fail">("unknown");
@@ -107,11 +133,25 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
   const username = isNewUser ? newUsername.trim() : selectedUser;
   const canSubmit = username.length >= 2;
 
+  // 草稿跟着敲走，为的是扛过首启那一次自刷（理由见 LOGIN_DRAFT_KEY 上面那段）
+  useEffect(() => {
+    try {
+      if (isNewUser && newUsername.trim()) {
+        sessionStorage.setItem(LOGIN_DRAFT_KEY, JSON.stringify({ selected: "__new__", typed: newUsername }));
+      } else {
+        sessionStorage.removeItem(LOGIN_DRAFT_KEY);
+      }
+    } catch { /* 写不进去（隐私模式之类）就退回"刷了重敲"，不许因此挡住登录 */ }
+  }, [isNewUser, newUsername]);
+
   const handleSubmit = async () => {
     if (!canSubmit) return;
     setLoading(true);
-    try { await onLogin(username); }
-    finally { setLoading(false); }
+    try {
+      await onLogin(username);
+      // 进到书架之后这份草稿就没意义了：留着它，同一标签页下次退回登录页会凭空带出旧名字
+      try { sessionStorage.removeItem(LOGIN_DRAFT_KEY); } catch { /* 同上 */ }
+    } finally { setLoading(false); }
   };
 
   const handleDelete = () => {
