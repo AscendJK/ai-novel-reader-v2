@@ -79,6 +79,23 @@ describe("collectFacts", () => {
     const runtime = facts.find((f) => f.label === "朗读运行时");
     expect(runtime?.value).toContain("没有朗读会话");
   });
+
+  it("COI 那一项报出「为等 SW 接管自刷了几次」，刷到上限要看得出来", async () => {
+    // 手机上开不了 devtools。`main.tsx` 刷到上限之后就永久停在非隔离态，症状是
+    // 浏览器朗读起不动模型；那一行只写 false / true 的话，"还在刷"和"已经放弃了"
+    // 看起来一模一样，排查只能靠猜。
+    sessionStorage.clear();
+    sessionStorage.setItem("coi-reload-count", "3");
+    const givenUp = (await collectFacts()).find((f) => f.label.startsWith("crossOriginIsolated"));
+    expect(givenUp?.value).toContain("3 次");
+    expect(givenUp?.value).toContain("上限");
+
+    sessionStorage.setItem("coi-reload-count", "1");
+    const midway = (await collectFacts()).find((f) => f.label.startsWith("crossOriginIsolated"));
+    expect(midway?.value).toContain("1 次");
+    expect(midway?.value).not.toContain("上限");
+    sessionStorage.clear();
+  });
 });
 
 describe("installProbes", () => {

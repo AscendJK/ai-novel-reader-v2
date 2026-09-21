@@ -10,6 +10,7 @@
  */
 import { getActiveTTSManager } from "@/tts/tts-manager";
 import { APP_VERSION } from "@/config/version";
+import { COI_RELOAD_KEY, MAX_COI_RELOADS } from "@/lib/sw-update";
 
 export type FactLevel = "ok" | "warn" | "bad" | "info";
 
@@ -150,9 +151,16 @@ export async function collectFacts(): Promise<Fact[]> {
   const g = globalThis as unknown as Record<string, unknown>;
   const coi = g.crossOriginIsolated === true;
   const sab = typeof SharedArrayBuffer !== "undefined";
+  // 刷到上限之后页面会**永久**停在非隔离态（`main.tsx` 的计数），而手机上开不了
+  // devtools：这一行得把"还在刷"和"已经放弃"分开，不然症状只是"浏览器朗读起不动
+  // 模型"，排查全靠猜。
+  let coiReloads = 0;
+  try {
+    coiReloads = Number(sessionStorage.getItem(COI_RELOAD_KEY) ?? "0") || 0;
+  } catch { /* 隐私模式下 sessionStorage 直接抛 */ }
   facts.push({
     label: "crossOriginIsolated / SharedArrayBuffer",
-    value: `${coi} / ${sab}`,
+    value: `${coi} / ${sab}（为等 SW 接管已自刷 ${coiReloads} 次${coiReloads >= MAX_COI_RELOADS ? "，到上限不再刷" : ""}）`,
     // 浏览器推理（Kokoro wasm）没有 SAB 就起不来；系统语音不受影响
     level: sab ? "ok" : "bad",
   });
