@@ -148,9 +148,10 @@ test("G3 整屏 AI 面板：五格 tab 不滚就得都摸得到，关闭按钮�
 /**
  * 390px 下把"小说地图"生成出来、展开、进大图并选中一个地点。
  *
- * 走「大图 → 选地点」而不是点图上的节点：预览只有 192px 高，注入的是 1170 宽的 svg
- * 再 scale(0.35)，热区靠坐标换算——产品自己都不信它（`NovelMapSection.tsx:510` 的注释写的
- * 就是"移动端点节点热区失效时也能看描述"）。判据要跑在用户真用得上的入口上。
+ * 走「大图 → 选地点」而不是点图上的节点：预览那一格只有 192px 高，注入的 svg 按
+ * `scale(0.35)` 塞进一层 286% 宽的容器里（`NovelMapSection.tsx:383-391`），热区靠坐标
+ * 换算——产品自己都不信它（`:510` 的注释写的就是"移动端点节点热区失效时也能看描述"）。
+ * 判据要跑在用户真用得上的入口上。
  */
 async function openPlaceDetail(page: Page, places: typeof MAP_PLACES): Promise<Backend> {
   const backend = await stubBackend(page, { ...idleTtsStatus, ...vendorTable({ content: mapFixture(places) }) });
