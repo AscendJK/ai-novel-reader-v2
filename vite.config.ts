@@ -59,6 +59,7 @@ export default defineConfig({
         // TTS worker 不走 precache：precache 用 Cache Storage 响应加载 worker
         // 脚本，在 COEP: credentialless 下可能被拒绝（缓存响应无 CORP 头），
         // 导致 Worker 加载失败。走网络由 GitHub Pages 直出（200）更可靠。
+        // 删掉这一行会被 e2e 的 H4 打红（判据：precache 里没有 /sherpa-tts/，而 assets 有）。
         globIgnores: ["**/sherpa-tts/**"],
         // 禁用 workbox 的导航 fallback：否则 NavigationRoute 会抢先对导航
         // 响应 respondWith(precache index.html)，COI 注入的 fetch listener

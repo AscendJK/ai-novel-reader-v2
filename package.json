@@ -30,6 +30,7 @@
     "test:coverage": "vitest --coverage",
     "e2e": "playwright test --config e2e/playwright.config.ts",
     "e2e:smoke": "playwright test --config e2e/playwright.config.ts specs/a-smoke.spec.ts",
+    "e2e:built": "playwright test --config e2e/playwright.config.ts --project=build",
     "e2e:headed": "playwright test --config e2e/playwright.config.ts --headed",
     "e2e:report": "playwright show-report"
   },
