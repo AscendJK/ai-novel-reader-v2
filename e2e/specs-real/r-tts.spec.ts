@@ -17,7 +17,7 @@
  * 这一档不会去动系统信任根。
  */
 import { test, expect, type Page } from "@playwright/test";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { importFiles, miniNovel, openBook, shelfCard, txtFile } from "../pages/shelf";
 import { leaveSettings, openSettings } from "../pages/settings";
@@ -92,6 +92,10 @@ async function openSettingsWithEngine(page: Page, baseURL: string, label: string
 test.describe.serial("真后端：模型真下载、SSE 真逐帧、音频真出声", () => {
   test("R-D1 点「启用服务端推理」：真 SSE 逐帧推进，模型真落盘，中转目录不留半截卷", async ({ page, baseURL }) => {
     test.setTimeout(15 * 60_000);
+    // 先清掉包外一次性目录里的语音缓存：TTS 的模型与 WASM 是**全服务器共用一份**
+    // （不像书/索引那样按用户分），上一轮跑过之后它一直在盘上，那条"还没下载"的起点
+    // 与整条"真下载"判据都会静默降级成"缓存命中"。删的仍是包外目录，不是开发项目的 server/data。
+    rmSync(path.join(DATA_DIR, "tts-cache"), { recursive: true, force: true });
     await openSettingsWithEngine(page, baseURL!, "朗读引擎：服务端推理");
     // 起点必须是"没下过"——包外那份数据目录是新开的，要是这里就显示就绪，
     // 说明上一轮没清干净或者路径漂了，后面的"真下载"判据全部作废。
