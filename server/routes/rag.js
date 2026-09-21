@@ -19,6 +19,7 @@ import {
   isValid7z, isValidBz2, readHeadSync, checkExtractedFiles, checkDiskSpace, assertPartsInOrder,
 } from "../lib/tts-archive-checks.mjs";
 import { createDownloader } from "../lib/tts-download.mjs";
+import { createGiteeAssembler, createGitHubTarExtractor } from "../lib/tts-assemble.mjs";
 import { createResourceGate } from "../lib/tts-resource-gate.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -567,141 +568,50 @@ function validateExtractedFiles(dir, requiredFiles) {
 const downloadFile = createDownloader();
 
 /**
+ * 拼卷/解压流水的实现连同判据都在 lib/tts-assemble.mjs（假 fs 之外的下载器与外部命令
+ * 就能把每条失败分支走一遍）。这里只把真实的 IO 边界接上去。
+ */
+const assembleFromGitee = createGiteeAssembler({
+  fs,
+  path,
+  tempDir: TTS_TEMP_DIR,
+  download: downloadFile,
+  exec: execFileAsync,
+  assertPartsInOrder,
+  readHead: readHeadSync,
+  isValidArchiveHead: isValid7z,
+  validateExtracted: validateExtractedFiles,
+});
+
+const extractFromGitHubTar = createGitHubTarExtractor({
+  fs,
+  path,
+  tempDir: TTS_TEMP_DIR,
+  download: downloadFile,
+  exec: execFileAsync,
+  readHead: readHeadSync,
+  isValidArchiveHead: isValidBz2,
+  validateExtracted: validateExtractedFiles,
+  log: (msg) => console.warn(`[tts-proxy] ${msg}`),
+});
+
+/**
  * 从 Gitee 下载 7z 分卷 → 拼接 → 校验 → 解压 → 校验解压结果
  * @param {Function} onProgress - 进度回调 (step, detail)
  */
-async function downloadFromGitee(partNames, archiveName, targetDir, requiredFiles, onProgress, { signal } = {}) {
-  // 先验顺序再花钱：拼接是按数组顺序流式写入的，顺序错要等几百 MB 下完、7z 解压时才炸
-  assertPartsInOrder(partNames);
-  if (!fs.existsSync(TTS_TEMP_DIR)) fs.mkdirSync(TTS_TEMP_DIR, { recursive: true });
-  if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-
-  const partPaths = [];
-  const archivePath = path.join(TTS_TEMP_DIR, archiveName + ".7z");
-  const extractedDir = path.join(TTS_TEMP_DIR, archiveName);
-  // 解压根目录必须在 try 之外声明：finally 要清理它，而 try 块内的 const 在
-  // finally 作用域不可见——引用它会抛 ReferenceError 并顶替 try 的正常返回
-  const extractRoot = path.join(TTS_TEMP_DIR, archiveName + "-extract");
-
-  try {
-    // 1. 下载所有分卷
-    for (let i = 0; i < partNames.length; i++) {
-      if (signal?.aborted) throw new Error("下载已取消");
-      const partName = partNames[i];
-      const partPath = path.join(TTS_TEMP_DIR, partName);
-      onProgress?.(`下载分卷 ${i+1}/${partNames.length}`, partName);
-      await downloadFile(`${GITEE_BASE}/${partName}`, partPath, 1024 * 1024, (pct) => {
-        onProgress?.(`下载分卷 ${i+1}/${partNames.length} ${pct}%`, partName);
-      }, { signal });
-      partPaths.push(partPath);
-    }
-
-    // 2. 拼接为完整 7z（流式写入）
-    onProgress?.("拼接分卷", "合并为完整压缩包");
-    const ws = fs.createWriteStream(archivePath);
-    for (const p of partPaths) ws.write(fs.readFileSync(p));
-    ws.end();
-    await new Promise((resolve, reject) => { ws.on("finish", resolve); ws.on("error", reject); });
-
-    // 3. 校验 7z 文件头（只读开头 6 字节：整包 readFileSync 会把 322MB 全塞进内存）
-    onProgress?.("校验压缩包", "检查文件格式");
-    if (!isValid7z(readHeadSync(archivePath, 6))) {
-      throw new Error("拼接后的文件不是有效的 7z 格式（文件头校验失败）");
-    }
-
-    // 4. 解压到独立子目录（避免归档根目录模式与 TTS_TEMP_DIR 其他残留混淆）
-    onProgress?.("解压中", "7z 解压...");
-    try { fs.rmSync(extractRoot, { recursive: true }); } catch {}
-    fs.mkdirSync(extractRoot, { recursive: true });
-    try {
-      await execFileAsync("7z", ["x", archivePath, `-o${extractRoot}`, "-y"], { timeout: 120000 });
-    } catch (e) {
-      if (e.code === "ENOENT") throw new Error("7z 未安装。请安装 7-Zip (Windows) 或 p7zip-full (Linux/macOS) 后重试。", { cause: e });
-      throw new Error(`7z 解压失败: ${e.message}`, { cause: e });
-    }
-
-    // 5. 复制到目标目录（整体复制，dict/ 等子目录全部保留）
-    onProgress?.("复制文件", "写入缓存目录");
-    // 兼容两种归档结构：
-    //   a) 归档内有单个顶层目录（archiveName/...）→ 复制该目录内容
-    //   b) 文件直接在归档根目录 → 复制 extractRoot 全部内容
-    let copySrc = extractRoot;
-    const entries = fs.readdirSync(extractRoot);
-    if (entries.length === 1) {
-      const only = path.join(extractRoot, entries[0]);
-      try { if (fs.statSync(only).isDirectory()) copySrc = only; } catch {}
-    }
-    fs.cpSync(copySrc, targetDir, { recursive: true });
-
-    // 6. 校验解压后的文件
-    onProgress?.("校验文件", "检查完整性");
-    validateExtractedFiles(targetDir, requiredFiles);
-
-    // 7. 清理临时文件
-    onProgress?.("清理", "删除临时文件");
-  } finally {
-    for (const p of partPaths) { try { fs.unlinkSync(p); } catch {} }
-    try { fs.unlinkSync(archivePath); } catch {}
-    try { fs.rmSync(extractedDir, { recursive: true }); } catch {}
-    try { fs.rmSync(extractRoot, { recursive: true }); } catch {}
-  }
+function downloadFromGitee(partNames, archiveName, targetDir, requiredFiles, onProgress, { signal } = {}) {
+  return assembleFromGitee({
+    baseUrl: GITEE_BASE, partNames, archiveName, targetDir, requiredFiles, onProgress, signal,
+  });
 }
 
 /**
  * 从 GitHub 下载 tar.bz2 → 校验 → 解压 → 校验解压结果
  */
-async function downloadFromGitHubTar(url, archiveName, targetDir, requiredFiles, onProgress, { signal } = {}) {
-  if (!fs.existsSync(TTS_TEMP_DIR)) fs.mkdirSync(TTS_TEMP_DIR, { recursive: true });
-  if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-
-  const archivePath = path.join(TTS_TEMP_DIR, archiveName + ".tar.bz2");
-  const extractedDir = path.join(TTS_TEMP_DIR, archiveName);
-
-  try {
-    onProgress?.("下载中 (GitHub)", "tar.bz2 格式");
-    // 依次尝试官方直连 + 加速镜像（downloadFile 失败会清理残缺文件，重试安全）
-    const urls = [url, ...GITHUB_MIRRORS.map((m) => m + url)];
-    let lastErr = null;
-    for (const u of urls) {
-      if (signal?.aborted) throw new Error("下载已取消");
-      try {
-        await downloadFile(u, archivePath, 1024 * 1024, (pct) => {
-          onProgress?.(`下载中 ${pct}% (GitHub)`, "tar.bz2 格式");
-        }, { signal });
-        lastErr = null;
-        break;
-      } catch (e) {
-        lastErr = e;
-        console.warn(`[tts-proxy] GitHub 下载失败 (${u}): ${e.message}，尝试下一个源`);
-      }
-    }
-    if (lastErr) throw lastErr;
-
-    onProgress?.("校验压缩包", "检查文件格式");
-    if (!isValidBz2(readHeadSync(archivePath, 4))) {
-      throw new Error("下载的文件不是有效的 bzip2 格式（文件头校验失败）");
-    }
-
-    onProgress?.("解压中", "tar.bz2 解压...");
-    try {
-      await execFileAsync("tar", ["xjf", archivePath, "-C", TTS_TEMP_DIR], { timeout: 120000 });
-    } catch (e) {
-      if (e.code === "ENOENT") throw new Error("tar 未安装。请安装 tar (Linux/macOS) 或 7-Zip (Windows) 后重试。", { cause: e });
-      throw new Error(`tar 解压失败: ${e.message}`, { cause: e });
-    }
-
-    onProgress?.("复制文件", "写入缓存目录");
-    if (!fs.existsSync(extractedDir)) {
-      throw new Error(`解压后找不到目录: ${archiveName}`);
-    }
-    fs.cpSync(extractedDir, targetDir, { recursive: true });
-
-    onProgress?.("校验文件", "检查完整性");
-    validateExtractedFiles(targetDir, requiredFiles);
-  } finally {
-    try { fs.unlinkSync(archivePath); } catch {}
-    try { fs.rmSync(extractedDir, { recursive: true }); } catch {}
-  }
+function downloadFromGitHubTar(url, archiveName, targetDir, requiredFiles, onProgress, { signal } = {}) {
+  return extractFromGitHubTar({
+    url, mirrors: GITHUB_MIRRORS, archiveName, targetDir, requiredFiles, onProgress, signal,
+  });
 }
 
 /**
