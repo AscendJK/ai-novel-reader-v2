@@ -13,7 +13,9 @@ import { fileURLToPath } from "node:url";
  *     用户那次取模型掐成 429；
  *  2. TTS 资源闸门的 `ready` 记忆（`server/lib/tts-resource-gate.mjs`）—— 修好之前，
  *     上一轮下完模型、这一轮把缓存清掉，点「启用」就会空响到超时（R-D1 卡了 14 分钟）。
- * 复用手工挂着的那台 = 判据静默降级成"看上一轮跑到哪了"。
+ * 复用手工挂着的那台 = 判据静默降级成"看上一轮跑到哪了"。所以**端口上只要已经活着一只
+ * 后端就红**（版本号对得上也不行——"版本正确 + 界面正常"恰恰是上一轮没收尾的那只的特征），
+ * 除非显式 `ANR_REAL_REUSE_SERVER=1`。
  *
  * 三件事必须成立才让跑：
  *  1. 目标 origin 真的是**发版包**在跑（`/api/version` 与仓库 `package.json` 同版本，
@@ -84,6 +86,17 @@ export default async function preflight(): Promise<() => void> {
 
   let version = await versionOf();
   const teardowns: Array<() => void> = [];
+
+  // **端口上只要已经活着一只后端就红**（除非显式 REUSE）：判"版本号对不对"挡不住
+  // 上一轮没收尾的那只——它版本正确、界面正常，而它的**进程内存**里带着上一轮的
+  // 限流计数与闸门 `ready`，正是这段注释开头要防的那种静默降级。
+  if (version && !REUSE) {
+    fail(
+      `${ORIGIN} 上已经有一只后端在跑（version=${version}），而它不是本轮起的：` +
+        `限流计数与 TTS 闸门状态都在进程内存里，复用会把判据静默换成"看上一轮跑到哪"。` +
+        `先停掉它（只停自己记账里那一只，别用 start.bat/stop.bat 那种全局杀），或确定要复用就显式 ANR_REAL_REUSE_SERVER=1`,
+    );
+  }
 
   if (!version && !REUSE) {
     if (!existsSync(path.join(PACK_DIR, "server", "index.js"))) {
