@@ -34,13 +34,21 @@ jobs:
       - name: Unit tests
         run: npm test
 
-      # 浏览器层只进这里，不进 npm run verify（闸门一慢就会被跳过）。只跑 A 组冒烟 5 条：
-      # 它盯的是桩之外接没接上——真挂载、真 IndexedDB 落盘、真遮挡，jsdom 一样都给不了。
+      # 先建前端：Playwright 一跑就会把两套 webServer 都起起来（配置级不能按 project 挑），
+      # 其中伺服 dist/ 的那台（e2e/serve-dist.mjs）发现产物缺失/过期会自己补一次 build——
+      # 那样构建坏了会红在"浏览器冒烟"这一步里，看不出是谁的锅。放在前面，台架直接复用。
+      - name: Build frontend
+        run: |
+          npm run build
+
+      # 浏览器层只进这里，不进 npm run verify（闸门一慢就会被跳过）。A 组冒烟 5 条 + B 组
+      # 导入与阅读 10 条：盯的是桩之外接没接上——真挂载、真 IndexedDB 落盘、真文件解码、
+      # 真遮挡、跳章落点，jsdom 一样都给不了。C/D/E/F/G/H 组留给本地 `npm run e2e`。
       # 刻意不加 retries：一条时灵时不灵的用例等于没有判据，宁可让它红一次并当场查根。
-      - name: Browser smoke (A 组冒烟)
+      - name: Browser smoke (A 组冒烟 + B 组导入阅读)
         run: |
           npx playwright install --with-deps chromium
-          npm run e2e:smoke
+          npm run e2e:ab
 
       - name: Upload browser report (只在失败时留证据)
         if: failure()
@@ -65,10 +73,6 @@ jobs:
           npm run probe:rag
           npm run probe:proxy
           npm run probe:boot
-
-      - name: Build frontend
-        run: |
-          npm run build
 
       - name: Package backend (light)
         shell: pwsh
