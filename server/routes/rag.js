@@ -21,6 +21,7 @@ import {
 import { createDownloader } from "../lib/tts-download.mjs";
 import { createGiteeAssembler, createGitHubTarExtractor } from "../lib/tts-assemble.mjs";
 import { createResourceGate } from "../lib/tts-resource-gate.mjs";
+import { createTtsPrepareHandler } from "../lib/tts-prepare-sse.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -849,57 +850,8 @@ router.get("/tts/model/dict/pos_dict/:filename", requireAuth, async (req, res) =
 });
 
 // GET /api/rag/tts/prepare — SSE 端点，下载并准备 TTS 资源，实时推送进度
-router.get("/tts/prepare", requireAuth, async (req, res) => {
-  const force = req.query.force === "true";
-  // SSE 头
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  // ACAO 由全局 cors() 白名单设置，这里不再手写 "*"
-  res.flushHeaders();
-
-  let clientDisconnected = false;
-  const abortController = new AbortController();
-  // ⚠️ 必须监听 res 而不是 req：Node 的 IncomingMessage 在"请求被读完"时就会
-  // emit close（GET 无体 → 几乎立刻触发），拿它当"客户端断开"会让这条 SSE 在
-  // 第一帧之前就自我判定为已断开，前端再也收不到进度事件（实测：同结构的
-  // req.on("close") 会让响应永远不结束）。round 2 R-66。
-  res.on("close", () => {
-    if (res.writableEnded) return; // 正常写完，不是断开
-    clientDisconnected = true;
-    abortController.abort();
-  });
-
-  function sendEvent(type, data) {
-    if (clientDisconnected) return;
-    try { res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`); } catch {}
-  }
-
-  try {
-    sendEvent("step", { step: "开始", detail: "检查 TTS 资源..." });
-
-    // 准备 WASM
-    sendEvent("step", { step: "WASM 引擎", detail: "检查中..." });
-    await ensureWasmReady((step, detail) => {
-      sendEvent("step", { step: `WASM: ${step}`, detail });
-    }, { signal: abortController.signal, force });
-    if (clientDisconnected) return;
-    sendEvent("step", { step: "WASM 引擎", detail: "就绪 ✓" });
-
-    // 准备模型
-    sendEvent("step", { step: "语音模型", detail: "检查中..." });
-    await ensureModelReady((step, detail) => {
-      sendEvent("step", { step: `模型: ${step}`, detail });
-    }, { signal: abortController.signal, force });
-    if (clientDisconnected) return;
-    sendEvent("step", { step: "语音模型", detail: "就绪 ✓" });
-
-    sendEvent("done", { success: true });
-  } catch (e) {
-    if (!clientDisconnected) sendEvent("error", { message: e.message });
-  }
-
-  res.end();
-});
+// 处理器在 lib/tts-prepare-sse.mjs：那条流的判据（帧顺序、必须收尾、断开只认 res）
+// 要真 HTTP 连接才测得动，那边用例拿假下载函数 + 回环服务跑完整一条流。
+router.get("/tts/prepare", requireAuth, createTtsPrepareHandler({ ensureWasmReady, ensureModelReady }));
 
 export default router;
