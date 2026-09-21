@@ -20,13 +20,19 @@ const { createResourceGate } = mod as {
     download: Download;
     cooldownMs?: number;
     now?: () => number;
+    isReady?: () => boolean;
   }) => { ensure: (onProgress?: Progress, opts?: { signal?: AbortSignal; force?: boolean }) => Promise<void> };
 };
 
-function harness(overrides: { cooldownMs?: number } = {}) {
+function harness(overrides: { cooldownMs?: number; isReady?: () => boolean } = {}) {
   let clock = 1_000_000;
   const download: Mock<Download> = vi.fn(async () => {});
-  const gate = createResourceGate({ download, now: () => clock, cooldownMs: overrides.cooldownMs ?? 30000 });
+  const gate = createResourceGate({
+    download,
+    now: () => clock,
+    cooldownMs: overrides.cooldownMs ?? 30000,
+    isReady: overrides.isReady,
+  });
   return { gate, download, tick: (ms: number) => { clock += ms; } };
 }
 
@@ -36,6 +42,30 @@ describe("一趟车", () => {
     await h.gate.ensure();
     await h.gate.ensure();
     expect(h.download).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * `ready` 只是"本进程成功过一次"的记忆，文件却归磁盘管。
+   *
+   * 形状是真后端那一档量出来的（`e2e/specs-real` 的 R-D1）：缓存被进程外部清掉之后，
+   * 点「启用服务端推理」的 SSE 会**立刻**报完成、什么都不下（闸门直接 `return`），
+   * 而 `/tts/status` 读的是文件存在性，于是界面永远停在"模型尚未下载到服务器"——
+   * 症状是"这个按钮按下去没反应，重启后端才好"。家用 LAN 上后端常连几周，
+   * 手动腾盘 / 清缓存目录都是会发生的。
+   */
+  it("成功之后缓存被外部清掉：下一次 ensure 必须重新下载，不许报「已完成」", async () => {
+    let onDisk = true;
+    const h = harness({ isReady: () => onDisk });
+    await h.gate.ensure();
+    expect(h.download).toHaveBeenCalledTimes(1);
+
+    onDisk = false; // 有人把 tts-cache 删了
+    await h.gate.ensure();
+    expect(h.download, "闸门还相信自己 ready：SSE 立刻 done 而盘上什么都没有").toHaveBeenCalledTimes(2);
+
+    onDisk = true; // 重新下回来了
+    await h.gate.ensure();
+    expect(h.download, "文件都在的时候不许重下（一次 322MB）").toHaveBeenCalledTimes(2);
   });
 
   it("并发请求共享同一趟下载", async () => {

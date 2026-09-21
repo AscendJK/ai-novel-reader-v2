@@ -687,10 +687,28 @@ async function downloadAndExtract(giteeParts, githubUrl, archiveName, targetDir,
  * 确保 WASM 文件已缓存。状态机（共享一趟下载 / 失败冷却 / force 不重叠）在
  * lib/tts-resource-gate.mjs——那里有用例，改坏了会有东西红。
  */
+/**
+ * 闸门用的"盘上到底齐不齐"探针。
+ *
+ * `validateExtractedFiles` 是**抛错**式（下载完那一次要的是"把错细节推给用户"），
+ * 而闸门要的只是一个布尔值：不齐就重新下，不是把"解压后缺少文件: model.onnx"
+ * 当成一次请求失败甩给点按钮的人。
+ */
+function cacheComplete(dir, requiredFiles) {
+  try {
+    validateExtractedFiles(dir, requiredFiles);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const wasmGate = createResourceGate({
   download: (onProgress, options) => downloadAndExtract(
     GITEE_WASM_PARTS, null, WASM_ARCHIVE_NAME, TTS_WASM_CACHE, WASM_REQUIRED_FILES, onProgress, options
   ),
+  // 齐套校验读的是磁盘，不是本进程的记忆：见 lib/tts-resource-gate.mjs 里那句复核
+  isReady: () => cacheComplete(TTS_WASM_CACHE, WASM_REQUIRED_FILES),
 });
 export function ensureWasmReady(onProgress, options = {}) {
   return wasmGate.ensure(onProgress, options);
@@ -701,6 +719,7 @@ const modelGate = createResourceGate({
   download: (onProgress, options) => downloadAndExtract(
     GITEE_MODEL_PARTS, GITHUB_MODEL_URL, MODEL_ARCHIVE_NAME, TTS_MODEL_CACHE, MODEL_REQUIRED_FILES, onProgress, options
   ),
+  isReady: () => cacheComplete(TTS_MODEL_CACHE, MODEL_REQUIRED_FILES),
 });
 export function ensureModelReady(onProgress, options = {}) {
   return modelGate.ensure(onProgress, options);

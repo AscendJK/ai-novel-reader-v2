@@ -12,7 +12,7 @@
  *    否则所有人重下 + 各自吃一次冷却（断开只影响事件推送，由 /tts/prepare 负责）。
  *  - force 只在"当前没有下载在跑"时生效：另起一份会和在跑的那次写同一批临时文件，互相踩坏。
  */
-export function createResourceGate({ download, cooldownMs = 30000, now = () => Date.now() }) {
+export function createResourceGate({ download, isReady = () => true, cooldownMs = 30000, now = () => Date.now() }) {
   let ready = false;
   let pending = null;
   let lastFailure = 0;
@@ -25,7 +25,11 @@ export function createResourceGate({ download, cooldownMs = 30000, now = () => D
     async ensure(onProgress, { signal, force = false } = {}) {
       void signal; // 见文件注释：调用方的断开不打断共享下载
       if (force && !pending) ready = false;
-      if (ready) return;
+      // `ready` 只是"本进程成功过一次"的记忆，文件归磁盘管：进程活着的时候被人清掉
+      // 缓存目录（手动腾盘、容器换卷），还当它就绪的话 SSE 会立刻报完成而盘上什么都没有，
+      // 界面上就是"点启用没反应，只能重启后端"。所以每次都拿真实存在性复核一次。
+      if (ready && isReady()) return;
+      if (ready) ready = false;
       if (pending) { await pending; return; }
       if (now() - lastFailure < cooldownMs) {
         throw new Error(`上次下载失败，请 ${Math.round(cooldownMs / 1000)} 秒后重试`);
