@@ -188,7 +188,17 @@ test("G4 390px 下打开地点详情：弹窗自己在屏内、整页不许被�
   expect(box, "详情卡片没有几何尺寸").not.toBeNull();
   expect(box!.x, "卡片左沿出界").toBeGreaterThanOrEqual(0);
   expect(box!.x + box!.width, "卡片右沿出了 390 的屏").toBeLessThanOrEqual(390 + 1);
-  expect(box!.y + box!.height, "卡片下沿出了 844 的屏").toBeLessThanOrEqual(844 + 1);
+  // 刻意**没有**"下沿必须落在 844 之内"这一条：那层遮罩本来就能纵向滚（`overflow-y-auto`，
+  // 就是为了关得掉），纵向出界不是缺陷。实测把卡片整体下移 700px，页面自己滚一下就把
+  // 它带回视口，判据照样绿——留一条打不动的断言只会伪造"这块有钉"的错觉。
+  // 纵向真正的用户后果（长内容时关不掉）由 G4b 盯。
+  // 横向才要硬判：那层没有横向滚动的余地，出界就是切掉一半。
+
+  // 上面那条 `expectNoHorizontalOverflow` 看的是"整页有没有被撑出横向滚动"，
+  // 而弹窗越界的内容会被祖先的裁剪/滚动吸收掉——实测给卡片塞一个 600px 宽的子元素，
+  // 那条照绿。所以对弹窗要单独量它自己：内部一旦比自身宽，用户就得左右拖才看得到全。
+  const innerOverhang = await detail.evaluate((el) => el.scrollWidth - el.clientWidth);
+  expect(innerOverhang, "卡片内部要横向拖才看得全（模型给一段不带空格的长 URL 就是这样）").toBeLessThanOrEqual(1);
 
   // 这一条判据只该花一次模型调用
   expect(backend.seen().filter((r) => r.path.endsWith("/chat/completions")), "生成地图只发一次请求").toHaveLength(1);
@@ -208,6 +218,10 @@ test("G4b 模型吐回一段超长描述：详情弹窗必须还能滚到关闭�
   await close.scrollIntoViewIfNeeded();
   await expectUnblocked(close);
   await expectNoHorizontalOverflow(page);
+  // 同一条内部量法放在这里才是这一条的主角：不带空格的长 URL 不会被自然折行，
+  // 卡片要么把它撑宽（用户得左右拖），要么靠 `break-words` 自己吞掉。
+  const overhang = await detail.evaluate((el) => el.scrollWidth - el.clientWidth);
+  expect(overhang, "超长描述把卡片撑得要在内部左右拖").toBeLessThanOrEqual(1);
 });
 
 test("G5 竖屏转横屏：当前章必须还是那一章，不许回到第一章", async ({ page }) => {

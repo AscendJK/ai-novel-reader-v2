@@ -57,7 +57,10 @@ export function PlaceDetail({ place, layers, parentPlace, childPlaces, forces, o
     // 手机上就是一副关不掉的弹窗。`my-auto` 在空间够的时候居中，不够时收成 0，
     // 于是长内容从顶部开始排，配 `overflow-y-auto` 就能滚到关闭按钮。
     <div className="fixed inset-0 z-[10000] flex overflow-y-auto bg-black/50 p-4">
-      <Card className="w-full max-w-md mx-auto my-auto shrink-0" data-testid="place-detail">
+      {/* `break-words` 写在卡片上：`overflow-wrap` 是继承属性，一处管住标题、徽章和描述。
+          模型给的描述里常有一段不带空格的长 URL，没有它整张卡片会被撑到要左右拖才看得全
+          （判据在 e2e 的 G4b：量卡片自身的 scrollWidth）。 */}
+      <Card className="w-full max-w-md mx-auto my-auto shrink-0 break-words" data-testid="place-detail">
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
