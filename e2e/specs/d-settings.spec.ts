@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { stubBackend, idleTtsStatus } from "../fixtures/backend";
-import { sel, openApp, expectUnblocked } from "../pages/app";
+import { sel, expectUnblocked } from "../pages/app";
+import { addProvider, openSettings, settings, signIn, signOut } from "../pages/settings";
 import { importFiles, miniNovel, shelfCard, txtFile } from "../pages/shelf";
 
 /**
@@ -16,48 +17,6 @@ import { importFiles, miniNovel, shelfCard, txtFile } from "../pages/shelf";
 const FAKE_KEY = "sk-e2e-dummy-不是真钥匙";
 const USER_A = "e2e-keystore-a";
 const USER_B = "e2e-keystore-b";
-
-const settings = (page: Page) => ({
-  add: page.getByRole("button", { name: "添加 API" }),
-  save: page.getByRole("button", { name: "保存" }),
-  name: page.locator("#api-name"),
-  key: page.locator("#api-key"),
-  baseUrl: page.locator("#api-baseurl"),
-  model: page.locator("#api-model"),
-  emptyList: page.getByText("暂无 API 配置，点击上方按钮添加"),
-});
-
-async function signIn(page: Page, username: string): Promise<void> {
-  await openApp(page);
-  await sel.usernameSelect(page).selectOption({ value: "__new__" });
-  await sel.newUsername(page).fill(username);
-  await sel.loginSubmit(page).click();
-  // 20 秒：满并发的"重 boot + 拉书架"实测要走十几秒（B7 量过），这条判据要红在
-  // "永远进不去"上，而不是红在"这台机器此刻很忙"
-  await expect(sel.loginGate(page)).toHaveCount(0, { timeout: 20_000 });
-}
-
-async function signOut(page: Page): Promise<void> {
-  // 不接 dialog 的话 Playwright 默认 dismiss，等于用户点了"取消"，根本退不出去
-  page.once("dialog", (d) => d.accept());
-  await page.getByTitle("退出登录").click();
-  await expect(sel.loginGate(page)).toBeVisible({ timeout: 20_000 });
-}
-
-async function openSettings(page: Page): Promise<void> {
-  await sel.settingsButton(page).click();
-  await expect(page.getByRole("heading", { name: "API 设置" })).toBeVisible();
-}
-
-async function addProvider(page: Page, f: { name: string; key?: string; baseUrl?: string; model?: string }): Promise<void> {
-  const s = settings(page);
-  await s.add.click();
-  await s.name.fill(f.name);
-  if (f.key !== undefined) await s.key.fill(f.key);
-  if (f.baseUrl !== undefined) await s.baseUrl.fill(f.baseUrl);
-  if (f.model !== undefined) await s.model.fill(f.model);
-  await s.save.click();
-}
 
 /** 直接查浏览器真 IndexedDB，而不是查应用自己的 store——store 会跟着代码一起错。 */
 async function readSharedSetting<T>(page: Page, key: string): Promise<T | undefined> {

@@ -11,6 +11,8 @@ export type Reply = {
   status?: number;
   body?: unknown;
   headers?: Record<string, string>;
+  /** 响应的 content-type。默认 `application/json`；SSE 那类要靠它分流（openai.ts:161） */
+  contentType?: string;
   /** 断掉连接 = "服务器不可达"，走 fetch 的网络错误分支（不是 500 分支） */
   abort?: boolean;
 };
@@ -26,6 +28,19 @@ export interface Backend {
   /** 没有任何桩接住的请求——静默放过就是假绿的温床，所以只记录、不假装成功 */
   unmatched(): string[];
   count(method: string, path: string): number;
+}
+
+/**
+ * 页面中途取消（点了"停止"）之后，桩的回包发不出去是正常现象。
+ * 不吞掉它就会在 route handler 里抛一个未处理拒绝，把一条本该绿在用例上失败的工具砸红。
+ */
+async function settle(action: Promise<void>): Promise<void> {
+  try {
+    await action;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!/already handled|closed|abort/i.test(msg)) throw e;
+  }
 }
 
 function resolveKey(table: StubTable, method: string, pathname: string): string | undefined {
@@ -75,12 +90,12 @@ export async function stubBackend(page: Page, table: StubTable): Promise<Backend
       : (table[name] as Reply));
 
     if (reply.abort) {
-      await route.abort("connectionrefused");
+      await settle(route.abort("connectionrefused"));
       return;
     }
-    await route.fulfill({
+    await settle(route.fulfill({
       status: reply.status ?? 200,
-      contentType: "application/json",
+      contentType: reply.contentType ?? "application/json",
       body: typeof reply.body === "string" ? reply.body : JSON.stringify(reply.body ?? {}),
       headers: {
         // dev server 带 `Cross-Origin-Embedder-Policy: require-corp`（vite.config.ts:133-139），
@@ -88,7 +103,7 @@ export async function stubBackend(page: Page, table: StubTable): Promise<Backend
         "Cross-Origin-Resource-Policy": "cross-origin",
         ...reply.headers,
       },
-    });
+    }));
   });
 
   return {

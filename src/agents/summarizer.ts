@@ -10,6 +10,7 @@ import { buildChapterSummaryPrompt } from "@/lib/prompt-templates";
 import { sampleChapterContent, prepareAgentContext, chatWithContextRetry, isAbortError, sampleChapterTitles, usablePreRetrieval } from "./utils";
 import { estimateTokens, computeAvailableInput, requireUsableInput } from "@/api/token-manager";
 import { APIError } from "@/api/error-handler";
+import { formatAPIError } from "./runTask";
 
 /**
  * 章节总结 Agent
@@ -44,6 +45,8 @@ class SummarizerAgent extends BaseAgent {
     }
 
     const results: { chapterTitle: string; content: string; tokens: number }[] = [];
+    /** 逐章失败的原因。全章皆墨时必须有一份递给 UI，否则用户只看到一句"总结生成失败" */
+    const failures: string[] = [];
     let totalChars = 0;
     let usedFallback = false;
     let truncated = false;
@@ -84,6 +87,7 @@ class SummarizerAgent extends BaseAgent {
 
         // 防御：即使 API 返回 200，空内容也视为失败，避免保存空白总结
         if (!response.content || !response.content.trim()) {
+          failures.push("API 返回了空内容");
           results.push({
             chapterTitle: chapter.title,
             content: "总结生成失败: API 返回了空内容",
@@ -107,9 +111,11 @@ class SummarizerAgent extends BaseAgent {
           cancelled = true;
           break;
         }
+        const reason = formatAPIError(err);
+        failures.push(reason);
         results.push({
           chapterTitle: chapter.title,
-          content: `总结生成失败: ${this.formatError(err)}`,
+          content: `总结生成失败: ${reason}`,
           tokens: 0,
         });
         consecutiveFailures++;
@@ -128,18 +134,14 @@ class SummarizerAgent extends BaseAgent {
 
     return {
       success: hasAnySuccess || results.length === 0,
+      // 一章都没成：把第一手原因带出去。过去只回 success:false，UI 上的红条就退化成
+      // 一句"总结生成失败"，厂商 401 与后端会话失效长得一模一样，用户无从下手（C9 实测）。
+      error: hasAnySuccess || results.length === 0 ? undefined : failures[0],
       data: { summaries: results, totalChars },
       tokensUsed: results.reduce((sum, r) => sum + r.tokens, 0),
       metadata,
       cancelled,
     };
-  }
-
-  private formatError(err: unknown): string {
-    if (err instanceof APIError) {
-      return `[${err.apiCode || err.code}] ${err.message}`;
-    }
-    return err instanceof Error ? err.message : "未知错误";
   }
 }
 

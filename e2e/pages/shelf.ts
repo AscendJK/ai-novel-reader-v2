@@ -86,5 +86,6 @@ export async function backToShelf(page: Page): Promise<void> {
 
 /** 目录侧栏里的章节按钮（宽屏才有，见 ReadingPanel.tsx:47）。按钮文案可能带序号前缀，所以不用 exact。 */
 export function navChapter(page: Page, index: number) {
-  return page.getByRole("button", { name: new RegExp(CHAPTER_TITLES[index]) });
+  // 必须限定在侧栏容器里：移动端那份目录抽屉（ReadingPanel.tsx:134-146）也挂着同名按钮
+  return page.locator('[data-sidebar="chapter-nav"]').getByRole("button", { name: new RegExp(CHAPTER_TITLES[index]) });
 }
