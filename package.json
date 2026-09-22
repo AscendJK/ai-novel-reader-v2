@@ -25,6 +25,7 @@
     "preview:migration": "node scripts/preview-db-migration.mjs",
     "audit:orphans": "node scripts/audit-joined-orphans.mjs",
     "audit:reach": "node scripts/audit-import-graph.mjs",
+    "audit:floor": "node scripts/audit-floor.mjs",
     "audit:discrimination": "node scripts/audit-discrimination.mjs",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",

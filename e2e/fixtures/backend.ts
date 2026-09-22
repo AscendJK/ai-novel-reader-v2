@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import type { Page, Request } from "@playwright/test";
 
 /**
@@ -114,6 +115,23 @@ export async function stubBackend(page: Page, table: StubTable): Promise<Backend
       },
     }));
   });
+
+  // 「覆盖地板」要用的一档：把这一页真加载过的 `src/**` 模块记进一份 JSONL。
+  // 不设 `ANR_E2E_MODULE_LOG` 时一行都不写，正常跑套不受影响；它**只记不判**——
+  // "加载过"远不等于"断言过"，但把这两件事分得开，才说得清哪里是真·裸奔。
+  const moduleLog = process.env.ANR_E2E_MODULE_LOG;
+  if (moduleLog) {
+    const logged = new Set<string>();
+    page.on("request", (req) => {
+      const pathname = new URL(req.url()).pathname;
+      const at = pathname.indexOf("/src/");
+      if (at < 0) return;
+      const file = pathname.slice(at + 1);
+      if (!/\.(ts|tsx|js|jsx)$/.test(file) || logged.has(file)) return;
+      logged.add(file);
+      appendFileSync(moduleLog, `${file}\n`);
+    });
+  }
 
   return {
     seen: () => seen.slice(),

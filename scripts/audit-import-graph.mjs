@@ -9,6 +9,12 @@
  * 机器扛不住（实测一次全量从 52s 恶化到 461s），基线一飘结论就作废。
  *
  * 用法：node scripts/audit-import-graph.mjs [--from 176c21d] [--json out.json]
+ *      --all      算全部 `src/`+`server/` 生产文件，而不是"某提交之后改过的"——
+ *                 要看**当前**覆盖地板就用它（`FROM` 那个口径是 2026-09 那轮审计的遗留）。
+ *      --browser <jsonl>  叠上浏览器层：文件每行一个 `src/...` 路径，来自
+ *                 `ANR_E2E_MODULE_LOG=<路径> npx playwright test -c e2e/playwright.config.ts`。
+ *                 这一档只说明"这个模块真在跑的应用里被加载过"，**不等于有断言看着它**；
+ *                 分档就是为了不把"加载过"读成"测过了"。
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -17,12 +23,25 @@ import { execFileSync } from "node:child_process";
 const args = process.argv.slice(2);
 const getArg = (n, d) => { const i = args.indexOf(`--${n}`); return i >= 0 && args[i + 1] ? args[i + 1] : d; };
 const FROM = getArg("from", "176c21d");
+const ALL = args.includes("--all");
+/** 浏览器层：`ANR_E2E_MODULE_LOG` 记下来的"这一页真加载过的模块" */
+const BROWSER_FILE = getArg("browser", "");
+const browserLoaded = new Set(
+  BROWSER_FILE && fs.existsSync(BROWSER_FILE)
+    ? [...new Set(fs.readFileSync(BROWSER_FILE, "utf8").split(/\r?\n/).map((s) => s.trim()).filter(Boolean))]
+    : [],
+);
+if (BROWSER_FILE && !fs.existsSync(BROWSER_FILE)) console.error(`--browser 指向的文件不存在：${BROWSER_FILE}（这一档会被当成空）`);
 const ROOT = process.cwd();
 
 const allFiles = execFileSync("git", ["ls-files"], { encoding: "utf8" }).trim().split("\n")
   .filter((f) => /\.(ts|tsx|js|jsx|mjs)$/.test(f) && fs.existsSync(path.join(ROOT, f)));
 
-const isTest = (f) => /__tests__|[.]test[.]/.test(f);
+// 判据层算三样：vitest 用例、`e2e/` 旅程的静态可达（多半到不了，浏览器层另记），
+// 以及**七只服务端探针**——它们直接 `import` server 里的模块（`probe-novel-reupload` 就是
+// 直接调 `db.insertNovel`），所以按 import 图算得到它们，且它们本来就是服务端那层的判据。
+// 不这么算的话 `server/rag-builder.js`、`admin.js` 会被误报成"没人看着"。
+const isTest = (f) => /__tests__|[.]test[.]/.test(f) || /^scripts[/]probe-[a-z-]+\.mjs$/.test(f);
 
 const EXTS = ["", ".ts", ".tsx", ".js", ".mjs", "/index.ts", "/index.tsx"];
 // 仓内路径一律用正斜杠（git ls-files 给的就是正斜杠）；Windows 上 path.join 会掺反斜杠，
@@ -87,17 +106,31 @@ function reachingTests(file, limit = 40) {
   return tests;
 }
 
-const changed = execFileSync("git", ["diff", "--name-only", `${FROM}..HEAD`], { encoding: "utf8" })
-  .trim().split("\n")
-  .filter((f) => /^(src|server)\//.test(f) && !isTest(f) && fs.existsSync(path.join(ROOT, f)));
+const changed = ALL
+  ? allFiles.filter((f) => /^(src|server)\//.test(f) && !isTest(f))
+  : execFileSync("git", ["diff", "--name-only", `${FROM}..HEAD`], { encoding: "utf8" })
+      .trim().split("\n")
+      .filter((f) => /^(src|server)\//.test(f) && !isTest(f) && fs.existsSync(path.join(ROOT, f)));
 
-const rows = changed.map((f) => ({ file: f, tests: reachingTests(f) }));
-const naked = rows.filter((r) => r.tests.length === 0);
+const rows = changed.map((f) => ({ file: f, tests: reachingTests(f), browser: browserLoaded.has(f) }));
+const naked = rows.filter((r) => r.tests.length === 0 && !r.browser);
+const onlyBrowser = rows.filter((r) => r.tests.length === 0 && r.browser);
 
 const jsonOut = getArg("json", "");
 if (jsonOut) fs.writeFileSync(jsonOut, JSON.stringify(rows, null, 2));
 
-console.log(`本轮改动的源文件：${rows.length}`);
-console.log(`没有任何测试能到达（= 修复 100% 无用例守着）：${naked.length}\n`);
+console.log(`算进来的源文件：${rows.length}${ALL ? "（--all：全部 src/ + server/）" : `（${FROM}..HEAD 改过的）`}`);
+console.log(`单测/探针可达：${rows.filter((r) => r.tests.length > 0).length}`);
+console.log(`单测/探针到不了、浏览器跑到过（只证明界面加载过它；断言有没有穿过它要人看用例）：${onlyBrowser.length}`);
+for (const n of onlyBrowser) console.log(`  ${n.file}`);
+console.log(`\n两层都没碰到（= 改动 100% 无用例守着）：${naked.length}\n`);
 for (const n of naked) console.log(`  ${n.file}`);
+if (naked.some((n) => n.file.startsWith("server/"))) {
+  // 别把下面这句读成"那 52 只组件有人断言"，也别把 server/ 读成"完全没人看"：
+  // 七只探针是**真起 `node server/index.js` 再发 HTTP**、或者 `await import(算出来的 URL)`
+  // 加载 `server/database.js`，静态 import 图两种都看不见。server 的地板只能靠"改坏了探针红不红"
+  // 来量 —— 那就是 `npm run audit:discrimination` 的活（它自带 PROBE_FOR 映射）。
+  console.log("\n注：`server/` 这几只不代表「完全没人看着」。探针是真起后端发 HTTP、或者运行时 import 那些文件的，");
+  console.log("    静态图看不见这两件事；服务端地板请用 npm run audit:discrimination（它自带 PROBE_FOR 映射）量。");
+}
 if (!jsonOut) console.log("\n（加 --json 路径 可导出完整可达表）");
