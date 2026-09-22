@@ -28,6 +28,13 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
+      # 原生模块必须在这里就编好：`npm ci --ignore-scripts` 不跑 install 脚本，而单测里的
+      # sync-handler 用的是真 better-sqlite3（内存库）——没编译就会在 "Unit tests" 这一步
+      # 以 "Could not locate the bindings file" 砸红（2026-09-22 CI 实测）。后面的探针同样
+      # 要它，所以一次编在前面，而不是各自补。
+      - name: Rebuild better-sqlite3 (单测与探针都要真 SQLite)
+        run: npm rebuild better-sqlite3
+
       - name: Lint (server/ 纯 JS 无类型检查，靠 no-undef 拦崩溃类错误)
         run: npm run lint
 
@@ -69,10 +76,6 @@ jobs:
             playwright-report/
             test-results/
           retention-days: 7
-
-      # 探针要在临时库上真开 SQLite；上面的 npm ci --ignore-scripts 没编译原生模块
-      - name: Rebuild better-sqlite3 for probes
-        run: npm rebuild better-sqlite3
 
       - name: Server probes (备份恢复 / 地图迁移 / 重传不删库 / 同步会话 / RAG 指纹 / 代理流式 / 后端启动)
         run: |
