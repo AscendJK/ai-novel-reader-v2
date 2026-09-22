@@ -72,6 +72,7 @@ export function CharacterGraphSection({
   }
 
   // 有数据：显示可折叠内容
+  const autoLinked = graphData?.edges.filter((e) => e.autoLinked).length ?? 0;
   return (
     <div>
       {/* 标题栏 */}
@@ -91,6 +92,14 @@ export function CharacterGraphSection({
           <RefreshCw className={`h-2.5 w-2.5 ${showSpinner ? "animate-spin" : ""}`} />
         </Button>
       </div>
+
+      {/* 兜底链要说出来：模型一条关系都没回时，graph-agent 会按人物顺序补一条链，
+          它在图上与真关系长得一样。不标出来就等于把编出来的连线展示成分析结果。 */}
+      {autoLinked > 0 && (
+        <p className="text-[10px] text-muted-foreground pl-4">
+          其中 {autoLinked} 条是界面自己补的连线，不是模型分析出来的关系
+        </p>
+      )}
 
       {/* 展开内容 */}
       {isOpen && graphData && (

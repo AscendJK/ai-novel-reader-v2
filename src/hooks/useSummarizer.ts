@@ -25,7 +25,11 @@ import { uuid } from "@/parsers/utils";
 
 export interface GraphData {
   nodes: { id: string; group: string; description: string }[];
-  edges: { source: string; target: string; label: string }[];
+  /**
+   * `autoLinked` 由 `graph-agent` 在"模型一条关系都没回"时补出来的那条链打标：
+   * 界面上它长得和真关系一模一样，所以必须能分开（提示行与虚线只认这个标记）。
+   */
+  edges: { source: string; target: string; label: string; autoLinked?: boolean }[];
 }
 
 interface TempResult {

@@ -241,20 +241,25 @@ describe("图谱的边兜底与引用过滤", () => {
     chat.mockResolvedValue(reply(json));
     const r = await run();
     expect(r.success).toBe(true);
-    return (r.data as { graphData: { nodes: { id: string; group: string; description: string }[]; edges: { source: string; target: string; label: string }[] } }).graphData;
+    return (r.data as {
+      graphData: {
+        nodes: { id: string; group: string; description: string }[];
+        edges: { source: string; target: string; label: string; autoLinked?: boolean }[];
+      };
+    }).graphData;
   }
 
   it("模型没给边时按节点顺序生成链式兜底边（不多不少，不产生 undefined 节点）", async () => {
     const g = await graphOf(graphJson([N("令狐冲"), N("任盈盈"), N("岳不群")], []));
     expect(g.edges).toEqual([
-      { source: "令狐冲", target: "任盈盈", label: "关联" },
-      { source: "任盈盈", target: "岳不群", label: "关联" },
+      { source: "令狐冲", target: "任盈盈", label: "关联", autoLinked: true },
+      { source: "任盈盈", target: "岳不群", label: "关联", autoLinked: true },
     ]);
   });
 
   it("edges 字段整个缺失也兜底", async () => {
     const g = await graphOf(JSON.stringify({ nodes: [N("令狐冲"), N("岳不群")] }));
-    expect(g.edges).toEqual([{ source: "令狐冲", target: "岳不群", label: "关联" }]);
+    expect(g.edges).toEqual([{ source: "令狐冲", target: "岳不群", label: "关联", autoLinked: true }]);
   });
 
   it("所有边都引用不存在的人物时换成兜底链（否则界面一张空网）", async () => {
@@ -263,8 +268,8 @@ describe("图谱的边兜底与引用过滤", () => {
       { source: "令狐冲", target: "丙", label: "利用" },
     ]));
     expect(g.edges).toEqual([
-      { source: "令狐冲", target: "任盈盈", label: "关联" },
-      { source: "任盈盈", target: "岳不群", label: "关联" },
+      { source: "令狐冲", target: "任盈盈", label: "关联", autoLinked: true },
+      { source: "任盈盈", target: "岳不群", label: "关联", autoLinked: true },
     ]);
   });
 
@@ -278,6 +283,18 @@ describe("图谱的边兜底与引用过滤", () => {
       { source: "令狐冲", target: "任盈盈", label: "恋人" },
       { source: "任盈盈", target: "岳不群", label: "仇敌" },
     ]);
+  });
+
+  it("补出来的边必须带 autoLinked，模型给的边不许带 —— 界面据此说清哪几条线不是分析结果", async () => {
+    // 这条标记是判据与产品之间唯一的接头：`CharacterGraphSection` 的提示行与
+    // `CharacterGraph` 的虚线都只认它。摘掉它，界面就会把"按人物顺序连起来的链"
+    // 展示成模型分析出的关系（R-E7 量出来的形状）。
+    const fallback = await graphOf(graphJson([N("令狐冲"), N("任盈盈")], []));
+    expect(fallback.edges.every((e) => e.autoLinked === true)).toBe(true);
+    const real = await graphOf(graphJson([N("令狐冲"), N("任盈盈")], [
+      { source: "令狐冲", target: "任盈盈", label: "恋人" },
+    ]));
+    expect(real.edges.every((e) => !e.autoLinked)).toBe(true);
   });
 
   it("单节点且无边时不产生越界边", async () => {

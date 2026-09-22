@@ -13,14 +13,20 @@ import { estimateTokens, computeAvailableInput } from "@/api/token-manager";
 
 interface GraphData {
   nodes: { id: string; group: string; description: string }[];
-  edges: { source: string; target: string; label: string }[];
+  edges: { source: string; target: string; label: string; autoLinked?: boolean }[];
 }
 
-/** 当 AI 未生成边时，自动生成链式关系边兜底 */
+/**
+ * 当 AI 未生成边时，自动生成链式关系边兜底。
+ *
+ * 每条都打 `autoLinked`：这条链是按人物顺序连出来的，不是模型读出来的关系，而界面上一眼
+ * 看不出区别（`CharacterGraphSection` 的提示行与 `CharacterGraph` 的虚线只认这个标记）。
+ * 真后端那档 R-E7 就是因此被改过判据——"界面有 N 条关系"根本证明不了模型回了关系。
+ */
 function autoGenerateEdges(nodes: GraphData["nodes"]): GraphData["edges"] {
   const edges: GraphData["edges"] = [];
   for (let i = 0; i < nodes.length - 1; i++) {
-    edges.push({ source: nodes[i].id, target: nodes[i + 1].id, label: "关联" });
+    edges.push({ source: nodes[i].id, target: nodes[i + 1].id, label: "关联", autoLinked: true });
   }
   return edges;
 }

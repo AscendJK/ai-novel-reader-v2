@@ -41,7 +41,7 @@ function getColor(group: string): string {
 }
 
 interface SimNode { id: string; group: string; description: string; x: number; y: number }
-interface SimEdge { source: SimNode; target: SimNode; label: string }
+interface SimEdge { source: SimNode; target: SimNode; label: string; autoLinked?: boolean }
 
 export function CharacterGraph({ graphData, onRegenerate }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -156,6 +156,7 @@ export function CharacterGraph({ graphData, onRegenerate }: Props) {
         source: nodes.find((n) => n.id === e.source)!,
         target: nodes.find((n) => n.id === e.target)!,
         label: e.label,
+        autoLinked: e.autoLinked,
       }))
       .filter((l) => l.source && l.target);
 
@@ -325,7 +326,8 @@ export function CharacterGraph({ graphData, onRegenerate }: Props) {
               return (
                 <g key={`e-${i}`}>
                   <line x1={e.source.x} y1={e.source.y} x2={e.target.x} y2={e.target.y}
-                    stroke="currentColor" strokeOpacity={0.12} strokeWidth={0.8} />
+                    stroke="currentColor" strokeOpacity={0.12} strokeWidth={0.8}
+                    strokeDasharray={e.autoLinked ? "4 3" : undefined} />
                   <text x={mx} y={my} textAnchor="middle" dominantBaseline="middle"
                     className="fill-muted-foreground" fontSize={fontSize * 0.85} dy={6}>
                     {e.label}
@@ -440,7 +442,8 @@ export function CharacterGraph({ graphData, onRegenerate }: Props) {
                   return (
                     <g key={`ee-${i}`}>
                       <line x1={e.source.x} y1={e.source.y} x2={e.target.x} y2={e.target.y}
-                        stroke="currentColor" strokeOpacity={0.15} strokeWidth={1.5} />
+                        stroke="currentColor" strokeOpacity={0.15} strokeWidth={1.5}
+                        strokeDasharray={e.autoLinked ? "6 4" : undefined} />
                       <text x={mx} y={my} textAnchor="middle" dominantBaseline="middle"
                         className="fill-muted-foreground" fontSize={fontSize} dy={8}>
                         {e.label}

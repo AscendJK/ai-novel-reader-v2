@@ -209,6 +209,36 @@ test("C3 人物关系图谱：几人几条边就显示几，边不许指向不�
   expect(backend.count("POST", VENDOR_CHAT_PATH)).toBe(1);
 });
 
+test("C10 图谱兜底链：模型没回关系时补出来的连线要说出来、画成虚线", async ({ page }) => {
+  test.setTimeout(60_000);
+  // `graph-agent.ts` 在模型一条关系都没回（或全部引用不存在的人）时，会按人物顺序补一条链。
+  // 补链本身是刻意保留的（不然界面一张空网），但它与真关系在图上长得一模一样，
+  // 而界面上那行「N 条关系」根本分不清是哪一种（R-E7 真厂商那档就是这么被逼着改判据的）。
+  await readyWithBook(page, vendorTable({ content: { nodes: GRAPH_FIXTURE.nodes, edges: [] } }));
+
+  await panel.tab(page, "全书分析").click();
+  await panel.button(page, "生成人物关系图谱").click();
+  await expect(panel.text(page, "3 个角色 · 2 条关系")).toBeVisible({ timeout: 20_000 });
+  await expect(panel.text(page, /2 条是界面自己补的连线，不是模型分析出来的关系/)).toBeVisible();
+
+  await panel.button(page, /人物关系分析图/).click();
+  const svg = panel.root(page).locator("svg.w-full.h-full").first();
+  // 补出来的两条都画成虚线；一条都没虚线化就是"提示写了、图上还在冒充"
+  await expect(svg.locator('line[stroke-dasharray="4 3"]')).toHaveCount(2);
+});
+
+test("C10b 模型真回了关系时不许出现兜底提示（把诚实的图谱污成有假线）", async ({ page }) => {
+  test.setTimeout(60_000);
+  await readyWithBook(page, vendorTable({ content: GRAPH_FIXTURE }));
+
+  await panel.tab(page, "全书分析").click();
+  await panel.button(page, "生成人物关系图谱").click();
+  await expect(panel.text(page, "3 个角色 · 2 条关系")).toBeVisible({ timeout: 20_000 });
+  await expect(panel.text(page, /不是模型分析出来的关系/)).toHaveCount(0);
+  await panel.button(page, /人物关系分析图/).click();
+  await expect(panel.root(page).locator('svg.w-full.h-full line[stroke-dasharray="4 3"]')).toHaveCount(0);
+});
+
 /**
  * 生成并展开"小说地图"，返回预览容器里那张注入的 SVG。
  *
