@@ -57,6 +57,11 @@ class CharacterGraphAgent extends BaseAgent {
     let lastError: string | undefined;
 
     for (let attempt = 1; attempt <= 2; attempt++) {
+      // 取消之后不再进第二次尝试。这道守卫在浏览器层量不出来——已 abort 的 fetch 到不了
+      // 厂商，第二发当场就失败，所以 e2e 只会看到"结果没落库"；真正的形状是重试分支把
+      // 取消当成一次普通失败：再走一遍完整装配、再刷一次状态文案。判据在单测层钉
+      // （signal 已 abort 时 provider 一次都不许被调用）
+      if (context.signal?.aborted) return { success: false, cancelled: true, error: "操作已取消" };
       try {
         context.onStatus?.(attempt === 1 ? "AI 正在生成分析..." : "AI 正在重新分析...");
 

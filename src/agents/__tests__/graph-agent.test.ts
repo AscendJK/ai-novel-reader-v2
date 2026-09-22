@@ -338,4 +338,15 @@ describe("图谱的请求参数", () => {
     expect(req.signal).toBe(controller.signal);
     expect(req.temperature).toBe(0.3);
   });
+
+  it("信号已经 abort 时一次都不许调用厂商（取消不许被当成一次普通失败去重试）", async () => {
+    chat.mockResolvedValue(reply(graphJson([N("令狐冲")], [])));
+    const controller = new AbortController();
+    controller.abort();
+    const r = await run({ signal: controller.signal });
+    expect(chat).not.toHaveBeenCalled();
+    expect(r.success).toBe(false);
+    // 取消不是失败：必须是 cancelled，否则上层会打出一条红色错误提示
+    expect(r.cancelled).toBe(true);
+  });
 });

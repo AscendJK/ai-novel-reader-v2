@@ -132,6 +132,16 @@ describe("地图任务的取数与请求参数", () => {
     expect(req.temperature).toBe(0.3);
   });
 
+  it("信号已经 abort 时一次都不许调用厂商（取消不许被当成一次普通失败去重试）", async () => {
+    chat.mockResolvedValue(reply(validMap()));
+    const controller = new AbortController();
+    controller.abort();
+    const r = await run({ signal: controller.signal });
+    expect(chat).not.toHaveBeenCalled();
+    expect(r.success).toBe(false);
+    expect(r.cancelled).toBe(true);
+  });
+
   it("输出上限只有 4096 的模型不能被顶到 16384（直接 400）", async () => {
     chat.mockResolvedValue(reply(validMap()));
     await run();

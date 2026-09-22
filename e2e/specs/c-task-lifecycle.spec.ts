@@ -242,3 +242,42 @@ test("L10 不同书：一本在飞时另一本照样能开跑", async ({ page })
   await ensurePanelOpen(page);
   await expect(panel.text(page, SUMMARY_TEXT), "乙书开跑把甲书的任务挤掉了").toBeVisible({ timeout: 10_000 });
 });
+
+/**
+ * 「停止」之后不许有事后落库。
+ *
+ * 两条断言各有各的份量，别当成一双：
+ *   ① 厂商请求数停在 1 —— 这条**没有**判别力：已 abort 的 fetch 在浏览器里就死了，
+ *      第二发根本到不了桩，所以摘掉守卫它也是 1。留它是记录意图（"停止之后不该再有第二发"），
+ *      真正钉住这件事的是 agent 层那两条单测（signal 已 abort 时 provider 一次都不许被调用）。
+ *   ② 界面上不许出现本该由那一发产出的结果 —— 这条有牙：摘掉 cancelTask 的 abort，
+ *      图谱就会在停止之后正常落库并显示出来（实测红）。
+ *      地图的计数行只在展开区里，所以判 ② 之前必须先把子项点开，否则恒真。
+ */
+async function stopMustReallyStop(
+  page: Page, trigger: string, table: Parameters<typeof vendorTable>[0], marker: string, subItem?: RegExp
+): Promise<void> {
+  const backend = await ready(page, table, "全书分析");
+  await panel.button(page, trigger).click();
+  await inFlight(backend, `停止·${trigger}`);
+  await panel.button(page, "停止").click();
+  await page.waitForTimeout(SLOW_MS + 3000);
+  const requests = chatRequests(backend).length;
+  console.log(`[L 停止] ${trigger} → 厂商请求数=${requests}`);
+  expect(requests, `${trigger}：按了停止还在发第二发（多花一次额度）`).toBe(1);
+  if (subItem) {
+    const header = panel.button(page, subItem);
+    if (await header.isVisible().catch(() => false)) await header.click();
+  }
+  await expect(panel.text(page, marker), `${trigger}：停止之后结果还是落库了`).toHaveCount(0);
+}
+
+test("L11 图谱按「停止」：不许事后落库", async ({ page }) => {
+  test.setTimeout(90_000);
+  await stopMustReallyStop(page, "生成人物关系图谱", { content: GRAPH_FIXTURE, delayMs: SLOW_MS }, "3 个角色 · 2 条关系");
+});
+
+test("L12 地图按「停止」：不许事后落库", async ({ page }) => {
+  test.setTimeout(90_000);
+  await stopMustReallyStop(page, "生成小说地图", { content: mapFixture(MAP_PLACES), delayMs: SLOW_MS }, "3 个层级 · 4 个地点", /小说地图/);
+});

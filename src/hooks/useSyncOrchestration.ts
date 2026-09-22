@@ -14,6 +14,7 @@ import type { SyncData } from "@/sync/types";
 import { apiFetch, getEffectiveServerUrl } from "@/lib/api-client";
 import { broadcast } from "@/lib/broadcast";
 import { getAiRunning } from "@/lib/ai-state";
+import { cancelAllAiTasks } from "@/lib/ai-task-queue";
 import { dedupSummaries } from "@/lib/dedup-utils";
 import { downloadModel } from "@/rag/model-loader";
 import { showToast } from "@/lib/toast-store";
@@ -301,6 +302,9 @@ const applySyncData = useCallback(async (data: SyncData) => {
       oldDb.graphs.toArray(),
     ]);
     syncClient.setUsername(newUsername);
+    // 换绑定之前先把 AI 活儿作废：任务的生命周期已经不在组件手里（折叠面板不再中断它），
+    // 而落库读的是「当前绑定的那个库」——留着它在飞，下一位用户就会看见不属于他的结果
+    cancelAllAiTasks();
     setCurrentUser(newUsername);
     localStorage.setItem("sync-username", newUsername);
     renameUserScopedKeys(oldUsername, newUsername);
@@ -451,6 +455,8 @@ const applySyncData = useCallback(async (data: SyncData) => {
     const prevUsername = existingUser;
     const userPreexisted = getLocalUsers().includes(username);
     localStorage.setItem("sync-username", username);
+    // 同一条理由：本标签页换身份不走 reload，在飞的 AI 任务必须跟着旧身份一起结束
+    cancelAllAiTasks();
     setCurrentUser(username);
     addLocalUser(username);
     setLocalUsers(getLocalUsers());
@@ -575,6 +581,8 @@ const applySyncData = useCallback(async (data: SyncData) => {
         useSummaryStore.getState().setSummaries([]);
         if (prevUsername && prevUsername !== username) {
           localStorage.setItem("sync-username", prevUsername);
+          // 回滚也是一次换绑定：以被拒用户名发起的任务同样不许留给上一位
+          cancelAllAiTasks();
           setCurrentUser(prevUsername);
           useNovelStore.getState().reloadReadingPositions();
           broadcast.send("user-switched", prevUsername);
