@@ -156,6 +156,14 @@ test.describe.serial("真后端：模型真下载、SSE 真逐帧、音频真出
 
     // 再按界面量一次：同样的文本走用户那条路，播放栏要出现并且计时真的在走
     await openBook(page, BOOK);
+    // 时间线：抓每一条真打到服务端的合成请求（正文 + 时刻）。F8 在假服务器上钉过
+    // "章末之前下一章就该排队"，这里把它翻到真 Python、真队列上。
+    const synth: { at: number; text: string }[] = [];
+    const tStart = Date.now();
+    page.on("request", (r) => {
+      if (r.method() !== "POST" || !r.url().includes("/api/rag/tts/synthesize")) return;
+      synth.push({ at: Date.now() - tStart, text: r.postData() ?? "" });
+    });
     await page.getByTitle("语音朗读").click();
     const bar = page.getByTitle("上一章", { exact: true });
     await expect(bar).toBeVisible({ timeout: 60_000 });
@@ -181,6 +189,23 @@ test.describe.serial("真后端：模型真下载、SSE 真逐帧、音频真出
       )
       .toBeGreaterThanOrEqual(2);
     await expect(page.getByText(/朗读出错/)).toHaveCount(0);
+
+    /**
+     * 判据：章界预热在真后端上真发了火。
+     *
+     * 这条之所以不需要拿时刻比来比去：**本用例在段号走到 2 之后就停手，根本不跨过章界**
+     * （一章两段，播完才叫章界）。所以"第二章的字出现在合成请求里"只可能是预热发的——
+     * 没有第二条路能在这一刻之前打到它。反过来，若预热根本没发火，这里就是 0 发。
+     * 第二道判据管住另一头：发火不等于把整本书都推下去了，下一章最多两段。
+     */
+    const ch2 = synth.filter((s) => /第二章|虎牢关/.test(s.text));
+    // 先给它一秒落定：预热是同批 fetch 一起提交的，而真服务器是 HTTP/1.1，
+    // 第二条可能在连接池里排着还没派发出去。不等就数，"上限"那条会 trivially 通过。
+    await page.waitForTimeout(1_500);
+    console.log(`[R-D2 预热时间线] ${JSON.stringify(synth.map((s) => `${s.at}ms:${s.text.slice(0, 12)}`))}`);
+    expect(ch2.length, "第一章还在播，第二章的字一句都没打到服务端 —— 章界预热在真后端上没发火").toBeGreaterThanOrEqual(1);
+    expect(ch2.length, "下一章被整章推下去了：预热段数上限没起作用").toBeLessThanOrEqual(2);
+
     await page.getByTitle(/停止/).first().click().catch(() => {});
   });
 
