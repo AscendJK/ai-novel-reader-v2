@@ -25,7 +25,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { panel } from "../pages/panel";
 import { openSummaryPanel, addProvider, openSettings, leaveSettings } from "../pages/settings";
 import { importFiles, longNovel, openBook, shelfCard, txtFile } from "../pages/shelf";
-import { RUN, signIn } from "./fixtures";
+import { RUN, signIn, vendorReach } from "./fixtures";
 
 const key = process.env.ANR_VENDOR1_KEY ?? "";
 const BASE = process.env.ANR_VENDOR1_BASE ?? "https://411.cc.cd/v1";
@@ -66,6 +66,15 @@ function vendorText(body: string, contentType: string): string {
 // 把后面两条一起吞掉（实测报 `did not run`），变异验收时看不全
 test.describe("真后端：批量生成三条打在真厂商上", () => {
   test.skip(!key, "没设 ANR_VENDOR1_KEY：这一组要真厂商，缺了就跳过（不算红）");
+
+  // 与 r-vendor.spec.ts 同一套分类：厂商"不在"（连不出去/5xx）跳过并写明原因，
+  // 4xx 照红——key 失效与"发出去的整本书没回内容"都是这一条要报的。
+  test.beforeAll(async () => {
+    const r = await vendorReach({ base: BASE, model: MODEL, key });
+    if (r.reachable) return;
+    console.log(`[R-E 批量] 预探：${r.why} → ${r.skip ? "跳过这一组" : "不跳过，让判据红"}`);
+    test.skip(r.skip, `预探：${r.why}`);
+  });
 
   /** 三条都要同一份前置：配好厂商 + 一本 40 章长书 + 面板展开到「全书分析」 */
   test.beforeEach(async ({ page, baseURL }) => {

@@ -24,7 +24,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { panel } from "../pages/panel";
 import { openSettings, openSummaryPanel, addProvider, leaveSettings } from "../pages/settings";
 import { importFiles, openBook, shelfCard, txtFile } from "../pages/shelf";
-import { ORIGIN, RUN, realNovel, signIn } from "./fixtures";
+import { ORIGIN, RUN, realNovel, signIn, vendorReach } from "./fixtures";
 
 interface Vendor {
   /** 只出现在测试标题与判据文案里，不含 key */
@@ -107,6 +107,15 @@ for (const v of VENDORS) {
   test.describe.serial(`R-E ${v.label}`, () => {
     test.skip(!key, `没设 ${v.keyEnv}：这一组要真厂商 key，缺了就跳过（不算红）`);
 
+    // 厂商"不在"与产品"坏了"是两件事：连不出去/5xx 就整组跳过并写明原因，
+    // 4xx（key 失效、额度、路径写错）照红——那正是这些判据要报的东西。
+    test.beforeAll(async () => {
+      const r = await vendorReach({ base: v.base, model: v.model, key });
+      if (r.reachable) return;
+      console.log(`[R-E] ${v.label} 预探：${r.why} → ${r.skip ? "跳过这一组" : "不跳过，让判据红"}`);
+      test.skip(r.skip, `${v.label} 预探：${r.why}`);
+    });
+
     test(`R-E1 可达性：经后端代理转发打一条探针，域名/路径/模型名三件都对得上`, async ({ page, baseURL }) => {
       test.setTimeout(3 * 60_000);
       await signIn(page, baseURL!, v.user);
@@ -183,6 +192,15 @@ test.describe("R-E 两条腿的分工（错 key）", () => {
   // 用 sensenova 那家：它的直连腿在浏览器里必败（无 OPTIONS 预检），所以这次一定走到代理腿，
   // 也正是在这条腿上"厂商的 401"最容易被误判成"后端会话失效"（`server/routes/proxy.js:63-67` 注释）
   test.skip(!key, `没设 ${v.keyEnv}：需要一把真 key 才能派生一只错 key 的对照`);
+
+  // 这条依赖厂商**真回 401**（判的是"厂商 401 不许说成本机会话失效"），所以厂商连不上时
+  // 它没有可判的东西：与上面同一套分类——网络层/5xx 跳过，4xx 照跑。
+  test.beforeAll(async () => {
+    const r = await vendorReach({ base: v.base, model: v.model, key });
+    if (r.reachable) return;
+    console.log(`[R-E4] ${v.label} 预探：${r.why} → ${r.skip ? "跳过" : "不跳过，让判据红"}`);
+    test.skip(r.skip, `${v.label} 预探：${r.why}`);
+  });
 
   test(`R-E4 故意错的 key：报"认证失败"类文案，并且不拿同一份内容再打第二次`, async ({ page, baseURL }) => {
     test.setTimeout(6 * 60_000);

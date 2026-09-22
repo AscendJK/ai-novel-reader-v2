@@ -102,3 +102,38 @@ export async function signIn(page: Page, baseURL: string, username: string): Pro
   await page.getByTestId("login-submit").click();
   await expect(sel.loginGate(page)).toHaveCount(0, { timeout: 30_000 });
 }
+
+export type Reach = { reachable: true } | { reachable: false; skip: boolean; why: string };
+
+/**
+ * 厂商可达性预探（**在 node 侧发，不进浏览器**）。
+ *
+ * 这一档的 8 条判据全建立"外部厂商活着"之上，而它今天确实会飘：同一本合成长书跑两次，
+ * 发出去的请求数就从 1 变 2（重试）。网络层挂了让判据红，报出来像"产品坏了"，
+ * 而实际是外网不通 / 厂商 5xx。所以分类：
+ *  - **连不出去（DNS/拒绝/超时）与 5xx → `skip`**，并在跳过原因里写清是哪一种；
+ *  - **4xx 不跳过**：key 失效、额度用完、路径写错正是要让它红——R-E4 那条尤其依赖
+ *    厂商真回 401（它判的是"厂商 401 不许说成本机会话失效"）。
+ * 只探可达性，不探内容：内容对不对仍由各条判据自己说。
+ */
+export async function vendorReach(opts: { base: string; model: string; key: string; timeoutMs?: number }): Promise<Reach> {
+  const { base, model, key } = opts;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 30_000);
+  try {
+    const res = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+      // 明确 stream:false：这里只要状态码，不想要一坨 SSE
+      body: JSON.stringify({ model, messages: [{ role: "user", content: "ping" }], max_tokens: 8, stream: false }),
+      signal: ctrl.signal,
+    });
+    if (res.status >= 500) return { reachable: false, skip: true, why: `厂商侧 HTTP ${res.status}（5xx 算它不在）` };
+    if (!res.ok) return { reachable: false, skip: false, why: `厂商回 HTTP ${res.status}：4xx 是真问题（key/额度/路径），不许当成"网络不通"跳掉` };
+    return { reachable: true };
+  } catch (e) {
+    return { reachable: false, skip: true, why: `连不出去：${e instanceof Error ? `${e.name} ${e.message}` : String(e)}` };
+  } finally {
+    clearTimeout(timer);
+  }
+}
