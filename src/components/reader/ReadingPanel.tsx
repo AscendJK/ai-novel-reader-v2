@@ -3,9 +3,10 @@ import { ChapterNav } from "./ChapterNav";
 import { ChapterContent } from "./ChapterContent";
 const SummaryPanel = lazy(() => import("@/components/summary/SummaryPanel").then(m => ({ default: m.SummaryPanel })));
 import { LocalErrorBoundary } from "@/components/common/LocalErrorBoundary";
-import { PanelRightOpen, PanelRightClose, List, FileText, BookOpen, MessageSquare, StickyNote, Search, X } from "lucide-react";
+import { PanelRightOpen, PanelRightClose, List, FileText, BookOpen, MessageSquare, StickyNote, Search, X, Loader2 } from "lucide-react";
 import { useSummaryStore } from "@/stores/summary-store";
 import { useNovelStore } from "@/stores/novel-store";
+import { useAiTaskStore } from "@/stores/ai-task-store";
 
 /** ChapterContent 暴露给 ChapterNav 的滚动控制函数 */
 export interface ScrollControl {
@@ -30,6 +31,9 @@ export function ReadingPanel() {
   const currentNovelId = useNovelStore((s) => s.currentNovel?.id);
   const selectedChapterId = useNovelStore((s) => s.selectedChapterId);
   const storeSummaries = useSummaryStore((s) => s.summaries);
+  // 收起面板之后，这本书手上的 AI 活儿得有个体征：任务现在不随面板卸载而中断了，
+  // 用户收起来就会以为"没在跑了"，然后重新点一次
+  const aiBusy = useAiTaskStore((s) => (currentNovelId ? s.tasks.some((t) => t.novelId === currentNovelId) : false));
 
   const hasCurrentSummary = useMemo(() => currentNovelId
     ? storeSummaries.some(
@@ -97,9 +101,13 @@ export function ReadingPanel() {
         {/* 折叠按钮 - 始终显示 */}
         <button onClick={() => setSummaryOpen(!summaryOpen)}
           aria-label={summaryOpen ? "收起 AI 分析面板" : "展开 AI 分析面板"}
+          data-ai-busy={aiBusy && !summaryOpen ? "1" : "0"}
+          title={aiBusy && !summaryOpen ? "AI 正在分析这本书（收起面板不会中断它）" : undefined}
           className="h-[85px] w-8 bg-card border border-l-0 rounded-l-md flex items-center justify-center hover:bg-accent transition-colors group shadow-sm shrink-0 relative">
           {summaryOpen ? (
             <PanelRightClose className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
+          ) : aiBusy ? (
+            <Loader2 className="h-5 w-5 text-primary animate-spin" aria-hidden="true" />
           ) : (
             <PanelRightOpen className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
           )}

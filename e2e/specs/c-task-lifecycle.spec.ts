@@ -281,3 +281,17 @@ test("L12 地图按「停止」：不许事后落库", async ({ page }) => {
   test.setTimeout(90_000);
   await stopMustReallyStop(page, "生成小说地图", { content: mapFixture(MAP_PLACES), delayMs: SLOW_MS }, "3 个层级 · 4 个地点", /小说地图/);
 });
+
+test("L13 折叠之后仍要看得见「AI 在跑」，跑完要自己熄掉", async ({ page }) => {
+  test.setTimeout(90_000);
+  const backend = await ready(page, { content: SUMMARY_TEXT, delayMs: SLOW_MS });
+  const toggle = page.locator("button[data-ai-busy]");
+  await expect(toggle).toHaveAttribute("data-ai-busy", "0");
+  await panel.button(page, "总结本章").click();
+  await inFlight(backend, "折叠态体征");
+  await page.getByLabel("收起 AI 分析面板").click();
+  // 收起之后那颗边条按钮就是唯一的出口：它不报"在跑"，用户就会以为活儿没了、再点一次
+  await expect(toggle).toHaveAttribute("data-ai-busy", "1", { timeout: 5_000 });
+  await page.waitForTimeout(SLOW_MS + 3500);
+  await expect(toggle).toHaveAttribute("data-ai-busy", "0", { timeout: 10_000 });
+});
