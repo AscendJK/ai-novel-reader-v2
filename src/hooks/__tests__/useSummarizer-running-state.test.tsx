@@ -1,5 +1,5 @@
 /**
- * 问答失败后的运行态收口（round 3 R-73）
+ * 问答失败后的运行态收口（round 3 R-73，AI 任务全局化之后换了读法）
  *
  * `askCustomQuestion` 在 `try` 之外就 `startTask`，而中间那步 `requireUsableInput`
  * 在上下文窗口不足时**必抛**（批次 3 的 R-07 修法），于是 `endTask()` 永远跑不到。
@@ -7,14 +7,18 @@
  * （不随组件卸载复位）和 `summaryStore.isGenerating`，而同步把 `getAiRunning`
  * 当门控交给 syncClient —— 症状是"AI 按钮全灰、进度条一直转、本地改动不再上传，
  * 而界面仍显示已同步"，只有刷新能救。
+ *
+ * 现在运行态是任务台账的派生值，预算校验也已经提到入队之前，所以这里钉的是：
+ * 一次失败的问答**不许在台账里留下任何东西**，且这本书下一发照样发得出去。
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useSummarizer } from "../useSummarizer";
 import { useNovelStore } from "@/stores/novel-store";
 import { useAPIStore } from "@/stores/api-store";
-import { useSummaryStore } from "@/stores/summary-store";
-import { getAiRunning, setAiRunning } from "@/lib/ai-state";
+import { useAiTaskStore } from "@/stores/ai-task-store";
+import { cancelAllAiTasks } from "@/lib/ai-task-queue";
+import { getAiRunning } from "@/lib/ai-state";
 
 vi.mock("@/rag/index", () => ({
   buildIndex: vi.fn(async () => undefined),
@@ -25,8 +29,7 @@ vi.mock("@/sync/sync-client", () => ({ syncClient: { pushNow: vi.fn(async () => 
 
 beforeEach(() => {
   localStorage.clear();
-  setAiRunning(false);
-  useSummaryStore.setState({ isGenerating: false });
+  cancelAllAiTasks();
   useNovelStore.setState({
     currentNovel: {
       id: "n1", title: "测试书", author: "", fileName: "t.txt", fileFormat: "txt",
@@ -57,9 +60,10 @@ describe("useSummarizer 问答的运行态收口", () => {
     expect(outcome).toBeNull();
     expect(result.current.error).toMatch(/上下文窗口不足/);
 
-    // 核心不变量：一次失败的问答不得留下运行态
+    // 核心不变量：一次失败的问答不得在台账里留下活儿
     expect(getAiRunning()).toBe(false);
-    expect(useSummaryStore.getState().isGenerating).toBe(false);
+    expect(useAiTaskStore.getState().tasks).toEqual([]);
+    expect(result.current.isRunning).toBe(false);
   });
 
   it("问答失败后仍可再次发起任务（运行态没有卡死）", async () => {
@@ -68,6 +72,18 @@ describe("useSummarizer 问答的运行态收口", () => {
     await act(async () => { await result.current.askCustomQuestion("第二问", []).catch(() => undefined); });
 
     expect(getAiRunning()).toBe(false);
-    expect(useSummaryStore.getState().isGenerating).toBe(false);
+    expect(useAiTaskStore.getState().tasks).toEqual([]);
+  });
+
+  it("同书的两问按顺序进台账，后一问在前一问收尾前不占槽位", async () => {
+    const { result } = renderHook(() => useSummarizer());
+    const first = result.current.askCustomQuestion("第一问", []);
+    const second = result.current.askCustomQuestion("第二问", []);
+    await act(async () => {
+      await Promise.all([first, second]);
+    });
+    // 两问都因为预算失败：台账必须彻底空掉，而不是留下排队的第二条
+    expect(useAiTaskStore.getState().tasks).toEqual([]);
+    expect(getAiRunning()).toBe(false);
   });
 });

@@ -12,7 +12,7 @@ import { uuid } from "@/parsers/utils";
 import type { GraphData } from "@/hooks/useSummarizer";
 import type { MapData } from "@/agents/types";
 import { TaskType } from "@/agents/types";
-import { saveNote, loadMap, saveGraph as saveGraphToDB, loadGraph } from "@/db/repositories";
+import { saveNote, loadMap, loadGraph } from "@/db/repositories";
 import type { NoteItem } from "@/db/repositories";
 import { syncClient } from "@/sync/sync-client";
 
@@ -53,26 +53,21 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
 
   const currentNovel = useNovelStore((s) => s.currentNovel);
   const selectedChapterId = useNovelStore((s) => s.selectedChapterId);
-  const isGenerating = useSummaryStore((s) => s.isGenerating);
-  const generateProgress = useSummaryStore((s) => s.generateProgress);
   const {
-    isRunning, currentTask, currentTaskType, error,
-    summarizeChapter, summarizeAllChapters, stopBatchSummary, regenerateChapter,
+    isRunning, currentTask, currentTaskType, error, progress, isQueued,
+    summarizeChapter, summarizeAllChapters, regenerateChapter,
     generateGlobalSummary, regenerateGlobal,
     generateCharacterAnalysis, generateTimeline,
     generateCharacterGraph, regenerateCharacterGraph,
     regenerateCharacters, regenerateTimeline,
     generateMap, regenerateMap,
     generateRangeSummary, askCustomQuestion, clearQaCache,
-    clearError, ragEngineUsed, abortAll,
+    clearError, ragEngineUsed, stopTasks,
   } = useSummarizer();
 
-  // 面板卸载（关闭/切书）时中断进行中的 AI 任务：后台任务继续生成会白白消耗
-  // API 额度，且重开面板得到全新 hook 实例（isRunning=false），可再触发任务
-  // 形成双任务并发；落库由保存函数按任务锚定的 novelId 写入，中断不影响一致性
-  useEffect(() => {
-    return () => { abortAll(); };
-  }, [abortAll]);
+  // 面板卸载时**不再**中断 AI 任务（原来这里是一行 abortAll()）：任务的生命周期
+  // 已经搬到 src/lib/ai-task-queue.ts，同书的活儿排队而不是互相顶掉，所以"重开
+  // 面板再点一次形成双任务并发"这个老问题由队列兜住，不需要靠掐死上一个任务来防
 
   // 使用 hooks
   const notesHook = useNotes({
@@ -93,7 +88,9 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
     chapters: currentNovel?.chapters || [],
   });
 
-  const loading = isRunning || isGenerating || qaHook.qaLoading;
+  // 运行态只有一个来源：任务台账。qaHook.qaLoading 与 summaryStore.isGenerating
+  // 都不再参与——问答/批量现在也是台账里的任务，两处真值反而会说出不一致的话
+  const loading = isRunning;
   const engine = useRAGStore((s) => s.engine);
   const offlineMode = useUIStore((s) => s.offlineMode);
   const buildPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -217,11 +214,26 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
     }
   };
 
-  // 保存图谱
+  // 图谱的落库已经在任务里做掉了（`useSummarizer.runGraphTask`），这里只刷本地视图；
+  // 删除路径（DataMgr）保持原样：它本来就只清当前视图
   const handleSaveGraph = (gd: GraphData | null) => {
     setCharacterGraphData(gd);
-    if (currentNovel && gd) saveGraphToDB(currentNovel.id, gd);
   };
+
+  // 这本书的活儿从"有"翻回"没有"的那一刻，把任务在后台写下的结果认回来。
+  // 需要它是因为：折叠期间跑完的任务由任务自己落库，而重挂的面板是在它落库**之前**
+  // 读的库（图谱/地图都存在组件 state 里，不像章节总结那样走 summaries 台账）。
+  // 少了这一步，症状是"AI 明明跑完了、重新展开面板却什么都看不到"。
+  const wasBusyRef = useRef(false);
+  useEffect(() => {
+    const wasBusy = wasBusyRef.current;
+    wasBusyRef.current = isRunning;
+    if (!wasBusy || isRunning || !currentNovel) return;
+    let cancelled = false;
+    loadGraph(currentNovel.id).then((r) => { if (!cancelled) setCharacterGraphData(r.data); });
+    loadMap(currentNovel.id).then((r) => { if (!cancelled) setMapData(r.data); });
+    return () => { cancelled = true; };
+  }, [isRunning, currentNovel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 计算过滤后的笔记
   const filteredNotes = useMemo(() => notesHook.notes.filter((n) =>
@@ -275,14 +287,16 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
       {loading && (
         <div className="mx-2.5 mt-2 p-1.5 rounded bg-primary/10 border border-primary/20 flex items-center gap-2 text-xs text-primary shrink-0">
           <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-          {/* 三元必须显式分层：原写法 currentTask || qaLoading ? ... 会因优先级
-              在 currentTask 非空时恒显示"问答中..."，真实进度文本从不展示 */}
-          <span className="flex-1 min-w-0 truncate">AI 正在执行：{currentTask ? currentTask : qaHook.qaLoading ? "问答中..." : "分析任务"}...</span>
+          {/* 排队与真在跑要分开说：都写成"AI 正在执行"的话，用户会以为这本书手上
+              有两个活儿在同时跑，而实际上后一个还在等前一个 */}
+          <span className="flex-1 min-w-0 truncate">{isQueued
+            ? (currentTask || "排队中")
+            : `AI 正在执行：${currentTask ? currentTask : "分析任务"}...`}</span>
           <Button
             variant="ghost"
             size="sm"
             className="h-5 text-[10px] px-1.5 shrink-0"
-            onClick={() => abortAll()}
+            onClick={() => stopTasks()}
           >
             停止
           </Button>
@@ -351,10 +365,10 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
               chapterSummary={chapterSummary}
               loading={loading}
               hasSelectedChapter={!!selectedChapterId}
-              generateProgress={generateProgress}
+              generateProgress={progress}
               onSummarize={() => selectedChapterId && summarizeChapter(selectedChapterId)}
               onSummarizeAll={summarizeAllChapters}
-              onStopBatch={stopBatchSummary}
+              onStopBatch={stopTasks}
               onRegenerate={() => selectedChapterId && regenerateChapter(selectedChapterId)}
               onBookmark={handleBookmarkAI}
             />

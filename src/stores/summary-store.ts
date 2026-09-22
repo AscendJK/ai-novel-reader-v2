@@ -23,12 +23,8 @@ interface CacheEntry<T> {
 
 interface SummaryState {
   summaries: SummaryItem[];
-  isGenerating: boolean;
-  generateProgress: { current: number; total: number } | null;
   addSummary: (summary: SummaryItem) => void;
   setSummaries: (summaries: SummaryItem[] | ((prev: SummaryItem[]) => SummaryItem[])) => void;
-  setGenerating: (generating: boolean) => void;
-  setProgress: (progress: { current: number; total: number } | null) => void;
   getSummariesByChapter: (chapterId: string) => SummaryItem[];
   getSummariesByNovel: (novelId: string) => SummaryItem[];
   getGlobalSummaries: () => SummaryItem[];
@@ -47,8 +43,6 @@ let _globalCache: CacheEntry<SummaryItem[]> | null = null;
 
 export const useSummaryStore = create<SummaryState>((set, get) => ({
   summaries: [],
-  isGenerating: false,
-  generateProgress: null,
 
   addSummary: (summary) =>
     set((s) => {
@@ -68,10 +62,6 @@ export const useSummaryStore = create<SummaryState>((set, get) => ({
     _cacheVersion += 1;
     return { summaries: typeof summaries === "function" ? summaries(s.summaries) : summaries };
   }),
-
-  setGenerating: (generating) => set({ isGenerating: generating }),
-
-  setProgress: (progress) => set({ generateProgress: progress }),
 
   getSummariesByChapter: (chapterId) => {
     const state = get();

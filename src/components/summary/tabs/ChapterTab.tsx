@@ -91,7 +91,9 @@ export function ChapterTab({
           总结本章
         </Button>
 
-        {isBatchRunning ? (
+        {/* 批量在跑就认台账：面板重挂之后本地 isBatchRunning 会归零，而进度条来自
+            任务台账——两者不一致时用户会看到"有进度条、没停止键" */}
+        {isBatchRunning || generateProgress ? (
           <Button
             size="sm"
             variant="destructive"

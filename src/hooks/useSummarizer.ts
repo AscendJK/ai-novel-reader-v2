@@ -1,16 +1,18 @@
-import { useState, useCallback, useRef, useMemo, useEffect } from "react";
+import { useCallback, useMemo } from "react";
 import { useNovelStore } from "@/stores/novel-store";
 import { useAPIStore } from "@/stores/api-store";
 import { useSummaryStore, type SummaryItem } from "@/stores/summary-store";
+import { useAiTaskStore, taskForNovel } from "@/stores/ai-task-store";
+import { runAiTask, cancelNovelTasks, type AiTaskContext } from "@/lib/ai-task-queue";
 import { summarizerAgent, globalSummarizerAgent } from "@/agents/summarizer";
 import { characterAnalysisAgent, timelineAgent } from "@/agents/analyzers";
 import { characterGraphAgent } from "@/agents/graph-agent";
 import { mapAgent } from "@/agents/map-agent";
 import type { Agent, AgentContext, AgentResult, MapData, TaskTypeValue } from "@/agents/types";
 import { TaskType } from "@/agents/types";
-import { runAgentTask as runAgentTaskPure, formatAPIError } from "@/agents/runTask";
+import { runAgentTask as runAgentTaskPure, formatAPIError, type TaskStatusHooks } from "@/agents/runTask";
 import { getProvider } from "@/api/registry";
-import { saveSummary, saveMap, deleteMap, loadChapters, loadNovel } from "@/db/repositories";
+import { saveSummary, saveMap, saveGraph, deleteMap, loadChapters, loadNovel } from "@/db/repositories";
 import { getUserDB } from "@/db/database";
 import { APIError } from "@/api/error-handler";
 import { getTokenBudget, requireUsableInput, estimateTokens } from "@/api/token-manager";
@@ -20,7 +22,6 @@ import { useRAGStore } from "@/stores/rag-store";
 import { syncClient } from "@/sync/sync-client";
 import { addDebugEntry } from "@/lib/debug-store";
 import { ragLog } from "@/lib/logger";
-import { setAiRunning } from "@/lib/ai-state";
 import { uuid } from "@/parsers/utils";
 
 export interface GraphData {
@@ -60,74 +61,83 @@ function keywordOverlap(a: string, b: string): number {
   return overlap / Math.min(setA.size, setB.size);
 }
 
+/**
+ * 追问用的 RAG 上下文缓存，按 novelId 存在模块层。
+ *
+ * 它原先挂在 hook 实例上，而实例跟着面板生灭 —— 折叠再展开就换了一份空缓存，同一
+ * 话题的追问要重新检索一次（重新编码、重新花钱）。任务的命既然已经不在组件手里，
+ * 这块缓存也没有理由再跟着组件走。
+ */
+const qaRagCache = new Map<string, { question: string; text: string; followUps: number }>();
+
+/** 任务的错误写进那本书的台账：面板可能整只不在场，等它回来时错误条还在 */
+function failTask(novelId: string, message: string) {
+  useAiTaskStore.getState().setNovelError(novelId, message);
+}
+
+/**
+ * `runTask` 纯逻辑层的回调 → 任务台账。
+ *
+ * onStart/onDone 归队列管（入队即记名称与类型，收尾由队列负责），所以这里留空。
+ * 原先那对回调背后是 `taskGenRef` 代次比较 —— 防的是"被顶替的旧任务迟到的 finally
+ * 把新任务的状态清掉"。同书的活儿现在不再互相顶替而是排队，各写各的台账条目，
+ * 那层代次保护就没有存在的必要了。
+ */
+function taskHooks(ctx: AiTaskContext): TaskStatusHooks {
+  return {
+    onStart: () => undefined,
+    onStatus: ctx.status,
+    onError: (msg) => {
+      // 用户主动取消（停止按钮触发 abort）不是错误：lib/error-handler 对 ABORTED
+      // 有固定文案，此处跳过以免取消之后弹出红色错误条
+      if (msg !== "操作已取消") failTask(ctx.novelId, msg);
+    },
+    onDone: () => undefined,
+    onPush: () => { void syncClient.pushNow(); },
+  };
+}
+
 export function useSummarizer() {
-  const [isRunning, setIsRunning] = useState(false);
-  const [currentTask, setCurrentTask] = useState("");
-  const [currentTaskType, setCurrentTaskType] = useState<string>("");
-  const [error, setError] = useState<string | null>(null);
   const currentNovel = useNovelStore((s) => s.currentNovel);
+  const novelId = currentNovel?.id ?? "";
   const getActiveProvider = useAPIStore((s) => s.getActiveProvider);
   const addSummary = useSummaryStore((s) => s.addSummary);
-  const setProgress = useSummaryStore((s) => s.setProgress);
-  const abortRef = useRef<AbortController | null>(null);
-  // 任务代次：每次启动新任务自增。被 abort 的旧任务在 finally 中回到这里时，
-  // 代次已不匹配，跳过状态清理/错误写入，避免覆盖正在运行的新任务的状态
-  const taskGenRef = useRef(0);
-  // Cached RAG context for Q&A session (cleared on new session or every 3 follow-ups)
-  // novelId 必须参与命中判断：面板常驻、切书不重挂，否则上一本书的检索内容
-  // 会被当作当前书的 RAG 上下文（跨书污染）
-  const qaRagCacheRef = useRef<{ question: string; text: string; followUps: number; novelId: string } | null>(null);
 
-  const startTask = useCallback((name: string, type?: string) => {
-    setCurrentTask(name);
-    setCurrentTaskType(type || name);
-    setIsRunning(true);
-    setAiRunning(true);
-    useSummaryStore.getState().setGenerating(true);
-    setError(null);
-  }, []);
+  // 运行态全部从任务台账派生：面板折叠、重挂、桌面与移动两份同时挂着，
+  // 读到的都是同一份"这本书手上有什么活儿"
+  const tasks = useAiTaskStore((s) => s.tasks);
+  const myTask = taskForNovel(tasks, novelId);
+  const isRunning = !!myTask;
+  const currentTask = myTask ? myTask.message || myTask.name : "";
+  const currentTaskType = myTask?.type ?? "";
+  const progress = myTask?.progress ?? null;
+  const isQueued = myTask?.status === "queued";
+  const aheadCount = useAiTaskStore(
+    (s) => (myTask ? s.tasks.filter((t) => t.novelId === novelId && t.queuedAt < myTask.queuedAt).length : 0)
+  );
+  const error = useAiTaskStore((s) => (novelId ? s.errorByNovel[novelId] ?? null : null));
+  const ragEngineUsed = useAiTaskStore((s) => (novelId ? s.engineByNovel[novelId] ?? "" : ""));
 
-  const endTask = useCallback(() => {
-    setIsRunning(false);
-    setAiRunning(false);
-    useSummaryStore.getState().setGenerating(false);
-    setCurrentTask("");
-    setCurrentTaskType("");
-  }, []);
+  const checkProvider = useCallback(() => {
+    const provider = getActiveProvider();
+    if (!provider) { failTask(novelId, "请先在设置中配置 API"); return null; }
+    return provider;
+  }, [getActiveProvider, novelId]);
 
-  // Index is loaded on-demand via getRelevantText (only from cache).
-  // Explicit build is triggered by the build button in BookSelect.
-
-  // Create a fresh AbortController, aborting any previous one
-  const createSignal = useCallback(() => {
-    abortRef.current?.abort();
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
-    return ctrl.signal;
-  }, []);
-
-  const abortAll = useCallback(() => {
-    abortRef.current?.abort();
-  }, []);
+  const handleError = useCallback((err: unknown) => {
+    failTask(novelId, formatAPIError(err));
+  }, [novelId]);
 
   // Pre-retrieve relevant text using local RAG. Falls back to TF-IDF if embedding engine not ready.
-  const [ragEngineUsed, setRagEngineUsed] = useState<string>("");
-  // 切换小说时清除上次使用的引擎记录，避免显示 stale 值
-  const prevNovelIdRef = useRef(currentNovel?.id);
-  useEffect(() => {
-    if (prevNovelIdRef.current !== currentNovel?.id) {
-      prevNovelIdRef.current = currentNovel?.id;
-      setRagEngineUsed("");
-    }
-  }, [currentNovel?.id]);
   const getRelevantText = useCallback(
-    async (query: string): Promise<string> => {
-      if (!currentNovel) { ragLog("getRelevantText: currentNovel 为空"); return ""; }
-      const signal = abortRef.current?.signal;
-      if (signal?.aborted) { ragLog("getRelevantText: 已取消"); return ""; }
+    async (ctx: AiTaskContext, query: string): Promise<string> => {
+      const novel = currentNovel;
+      if (!novel) { ragLog("getRelevantText: currentNovel 为空"); return ""; }
+      const { signal, status } = ctx;
+      if (signal.aborted) { ragLog("getRelevantText: 已取消"); return ""; }
       await new Promise((r) => setTimeout(r, 0));
       const prefEngine = useRAGStore.getState().engine;
-      ragLog(`getRelevantText: prefEngine=${prefEngine}, novelId=${currentNovel.id.slice(0, 8)}`);
+      ragLog(`getRelevantText: prefEngine=${prefEngine}, novelId=${novel.id.slice(0, 8)}`);
       try {
         let engine = prefEngine;
         let degraded = false;
@@ -136,7 +146,7 @@ export function useSummarizer() {
         // 索引自带 chunks 文本，不需要加载全书章节
         if (engine !== "tfidf") {
           try {
-            await buildIndex(currentNovel.id, currentNovel.chapters, engine, (msg) => setCurrentTask(msg), { cacheOnly: true });
+            await buildIndex(novel.id, novel.chapters, engine, undefined, { cacheOnly: true });
             ragLog(`索引从缓存加载成功 (${engine})`);
           } catch {
             ragLog(`索引未缓存 (${engine}), 降级为 TF-IDF`);
@@ -146,36 +156,36 @@ export function useSummarizer() {
         }
 
         // TF-IDF 路径：先检查缓存，缓存未命中时才加载全书
-        const chapters = currentNovel.chapters;
+        const chapters = novel.chapters;
         if (engine === "tfidf") {
           // 尝试从缓存加载 TF-IDF 索引
           try {
-            await buildIndex(currentNovel.id, chapters, "tfidf", undefined, { cacheOnly: true });
+            await buildIndex(novel.id, chapters, "tfidf", undefined, { cacheOnly: true });
             ragLog(`TF-IDF 索引从缓存加载成功`);
           } catch {
             // TF-IDF 缓存未命中，流式构建（内部逐批加载章节，不预加载全书）
             ragLog("TF-IDF 缓存未命中，流式构建...");
             const degradedLabel = degraded ? " (降级至 TF-IDF)" : "";
-            setCurrentTask(`正在构建 TF-IDF 索引${degradedLabel}...`);
-            await buildIndex(currentNovel.id, [], "tfidf",
-              (msg) => setCurrentTask(msg + degradedLabel),
+            status(`正在构建 TF-IDF 索引${degradedLabel}...`);
+            await buildIndex(novel.id, [], "tfidf",
+              (msg) => status(msg + degradedLabel),
               undefined,
-              currentNovel.chapterCount  // 传入章节数，由 buildIndex 内部流式加载
+              novel.chapterCount  // 传入章节数，由 buildIndex 内部流式加载
             );
           }
         }
 
-        if (signal?.aborted) { ragLog("getRelevantText: 被取消"); return ""; }
+        if (signal.aborted) { ragLog("getRelevantText: 被取消"); return ""; }
 
         const degradedLabel = degraded ? " (降级至 TF-IDF)" : "";
         if (engine !== "tfidf") {
-          setCurrentTask(`正在启动检索引擎 (${engine})${degradedLabel}...`);
+          status(`正在启动检索引擎 (${engine})${degradedLabel}...`);
         }
-        if (signal?.aborted) { ragLog("getRelevantText: 构建索引后被取消"); return ""; }
-        setCurrentTask(`正在检索相关段落${degradedLabel}...`);
+        if (signal.aborted) { ragLog("getRelevantText: 构建索引后被取消"); return ""; }
+        status(`正在检索相关段落${degradedLabel}...`);
         const t0 = performance.now();
-        const result = await retrieveRelevantWithDetails(currentNovel.id, query, undefined, engine, { signal });
-        setRagEngineUsed(result.engine);
+        const result = await retrieveRelevantWithDetails(novel.id, query, undefined, engine, { signal });
+        ctx.usedEngine(result.engine);
         addDebugEntry({ query, duration: (performance.now() - t0) / 1000, results: result.results, engine: result.engine });
         ragLog(`检索: "${query}" → ${result.results.length}段 ${result.text.length}字 (${result.engine})`);
         return result.text;
@@ -187,32 +197,19 @@ export function useSummarizer() {
     [currentNovel]
   );
 
-  // RAG 预取纳入任务生命周期：先 startTask（UI 进入运行态、生成按钮禁用、
-  // 停止按钮出现）再预取。否则大书 TF-IDF 流式构建期间（可达分钟级）无任何
-  // loading 提示、按钮可重复触发并发构建、且无法停止。
-  // 代次必须在这里就自增：被顶替的旧任务其迟到 finally 以 gen 匹配为准，
-  // 若预取期间代次不动，旧任务会在检索期把运行态清掉
-  const preRetrieve = useCallback(async (query: string): Promise<string> => {
-    taskGenRef.current++;
-    startTask("正在检索相关内容", "检索");
+  // RAG 预取算任务的一部分：状态文案直接写进这条任务自己的台账行。
+  // 预取失败不阻塞任务（返回空串走 agent 内部的采样回退）。
+  // 注意 `buildIndex` 本身不接 signal（模块级共享构建，任何一个人的取消只带走自己），
+  // 所以这里靠 signal.aborted 的检查点退出，而不是指望它能被打断。
+  const preRetrieve = useCallback(async (ctx: AiTaskContext, query: string): Promise<string> => {
+    ctx.status("正在检索相关内容");
     try {
-      return await getRelevantText(query);
+      return await getRelevantText(ctx, query);
     } catch (e) {
-      // 预取失败不阻塞任务：返回空串走 agent 内部的采样回退
       console.warn("[useSummarizer] RAG 预取失败，回退空上下文:", e);
       return "";
     }
-  }, [startTask, getRelevantText]);
-
-  const checkProvider = useCallback(() => {
-    const provider = getActiveProvider();
-    if (!provider) { setError("请先在设置中配置 API"); return null; }
-    return provider;
-  }, [getActiveProvider]);
-
-  const handleError = useCallback((err: unknown) => {
-    setError(formatAPIError(err));
-  }, []);
+  }, [getRelevantText]);
 
   // novelId 由调用方显式传入（任务启动时锚定的 id），不读 currentNovel：
   // 任务运行中用户可能切换小说，读 store 会把旧书生成的总结写进新书的 novelId 下
@@ -253,305 +250,292 @@ export function useSummarizer() {
     [addSummary]
   );
 
-  // --- 通用 Agent 任务执行器（薄封装：注入 React 状态回调 + 复用纯逻辑层）---
-  const runAgentTask = useCallback(async (options: {
+  /**
+   * 发起一个 agent 任务：进那本书的队列，等到轮到自己再跑。
+   * `makeContext` 允许是异步的 —— 需要 RAG 预取的 agent 在拿到槽位之后才去检索，
+   * 排队期间不占带宽也不提前花钱。
+   */
+  const runAgent = useCallback((options: {
     taskName: string;
+    taskType: TaskTypeValue;
     agent: Agent;
-    context: AgentContext;
+    makeContext: (ctx: AiTaskContext) => AgentContext | Promise<AgentContext>;
     errorMessage: string;
     onSuccess?: (result: AgentResult) => Promise<void>;
     returnData?: boolean;
-    /** 任务类型标识，优先使用，其次使用 agent.taskType，最后回退到 taskName */
-    taskType?: TaskTypeValue;
   }): Promise<unknown> => {
-    const gen = ++taskGenRef.current;
-    // context.onStatus 也要代次保护：旧任务被 abort 后的尾部回调不得覆盖新任务文案
-    const guardedContext: AgentContext = {
-      ...options.context,
-      onStatus: (msg: string) => {
-        if (gen === taskGenRef.current) options.context.onStatus?.(msg);
-      },
-    };
-    return runAgentTaskPure({
-      onStart: (name, type) => startTask(name, type || ""),
-      onStatus: (msg) => { if (gen === taskGenRef.current) setCurrentTask(msg); },
-      onError: (msg) => {
-        // 用户主动取消（停止按钮触发 abort）不是错误：lib/error-handler 对
-        // ABORTED 的固定文案，此处跳过以免取消后弹出红色错误条
-        if (gen === taskGenRef.current && msg !== "操作已取消") setError(msg);
-      },
-      onDone: () => { if (gen === taskGenRef.current) endTask(); },
-      onPush: () => syncClient.pushNow(),
-    }, { ...options, context: guardedContext });
-  }, [startTask, setCurrentTask, setError, endTask]);
+    return runAiTask({ novelId, name: options.taskName, type: options.taskType }, async (ctx) =>
+      runAgentTaskPure(taskHooks(ctx), {
+        taskName: options.taskName,
+        agent: options.agent,
+        context: await options.makeContext(ctx),
+        errorMessage: options.errorMessage,
+        onSuccess: options.onSuccess,
+        returnData: options.returnData,
+      })
+    );
+  }, [novelId]);
 
   // --- Chapter summary ---
   const summarizeChapter = useCallback(async (chapterId: string) => {
-    if (!currentNovel || !checkProvider()) return;
-    await runAgentTask({
+    if (!novelId || !checkProvider()) return;
+    await runAgent({
       taskName: "总结本章",
+      taskType: TaskType.CHAPTER,
       agent: summarizerAgent,
-      context: { novelId: currentNovel.id, chapterIds: [chapterId], signal: createSignal(), onStatus: setCurrentTask },
+      makeContext: (ctx) => ({ novelId, chapterIds: [chapterId], signal: ctx.signal, onStatus: ctx.status }),
       errorMessage: "总结生成失败",
-      onSuccess: (result) => saveChapterSummary(currentNovel.id, chapterId, result),
+      onSuccess: (result) => saveChapterSummary(novelId, chapterId, result),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveChapterSummary, createSignal]);
+  }, [novelId, checkProvider, runAgent, saveChapterSummary]);
 
   const regenerateChapter = useCallback(async (chapterId: string) => {
-    if (!currentNovel || !checkProvider()) return;
-    await runAgentTask({
+    if (!novelId || !checkProvider()) return;
+    await runAgent({
       taskName: "重新生成总结",
+      taskType: TaskType.CHAPTER,
       agent: summarizerAgent,
-      context: { novelId: currentNovel.id, chapterIds: [chapterId], signal: createSignal(), onStatus: setCurrentTask },
+      makeContext: (ctx) => ({ novelId, chapterIds: [chapterId], signal: ctx.signal, onStatus: ctx.status }),
       errorMessage: "重新生成失败",
-      onSuccess: (result) => saveChapterSummary(currentNovel.id, chapterId, result),
+      onSuccess: (result) => saveChapterSummary(novelId, chapterId, result),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveChapterSummary, createSignal]);
+  }, [novelId, checkProvider, runAgent, saveChapterSummary]);
 
-  // 批量总结停止标志
-  const batchStopRef = useRef(false);
-
+  // --- 批量总结：整批是同书的一条任务，逐章推进写在它自己的台账行上 ---
   const summarizeAllChapters = useCallback(async (options?: { skipExisting?: boolean }) => {
-    if (!currentNovel || !checkProvider()) return;
+    const novel = currentNovel;
+    if (!novel || !checkProvider()) return;
     const { skipExisting = true } = options || {};
 
-    batchStopRef.current = false;
-    const gen = ++taskGenRef.current;
-    startTask("批量总结所有章节", TaskType.CHAPTER);
-    const chapters = currentNovel.chapters;
+    await runAiTask({ novelId, name: "批量总结所有章节", type: TaskType.CHAPTER }, async (ctx) => {
+      const { signal, status, progress: report } = ctx;
+      const chapters = novel.chapters;
 
-    // 获取已有的章节总结
-    const existingSummaries = await getUserDB().summaries
-      .where({ novelId: currentNovel.id, type: "chapter" })
-      .toArray();
-    const existingChapterIds = new Set(existingSummaries.map(s => s.chapterId));
+      // 获取已有的章节总结
+      const existingSummaries = await getUserDB().summaries
+        .where({ novelId: novel.id, type: "chapter" })
+        .toArray();
+      const existingChapterIds = new Set(existingSummaries.map((s) => s.chapterId));
 
-    // 计算需要总结的章节
-    const chaptersToSummarize = skipExisting
-      ? chapters.filter(ch => !existingChapterIds.has(ch.id))
-      : chapters;
+      const chaptersToSummarize = skipExisting
+        ? chapters.filter((ch) => !existingChapterIds.has(ch.id))
+        : chapters;
 
-    if (chaptersToSummarize.length === 0) {
-      if (gen === taskGenRef.current) {
-        setCurrentTask("所有章节已有总结");
-        endTask();
+      if (chaptersToSummarize.length === 0) {
+        status("所有章节已有总结");
+        return;
       }
-      return;
-    }
 
-    const signal = createSignal();
-    setProgress({ current: 0, total: chaptersToSummarize.length });
-    try {
-      // 一次性预加载全书内容，循环内逐章复用：
-      // 原实现每章 agent.run 都会触发一次全书 IndexedDB 加载（N 章 = N 次全量 IO）
-      setCurrentTask("正在加载小说数据...");
-      const fullNovel = await loadNovel(currentNovel.id, undefined, true);
-      if (!fullNovel) throw new Error("小说数据未找到");
+      report({ current: 0, total: chaptersToSummarize.length });
+      try {
+        // 一次性预加载全书内容，循环内逐章复用：
+        // 原实现每章 agent.run 都会触发一次全书 IndexedDB 加载（N 章 = N 次全量 IO）
+        status("正在加载小说数据...");
+        const fullNovel = await loadNovel(novel.id, undefined, true);
+        if (!fullNovel) throw new Error("小说数据未找到");
 
-      let failedCount = 0;
-      for (let i = 0; i < chaptersToSummarize.length; i++) {
-        // 检查停止标志
-        if (batchStopRef.current) {
-          setCurrentTask("已停止批量总结");
-          break;
+        let failedCount = 0;
+        for (let i = 0; i < chaptersToSummarize.length; i++) {
+          if (signal.aborted) break;
+          status(`正在总结第 ${i + 1}/${chaptersToSummarize.length} 章...`);
+          const result = await summarizerAgent.run({
+            novelId: novel.id, chapterIds: [chaptersToSummarize[i].id],
+            signal, onStatus: status, preloadedNovel: fullNovel,
+          });
+          if (signal.aborted) break;
+          if (result.success) {
+            status("正在保存结果...");
+            await saveChapterSummary(novel.id, chaptersToSummarize[i].id, result);
+          } else {
+            failedCount++;
+          }
+          report({ current: i + 1, total: chaptersToSummarize.length });
         }
-        if (signal.aborted) break;
-        // 被新任务取代（createSignal abort 了本任务）时退出循环，
-        // 任务状态由新任务接管，此处不得再写任何任务状态
-        if (gen !== taskGenRef.current) break;
-
-        setCurrentTask(`正在总结第 ${i + 1}/${chaptersToSummarize.length} 章...`);
-        const result = await summarizerAgent.run({ novelId: currentNovel.id, chapterIds: [chaptersToSummarize[i].id], signal, onStatus: setCurrentTask, preloadedNovel: fullNovel });
-        if (signal.aborted) break;
-        if (result.success) {
-          setCurrentTask("正在保存结果...");
-          await saveChapterSummary(currentNovel.id, chaptersToSummarize[i].id, result);
-        } else {
-          failedCount++;
-        }
-        setProgress({ current: i + 1, total: chaptersToSummarize.length });
+        if (failedCount > 0) failTask(novel.id, `批量总结完成，${failedCount} 章失败`);
+      } catch (err) {
+        // 取消不是失败：不写错误条
+        if (!signal.aborted) handleError(err);
+      } finally {
+        void syncClient.pushNow();
       }
-      if (failedCount > 0 && gen === taskGenRef.current) {
-        setError(`批量总结完成，${failedCount} 章失败`);
-      }
-    } catch (err) {
-      // 被新任务取代后的异常不再写入错误状态（会覆盖新任务的运行状态）
-      if (gen === taskGenRef.current) handleError(err);
-    }
-    finally {
-      if (gen === taskGenRef.current) {
-        endTask();
-        setProgress(null);
-      }
-      // 推送数据到服务器
-      syncClient.pushNow();
-    }
-  }, [currentNovel, checkProvider, saveChapterSummary, setProgress, handleError, startTask, endTask, createSignal]);
-
-  const stopBatchSummary = useCallback(() => {
-    batchStopRef.current = true;
-  }, []);
+    });
+  }, [novelId, currentNovel, checkProvider, saveChapterSummary, handleError]);
 
   // --- Global summary ---
+  const GLOBAL_QUERY = "小说的核心主线、主题思想、故事梗概，关键情节的发展脉络";
+
   const generateGlobalSummary = useCallback(async () => {
-    if (!currentNovel || !checkProvider()) return;
-    await runAgentTask({
+    if (!novelId || !checkProvider()) return;
+    await runAgent({
       taskName: "生成全书总览",
+      taskType: TaskType.GLOBAL,
       agent: globalSummarizerAgent,
-      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await preRetrieve("小说的核心主线、主题思想、故事梗概，关键情节的发展脉络"), onStatus: setCurrentTask },
+      makeContext: async (ctx) => ({ novelId, signal: ctx.signal, onStatus: ctx.status, preRetrieved: await preRetrieve(ctx, GLOBAL_QUERY) }),
       errorMessage: "全局总结生成失败",
-      onSuccess: (result) => saveGlobalSummary(currentNovel.id, result, "global", "全书总结", "__global__"),
+      onSuccess: (result) => saveGlobalSummary(novelId, result, "global", "全书总结", "__global__"),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, preRetrieve]);
+  }, [novelId, checkProvider, runAgent, saveGlobalSummary, preRetrieve]);
 
   const regenerateGlobal = useCallback(async () => {
-    if (!currentNovel || !checkProvider()) return;
-    await runAgentTask({
+    if (!novelId || !checkProvider()) return;
+    await runAgent({
       taskName: "重新生成全书总览",
+      taskType: TaskType.GLOBAL,
       agent: globalSummarizerAgent,
-      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await preRetrieve("小说的核心主线、主题思想、故事梗概，关键情节的发展脉络"), onStatus: setCurrentTask },
+      makeContext: async (ctx) => ({ novelId, signal: ctx.signal, onStatus: ctx.status, preRetrieved: await preRetrieve(ctx, GLOBAL_QUERY) }),
       errorMessage: "重新生成失败",
-      onSuccess: (result) => saveGlobalSummary(currentNovel.id, result, "global", "全书总结", "__global__"),
+      onSuccess: (result) => saveGlobalSummary(novelId, result, "global", "全书总结", "__global__"),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, preRetrieve]);
+  }, [novelId, checkProvider, runAgent, saveGlobalSummary, preRetrieve]);
 
   // --- Character analysis ---
+  const CHARACTER_QUERY = "小说中各主要角色的关系网络、互动、性格特征与情感变化";
+
   const generateCharacterAnalysis = useCallback(async () => {
-    if (!currentNovel || !checkProvider()) return;
-    await runAgentTask({
+    if (!novelId || !checkProvider()) return;
+    await runAgent({
       taskName: "生成人物关系分析",
+      taskType: TaskType.CHARACTER,
       agent: characterAnalysisAgent,
-      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await preRetrieve("小说中各主要角色的关系网络、互动、性格特征与情感变化"), onStatus: setCurrentTask },
+      makeContext: async (ctx) => ({ novelId, signal: ctx.signal, onStatus: ctx.status, preRetrieved: await preRetrieve(ctx, CHARACTER_QUERY) }),
       errorMessage: "人物分析失败",
-      onSuccess: (result) => saveGlobalSummary(currentNovel.id, result, "characters", "人物关系分析", "__characters__"),
+      onSuccess: (result) => saveGlobalSummary(novelId, result, "characters", "人物关系分析", "__characters__"),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, preRetrieve]);
+  }, [novelId, checkProvider, runAgent, saveGlobalSummary, preRetrieve]);
 
   const regenerateCharacters = useCallback(async () => {
-    if (!currentNovel || !checkProvider()) return;
-    await runAgentTask({
+    if (!novelId || !checkProvider()) return;
+    await runAgent({
       taskName: "重新生成人物关系分析",
+      taskType: TaskType.CHARACTER,
       agent: characterAnalysisAgent,
-      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await preRetrieve("小说中各主要角色的关系网络、互动、性格特征与情感变化"), onStatus: setCurrentTask },
+      makeContext: async (ctx) => ({ novelId, signal: ctx.signal, onStatus: ctx.status, preRetrieved: await preRetrieve(ctx, CHARACTER_QUERY) }),
       errorMessage: "重新生成失败",
-      onSuccess: (result) => saveGlobalSummary(currentNovel.id, result, "characters", "人物关系分析", "__characters__"),
+      onSuccess: (result) => saveGlobalSummary(novelId, result, "characters", "人物关系分析", "__characters__"),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, preRetrieve]);
+  }, [novelId, checkProvider, runAgent, saveGlobalSummary, preRetrieve]);
 
   // --- Character graph only (no text analysis) ---
-  const generateCharacterGraph = useCallback(async (): Promise<GraphData | null> => {
-    if (!currentNovel || !checkProvider()) return null;
-    const result = await runAgentTask({
-      taskName: "生成人物关系图谱",
+  const runGraphTask = useCallback(async (taskName: string): Promise<GraphData | null> => {
+    if (!novelId || !checkProvider()) return null;
+    const result = await runAgent({
+      taskName,
+      taskType: TaskType.GRAPH,
       agent: characterGraphAgent,
-      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await preRetrieve("小说中各主要角色的关系网络、互动、性格特征与情感变化"), onStatus: setCurrentTask },
+      makeContext: async (ctx) => ({ novelId, signal: ctx.signal, onStatus: ctx.status, preRetrieved: await preRetrieve(ctx, CHARACTER_QUERY) }),
       errorMessage: "图谱生成失败",
       returnData: true,
     }) as { graphData: GraphData } | null;
     if (result && !result.graphData) {
-      setError("图谱生成成功但数据解析失败，请重试");
+      failTask(novelId, "图谱生成成功但数据解析失败，请重试");
       return null;
     }
-    return result?.graphData || null;
-  }, [currentNovel, checkProvider, runAgentTask, createSignal, preRetrieve]);
+    const graphData = result?.graphData || null;
+    // 落库在任务里做：发起它的那只面板可能已经折叠了，等不到 `onSuccess` 那一步
+    if (graphData) await saveGraph(novelId, graphData);
+    return graphData;
+  }, [novelId, checkProvider, runAgent, preRetrieve]);
 
-  const regenerateCharacterGraph = useCallback(async (): Promise<GraphData | null> => {
-    if (!currentNovel || !checkProvider()) return null;
-    const result = await runAgentTask({
-      taskName: "重新生成人物关系图谱",
-      agent: characterGraphAgent,
-      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await preRetrieve("小说中各主要角色的关系网络、互动、性格特征与情感变化"), onStatus: setCurrentTask },
-      errorMessage: "图谱生成失败",
-      returnData: true,
-    }) as { graphData: GraphData } | null;
-    if (result && !result.graphData) {
-      setError("图谱生成成功但数据解析失败，请重试");
-      return null;
-    }
-    return result?.graphData || null;
-  }, [currentNovel, checkProvider, runAgentTask, createSignal, preRetrieve]);
+  const generateCharacterGraph = useCallback(() => runGraphTask("生成人物关系图谱"), [runGraphTask]);
+  const regenerateCharacterGraph = useCallback(() => runGraphTask("重新生成人物关系图谱"), [runGraphTask]);
 
   // --- Timeline ---
+  const TIMELINE_QUERY = "小说剧情的时间线、关键事件、转折点、伏笔与高潮结局";
+
   const generateTimeline = useCallback(async () => {
-    if (!currentNovel || !checkProvider()) return;
-    await runAgentTask({
+    if (!novelId || !checkProvider()) return;
+    await runAgent({
       taskName: "生成剧情时间线",
+      taskType: TaskType.TIMELINE,
       agent: timelineAgent,
-      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await preRetrieve("小说剧情的时间线、关键事件、转折点、伏笔与高潮结局"), onStatus: setCurrentTask },
+      makeContext: async (ctx) => ({ novelId, signal: ctx.signal, onStatus: ctx.status, preRetrieved: await preRetrieve(ctx, TIMELINE_QUERY) }),
       errorMessage: "时间线生成失败",
-      onSuccess: (result) => saveGlobalSummary(currentNovel.id, result, "timeline", "剧情时间线", "__timeline__"),
+      onSuccess: (result) => saveGlobalSummary(novelId, result, "timeline", "剧情时间线", "__timeline__"),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, preRetrieve]);
+  }, [novelId, checkProvider, runAgent, saveGlobalSummary, preRetrieve]);
 
   const regenerateTimeline = useCallback(async () => {
-    if (!currentNovel || !checkProvider()) return;
-    await runAgentTask({
+    if (!novelId || !checkProvider()) return;
+    await runAgent({
       taskName: "重新生成剧情时间线",
+      taskType: TaskType.TIMELINE,
       agent: timelineAgent,
-      context: { novelId: currentNovel.id, signal: createSignal(), preRetrieved: await preRetrieve("小说剧情的时间线、关键事件、转折点、伏笔与高潮结局"), onStatus: setCurrentTask },
+      makeContext: async (ctx) => ({ novelId, signal: ctx.signal, onStatus: ctx.status, preRetrieved: await preRetrieve(ctx, TIMELINE_QUERY) }),
       errorMessage: "重新生成失败",
-      onSuccess: (result) => saveGlobalSummary(currentNovel.id, result, "timeline", "剧情时间线", "__timeline__"),
+      onSuccess: (result) => saveGlobalSummary(novelId, result, "timeline", "剧情时间线", "__timeline__"),
     });
-  }, [currentNovel, checkProvider, runAgentTask, saveGlobalSummary, createSignal, preRetrieve]);
+  }, [novelId, checkProvider, runAgent, saveGlobalSummary, preRetrieve]);
 
   // --- Map generation ---
-  const generateMap = useCallback(async (): Promise<MapData | null> => {
-    if (!currentNovel || !checkProvider()) return null;
-    const result = await runAgentTask({
-      taskName: "生成小说地图",
+  const runMapTask = useCallback(async (taskName: string, presetNovelId: string): Promise<MapData | null> => {
+    const result = await runAgent({
+      taskName,
+      taskType: TaskType.MAP,
       agent: mapAgent,
-      context: { novelId: currentNovel.id, signal: createSignal(), onStatus: setCurrentTask },
+      makeContext: (ctx) => ({ novelId: presetNovelId, signal: ctx.signal, onStatus: ctx.status }),
       errorMessage: "地图生成失败",
       returnData: true,
     });
     if (result && typeof result === "object" && "mapData" in result) {
       const mapData = (result as { mapData: MapData }).mapData;
-      await saveMap(currentNovel.id, mapData);
+      // 落库在任务里做，不等发起的组件还在不在场
+      await saveMap(presetNovelId, mapData);
       return mapData;
     }
     return null;
-  }, [currentNovel, checkProvider, runAgentTask, createSignal]);
+  }, [runAgent]);
+
+  const generateMap = useCallback(async (): Promise<MapData | null> => {
+    if (!novelId || !checkProvider()) return null;
+    return await runMapTask("生成小说地图", novelId);
+  }, [novelId, checkProvider, runMapTask]);
 
   const regenerateMap = useCallback(async (): Promise<MapData | null> => {
-    if (!currentNovel) return null;
-    await deleteMap(currentNovel.id);
-    return await generateMap();
-  }, [currentNovel, generateMap]);
+    if (!novelId || !checkProvider()) return null;
+    // 删旧图与重新生成算同一条任务：分成两条的话，中间插进别的任务会让
+    // "已删除但还没生成"这本书停在一个空档上
+    await deleteMap(novelId);
+    return await runMapTask("重新生成小说地图", novelId);
+  }, [novelId, checkProvider, runMapTask]);
 
   // --- Temporary: range summary (in-memory, not saved to DB) ---
   const generateRangeSummary = useCallback(
     async (fromChapter: number, toChapter: number): Promise<TempResult | null> => {
-      if (!currentNovel || !checkProvider()) return null;
+      const novel = currentNovel;
+      if (!novel || !checkProvider()) return null;
       const provider = getActiveProvider()!;
 
-      startTask(`第${fromChapter}-${toChapter}章 范围总结`, TaskType.RANGE);
-      try {
-        // 从 IndexedDB 直接读取指定范围的章节
-        setCurrentTask(`正在加载第${fromChapter}-${toChapter}章...`);
-        const startIndex = fromChapter - 1;
-        const count = toChapter - fromChapter + 1;
-        const rangeChapters = await loadChapters(currentNovel.id, startIndex, count);
-        // 根据模型 Token 预算精确计算最大字符数（可用输入 = 上下文 - 输出预算2048 - 安全余量）
-        const budget = provider ? getTokenBudget(provider.model, provider.contextWindow, provider.maxTokens) : null;
-        const maxTokens = budget ? requireUsableInput(budget, 2048, "范围总结") : 40000;
-        const maxChars = Math.floor(maxTokens); // 中文约 1 字 = 1 token
-        let combinedText = "";
-        let totalChars = 0;
-        const includedTitles: string[] = [];
-        for (const ch of rangeChapters) {
-          if (!ch.content) continue;
-          const remaining = maxChars - totalChars;
-          if (remaining <= 0) break;
-          const text = ch.content.length > remaining ? ch.content.slice(0, remaining) : ch.content;
-          combinedText += `\n\n--- ${ch.title} ---\n${text}`;
-          totalChars += text.length;
-          includedTitles.push(ch.title);
-        }
-        const actualFrom = rangeChapters[0]?.title || `第${fromChapter}章`;
-        const actualTo = rangeChapters[rangeChapters.length - 1]?.title || `第${toChapter}章`;
-        ragLog(`范围总结: ${includedTitles.length}章, combinedText=${totalChars}字`);
+      return await runAiTask<TempResult | null>(
+        { novelId, name: `第${fromChapter}-${toChapter}章 范围总结`, type: TaskType.RANGE },
+        async (ctx) => {
+          const { signal, status } = ctx;
+          try {
+            // 从 IndexedDB 直接读取指定范围的章节
+            status(`正在加载第${fromChapter}-${toChapter}章...`);
+            const startIndex = fromChapter - 1;
+            const count = toChapter - fromChapter + 1;
+            const rangeChapters = await loadChapters(novel.id, startIndex, count);
+            // 根据模型 Token 预算精确计算最大字符数（可用输入 = 上下文 - 输出预算2048 - 安全余量）
+            const budget = getTokenBudget(provider.model, provider.contextWindow, provider.maxTokens);
+            const maxTokens = requireUsableInput(budget, 2048, "范围总结");
+            const maxChars = Math.floor(maxTokens); // 中文约 1 字 = 1 token
+            let combinedText = "";
+            let totalChars = 0;
+            const includedTitles: string[] = [];
+            for (const ch of rangeChapters) {
+              if (!ch.content) continue;
+              const remaining = maxChars - totalChars;
+              if (remaining <= 0) break;
+              const text = ch.content.length > remaining ? ch.content.slice(0, remaining) : ch.content;
+              combinedText += `\n\n--- ${ch.title} ---\n${text}`;
+              totalChars += text.length;
+              includedTitles.push(ch.title);
+            }
+            const actualFrom = rangeChapters[0]?.title || `第${fromChapter}章`;
+            const actualTo = rangeChapters[rangeChapters.length - 1]?.title || `第${toChapter}章`;
+            ragLog(`范围总结: ${includedTitles.length}章, combinedText=${totalChars}字`);
 
-        const prompt = `你是一位专业的小说分析助手。请对以下小说章节范围进行总结分析。
+            const prompt = `你是一位专业的小说分析助手。请对以下小说章节范围进行总结分析。
 
 章节范围：${actualFrom} 到 ${actualTo}（共 ${includedTitles.length} 章）
 
@@ -567,37 +551,37 @@ export function useSummarizer() {
 
 ${combinedText}`;
 
-        setCurrentTask("正在等待 AI 回答...");
-        const providerInstance = getProvider(provider);
-        const response = await providerInstance.chat({
-          model: "", messages: [{ role: "user", content: prompt }],
-          max_tokens: Math.min(2048, budget?.maxOutputTokens ?? 2048),
-          signal: createSignal(),
-        });
+            status("正在等待 AI 回答...");
+            const providerInstance = getProvider(provider);
+            const response = await providerInstance.chat({
+              model: "", messages: [{ role: "user", content: prompt }],
+              max_tokens: Math.min(2048, budget.maxOutputTokens ?? 2048),
+              signal,
+            });
 
-        // 防御：即使 API 返回 200，空内容也视为失败，避免保存空白总结
-        if (!response.content || !response.content.trim()) {
-          handleError(new APIError("API 返回了空内容", "server"));
-          return null;
+            // 防御：即使 API 返回 200，空内容也视为失败，避免保存空白总结
+            if (!response.content || !response.content.trim()) {
+              failTask(novel.id, new APIError("API 返回了空内容", "server").message);
+              return null;
+            }
+
+            return {
+              id: uuid(),
+              title: `第${fromChapter}-${toChapter}章 范围总结`,
+              content: response.content,
+              tokensUsed: response.content.length,
+              createdAt: Date.now(),
+            };
+          } catch (err) {
+            // 用户主动取消不是错误：不写错误条，静默返回
+            if (signal.aborted) return null;
+            handleError(err);
+            return null;
+          }
         }
-
-        return {
-          id: uuid(),
-          title: `第${fromChapter}-${toChapter}章 范围总结`,
-          content: response.content,
-          tokensUsed: response.content.length,
-          createdAt: Date.now(),
-        };
-      } catch (err) {
-        // 用户主动取消不是错误：不写入错误状态（否则显示原始 abort 信息）
-        if (err instanceof Error && err.name === "AbortError") return null;
-        handleError(err);
-        return null;
-      } finally {
-        endTask();
-      }
+      );
     },
-    [currentNovel, checkProvider, createSignal, endTask, getActiveProvider, handleError, startTask]
+    [novelId, currentNovel, checkProvider, getActiveProvider, handleError]
   );
 
   // --- Temporary: custom question with conversation history ---
@@ -606,7 +590,8 @@ ${combinedText}`;
       question: string,
       history: { role: "user" | "assistant"; content: string }[]
     ): Promise<{ answer: string; tokensUsed: number } | null> => {
-      if (!currentNovel || !checkProvider()) return null;
+      const novel = currentNovel;
+      if (!novel || !checkProvider()) return null;
       const provider = getActiveProvider();
       if (!provider) return null;
 
@@ -615,11 +600,8 @@ ${combinedText}`;
       // chatWithContextRetry → 长书 + 多轮追问必然 400，且不会自愈。
       const QA_OUTPUT_TOKENS = 2048;
       const budget = getTokenBudget(provider.model, provider.contextWindow, provider.maxTokens);
-      // 预算校验必须在进入运行态之前收口（round 3 R-73）：它是下面这段装配里唯一会抛的
-      // 调用，而 startTask 与那个 try/finally 之间没有兜底——一次"上下文窗口不足"就会把
-      // 模块级 aiRunning 与 isGenerating 永久留在 true，同步还把 getAiRunning 当门控，
-      // 症状是"AI 按钮全灰、进度条一直转、界面显示已同步却永不再上传"。
-      // 走 handleError 也保住了这句精确文案，而不是上层那句笼统的"问答失败，请重试"。
+      // 预算校验必须发生在入队之前（round 3 R-73）：它是这段装配里唯一会抛的调用，
+      // 一次"上下文窗口不足"若发生在任务已经记账之后，那本书的槽位就会被它占住。
       let available: number;
       try {
         available = requireUsableInput(budget, QA_OUTPUT_TOKENS, "问答");
@@ -628,111 +610,116 @@ ${combinedText}`;
         return null;
       }
 
-      startTask("问答", TaskType.QA);
-      const allTitles = currentNovel.chapters.map((c, i) => `${i + 1}. ${c.title}`);
+      return await runAiTask<{ answer: string; tokensUsed: number } | null>(
+        { novelId, name: "问答", type: TaskType.QA },
+        async (ctx) => {
+          const { signal, status } = ctx;
+          const allTitles = novel.chapters.map((c, i) => `${i + 1}. ${c.title}`);
 
-      // Use cached RAG context for follow-up questions, refresh if topic changes
-      let relevantText: string;
-      const QA_CACHE_MAX_FOLLOWUPS = 3;
-      const cached = qaRagCacheRef.current;
-      const isSameNovel = cached?.novelId === currentNovel.id;
-      const isSameTopic = cached && isSameNovel && keywordOverlap(cached.question, question) > 0.5;
-      if (cached && cached.followUps < QA_CACHE_MAX_FOLLOWUPS && isSameTopic) {
-        relevantText = cached.text;
-        cached.followUps++;
-      } else {
-        relevantText = await getRelevantText(question);
-        qaRagCacheRef.current = { question, text: relevantText, followUps: 0, novelId: currentNovel.id };
-      }
+          // Use cached RAG context for follow-up questions, refresh if topic changes
+          let relevantText: string;
+          const QA_CACHE_MAX_FOLLOWUPS = 3;
+          const cached = qaRagCache.get(novel.id);
+          const isSameTopic = cached && keywordOverlap(cached.question, question) > 0.5;
+          if (cached && cached.followUps < QA_CACHE_MAX_FOLLOWUPS && isSameTopic) {
+            relevantText = cached.text;
+            cached.followUps++;
+          } else {
+            relevantText = await getRelevantText(ctx, question);
+            qaRagCache.set(novel.id, { question, text: relevantText, followUps: 0 });
+          }
 
-      // 历史从最新往回装，最多 12 轮，且不超过预算的 30%
-      const historyCap = Math.floor(available * 0.3);
-      const keptReversed: { role: "user" | "assistant"; content: string }[] = [];
-      let historyTokens = 0;
-      const recentFirst = [...history].reverse();
-      for (const msg of recentFirst) {
-        if (keptReversed.length >= 12) break;
-        const cost = estimateTokens(msg.content) + 4;
-        if (keptReversed.length > 0 && historyTokens + cost > historyCap) break;
-        keptReversed.push(msg);
-        historyTokens += cost;
-      }
-      const keptHistory = keptReversed.reverse();
-      const droppedTurns = Math.max(0, history.length - keptHistory.length);
+          // 历史从最新往回装，最多 12 轮，且不超过预算的 30%
+          const historyCap = Math.floor(available * 0.3);
+          const keptReversed: { role: "user" | "assistant"; content: string }[] = [];
+          let historyTokens = 0;
+          const recentFirst = [...history].reverse();
+          for (const msg of recentFirst) {
+            if (keptReversed.length >= 12) break;
+            const cost = estimateTokens(msg.content) + 4;
+            if (keptReversed.length > 0 && historyTokens + cost > historyCap) break;
+            keptReversed.push(msg);
+            historyTokens += cost;
+          }
+          const keptHistory = keptReversed.reverse();
+          const droppedTurns = Math.max(0, history.length - keptHistory.length);
 
-      const chapterSample = sampleChapterTitles(allTitles, Math.floor(available * 0.2));
+          const chapterSample = sampleChapterTitles(allTitles, Math.floor(available * 0.2));
 
-      const systemSkeleton = `你是一位专业的小说分析助手。请根据以下小说信息回答用户问题。请用中文回答。
+          const systemSkeleton = `你是一位专业的小说分析助手。请根据以下小说信息回答用户问题。请用中文回答。
 
-**小说：**《${currentNovel.title}》
+**小说：**《${novel.title}》
 **章节目录：**
 ${chapterSample.text}
 
 **语义检索相关段落：**
 `;
-      const tailNote = chapterSample.sampled
-        ? "\n\n注意：章节目录过长，上面只给了抽样部分。若抽样不足以回答，请明确说明需要查阅哪些章节，不要凭目录猜测剧情。"
-        : "";
-      const fixedCost = estimateTokens(systemSkeleton) + estimateTokens(tailNote) + estimateTokens(question);
-      const ragCap = Math.max(200, available - historyTokens - fixedCost);
-      let relevantBody = relevantText || "（无额外参考信息，请基于章节目录回答）";
-      if (estimateTokens(relevantBody) > ragCap) {
-        // 按字符近似截断（中文约 1 字 = 1 token）
-        relevantBody = relevantBody.slice(0, Math.max(0, ragCap)) + "\n……（检索结果因长度限制被截断）";
-      }
+          const tailNote = chapterSample.sampled
+            ? "\n\n注意：章节目录过长，上面只给了抽样部分。若抽样不足以回答，请明确说明需要查阅哪些章节，不要凭目录猜测剧情。"
+            : "";
+          const fixedCost = estimateTokens(systemSkeleton) + estimateTokens(tailNote) + estimateTokens(question);
+          const ragCap = Math.max(200, available - historyTokens - fixedCost);
+          let relevantBody = relevantText || "（无额外参考信息，请基于章节目录回答）";
+          if (estimateTokens(relevantBody) > ragCap) {
+            // 按字符近似截断（中文约 1 字 = 1 token）
+            relevantBody = relevantBody.slice(0, Math.max(0, ragCap)) + "\n……（检索结果因长度限制被截断）";
+          }
 
-      const systemPrompt = `${systemSkeleton}${relevantBody}${tailNote}`;
+          const systemPrompt = `${systemSkeleton}${relevantBody}${tailNote}`;
 
-      // Build messages: system context + conversation history + new question
-      const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
-        { role: "system", content: systemPrompt },
-      ];
-      for (const msg of keptHistory) {
-        messages.push(msg);
-      }
-      messages.push({ role: "user", content: question });
-      if (droppedTurns > 0) {
-        console.log(`[qa] 历史超出预算，省略最早 ${droppedTurns} 条消息`);
-      }
+          // Build messages: system context + conversation history + new question
+          const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
+            { role: "system", content: systemPrompt },
+          ];
+          for (const msg of keptHistory) {
+            messages.push(msg);
+          }
+          messages.push({ role: "user", content: question });
+          if (droppedTurns > 0) {
+            console.log(`[qa] 历史超出预算，省略最早 ${droppedTurns} 条消息`);
+          }
 
-      try {
-        const providerInstance = getProvider(provider);
-        const response = await providerInstance.chat({
-          model: "",
-          messages,
-          // 与上面 computeAvailableInput 的输出预留取同一值，否则预算算小了
-          // 而请求要得多，严格校验的服务商必 400
-          max_tokens: Math.min(QA_OUTPUT_TOKENS, budget.maxOutputTokens),
-          temperature: 0.5,
-          signal: createSignal(),
-        });
+          try {
+            status("正在等待 AI 回答...");
+            const providerInstance = getProvider(provider);
+            const response = await providerInstance.chat({
+              model: "",
+              messages,
+              // 与上面 computeAvailableInput 的输出预留取同一值，否则预算算小了
+              // 而请求要得多，严格校验的服务商必 400
+              max_tokens: Math.min(QA_OUTPUT_TOKENS, budget.maxOutputTokens),
+              temperature: 0.5,
+              signal,
+            });
 
-        // 防御：即使 API 返回 200，空内容也视为失败，避免显示空白回答
-        if (!response.content || !response.content.trim()) {
-          handleError(new APIError("API 返回了空内容", "server"));
-          return null;
+            // 防御：即使 API 返回 200，空内容也视为失败，避免显示空白回答
+            if (!response.content || !response.content.trim()) {
+              failTask(novel.id, new APIError("API 返回了空内容", "server").message);
+              return null;
+            }
+
+            return { answer: response.content, tokensUsed: response.content.length };
+          } catch (err) {
+            // 用户主动取消（停止按钮触发 abort）：向上抛出让调用方静默处理，
+            // 否则 useQA 会把它当成失败显示"问答失败，请重试"
+            if (signal.aborted) throw err;
+            handleError(err);
+            return null;
+          }
         }
-
-        return { answer: response.content, tokensUsed: response.content.length };
-      } catch (err) {
-        // 用户主动取消（停止按钮触发 abort）：向上抛出让调用方静默处理，
-        // 否则 useQA 会把它当成失败显示"问答失败，请重试"
-        if (err instanceof Error && err.name === "AbortError") throw err;
-        handleError(err);
-        return null;
-      } finally {
-        endTask();
-      }
+      );
     },
-    [currentNovel, checkProvider, createSignal, endTask, getActiveProvider, getRelevantText, handleError, startTask]
+    [novelId, currentNovel, checkProvider, getActiveProvider, getRelevantText, handleError]
   );
 
-  const clearQaCache = useCallback(() => { qaRagCacheRef.current = null; }, []);
-  const clearError = useCallback(() => setError(null), []);
+  const clearQaCache = useCallback(() => { qaRagCache.delete(novelId); }, [novelId]);
+  const clearError = useCallback(() => { useAiTaskStore.getState().clearNovelError(novelId); }, [novelId]);
+  /** 「停止」：取消这本书的在飞任务，并让它后面排着的活儿不再开始 */
+  const stopTasks = useCallback(() => { cancelNovelTasks(novelId); }, [novelId]);
 
   return useMemo(() => ({
-    isRunning, currentTask, currentTaskType, error,
-    summarizeChapter, summarizeAllChapters, stopBatchSummary, regenerateChapter,
+    isRunning, currentTask, currentTaskType, error, progress, isQueued, aheadCount,
+    summarizeChapter, summarizeAllChapters, regenerateChapter,
     generateGlobalSummary, regenerateGlobal,
     generateCharacterAnalysis, regenerateCharacters,
     generateCharacterGraph, regenerateCharacterGraph,
@@ -741,17 +728,17 @@ ${chapterSample.text}
     generateRangeSummary, askCustomQuestion,
     clearQaCache,
     clearError,
-    abortAll,
+    stopTasks,
     ragEngineUsed,
   }), [
-    isRunning, currentTask, currentTaskType, error,
-    summarizeChapter, summarizeAllChapters, stopBatchSummary, regenerateChapter,
+    isRunning, currentTask, currentTaskType, error, progress, isQueued, aheadCount,
+    summarizeChapter, summarizeAllChapters, regenerateChapter,
     generateGlobalSummary, regenerateGlobal,
     generateCharacterAnalysis, regenerateCharacters,
     generateCharacterGraph, regenerateCharacterGraph,
     generateTimeline, regenerateTimeline,
     generateMap, regenerateMap,
     generateRangeSummary, askCustomQuestion,
-    clearQaCache, clearError, abortAll, ragEngineUsed,
+    clearQaCache, clearError, stopTasks, ragEngineUsed,
   ]);
 }
