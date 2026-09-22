@@ -44,6 +44,16 @@ let logs = "";
 server.stdout.on("data", (c) => { logs += c; });
 server.stderr.on("data", (c) => { logs += c; });
 
+// 「退出」这件事必须分清是中途还是收尾：收尾时探针自己会发 SIGTERM，而 POSIX 上后端的
+// 处理器是 process.exit(0)（server/index.js:313）→ 退出码 0、信号 null；Windows 的 libuv
+// 则把这次 kill 报成 signal=SIGTERM。所以只看退出码/信号会在 Linux 上把"我们杀的"判成
+// "它崩了"，反过来又对"中途就被信号打死"（退出码 null）放行。要钉的是活着跑完判据。
+let tearing = false;
+let diedEarly = null;
+server.on("exit", (code, signal) => {
+  if (!tearing) diedEarly = { code, signal };
+});
+
 const base = `http://127.0.0.1:${HTTP_PORT}`;
 async function waitForServer() {
   for (let i = 0; i < 100; i++) {
@@ -74,7 +84,6 @@ const heartbeat = (username, clientId, token) => api("POST", "/api/sync/heartbea
 const push = (username, clientId, token, changes, lastSyncTime) =>
   api("POST", "/api/sync/push", { username, clientId, token, changes, lastSyncTime });
 
-let exitInfo;
 try {
   check("后端已启动", await waitForServer(), logs.slice(-240));
 
@@ -181,14 +190,18 @@ try {
 } catch (e) {
   check("探针自身没有抛出", false, String(e && e.message ? e.message : e));
 } finally {
+  tearing = true;
   const exited = await new Promise((resolve) => {
     server.on("exit", (code, signal) => resolve({ code, signal }));
     if (server.killed || server.exitCode !== null) { resolve({ code: server.exitCode, signal: null }); return; }
     server.kill("SIGTERM");
     setTimeout(() => resolve({ code: server.exitCode, signal: "timeout" }), 5000);
   });
-  exitInfo = exited;
-  check("后端全程未崩溃退出", exitInfo.code === null || exitInfo.signal === "SIGTERM", JSON.stringify(exitInfo));
+  // 收尾这一刀之后：按 0 退出（Linux 的优雅停机）、被信号带走、或压根没死成（Windows 上
+  // kill 有时不奏效，5 秒后走 timeout 分支）都算正常。中途死掉一定算红。
+  const cleanTeardown = exited.code === 0 || exited.code === null || exited.signal === "SIGTERM";
+  check("后端全程未崩溃退出", diedEarly === null && cleanTeardown,
+    diedEarly ? `判据跑完之前就退出了 ${JSON.stringify(diedEarly)}` : cleanTeardown ? "" : JSON.stringify(exited));
   check("日志里没有 unhandledRejection / uncaughtException",
     !/unhandledRejection|uncaughtException/.test(logs), logs.match(/(unhandledRejection|uncaughtException).{0,80}/)?.[0] || "");
   fs.rmSync(workDir, { recursive: true, force: true });
