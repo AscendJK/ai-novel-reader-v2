@@ -469,4 +469,60 @@ describe("父级对不上时的可见降级", () => {
     expect(r.success).toBe(false);
     expect(r.error).toContain("level 无效");
   });
+
+  // ↓ 批次 W：环。`ids.has(parentId)` 对"互指"恒为真，所以这一类坏法一直过检
+  //   （自引用那格在 `0e92e6b` 修掉了，同类里只剩环）。
+  type PlacesOf = { id: string; name: string; parentId: string; level: number }[];
+  const readMap = (data: unknown) =>
+    (data as { mapData: { places: PlacesOf; parentMissing?: string[] } }).mapData;
+
+  it("两个地点互为上级：那是环，不是父子——两边都降级并记进清单", async () => {
+    const r = await runWithMap(mapWith([
+      place({ id: "9", name: "黑木崖", parentId: "10" }),
+      place({ id: "10", name: "梅庄", parentId: "9" }),
+    ]));
+    expect(r.success).toBe(true);
+    const map = readMap(r.data);
+    expect(map.places.find((p) => p.id === "9")).toMatchObject({ parentId: "", level: 1 });
+    expect(map.places.find((p) => p.id === "10")).toMatchObject({ parentId: "", level: 1 });
+    expect(map.parentMissing).toEqual(["黑木崖", "梅庄"]);
+  });
+
+  it("三个地点转一圈成环：环上每一格都被拆掉，不是只拆最后一个", async () => {
+    const r = await runWithMap(mapWith([
+      place({ id: "9", name: "黑木崖", parentId: "11" }),
+      place({ id: "10", name: "梅庄", parentId: "9" }),
+      place({ id: "11", name: "绿竹巷", parentId: "10" }),
+    ]));
+    expect(r.success).toBe(true);
+    const map = readMap(r.data);
+    for (const id of ["9", "10", "11"]) {
+      expect(map.places.find((p) => p.id === id)).toMatchObject({ parentId: "", level: 1 });
+    }
+    expect(map.parentMissing).toEqual(["黑木崖", "梅庄", "绿竹巷"]);
+  });
+
+  it("挂在环外的合法子级不许被牵连：它的上级真实存在，就还是二级地点", async () => {
+    const r = await runWithMap(mapWith([
+      place({ id: "9", name: "黑木崖", parentId: "10" }),
+      place({ id: "10", name: "梅庄", parentId: "9" }),
+      place({ id: "11", name: "绿竹巷", parentId: "9" }),
+    ]));
+    expect(r.success).toBe(true);
+    const map = readMap(r.data);
+    // 11 的上级 9 在环里被降级成顶级，但"9 存在且不是 11 自己"这条没变 → 11 保持二级
+    expect(map.places.find((p) => p.id === "11")).toMatchObject({ parentId: "9", level: 2 });
+    expect(map.parentMissing).toEqual(["黑木崖", "梅庄"]);
+  });
+
+  it("一条正常深链（1←9←11）不触发环检测：一条都不记", async () => {
+    const r = await runWithMap(mapWith([
+      place({ id: "9", name: "黑木崖", parentId: "1" }),
+      place({ id: "11", name: "绿竹巷", parentId: "9" }),
+    ]));
+    expect(r.success).toBe(true);
+    const map = readMap(r.data);
+    expect(map.places.find((p) => p.id === "11")).toMatchObject({ parentId: "9", level: 2 });
+    expect(map.parentMissing).toBeUndefined();
+  });
 });

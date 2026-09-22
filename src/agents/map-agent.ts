@@ -28,8 +28,9 @@ function toCoord(value: unknown): number | null {
 /**
  * 父级对不上的统一处理：清掉无效父级、把地点降级成顶级，并回报被降级的地点名。
  *
- * 两种坏法以前待遇不同——parentId 指向不存在的 id 会被静默降级，而"自称 level 2
- * 却没写 parentId"会让整张图判失败去重试。同一个幻觉两种结果是分叉，现在都走这里。
+ * 三种坏法以前待遇不同——`parentId` 指向不存在的 id 会被静默降级，而"自称 level 2
+ * 却没写 parentId"会让整张图判失败去重试，而"两个地点互为上级"干脆过检（`ids.has` 对
+ * 存在的 id 恒为真）。同一个幻觉三种结果是分叉，现在都走这里。
  * 为什么不选"报错重试"：一张图几十个点、id 全由模型自己编，坏父级是常态；硬失败等于
  * 整图重来，重来还可能引入新的坏 id，撞重试上限后用户一张图都拿不到。降级至少给出一张
  * 九成正确的图——但"上下级是 AI 猜的"必须让用户看见，所以记进 mapData.parentMissing，
@@ -37,7 +38,9 @@ function toCoord(value: unknown): number | null {
  */
 export function normalizePlaceParents(places: MapData["places"]): string[] {
   const ids = new Set(places.map((p) => p.id));
-  const missing: string[] = [];
+  // 记的是"哪些地点被降级"，最后按 `places` 自己的顺序回报：两趟处理（坏父级 / 环）
+  // 各按自己的顺序走，直接 push 会得到一份顺序混着读的清单，而它是界面上一句人话。
+  const demoted = new Set<MapData["places"][number]>();
   for (const place of places) {
     // 自己也算"存在的 id"，所以父级写着自己时必须单独排除：否则地点成为自己的上级，
     // 详情面板会显示"上级：黑木崖 / 下级：黑木崖"，而这张图在库里永远修不好。
@@ -45,13 +48,44 @@ export function normalizePlaceParents(places: MapData["places"]): string[] {
     if (parent && (parent === place.id || !ids.has(parent))) {
       place.parentId = "";
       if (place.level > 1) place.level = 1;
-      missing.push(place.name);
+      demoted.add(place);
     } else if (place.level > 1 && !parent) {
       place.level = 1;
-      missing.push(place.name);
+      demoted.add(place);
     }
   }
-  return missing;
+
+  // 环。上面那一趟拆掉了"父级不存在/是自己"两种，剩下的坏法是 A→B→A（或更长一圈）：
+  // 每个地点只有一个父级，所以"沿父级往下走"是出度为 1 的链，走着走回到本次已走过的
+  // 地点就是环。整圈都拆成顶级而不是只断一条边——环上每一格的上下级都是编出来的，
+  // 挑一条留下等于替模型猜一个，界面上那句"N 个地点的上级没找到"也就在骗人。
+  // 挂在环外的合法子级不受牵连：它的上级依然真实存在。
+  const byId = new Map<string, MapData["places"][number]>();
+  for (const p of places) if (!byId.has(p.id)) byId.set(p.id, p);
+  const settled = new Set<string>();
+  for (const start of places) {
+    if (settled.has(start.id)) continue;
+    const path: MapData["places"] = [];
+    const seenAt = new Map<string, number>();
+    let cur = byId.get(start.id);
+    while (cur && cur.parentId) {
+      if (settled.has(cur.id)) break;
+      const at = seenAt.get(cur.id);
+      if (at !== undefined) {
+        for (const p of path.slice(at)) {
+          p.parentId = "";
+          if (p.level > 1) p.level = 1;
+          demoted.add(p);
+        }
+        break;
+      }
+      seenAt.set(cur.id, path.length);
+      path.push(cur);
+      cur = byId.get(cur.parentId);
+    }
+    for (const p of path) settled.add(p.id);
+  }
+  return places.filter((p) => demoted.has(p)).map((p) => p.name);
 }
 
 /**
