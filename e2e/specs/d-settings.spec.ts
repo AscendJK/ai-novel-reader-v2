@@ -76,7 +76,12 @@ test("D2 key 还没填：保存按钮是禁用的（填上才放开）", async (
 });
 
 test("D3 换一个用户名：服务商列表跟着换，不许串到别人账号下", async ({ page }) => {
-  test.setTimeout(60_000); // 同 B7/B8：两次退出+登录在混跑全套时要 30 秒以上，单跑 7.5 秒
+  // 单跑 6.1 秒（4/4 实测），6 worker 混跑 20~22 秒（6/6 实测），全套并跑历史上偶发 30 秒+。
+  // 2026-09-22 在真后端台架上量过归因：换用户整趟 427ms、一次开机只发 4 个 /api 请求且
+  // **与书架规模无关**（1 本与 8 本同样 4 发，见 `specs-real/r-boot-cost.spec.ts`）——
+  // 所以这里不是产品在慢，是这条判据要跑 5 次 boot、每次 boot 在 dev 下都要拉一遍未打包源码。
+  // 天花板按并发的量给，不按单跑给。
+  test.setTimeout(60_000);
   await openSettings(page);
   await addProvider(page, { name: "A 专用配置", key: FAKE_KEY });
   await expect(page.getByText("A 专用配置").first()).toBeVisible();
