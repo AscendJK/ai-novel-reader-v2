@@ -40,6 +40,13 @@ async function localStorageDump(page: Page): Promise<string> {
 }
 
 test.beforeEach(async ({ page }) => {
+  // D 组每条都要在开头做一次"真 boot + 从 IndexedDB 读回书架 + 登录"，这一步的耗时随并发
+  // **线性恶化**：本机 `--workers=1` 单条 2.7 秒，`--workers=10` 下 D8 直接顶穿 30 秒的
+  // 用例天花板（报出来是 `Test timeout of 30000ms exceeded`，红的地方在登录遮罩那一步，
+  // 与判据无关）。同族先例是 D3（`6ab8e3d` 抬到 60 秒）。
+  // 只抬**这一档文件**的用例天花板，全局 `expect.timeout` 仍是 5 秒（见 playwright.config.ts:27），
+  // 所以"遮罩真的盖住按钮"这类缺陷照样在原预算内红——判别力靠变异复核，不靠这个 60 秒。
+  test.setTimeout(60_000);
   await stubBackend(page, {
     ...idleTtsStatus,
     // 登录会真发一次注册（A1 实测），不桩住就卡在遮罩上

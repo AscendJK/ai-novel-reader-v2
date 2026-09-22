@@ -41,20 +41,30 @@ jobs:
         run: |
           npm run build
 
-      # 浏览器层只进这里，不进 npm run verify（闸门一慢就会被跳过）。A 组冒烟 5 条 + B 组
-      # 导入与阅读 10 条：盯的是桩之外接没接上——真挂载、真 IndexedDB 落盘、真文件解码、
-      # 真遮挡、跳章落点，jsdom 一样都给不了。C/D/E/F/G/H 组留给本地 `npm run e2e`。
+      # 浏览器层只进这里，不进 npm run verify（闸门一慢就会被跳过）。2026-09-22 制作人点头：
+      # 从"A+B 冒烟 15 条"换成**全量 62 条**（A5 + B10 + C11 + D8 + E9 + F7 + G7 跑 dev，
+      # H5 跑 dist/）。盯的是桩之外接没接上——真挂载、真 IndexedDB 落盘、真文件解码、真遮挡、
+      # 跳章落点、真 SW 与离线兜底，jsdom 一样都给不了。以前只有 A+B 进 CI，等于另 47 条
+      # 每次改动只在这台开发机上跑过一遍就算"验证过了"。
+      # 真后端那一档（`npm run e2e:real`）**刻意不进 CI**：要下 412MB 模型、真打厂商，
+      # 还得把两把 key 放进 secrets——成本与暴露都不划算，留本地。
       # 刻意不加 retries：一条时灵时不灵的用例等于没有判据，宁可让它红一次并当场查根。
-      - name: Browser smoke (A 组冒烟 + B 组导入阅读)
+      #  workers 钉死 2 的理由（2026-09-22 本机量的）：D 组每条开头都要"真 boot + 从 IndexedDB
+      # 读回书架 + 登录"，这一步耗时随并发线性恶化——`--workers=1` 单条 2.7 秒，`--workers=10`
+      # 起 D5/D7/D8 会偶发红（红在登录遮罩与 hit-test 的 3 秒预算上，不是产品形状）。
+      # runner 是 4 核，2 worker 既是它的真实容量也让这一档在不同代机器上可复现。
+      # 首次跑还要盯的已知风险：runner 上没有本机的中文字体度量，G4b（地点详情弹窗溢出）与
+      # B10（跳章落点）这类**按像素判**的用例在 Linux 上可能更紧也可能更松。
+      - name: Browser journeys (全量 62 条：dev 57 + 构建产物 5)
         run: |
           npx playwright install --with-deps chromium
-          npm run e2e:ab
+          npm run e2e -- --workers=2
 
       - name: Upload browser report (只在失败时留证据)
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-smoke-report
+          name: playwright-e2e-report
           path: |
             playwright-report/
             test-results/

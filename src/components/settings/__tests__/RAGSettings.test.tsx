@@ -31,10 +31,10 @@ import { useRAGStore } from "@/stores/rag-store";
 
 function setMobile(width: number) {
   Object.defineProperty(window, "innerWidth", { value: width, writable: true, configurable: true });
-  // 口径修正（2026-09-22 地板重算时量出来的）：**RAGSettings 现在不按 JS 断点分支**——
-  // `useMediaQuery("(max-width: 767px)")` 那套早就不在这只组件里了，全仓只剩
-  // `src/hooks/useMediaQuery.ts` 一个定义、没有任何 import。所以这条用例的"手机宽度"那一半
-  // 已经没有判别力（改宽度不改 DOM）。留这段 helper 只是让 jsdom 里的 matchMedia 有确定行为；
+  // 口径修正（2026-09-22 地板重算时量出来的）：**RAGSettings 不按 JS 断点分支**——以前那套
+  // `useMediaQuery("(max-width: 767px)")` 早就不在这只组件里了，而那只 hook 全仓零引用、
+  // 已随本次清理删掉（`src/hooks/useMediaQuery.ts`）。所以这条用例的"手机宽度"那一半
+  // **没有判别力**（改宽度不改 DOM）：留这段 helper 只是让 jsdom 里的 matchMedia 有确定行为。
   // 真要钉"自检入口在手机上摸得到"，那属于窄屏浏览器层（G 组）的活。
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
