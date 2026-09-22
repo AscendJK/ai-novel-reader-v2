@@ -154,7 +154,13 @@ test.describe.serial("真后端：模型真下载、索引真建、问一句真�
     // `[rag] done: … 3 chunks 512d 375ms`），弹窗开合都在一次轮询（3 秒）的间隙里。
     // 中间态由主套 F1 用假时钟钉（`f-rag-tts.spec.ts:133`），这一条改钉卡片徽章：
     // 它由服务端状态驱动，且建完就一直留着。
-    await expect(page.getByText(/BGE (就绪|已缓存|已加载)/).first()).toBeVisible({ timeout: 90_000 });
+    //
+    // 预算按"真下载"给，不按"建库"给：这条用例自己会把 models-cache 删掉，所以徽章
+    // 要等 服务端拉 22.9MB + 转给浏览器 + 建库 三段全走完。2026-09-22 晚实测镜像裸速
+    // 366KB/s（`curl` 同一只 onnx：64 秒），原先的 90 秒当晚就会红在预算上而不是产品。
+    // 抬这一眼的等待不放宽任何判别力：真正的判据是它后面那两条（onnx 字节数与服务端
+    // 报回来的维度），F7 那种"点了没反应"在 240 秒里同样永远等不到徽章。
+    await expect(page.getByText(/BGE (就绪|已缓存|已加载)/).first()).toBeVisible({ timeout: 240_000 });
 
     const after = biggestOnnx();
     expect(after.bytes, `首建之后服务端缓存里没有 .onnx（跑之前有 ${before.bytes} 字节）`).toBeGreaterThan(20 * 1048576);
