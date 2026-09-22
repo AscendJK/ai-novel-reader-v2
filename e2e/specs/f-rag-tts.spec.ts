@@ -443,3 +443,56 @@ test("F6 停止朗读：播放栏收掉、顶栏按钮回来，并且真的通�
     .toBe(true);
 });
 
+/** 送进合成接口的正文（`POST /api/rag/tts/synthesize` 的请求体原文） */
+function synthesizedTexts(backend: Backend): string[] {
+  return pathsOf(backend, "POST", "/api/rag/tts/synthesize").map((r) => r.body ?? "");
+}
+
+test("F8 播到章末之前就得把下一章推进缓冲：章界不许有冷启动静音", async ({ page }) => {
+  test.setTimeout(120_000);
+  // 每段 12 秒长音：把"第一章还在播"这段窗口拉到足够宽，判据才不用抢毫秒。
+  // 一章正好两段（章节标题独立成段，`prepareTextForTTS` 只滤 5 字以下的段），
+  // serverChunkSize=150 不够把它们并成一段。
+  const LONG = wav(Array.from({ length: 24000 * 12 }, (_, i) => Math.sin(i / 40)), 24000);
+  const backend = await stubBackend(
+    page,
+    baseTable({
+      ...ttsStatus(() => true),
+      "POST /api/rag/tts/synthesize": async () => {
+        await new Promise((r) => setTimeout(r, 1_500));
+        return { body: LONG, contentType: "audio/wav" };
+      },
+      "POST /api/rag/tts/cancel": { body: { ok: true } },
+    }),
+  );
+  await openOnline(page, { ttsEngine: "server" });
+  await importOne(page, "朗读测试");
+  await openBook(page, "朗读测试");
+  const t0 = Date.now();
+  await page.getByTitle("语音朗读").click();
+  await expect(page.getByTitle("上一章", { exact: true })).toBeVisible({ timeout: 20_000 });
+
+  // 判据一：第一章那句"洛阳城下"还在播的时候，第二章那句"虎牢关"就应当已经被送去
+  // 合成。修复前不可能成立——预生成窗口只覆盖当前这一批 chunks（`tts-manager.ts:816-817`），
+  // 第二章那句最早也要等第一章播完 + 翻章底噪（500ms + 350ms 两个定时器）才发得出。
+  // 20 秒这条线是照着上面那笔时长账定的：预热落在 ~14 秒，章界之前那一秒都不算。
+  await expect
+    .poll(() => synthesizedTexts(backend).some((t) => t.includes("虎牢关")), {
+      timeout: 20_000,
+      message: "第一章还在播，第二章那句却没被送去合成 —— 章界只能冷启动现推，用户听到一段静音",
+    })
+    .toBe(true);
+
+  // 判据二：预热过的那句在章界只能被用一次。若在翻章之后又被推一遍，说明预热的结果
+  // 没被下一章消费（键对不上、或被 clearPrefetch 顺手清了）——那是白花钱还不省时间。
+  // 必须等**过**章界再回看：本章 2 段 × 12 秒 + 翻章底噪 ≈ 26 秒，早判等于没判。
+  await page.waitForTimeout(Math.max(0, 27_000 - (Date.now() - t0)));
+  const texts = synthesizedTexts(backend);
+  expect(
+    texts.filter((t) => t.includes("虎牢关")).length,
+    "第二章那句被合成了两遍 —— 预热没被下一章用上",
+  ).toBe(1);
+  // 两章各 2 段 = 4 次，多出来的都是拿用户的钱赌他会听完
+  expect(texts.length, "预热的段数超了：下一章只该热当前引擎预生成段数那么多").toBeLessThanOrEqual(4);
+});
+

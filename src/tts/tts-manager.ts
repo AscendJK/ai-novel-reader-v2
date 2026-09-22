@@ -13,6 +13,9 @@ export type TTSEngine = "server" | "zipvoice" | "webspeech";
 let activeManager: TTSManager | null = null;
 export function getActiveTTSManager(): TTSManager | null { return activeManager; }
 
+/** 章界预热最多存几段（一段 24kHz 单声道约 1-4MB；超了就丢最旧的，宁可白扔不占内存） */
+const WARM_BUFFER_MAX = 6;
+
 export interface TTSChunk {
   text: string;
   index: number;
@@ -753,6 +756,17 @@ export class TTSManager {
   // 生成参数（语速/倍速）epoch：变更后在飞的旧参数预生成不得再入池，
   // 否则同一章里混着两套语速（代次不变，所以不能靠 generationId 作废）
   private generationEpoch = 0;
+  // ── 章界预热：本章还在播时就把下一章开头的几段推好，存到这里等下一次 speak() ──
+  // 与上面的缓冲池唯一的区别是它**跨 speak() 存活**（章界正是靠再调一次 speak 到达的，
+  // 而 speak 开场就 clearPrefetch）。音色与语速走键值，任一变了自然不命中，不需要额外
+  // 的作废路径；已在飞的预热结果由 `stopped` 挡在池外。
+  // 注意：**停止朗读不清它**。用户关掉又马上重开是常态，那几段是同一音色同一语速的
+  // 有效音频，清了就是把他刚花掉的那份钱扔掉；内存由 WARM_BUFFER_MAX 兜住。
+  private warmBuffers = new Map<string, AudioBuffer>();
+  // 在飞预热：键 → 提交它的那个 epoch。收尾只许删自己那一份——上一轮迟到的任务
+  // 无条件删标记，会把这一轮同段的在飞标记抹掉并再提交一遍（同 R-46 的教训）
+  private warmPending = new Map<string, number>();
+  private warmEpoch = 0;
 
   constructor() {
     this.webSpeech = new WebSpeechTTSEngine();
@@ -781,6 +795,7 @@ export class TTSManager {
       console.warn(`[TTS] 引擎类型不匹配（当前 ${this.engine}），重建 Kokoro 引擎实例`);
       this.zipvoice.destroy();
       this.zipvoice = null;
+      this.clearWarm(); // 旧实例的 AudioContext 已关：手里的 AudioBuffer 再也播不出来
     }
     if (!this.zipvoice) {
       this.zipvoice = this.engine === "server" ? new ServerKokoroEngine() : new BrowserKokoroEngine();
@@ -835,8 +850,8 @@ export class TTSManager {
       // 异步生成：完成后若未作废则入缓冲（按 index 有序插入）
       (async () => {
         try {
-          const buffer = await kokoro.generateBuffer(
-            chunk.text, effectiveSpeed,
+          const buffer = await this.genChunkBuffer(
+            kokoro, chunk.text, effectiveSpeed,
             () => this.stopped || this.generationId !== genId,
           );
           if (this.stopped || this.generationId !== genId || epoch !== this.generationEpoch) return; // 作废：停止/seek/语速变更
@@ -959,6 +974,75 @@ export class TTSManager {
     this.prefetchWaiters.clear();
     this.inFlightPrefetch.clear();
     this.callbacks.onBufferChange?.(0);
+  }
+
+  /** 预热缓冲的键：引擎 + 音色 + 有效语速 + 正文，任一变了就是另一次生成，不认旧货 */
+  private warmKey(text: string): string {
+    const s = Math.max(0.4, Math.min(3.5, this.speed * this.playbackRate)).toFixed(2);
+    return `${this.engine}|${this.voiceId}|${s}|${text}`;
+  }
+
+  /**
+   * 章界预热：本章播到最后一句时，把下一章开头的若干段先推出来存着。
+   * 段数上限跟着当前引擎的预生成段数走——用户拿它表达过"愿意为流畅度排多久的队"，
+   * 预热没有理由比它更贪。服务端队列被预热挤爆的代价是当前章卡顿，所以宁少不多。
+   *
+   * 失败静默：预热不中只是章界回到冷启动的老样子，不值得弹任何东西给用户。
+   */
+  warmAhead(chunks: TTSChunk[]): void {
+    const kokoro = this.zipvoice;
+    if (!kokoro || this.engine === "webspeech" || this.prefetchCount <= 0 || this.stopped) return;
+    const effectiveSpeed = Math.max(0.4, Math.min(3.5, this.speed * this.playbackRate));
+    const epoch = this.warmEpoch;
+    for (const chunk of chunks.slice(0, this.prefetchCount)) {
+      const key = this.warmKey(chunk.text);
+      if (this.warmBuffers.has(key) || this.warmPending.has(key)) continue;
+      this.warmPending.set(key, epoch);
+      void (async () => {
+        try {
+          const buffer = await kokoro.generateBuffer(
+            chunk.text, effectiveSpeed,
+            () => this.stopped || this.warmEpoch !== epoch,
+          );
+          if (this.stopped || this.warmEpoch !== epoch) return; // 停止/换实例：宁可白扔
+          this.warmBuffers.set(key, buffer);
+          while (this.warmBuffers.size > WARM_BUFFER_MAX) {
+            const oldest = this.warmBuffers.keys().next();
+            if (oldest.done) break;
+            this.warmBuffers.delete(oldest.value);
+          }
+        } catch {
+          /* 预热失败 = 没有预热，别的什么都不做 */
+        } finally {
+          if (this.warmPending.get(key) === epoch) this.warmPending.delete(key);
+        }
+      })();
+    }
+  }
+
+  /**
+   * 一段正文的音频来源：先看章界预热的成品，没有才现推。三处生成入口共用。
+   * 命中即取出（不留在池里）——同一句话第二次要音频说明有东西错了，宁可重推。
+   */
+  private async genChunkBuffer(
+    kokoro: ZipVoiceTTSEngine, text: string, speed: number,
+    isCancelled: () => boolean, priority = false,
+  ): Promise<AudioBuffer> {
+    const key = this.warmKey(text);
+    const warm = this.warmBuffers.get(key);
+    if (warm) {
+      this.warmBuffers.delete(key);
+      console.log(`[TTS] ▶ 用章界预热音频（还存 ${this.warmBuffers.size} 段）: ${text.length} 字`);
+      return warm;
+    }
+    return kokoro.generateBuffer(text, speed, isCancelled, priority);
+  }
+
+  /** 丢掉预热：只在 Kokoro 实例被换掉（旧 AudioContext 已关，Buffer 播不出来）与销毁时调 */
+  private clearWarm(): void {
+    this.warmEpoch++;
+    this.warmBuffers.clear();
+    this.warmPending.clear();
   }
 
   /**
@@ -1195,15 +1279,15 @@ export class TTSManager {
               this.callbacks.onBufferChange?.(this.buffered.length);
             } else {
               // 预生成失败：现场生成（priority 插队，不被后台任务阻塞）
-              buffer = await this.zipvoice.generateBuffer(
-                chunk.text, effectiveSpeed,
+              buffer = await this.genChunkBuffer(
+                this.zipvoice, chunk.text, effectiveSpeed,
                 () => this.stopped || this.generationId !== genId,
                 true,
               );
             }
           } else {
-            buffer = await this.zipvoice.generateBuffer(
-              chunk.text, effectiveSpeed,
+            buffer = await this.genChunkBuffer(
+              this.zipvoice, chunk.text, effectiveSpeed,
               () => this.stopped || this.generationId !== genId,
               true, // priority：现场生成插队到 worker 队列队首，不被后台预生成阻塞
             );
@@ -1401,6 +1485,7 @@ export class TTSManager {
     this.userPaused = false;
     this.generationId++;
     this.clearPrefetch();
+    this.clearWarm();
     this.cancelServerInference();
     if (this.zipvoice) { this.zipvoice.destroy(); this.zipvoice = null; }
     this.webSpeech.destroy();

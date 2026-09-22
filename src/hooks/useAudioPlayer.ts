@@ -5,6 +5,8 @@
 
 import { useRef, useCallback, useEffect, useState } from "react";
 import { useTTSStore } from "@/stores/tts-store";
+import { useNovelStore } from "@/stores/novel-store";
+import { loadChapters } from "@/db/repositories";
 import { TTSManager, type TTSChunk } from "@/tts/tts-manager";
 import { setWorkerPoolSize } from "@/tts/zipvoice-engine";
 import { prepareTextForTTS, buildOrderedParaIndices, findChunkIndexByPara } from "@/tts/text-preprocess";
@@ -196,6 +198,37 @@ export function useAudioPlayer({
     return null;
   }, [novelId, chapterIndex]);
 
+  // ── 章界预热：本章播到最后一句时，先把下一章开头几段推出来存着 ──────────
+  // 不预热的话，翻章之后第一句是冷启动现推的（预生成窗口只覆盖当前这一批 chunks），
+  // 服务器推理下那是一整轮排队+推理的静音，浏览器推理下更是一两分钟。
+  // 代价说清楚：用户若在那一刻关掉朗读且那几段还没推完，就白推了——上限是当前引擎的
+  // 预生成段数（裁在 `tts-manager.warmAhead` 里），推完的那部分重开时仍然作数。
+  const warmedRef = useRef<string | null>(null);
+  const maybeWarmNextChapter = useCallback((index: number, total: number) => {
+    // Web 语音不产 AudioBuffer（浏览器自己流式念），预热它只是白排队
+    if (engine === "webspeech" || !autoNextChapter || !onNextChapter) return;
+    if (index !== total - 1) return; // 本章还有后话：轮不到下一章
+    if (novelId == null || chapterIndex == null) return;
+    const nextIndex = chapterIndex + 1;
+    const token = `${novelId}:${nextIndex}:${voiceId}:${speed}×${playbackRate}:${chunkSize}`;
+    if (warmedRef.current === token) return; // 段落进度会反复回调，每章只热一次
+    warmedRef.current = token;
+    void (async () => {
+      const chapters = useNovelStore.getState().currentNovel?.chapters ?? [];
+      let text = chapters[nextIndex]?.content?.trim() ?? "";
+      if (!text) {
+        // 翻页模式下下一章正文可能还没进内存；读回来正好也是翻章要用的
+        const [loaded] = await loadChapters(novelId, nextIndex, 1);
+        text = loaded?.content?.trim() ?? "";
+      }
+      if (!text) return;
+      if (warmedRef.current !== token) return; // 期间切了章或改了参数：这一轮作废
+      const ahead = prepareTextForTTS(text, chunkSize, engine === "server")
+        .map((c, i) => ({ ...c, index: i }));
+      managerRef.current?.warmAhead(ahead);
+    })();
+  }, [engine, autoNextChapter, onNextChapter, novelId, chapterIndex, voiceId, speed, playbackRate, chunkSize]);
+
   // 播放当前章节
   const play = useCallback(async () => {
     if (!chapterContent || chapterIndex == null || !novelId) return;
@@ -269,7 +302,10 @@ export function useAudioPlayer({
       },
       onBufferChange: (buffered) => setBufferedChunks(buffered),
       onGenerating: (g) => setGenerating(g),
-      onChunkStart: (_i, _total, paraIdx) => setParagraphProgress(paraIdx, totalParaCount),
+      onChunkStart: (i, total, paraIdx) => {
+        setParagraphProgress(paraIdx, totalParaCount);
+        maybeWarmNextChapter(i, total);
+      },
       onChunkEnd: (_i, _total, paraIdx) => setParagraphProgress(paraIdx, totalParaCount),
       onParagraphChange: (paraIdx) => setParagraphProgress(paraIdx, totalParaCount),
       onEnd: () => {
@@ -352,7 +388,7 @@ export function useAudioPlayer({
       setGenerating(false);
       setPlaying(false);
     });
-  }, [chapterContent, chapterIndex, novelId, engine, voiceId, speed, playbackRate, pitch, autoNextChapter, getManager, setCurrentChapter, setGenerating, setParagraphProgress, setPlaying, setPaused, onNextChapter, loadPosition, setBrowserVoices, setEngine, setModelDownloaded, setModelDownloading, chunkSize, prefetchCount, workerCount, setPrepareProgress, setBufferedChunks]);
+  }, [chapterContent, chapterIndex, novelId, engine, voiceId, speed, playbackRate, pitch, autoNextChapter, getManager, setCurrentChapter, setGenerating, setParagraphProgress, setPlaying, setPaused, onNextChapter, loadPosition, maybeWarmNextChapter, setBrowserVoices, setEngine, setModelDownloaded, setModelDownloading, chunkSize, prefetchCount, workerCount, setPrepareProgress, setBufferedChunks]);
 
   // R13: 暂停/恢复（WebSpeech 使用 cancel+re-speak 模式，绕过移动端 resume bug）
   const togglePause = useCallback(async () => {
@@ -403,6 +439,9 @@ export function useAudioPlayer({
   const stop = useCallback(() => {
     savePosition();
     startChunkOffsetRef.current = 0;
+    // 停止会让 manager 丢掉预热缓冲，这一章的"已经热过了"记账也必须跟着丢，
+    // 否则重新开播同一章时再没人去预热，章界又退回冷启动
+    warmedRef.current = null;
     pendingAutoPlayRef.current = false;
     pendingAutoPlayIndexRef.current = null;
     if (pendingAutoPlayTimerRef.current) {
