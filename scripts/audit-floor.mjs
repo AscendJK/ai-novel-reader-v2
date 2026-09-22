@@ -18,9 +18,19 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createRequire } from "node:module";
 
 const LOG = path.join(os.tmpdir(), "anr-src-modules.jsonl");
 const skipE2E = process.argv.includes("--no-e2e");
+
+/**
+ * 不经 `npx` 起 Playwright：Windows 上 `spawnSync("npx", …)` 会以 ENOENT 失败（状态 null），
+ * 于是浏览器那一档整层不存在，地板只剩单测那一档——2026-09-22 一次性全面复跑时实测到的形状。
+ * 取 `@playwright/test` 自己的 cli.js，用当前 node 可执行文件起，两侧分隔符与 PATHEXT 都不参与。
+ */
+function playwrightCli() {
+  return path.join(path.dirname(createRequire(import.meta.url).resolve("@playwright/test")), "cli.js");
+}
 
 if (skipE2E && !fs.existsSync(LOG)) {
   console.error(`--no-e2e 但记录不存在：${LOG}（先不带这个开关跑一次）`);
@@ -30,7 +40,7 @@ if (skipE2E && !fs.existsSync(LOG)) {
 if (!skipE2E) {
   fs.rmSync(LOG, { force: true });
   console.log(`[地板] 跑 dev 那一层（--project=chromium）并记录加载过的 src 模块 → ${LOG}`);
-  const run = spawnSync("npx", ["playwright", "test", "-c", "e2e/playwright.config.ts", "--project=chromium"], {
+  const run = spawnSync(process.execPath, [playwrightCli(), "test", "-c", "e2e/playwright.config.ts", "--project=chromium"], {
     stdio: "inherit",
     env: { ...process.env, ANR_E2E_MODULE_LOG: LOG },
   });
