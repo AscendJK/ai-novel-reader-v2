@@ -125,6 +125,9 @@ jobs:
           Check-Zip "release/ai-novel-reader-v2-full.zip" @("server/tts-worker.py", "server/routes/rag.js", "package.json", "start.bat", "start.sh", "dist/index.html", "dist/sw.js") $tagVersion
 
       - name: Create Release
+        # 只在真打 tag 时才发布：手动 dispatch 跑在分支上没有 tag，而这个 action 会拿
+        # 分支名去建 release 与 tag —— 于是"只想验一遍 CI"会变成真发一个版本出去。
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
