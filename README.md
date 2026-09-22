@@ -62,8 +62,8 @@ pwsh -File pack-backend.ps1 -IncludeDist  # 额外打前后端全包（需先 np
 **自动发布 Release**：推送到 `main` 分支只触发前端部署，不会打包后端。需要发布新版本时打 tag：
 
 ```bash
-git tag v2.3.0
-git push origin v2.3.0
+git tag v2.4.0
+git push origin v2.4.0
 ```
 
 GitHub Actions（`.github/workflows/release-backend.yml`）会自动构建前端、分别打包两个 zip、校验产物（检查 `tts-worker.py`、`rag.js`、全包的 `dist/index.html` 等关键文件，缺失即失败）、并创建 Release 上传。也可以在 Actions 页面手动触发（workflow_dispatch）。

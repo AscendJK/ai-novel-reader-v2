@@ -52,8 +52,8 @@ Produces `ai-novel-reader-v2-backend.zip` (~60 KB).
 **Auto-publish a Release**: Pushing to `main` only triggers the frontend deployment — it does not package the backend. To release a new version, create a tag:
 
 ```bash
-git tag v2.3.0
-git push origin v2.3.0
+git tag v2.4.0
+git push origin v2.4.0
 ```
 
 GitHub Actions (`.github/workflows/release-backend.yml`) then runs `pack-backend.ps1`, verifies the artifact (checks critical files such as `tts-worker.py` and `rag.js` are inside the zip, failing otherwise), creates a Release, and uploads the zip. You can also trigger it manually from the Actions tab (workflow_dispatch).
