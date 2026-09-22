@@ -91,4 +91,17 @@ describe("全书总结的预检索门槛", () => {
     const p = promptOf();
     expect(p).not.toContain("**内容样本（开头几章+中间+结尾的片段）：**");
   });
+
+  it("样本标签写了「开头几章+中间+结尾」，就必须真的给出首/中/尾三处", async () => {
+    // 13 章 → `sampleChapters` 取第 1、2、7（中点）、13 章。钉死这三处的章号，是
+    // 为了让"只塞第一章"这种退化在这里就红：真后端那条（R-E5）在配了检索的书签下走的
+    // 是预检索分支，量不到样本分支，所以样本的覆盖只能在这一层守。
+    await run({ preRetrieved: "太短了" });
+    const p = promptOf();
+    expect(p).toContain("【第1章 标题】开头:");
+    expect(p).toContain("【第7章 标题】开头:");
+    expect(p).toContain("【第13章 标题】开头:");
+    // 而且每块都得真带正文，只列标题等于没给内容
+    expect(p).toContain("第7章正文：令狐冲练剑。");
+  });
 });
