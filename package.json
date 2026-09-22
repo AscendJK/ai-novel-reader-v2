@@ -23,6 +23,7 @@
     "probe:proxy": "node scripts/probe-proxy-stream.mjs",
     "probe:boot": "node scripts/probe-server-boot.mjs",
     "preview:migration": "node scripts/preview-db-migration.mjs",
+    "audit:orphans": "node scripts/audit-joined-orphans.mjs",
     "audit:reach": "node scripts/audit-import-graph.mjs",
     "audit:discrimination": "node scripts/audit-discrimination.mjs",
     "test:watch": "vitest",
