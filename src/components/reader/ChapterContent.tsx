@@ -472,7 +472,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
   });
 
   // 自动阅读期间保持屏幕常亮（防移动端息屏）
-  useScreenWakeLock(autoReadEnabled);
+  useScreenWakeLock(autoReadEnabled, "自动阅读");
 
   // 自动阅读开启期间，用户打开设置面板 / 切换阅读模式 → 视为干扰，停止
   // （切换沉浸模式不停自动阅读：沉浸时顶栏隐藏，用底部悬浮停止按钮控制）

@@ -100,8 +100,9 @@ export function useAudioPlayer({
     };
   }, []);
 
-  // 朗读/生成期间保持屏幕常亮（防移动端息屏；暂停时释放）
-  useScreenWakeLock((playing || generating) && !paused);
+  // 朗读/生成期间保持屏幕常亮（防移动端息屏；暂停时释放）。label 给真机自检看：
+  // 息屏后朗读断不断，第一手证据就是这把锁到底拿到没有、什么时候被系统收走
+  useScreenWakeLock((playing || generating) && !paused, "朗读");
 
   // M19+R7: 翻章时清除定时器+停止旧播放
   useEffect(() => {

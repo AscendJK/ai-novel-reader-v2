@@ -9,6 +9,7 @@
  * 纯逻辑部分（collectFacts/清单/导出文本）与 DOM 探针分开，前者可单测。
  */
 import { getActiveTTSManager } from "@/tts/tts-manager";
+import { onWakeLockEvent, wakeLockRecords, type WakeLockRecord } from "@/hooks/useScreenWakeLock";
 import { APP_VERSION } from "@/config/version";
 import { COI_RELOAD_KEY, MAX_COI_RELOADS } from "@/lib/sw-update";
 
@@ -57,9 +58,15 @@ export const DEVICE_CHECKLIST: ChecklistItem[] = [
   },
   {
     id: "lockscreen",
-    title: "锁屏后解锁",
+    title: "锁屏 10 秒再解锁（回来之后状态对不对）",
     how: "朗读中锁屏 10 秒 → 解锁回页面",
     expect: "同上；若系统接管了播放，锁屏控件也应只对当前这一段",
+  },
+  {
+    id: "screen-off-listening",
+    title: "熄屏之后还在读吗（三档引擎各来一次）",
+    how: "先记下用的哪一档引擎（服务端推理/浏览器推理/系统语音），并记下播放栏「第 N/M 段」和章号 → 按电源键让屏幕熄灭，不要按 Home、不要切到别的应用 → 纯听 60~90 秒 → 亮屏核对段号。每一档在纸上记一行：引擎 / 熄屏秒数 / 段号从 N 到几",
+    expect: "声音不断，且段号推进的段数与熄屏时长相称（服务端推理一段约 2~5 秒音频）。若某档熄屏后就无声，导出时间线看三处：唤醒锁有没有「已放开/申请被拒」、有没有「页面被冻结」、「朗读现场」那几行的段号在熄屏期间有没有往前爬——三档引擎的结论本来就不同，没记引擎等于没测",
   },
   {
     id: "auto-next-chapter",
@@ -109,6 +116,17 @@ function fmtBytes(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0";
   const mb = n / 1048576;
   return mb >= 1024 ? `${(mb / 1024).toFixed(2)}GB` : `${mb.toFixed(1)}MB`;
+}
+
+/** 一把锁的现状写成一行：持有中 / 被拒（带原因） / 多久之前被系统收走 */
+function lockPhrase(l: WakeLockRecord): string {
+  if (l.held) return `${l.label}=持有中`;
+  if (l.lastError) return `${l.label}=没拿到（申请被拒：${l.lastError}）`;
+  if (l.lastReleasedAt) {
+    const ago = Math.max(0, Math.round((Date.now() - l.lastReleasedAt) / 1000));
+    return `${l.label}=已放开（${ago} 秒前）`;
+  }
+  return `${l.label}=未持有`;
 }
 
 /** 私密浏览下 IndexedDB 打不开或写不进——iOS Safari 私密模式是这个 app 的头号杀手 */
@@ -211,6 +229,20 @@ export async function collectFacts(): Promise<Fact[]> {
   const manager = getActiveTTSManager();
   facts.push({ label: "朗读运行时", value: manager ? manager.describeRuntime() : "当前没有朗读会话（先开始一次朗读再看这里）", level: "info" });
 
+  // 息屏保活。放在这里是因为它决定"熄屏之后还在不在读"：锁在手，屏幕不会熄，问题
+  // 只剩系统收锁那一瞬；锁没到手（非 HTTPS、iOS 16.4 以下、省电模式），那就是
+  // 一定会熄屏，接下来能不能继续出声全看引擎。
+  // 三种"没锁"原先在界面上长得一模一样，所以把拒绝原因与释放时刻都摊出来。
+  const locks = wakeLockRecords().filter((l) => l.tried);
+  const wlApi = typeof (navigator as Navigator & { wakeLock?: { request?: unknown } }).wakeLock?.request === "function";
+  const secure = (globalThis as unknown as { isSecureContext?: boolean }).isSecureContext === true;
+  facts.push({
+    label: "屏幕唤醒锁（息屏保活）",
+    value: `API=${wlApi ? "有" : "无（要 HTTPS + Android Chrome 84+/iOS Safari 16.4+）"} · 安全上下文=${secure}` +
+      (locks.length ? ` · ${locks.map(lockPhrase).join(" · ")}` : " · 还没申请过（先开始一次朗读再看这里）"),
+    level: !wlApi || !secure ? "warn" : locks.some((l) => l.held) ? "ok" : "info",
+  });
+
   try {
     const { isCacheReady } = await import("@/tts/tts-cache");
     const { getWorkerPoolSize, isModelLoaded } = await import("@/tts/zipvoice-engine");
@@ -274,9 +306,18 @@ export async function playTone(): Promise<string> {
   }
 }
 
+/** 朗读现场采样节奏：3 秒一拍，只在内容变了才落行；连续静默 7 拍补一行心跳 */
+const RUNTIME_SAMPLE_MS = 3_000;
+const RUNTIME_HEARTBEAT_TICKS = 7;
+
 /**
  * 时间线探针：面板打开期间挂着，返回卸载函数。
- * 只记对判断有意义的事件，不记高频量（滚动/指针移动等）。
+ * 事件类只记对判断有意义的，不记高频量（滚动/指针移动等）。
+ *
+ * 除了事件，还按 `RUNTIME_SAMPLE_MS` 抄一份朗读现场（段号 / 缓冲池 / 页面可见性）：
+ * 熄屏那 60~90 秒没人看得见屏幕，"到底还在不在读"只能事后从导出的时间线里读出来——
+ * 段号一直在往前爬 = 活着；停在某一段再无新行 = 停了。变化才落行是为了别把导出窗口
+ * （最近 120 行）刷满，心跳是为了让"没有行"这件事本身还能被解释。
  */
 export function installProbes(push: (line: string) => void): () => void {
   const onVisibility = () => push(`可见性 → ${document.visibilityState}${document.hidden ? "（页面已隐藏）" : ""}`);
@@ -287,6 +328,18 @@ export function installProbes(push: (line: string) => void): () => void {
   const onReject = (e: PromiseRejectionEvent) => push(`未捕获的 Promise 拒绝：${e.reason instanceof Error ? e.reason.message : String(e.reason)}`);
   const onError = (e: ErrorEvent) => push(`未捕获错误：${e.message}`);
 
+  let lastSample = "";
+  let quietTicks = 0;
+  const sampleRuntime = () => {
+    const line = `朗读现场 ${getActiveTTSManager()?.describeRuntime() ?? "当前没有朗读会话"} · 页面=${document.visibilityState}`;
+    quietTicks += 1;
+    if (line === lastSample && quietTicks < RUNTIME_HEARTBEAT_TICKS) return;
+    lastSample = line;
+    quietTicks = 0;
+    push(line);
+  };
+  const timer = setInterval(sampleRuntime, RUNTIME_SAMPLE_MS);
+
   document.addEventListener("visibilitychange", onVisibility);
   window.addEventListener("pagehide", onPageHide);
   window.addEventListener("pageshow", onPageShow);
@@ -294,9 +347,12 @@ export function installProbes(push: (line: string) => void): () => void {
   window.addEventListener("resume", onResume);
   window.addEventListener("unhandledrejection", onReject);
   window.addEventListener("error", onError);
-  push("自检探针已挂载（可见性 / 冻结 / 未捕获错误）");
+  // 唤醒锁的事件只在 hook 内部看得见，而"熄屏那一瞬锁被收走"正是这条时间线要抓的
+  const offWakeLock = onWakeLockEvent((l) => push(l));
+  push("自检探针已挂载（可见性 / 冻结 / 唤醒锁 / 朗读采样 / 未捕获错误）");
 
   return () => {
+    clearInterval(timer);
     document.removeEventListener("visibilitychange", onVisibility);
     window.removeEventListener("pagehide", onPageHide);
     window.removeEventListener("pageshow", onPageShow);
@@ -304,6 +360,7 @@ export function installProbes(push: (line: string) => void): () => void {
     window.removeEventListener("resume", onResume);
     window.removeEventListener("unhandledrejection", onReject);
     window.removeEventListener("error", onError);
+    offWakeLock();
   };
 }
 

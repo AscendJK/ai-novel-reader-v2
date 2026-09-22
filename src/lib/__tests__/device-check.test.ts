@@ -2,14 +2,25 @@
  * 真机自检模块的纯逻辑测试（清单/事实/导出/探针）
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { renderHook, act } from "@testing-library/react";
 import {
   DEVICE_CHECKLIST, buildReport, loadCheckState, saveCheckState,
   installProbes, collectFacts, type Fact,
 } from "../device-check";
+import { useScreenWakeLock } from "@/hooks/useScreenWakeLock";
 
 vi.mock("@/tts/tts-manager", () => ({
-  getActiveTTSManager: () => null,
+  getActiveTTSManager: () => h.manager(),
 }));
+
+/** 可控的"当前朗读会话"：runtime=null 表示没有会话（沿用原有若干用例的口径） */
+const h = vi.hoisted(() => {
+  const state = { runtime: null as string | null };
+  return {
+    state,
+    manager: () => (state.runtime === null ? null : { describeRuntime: () => state.runtime as string }),
+  };
+});
 
 function makeFacts(): Fact[] {
   return [
@@ -35,9 +46,18 @@ describe("清单与勾选状态", () => {
 
   it("清单覆盖批次 5 遗留的 iOS 关键场景", () => {
     const ids = DEVICE_CHECKLIST.map((i) => i.id);
-    for (const must of ["resume-after-interrupt", "double-tap-continue", "mute-switch", "background-restore", "auto-next-chapter", "rate-change-while-paused", "offline-cold-start"]) {
+    for (const must of ["resume-after-interrupt", "double-tap-continue", "mute-switch", "background-restore", "auto-next-chapter", "rate-change-while-paused", "offline-cold-start", "screen-off-listening"]) {
       expect(ids).toContain(must);
     }
+  });
+
+  it("熄屏听声那条要能与「切后台」分开做，并要求留下可比数字", () => {
+    const item = DEVICE_CHECKLIST.find((i) => i.id === "screen-off-listening");
+    expect(item, "清单只验「回来之后状态对不对」，没验「熄屏那段时间还在不在读」").toBeTruthy();
+    expect(item?.how).toContain("电源键");
+    expect(item?.how).toContain("不要按 Home");   // 按 Home 走的是另一条路（切后台），两件事不能混做
+    expect(item?.how).toContain("引擎");          // 三档引擎的结论不同，不记引擎等于没测
+    expect(item?.expect).toContain("段号");
   });
 
   it("勾选状态持久化到 localStorage 并可回读", () => {
@@ -129,5 +149,140 @@ describe("installProbes", () => {
     }));
     expect(lines.some((l) => l.includes("boom"))).toBe(true);
     off();
+  });
+
+  it("屏幕唤醒锁被系统收走这件事，自己爬进时间线", async () => {
+    const off = installProbes((l) => lines.push(l));
+    const listeners = new Map<string, () => void>();
+    const sentinel = {
+      release: vi.fn(() => Promise.resolve()),
+      addEventListener: vi.fn((t: string, fn: () => void) => listeners.set(t, fn)),
+    };
+    Object.defineProperty(navigator, "wakeLock", {
+      configurable: true,
+      value: { request: async () => sentinel },
+    });
+    const { unmount } = renderHook(() => useScreenWakeLock(true, "探针-锁"));
+    await act(async () => {});
+    act(() => { listeners.get("release")?.(); }); // 熄屏/切后台：系统强制收锁
+
+    // 认"已放开"这件事本身：只要求"唤醒锁 + 标签"的话，"到手"那行也算命中
+    expect(lines.some((l) => l.includes("探针-锁") && l.includes("已放开")), `时间线里没有这一句：${lines.join(" | ")}`).toBe(true);
+    unmount();
+
+    // 面板关掉之后不能再往这一份时间线里推：漏掉一次，下次打开面板就能看到两遍
+    off();
+    const n = lines.length;
+    const second = renderHook(() => useScreenWakeLock(true, "探针-锁退订后"));
+    await act(async () => {});
+    second.unmount();
+    expect(lines.length, "installProbes 返回的 off() 没把唤醒锁这条订上/退干净").toBe(n);
+    delete (navigator as unknown as { wakeLock?: unknown }).wakeLock;
+  });
+});
+
+describe("屏幕唤醒锁事实行（息屏还在不在读，第一眼要看的地方）", () => {
+  afterEach(() => { delete (navigator as unknown as { wakeLock?: unknown }).wakeLock; });
+  const lockFact = async () => (await collectFacts()).find((f) => f.label.includes("唤醒锁"));
+
+  it("这一行存在，并且说清「是不是安全上下文」——非 HTTPS 根本申请不到锁", async () => {
+    const wl = await lockFact();
+    expect(wl, "息屏保活是移动端朗读的头号疑点，自检里却一行都不报").toBeTruthy();
+    expect(wl?.value).toContain("安全上下文");
+    expect(wl?.value).toMatch(/还没申请过|持有中|未持有|已放开|申请被拒/);
+  });
+
+  it("真持有着就如实报「持有中」，不是只报 API 在不在", async () => {
+    const listeners = new Map<string, () => void>();
+    const sentinel = {
+      release: vi.fn(() => Promise.resolve()),
+      addEventListener: vi.fn((t: string, fn: () => void) => listeners.set(t, fn)),
+    };
+    Object.defineProperty(navigator, "wakeLock", { configurable: true, value: { request: async () => sentinel } });
+    const { unmount } = renderHook(() => useScreenWakeLock(true, "自检-持有"));
+    await act(async () => {});
+
+    expect((await lockFact())?.value).toContain("持有中");
+    unmount();
+  });
+
+  it("申请被拒时那一行要写出为什么没锁（省电模式与非 HTTPS 长得不一样，不能都成「没锁」）", async () => {
+    Object.defineProperty(navigator, "wakeLock", {
+      configurable: true,
+      value: { request: async () => { throw Object.assign(new Error("denied"), { name: "NotAllowedError" }); } },
+    });
+    renderHook(() => useScreenWakeLock(true, "自检-被拒"));
+    await act(async () => {});
+
+    const value = (await lockFact())?.value ?? "";
+    expect(value).toContain("自检-被拒");
+    expect(value).toContain("NotAllowedError");
+  });
+});
+
+describe("朗读现场采样（熄屏那 60~90 秒得在时间线里留下脚印）", () => {
+  let lines: string[];
+
+  beforeEach(() => {
+    lines = [];
+    h.state.runtime = null;
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    h.state.runtime = null;
+    Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+  });
+
+  const sampled = () => lines.filter((l) => l.includes("朗读现场"));
+
+  it("段号一动就记一行，并带上页面可见性", () => {
+    const off = installProbes((l) => lines.push(l));
+    h.state.runtime = "engine=server chunk=3/12 缓冲池=2段";
+    vi.advanceTimersByTime(3_000);
+    expect(sampled().some((l) => l.includes("chunk=3/12") && l.includes("页面=visible")), lines.join(" | ")).toBe(true);
+
+    h.state.runtime = "engine=server chunk=4/12 缓冲池=2段";
+    vi.advanceTimersByTime(3_000);
+    expect(sampled().some((l) => l.includes("chunk=4/12")), "段号往前走了，时间线却看不出来——熄屏期间听没听就成了猜").toBe(true);
+    off();
+  });
+
+  it("毫无变化时不许刷屏，但静默太久要留一行「还在」", () => {
+    const off = installProbes((l) => lines.push(l));
+    h.state.runtime = "engine=server chunk=3/12";
+    vi.advanceTimersByTime(3_000);
+    const n = sampled().length;
+    expect(n).toBe(1);
+
+    vi.advanceTimersByTime(3_000 * 5); // 15 秒毫无变化：不该跟着刷 5 行
+    expect(sampled().length, "每 3 秒抄一遍会把导出窗口（最近 120 行）刷满").toBe(n);
+
+    vi.advanceTimersByTime(3_000 * 20); // 再静默下去要靠心跳证明探针没死
+    expect(sampled().length).toBeGreaterThan(n);
+    off();
+  });
+
+  it("亮屏/熄屏本身就要记一行（页面=hidden 是熄屏的起点锚）", () => {
+    const off = installProbes((l) => lines.push(l));
+    h.state.runtime = "engine=server chunk=3/12";
+    vi.advanceTimersByTime(3_000);
+    Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+    vi.advanceTimersByTime(3_000); // 段号没动，只有可见性动了
+
+    expect(sampled().some((l) => l.includes("页面=hidden")), lines.join(" | ")).toBe(true);
+    off();
+  });
+
+  it("面板关掉之后不许再采样（否则后台定时器会把时间线刷爆）", () => {
+    const off = installProbes((l) => lines.push(l));
+    h.state.runtime = "engine=server chunk=3/12";
+    vi.advanceTimersByTime(3_000);
+    off();
+
+    const n = lines.length;
+    h.state.runtime = "engine=server chunk=9/9";
+    vi.advanceTimersByTime(60_000);
+    expect(lines.length).toBe(n);
   });
 });
