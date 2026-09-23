@@ -53,6 +53,10 @@ function newestInput(dir) {
     const full = path.join(dir, entry.name);
     // 模型权重和 sherpa 的 onnx 体积大、不参与构建判定，跳过省掉无谓的 stat
     if (!entry.isDirectory() && /\.(onnx|bin|tflite)$/i.test(entry.name)) continue;
+    // 测试文件不进包（`src/**/__tests__`、`*.test.*`、vitest 专用的 `src/test/`），
+    // 把它们算进"源码比 dist 新"会让改一行注释的测试都触发一次全量 build
+    if (entry.isDirectory() && (entry.name === "__tests__" || entry.name === "test")) continue;
+    if (!entry.isDirectory() && /\.(test|spec)\.[jt]sx?$/i.test(entry.name)) continue;
     const mtime = entry.isDirectory() ? newestInput(full) : statSync(full).mtimeMs;
     if (mtime > max) max = mtime;
   }
