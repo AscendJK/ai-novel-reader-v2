@@ -374,3 +374,14 @@ test("D13 清理「嵌入模型」要真把缓存文件删掉，删完那一行�
   // 报数与动手同一口径：清完之后界面那格必须跟着归零（runCleanup 里那次 refresh）
   await expect(bytes).toHaveText("0 B");
 });
+
+test("D14 清理 TTS 残留：回执要报数，不许被一句「清理完成」盖掉", async ({ page }) => {
+  // 全新浏览器上下文里 tts-cache 是空的 → 孤儿数 0，产品该说的是它自己那句
+  // "没有发现残留文件"。用户点这枚按钮要的答案就是"清了几个"，通用文案盖掉它
+  // 等于这个功能只做了一半（StorageManager 里两处 setMessage 并存的形状）。
+  await openSettings(page);
+  page.on("dialog", (d) => void d.accept());
+  await page.getByRole("button", { name: "清理残留" }).click();
+  await expect(page.getByText("没有发现残留文件")).toBeVisible();
+  await expect(page.getByText("清理完成"), "带信息的回执不许被通用文案覆盖").toHaveCount(0);
+});

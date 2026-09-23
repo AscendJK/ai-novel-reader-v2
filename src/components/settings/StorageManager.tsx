@@ -62,13 +62,15 @@ export function StorageManager() {
     return () => { cancelled = true; };
   }, []);
 
-  const runCleanup = async (id: string, confirmText: string, action: () => Promise<void>) => {
+  const runCleanup = async (id: string, confirmText: string, action: () => Promise<string | void>) => {
     if (!window.confirm(confirmText)) return;
     setBusyAction(id);
     setMessage(null);
     try {
-      await action();
-      setMessage({ type: "ok", text: "清理完成" });
+      const note = await action();
+      // 谁有信息谁说话：动作自己报得出数量就用它那句，报不出才回落到通用文案。
+      // 反过来（通用文案无条件覆盖）会让"清理残留"的回执永远看不见。
+      setMessage({ type: "ok", text: typeof note === "string" && note ? note : "清理完成" });
       await refresh();
     } catch (e) {
       setMessage({ type: "err", text: `清理失败：${e instanceof Error ? e.message : String(e)}` });
@@ -241,8 +243,7 @@ export function StorageManager() {
               "确认清理 TTS 残留文件？仅删除不在当前必需清单内的孤儿文件。",
               async () => {
                 const removed = await cleanupOrphanFiles();
-                if (removed > 0) setMessage({ type: "ok", text: `已清理 ${removed} 个残留文件` });
-                else setMessage({ type: "ok", text: "没有发现残留文件" });
+                return removed > 0 ? `已清理 ${removed} 个残留文件` : "没有发现残留文件";
               },
             )}
           >
