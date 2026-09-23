@@ -1,5 +1,5 @@
 import { appendFileSync } from "node:fs";
-import type { Page, Request } from "@playwright/test";
+import { test, type Page, type Request } from "@playwright/test";
 
 /**
  * 浏览器侧看到的"后端"——全部用 page.route 桩掉，绝不起真 server。
@@ -119,9 +119,12 @@ export async function stubBackend(page: Page, table: StubTable): Promise<Backend
   // 「覆盖地板」要用的一档：把这一页真加载过的 `src/**` 模块记进一份 JSONL。
   // 不设 `ANR_E2E_MODULE_LOG` 时一行都不写，正常跑套不受影响；它**只记不判**——
   // "加载过"远不等于"断言过"，但把这两件事分得开，才说得清哪里是真·裸奔。
+  // 每行是 `模块路径\t用例文件`：只记模块名时分不出"哪条用例加载的"，想从 52 只"浏览器
+  // 加载过"里挑出该跑哪几条用例去验断言，就只能盲读整套 spec。
   const moduleLog = process.env.ANR_E2E_MODULE_LOG;
   if (moduleLog) {
     const logged = new Set<string>();
+    const specFile = test.info().file;
     page.on("request", (req) => {
       const pathname = new URL(req.url()).pathname;
       const at = pathname.indexOf("/src/");
@@ -129,7 +132,7 @@ export async function stubBackend(page: Page, table: StubTable): Promise<Backend
       const file = pathname.slice(at + 1);
       if (!/\.(ts|tsx|js|jsx)$/.test(file) || logged.has(file)) return;
       logged.add(file);
-      appendFileSync(moduleLog, `${file}\n`);
+      appendFileSync(moduleLog, `${file}\t${specFile}\n`);
     });
   }
 

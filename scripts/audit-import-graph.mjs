@@ -25,14 +25,26 @@ const args = process.argv.slice(2);
 const getArg = (n, d) => { const i = args.indexOf(`--${n}`); return i >= 0 && args[i + 1] ? args[i + 1] : d; };
 const FROM = getArg("from", "176c21d");
 const ALL = args.includes("--all");
-/** 浏览器层：`ANR_E2E_MODULE_LOG` 记下来的"这一页真加载过的模块" */
+/**
+ * 浏览器层：`ANR_E2E_MODULE_LOG` 记下来的"这一页真加载过的模块"。
+ * 每行是 `模块路径\t用例文件`（老格式只有一列，照样吃得下），第二列留着给"哪几条用例
+ * 加载了它"用——地板第 2 档要逐只核"有没有断言穿过"，没有这一列就只能盲读整套 spec。
+ */
 const BROWSER_FILE = getArg("browser", "");
-const browserLoaded = new Set(
+const browserPairs =
   BROWSER_FILE && fs.existsSync(BROWSER_FILE)
     ? [...new Set(fs.readFileSync(BROWSER_FILE, "utf8").split(/\r?\n/).map((s) => s.trim()).filter(Boolean))]
-    : [],
-);
+    : [];
 if (BROWSER_FILE && !fs.existsSync(BROWSER_FILE)) console.error(`--browser 指向的文件不存在：${BROWSER_FILE}（这一档会被当成空）`);
+const browserLoaded = new Set(browserPairs.map((l) => l.split("\t")[0]));
+/** 模块 → 加载过它的用例文件（去重） */
+export const browserSpecs = new Map();
+for (const line of browserPairs) {
+  const [mod, spec] = line.split("\t");
+  if (!spec) continue;
+  if (!browserSpecs.has(mod)) browserSpecs.set(mod, new Set());
+  browserSpecs.get(mod).add(spec);
+}
 const ROOT = process.cwd();
 
 const allFiles = execFileSync("git", ["ls-files"], { encoding: "utf8" }).trim().split("\n")
@@ -119,7 +131,8 @@ const rows = changed.map((f) => {
   // 于是 `server/routes/*.js` 这类会被误报成"没人看着"。映射表里有的补上，带 `探针映射:` 前缀
   // 与真 import 分开——那张表每只都经手工变异证过"改坏了探针会红"，见 lib/probe-map.mjs 头上。
   for (const p of PROBE_FOR[f] ?? []) if (!tests.includes(`探针映射:${p}`)) tests.push(`探针映射:${p}`);
-  return { file: f, tests, browser: browserLoaded.has(f) };
+  // `specs`：哪几条用例加载过它——第 2 档要逐只核"有没有断言穿过"，靠这个挑用例才不用盲读整套
+  return { file: f, tests, browser: browserLoaded.has(f), specs: [...(browserSpecs.get(f) ?? [])] };
 });
 const naked = rows.filter((r) => r.tests.length === 0 && !r.browser);
 const onlyBrowser = rows.filter((r) => r.tests.length === 0 && r.browser);

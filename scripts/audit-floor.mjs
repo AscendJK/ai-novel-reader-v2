@@ -52,7 +52,7 @@ if (!fs.existsSync(LOG)) {
   console.error(`[地板] 没拿到加载记录：${LOG}`);
   process.exit(2);
 }
-const modules = new Set(fs.readFileSync(LOG, "utf8").split(/\r?\n/).map((s) => s.trim()).filter(Boolean));
+const modules = new Set(fs.readFileSync(LOG, "utf8").split(/\r?\n/).map((s) => s.trim().split("\t")[0]).filter(Boolean));
 console.log(`[地板] 浏览器真加载过的 src 模块：${modules.size} 只`);
 
 const audit = spawnSync(process.execPath, ["scripts/audit-import-graph.mjs", "--all", "--browser", LOG], { stdio: "inherit" });
