@@ -178,3 +178,64 @@ describe("解析与落库", () => {
     expect(result.current.isParsing).toBe(false);
   });
 });
+
+/**
+ * 空正文不许上架（制作人 2026-09-25 定的口径）。
+ *
+ * 判的是"去掉空白之后一个字都没有"，**不是**"太短"——短书是真实存在的内容，
+ * 空书没有任何合法用途，这条线才不会误伤。拦在导入这一步而不是解析器里：
+ * "能不能上架"是导入流程的决定，`parseTxt`/`parseEpub` 还要被别处复用。
+ */
+describe("一个字都没有的解析结果不许上架", () => {
+  it("0 字（空 manifest 的 EPUB 就是这个形状）：不落库、不上传、不上架", async () => {
+    vi.mocked(parseTxt).mockResolvedValue({
+      title: "空书", chapters: [{ title: "全文", content: "" }], totalChars: 0,
+    } as never);
+    const { result } = renderHook(() => useFileParser());
+    let returned: unknown = "没调用";
+    await act(async () => {
+      returned = await result.current.parseFile(fileOf("空书.txt", MB));
+    });
+    expect(returned).toBeNull();
+    expect(saveNovel).not.toHaveBeenCalled();
+    expect(addNovel).not.toHaveBeenCalled();
+    expect(apiFetch).not.toHaveBeenCalled();
+    expect(result.current.error).toContain("没读到任何正文");
+  });
+
+  it("只有空白与换行：同样算空，不许靠字节数蒙过去", async () => {
+    vi.mocked(parseTxt).mockResolvedValue({
+      title: "空白书", chapters: [{ title: "全文", content: "\n\n \t　\n  " }], totalChars: 8,
+    } as never);
+    const { result } = renderHook(() => useFileParser());
+    await act(async () => {
+      await result.current.parseFile(fileOf("空白.txt", MB));
+    });
+    expect(addNovel).not.toHaveBeenCalled();
+    expect(result.current.error).toContain("没读到任何正文");
+  });
+
+  it("报错要说人话：给出可能的原因（扫描版 EPUB / TXT 编码选错）", async () => {
+    vi.mocked(parseTxt).mockResolvedValue({
+      title: "空书", chapters: [{ title: "全文", content: "" }], totalChars: 0,
+    } as never);
+    const { result } = renderHook(() => useFileParser());
+    await act(async () => {
+      await result.current.parseFile(fileOf("空书.txt", MB));
+    });
+    expect(result.current.error).toContain("扫描版");
+    expect(result.current.error).toContain("编码");
+  });
+
+  it("只有 11 个字的一本书必须照常上架（守卫不许长成「太短就不许」）", async () => {
+    vi.mocked(parseTxt).mockResolvedValue({
+      title: "极短", chapters: [{ title: "全文", content: "洛阳城下的雪落了三天。" }], totalChars: 12,
+    } as never);
+    const { result } = renderHook(() => useFileParser());
+    await act(async () => {
+      await result.current.parseFile(fileOf("极短.txt", MB));
+    });
+    expect(result.current.error).toBeNull();
+    expect(addNovel).toHaveBeenCalledTimes(1);
+  });
+});

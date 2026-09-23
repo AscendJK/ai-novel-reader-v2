@@ -67,6 +67,13 @@ export function useFileParser() {
         throw new Error(`不支持的文件格式: .${ext}。当前支持 .txt 和 .epub 格式。`);
       }
 
+      // 一个字都没有就不上架，与下面"本地存不下就中止、不留幽灵书"是同一条口径：
+      // 宁可挡住，也不给书架留一本点开来是空白的卡片（AI 总结还会拿空正文去发请求）。
+      // 判的是"去掉空白之后为空"，**不是**"太短"——短书是真实存在的内容，只有空不是。
+      if (!result.chapters.some((c) => c.content.trim().length > 0)) {
+        throw new Error("没读到任何正文：可能是纯图片/扫描版 EPUB，或 TXT 编码选错了（可手动指定编码重试）");
+      }
+
       setProgress(70);
 
       const novel = createNovel(

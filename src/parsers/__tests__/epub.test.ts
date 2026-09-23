@@ -165,9 +165,10 @@ describe("parseEpub：坏输入要报错，不许给一只空书", () => {
     e["OEBPS/content.opf"] = opf([], []);
     const r = await parseEpub(await epubFile(e));
     // 实测：空的 ParseResult 不是空数组，而是 `splitByChapters` 给的一章 {title:"全文", content:""}。
-    // 而 `useFileParser.ts` 里没有任何"一个字都没有就别上架"的检查（grep 过 totalChars/chapters.length，
-    // 只有文件大小与格式两道），所以一本空书会真落进书架。**这是没修的口子，已进未修清单**，
-    // 这条只钉住"解析层交出来的是什么形状"，别把它读成"空输入被挡下了"。
+    // 解析层**如实交出这个形状**、不报错，是刻意的分工：拦"一个字都没有"的活儿归导入那一步
+    // （`useFileParser.ts` 的正文守卫，判 `content.trim()` 为空 → 不落库不上传不上架），
+    // 判据在 `src/hooks/__tests__/useFileParser-guards.test.ts`。
+    // 这条只钉住"解析层交出来的是什么形状"，别把它读成"空输入在门口就挡下了"。
     expect(r.chapters).toHaveLength(1);
     expect(r.chapters[0].title).toBe("全文");
     expect(r.totalChars).toBe(0);
