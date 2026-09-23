@@ -174,6 +174,8 @@ export function ChapterTab({
           content={chapterSummary.content}
           tokens={chapterSummary.tokensUsed}
           date={chapterSummary.updatedAt || chapterSummary.createdAt}
+          usedFallback={chapterSummary.usedFallback}
+          metadata={{ usedFallback: chapterSummary.usedFallback, truncated: chapterSummary.truncated }}
           onRegenerate={onRegenerate}
           loading={loading}
           onBookmark={() =>

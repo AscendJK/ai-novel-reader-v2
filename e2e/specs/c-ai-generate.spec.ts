@@ -37,9 +37,11 @@ async function readyWithBook(
     bookTitle?: string; offline?: boolean; session?: boolean; chapters?: number;
     /** 服务商表单里的两个预算字段；不填就走产品默认（模型表 → 未匹配模型 128k/4096） */
     provider?: { contextWindow?: number; maxTokens?: number };
+    /** 自带的书名文本（判"截断"那类要一章特别长、另几章照常短，现成样本都凑不出这个形状） */
+    novelText?: string;
   } = {},
 ): Promise<Backend> {
-  const { bookTitle = "AI 测试", offline = true, session = false, chapters = 0, provider = {} } = opts;
+  const { bookTitle = "AI 测试", offline = true, session = false, chapters = 0, provider = {}, novelText } = opts;
   const backend = await stubBackend(page, { ...idleTtsStatus, ...table });
   // 离线态起步：chat() 在离线或没有 sync-token 时只走直连腿（openai.ts:209-215），
   // C1~C8 要的就是这一条腿；需要代理腿的 C9 传 offline:false + session:true。
@@ -51,7 +53,7 @@ async function readyWithBook(
   await leaveSettings(page);
   // 三章样本够判"发的是这一章还是那一章"，但判不了"范围"——按章号取内容的那类判据
   // 需要章数明显多于范围，否则"少取一章"和"取错一章"分不开
-  await importFiles(page, [txtFile(`${bookTitle}.txt`, chapters > 3 ? longNovel(chapters) : miniNovel())]);
+  await importFiles(page, [txtFile(`${bookTitle}.txt`, novelText ?? (chapters > 3 ? longNovel(chapters) : miniNovel()))]);
   await openBook(page, bookTitle);
   await openSummaryPanel(page);
   return backend;
@@ -440,6 +442,60 @@ test("C17 问答历史装不下时：少带的轮次要上屏，prompt 也要对
   // 对用户也要明说，数字与请求面同源
   // 变异：删掉 QATab 那三行提示 → 这一句红；把返回值写成 droppedTurns: 0 → 两句都红
   await expect(panel.text(page, new RegExp(`更早 ${dropped} 条对话超出上下文预算`))).toBeVisible();
+});
+
+/**
+ * C18：章节摘要被截断时，"只送进去前半章"这件事要留在卡片上，而且要留得住
+ *
+ * agent 早就算出 `truncated / usedFallback`，`saveChapterSummary` 却整个丢掉 → `MiniCard`
+ * 那两行提示对章节摘要是死代码（全书总结反而一直在传）。窗口 4096 + 输出上限 3000 时
+ * 可用输入只剩 892，一章 1500 字必然截断。第二条判据（短章不许冒提示）是防反向缺陷：
+ * 把提示写成常驻，等于把"降级"这件事又变回没有信息。
+ */
+test("C18 章节摘要截断：提示跟着结果落库，换章回来还在；短章不许冒出提示", async ({ page }) => {
+  test.setTimeout(90_000);
+  const sentence = "石阶被水泡过了三道，缆桩上系着的麻绳换了两回，等船的人始终没有来，只有船家每天把篷布掀开又盖上，天黑了才回屋。";
+  const longChapter = `第一章 长渡\n渡口这一站。${sentence.repeat(24)}`; // ≈1560 字
+  // 短章必须长过 `MIN_STANDALONE_CHAPTER_CHARS`（chapter-detector.ts:110，50 字），
+  // 否则解析阶段就被并进上一章，第二章根本不存在——那会让下面那半截判据变成空判。
+  const shortChapter = "第二章 短岗\n崖上的鼓声停了半日，看火的人换了一班，谁都没提昨夜那道影子。守卒说那是回营的号，可号声之后再也没有人上山。";
+  const ANSWER = "这一章说的是等待。";
+  const NOTE = "本分析使用了精简模式";
+  const backend = await readyWithBook(
+    page,
+    vendorTable({ content: ANSWER, usage: { input: 900, output: 60 } }),
+    {
+      bookTitle: "截断书",
+      provider: { contextWindow: 4096, maxTokens: 3000 },
+      novelText: `${longChapter}\n\n${shortChapter}`,
+    },
+  );
+
+  await panel.button(page, "总结本章").click();
+  await expect(panel.text(page, ANSWER)).toBeVisible({ timeout: 20_000 });
+
+  // 前提先立住：这一档真的截断了（发出的正文带不满 24 遍重复），否则后面的判据全是空判
+  const wire = JSON.stringify(chatRequests(backend).at(-1)?.messages ?? []);
+  expect(wire).toContain("渡口这一站");
+  expect((wire.match(/等船的人始终没有来/g) ?? []).length).toBeLessThan(24);
+  await expect(panel.text(page, NOTE)).toBeVisible();
+
+  // 换到第二章：短章全章送得下，不许有提示，也不许继承第一章的那一条
+  // （`navChapter` 的锚点来自 `CHAPTER_TITLES`，本书标题是自己拼的，所以这里按名字定位）
+  const navTo = (title: string) =>
+    page.locator('[data-sidebar="chapter-nav"]').getByRole("button", { name: new RegExp(title) });
+  await navTo("第二章 短岗").click();
+  await expect(panel.text(page, "暂无总结，点击上方按钮生成")).toBeVisible();
+  await panel.button(page, "总结本章").click();
+  await expect(panel.text(page, NOTE)).toHaveCount(0);
+  // 第二章也真打了一次厂商（结果同款文案，靠计数而不是靠文字区分两章）
+  expect(backend.count("POST", VENDOR_CHAT_PATH)).toBe(2);
+
+  // 回到第一章：提示必须还在，而且一个子都没再花 —— 这才算"落库了"而不是"内存里还热着"
+  await navTo("第一章 长渡").click();
+  await expect(panel.text(page, ANSWER)).toBeVisible();
+  await expect(panel.text(page, NOTE)).toBeVisible();
+  expect(backend.count("POST", VENDOR_CHAT_PATH), "回来看不到缓存=又打了一次厂商").toBe(2);
 });
 
 test("C12 问答追问：第二发的 messages 里要带上第一问和第一答", async ({ page }) => {

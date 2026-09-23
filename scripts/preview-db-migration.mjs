@@ -38,7 +38,7 @@ const SRC = path.resolve(opt("db") || path.join(REPO, "server", "data", "novels.
 const TABLES = ["novels", "chapters", "summaries", "notes", "maps", "graphs", "rag_indices", "reading_progress", "users"];
 
 /** 本次迁移会新增的列：行指纹要比对"迁移前后都存在的那些列"，否则新增列本身就成了假警报 */
-const ADDED_BY_MIGRATION = new Set(["source_fingerprint"]);
+const ADDED_BY_MIGRATION = new Set(["source_fingerprint", "truncated"]);
 
 function digest(rows) {
   // djb2 就够：这里要的是"变没变"，不是抗碰撞

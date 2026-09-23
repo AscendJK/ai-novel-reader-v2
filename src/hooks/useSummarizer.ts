@@ -215,9 +215,12 @@ export function useSummarizer() {
   // novelId 由调用方显式传入（任务启动时锚定的 id），不读 currentNovel：
   // 任务运行中用户可能切换小说，读 store 会把旧书生成的总结写进新书的 novelId 下
   const saveChapterSummary = useCallback(
-    async (novelId: string, chapterId: string, result: { success: boolean; data?: unknown; error?: string; tokensUsed?: number }) => {
+    async (novelId: string, chapterId: string, result: { success: boolean; data?: unknown; error?: string; tokensUsed?: number; metadata?: AnalysisMetadata }) => {
       if (!result.success || !result.data) return;
       const data = result.data as { summaries: { chapterTitle: string; content: string; tokens: number }[] };
+      // agent 算出来的两个降级标记必须跟着落库：卡片上那行"本分析使用了精简模式"以前对
+      // 章节总结是死代码，就是因为这里整个丢掉了 metadata（全书总结反而一直在传）。
+      const { usedFallback, truncated } = result.metadata ?? {};
       for (const s of data.summaries) {
         // Reuse existing ID for same (novelId, chapterId, type) — server upserts by ID, can't signal deletes
         const existing = await getUserDB().summaries.where({ novelId, chapterId, type: "chapter" }).first();
@@ -225,6 +228,7 @@ export function useSummarizer() {
           id: existing?.id || uuid(), novelId, chapterId,
           chapterTitle: s.chapterTitle, content: s.content,
           tokensUsed: s.tokens, createdAt: existing?.createdAt || Date.now(), updatedAt: Date.now(), type: "chapter",
+          usedFallback, truncated,
         };
         await saveSummary(summary);
         addSummary(summary);

@@ -35,6 +35,8 @@ export interface SummaryRecord {
   updatedAt: number;
   type: string;
   usedFallback?: boolean;
+  /** 原文没送全（超出上下文预算被截断）。与 usedFallback 一样：缺字段＝不知道，别当"没截断" */
+  truncated?: boolean;
   deleted?: number;
 }
 

@@ -11,6 +11,7 @@ interface SummaryItem {
   updatedAt: number;
   type: "chapter" | "global" | "timeline" | "characters";
   usedFallback?: boolean;
+  truncated?: boolean;
   deleted?: number;
 }
 

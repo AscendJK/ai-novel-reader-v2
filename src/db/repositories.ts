@@ -293,7 +293,7 @@ export async function saveSummary(summary: SummaryItem & { novelId: string }): P
       chapterId: summary.chapterId, chapterTitle: summary.chapterTitle,
       content: summary.content, tokensUsed: summary.tokensUsed,
       createdAt: summary.createdAt, updatedAt: summary.updatedAt, type: summary.type,
-      usedFallback: summary.usedFallback, deleted: summary.deleted,
+      usedFallback: summary.usedFallback, truncated: summary.truncated, deleted: summary.deleted,
     });
   } catch (e) {
     console.error("saveSummary failed:", e);

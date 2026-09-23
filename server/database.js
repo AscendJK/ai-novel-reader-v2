@@ -128,6 +128,9 @@ try { db.exec("ALTER TABLE notes ADD COLUMN deleted INTEGER DEFAULT 0"); } catch
 // ── Migration: add deleted/used_fallback to summaries ─────
 try { db.exec("ALTER TABLE summaries ADD COLUMN deleted INTEGER DEFAULT 0"); } catch {}
 try { db.exec("ALTER TABLE summaries ADD COLUMN used_fallback INTEGER DEFAULT 0"); } catch {}
+// 章节摘要的"原文没送全"标记：本地存住了不够——下行合并是整行覆盖，服务端没这一列
+// 就等于第一次同步之后提示永久消失（better-sqlite3 对多余的键静默忽略，不会报错）
+try { db.exec("ALTER TABLE summaries ADD COLUMN truncated INTEGER DEFAULT 0"); } catch {}
 
 // ── Migration: add updated_at to reading_progress ────
 try { db.exec("ALTER TABLE reading_progress ADD COLUMN updated_at INTEGER DEFAULT 0"); } catch {}
@@ -392,13 +395,13 @@ export function getSummaries(username, novelId) {
 
 export function upsertSummary(s) {
   db.prepare(`
-    INSERT INTO summaries (id, novel_id, chapter_id, chapter_title, username, content, tokens_used, created_at, type, updated_at, deleted, used_fallback)
-    VALUES (@id, @novelId, @chapterId, @chapterTitle, @username, @content, @tokensUsed, @createdAt, @type, @updatedAt, @deleted, @usedFallback)
+    INSERT INTO summaries (id, novel_id, chapter_id, chapter_title, username, content, tokens_used, created_at, type, updated_at, deleted, used_fallback, truncated)
+    VALUES (@id, @novelId, @chapterId, @chapterTitle, @username, @content, @tokensUsed, @createdAt, @type, @updatedAt, @deleted, @usedFallback, @truncated)
     -- summaries.id 是客户端生成的 UUID，跨用户不会相撞，故单列主键即可
     ON CONFLICT(id) DO UPDATE SET
-      content = @content, tokens_used = @tokensUsed, type = @type, updated_at = @updatedAt, deleted = @deleted, used_fallback = @usedFallback
+      content = @content, tokens_used = @tokensUsed, type = @type, updated_at = @updatedAt, deleted = @deleted, used_fallback = @usedFallback, truncated = @truncated
     WHERE @updatedAt >= updated_at
-  `).run({ ...s, updatedAt: s.updatedAt || Date.now(), deleted: s.deleted || 0, usedFallback: s.usedFallback ? 1 : 0 });
+  `).run({ ...s, updatedAt: s.updatedAt || Date.now(), deleted: s.deleted || 0, usedFallback: s.usedFallback ? 1 : 0, truncated: s.truncated ? 1 : 0 });
 }
 
 // ── Notes ──
@@ -487,13 +490,13 @@ export function gatherSyncData(username, since = 0) {
     ? db.prepare(`
         SELECT id, novel_id AS "novelId", chapter_id AS "chapterId", chapter_title AS "chapterTitle",
                username, content, tokens_used AS "tokensUsed", created_at AS "createdAt", updated_at AS "updatedAt", type,
-               deleted, used_fallback AS "usedFallback"
+               deleted, used_fallback AS "usedFallback", truncated
         FROM summaries WHERE username = ? AND updated_at > ?
       `).all(username, since)
     : db.prepare(`
         SELECT id, novel_id AS "novelId", chapter_id AS "chapterId", chapter_title AS "chapterTitle",
                username, content, tokens_used AS "tokensUsed", created_at AS "createdAt", updated_at AS "updatedAt", type,
-               deleted, used_fallback AS "usedFallback"
+               deleted, used_fallback AS "usedFallback", truncated
         FROM summaries WHERE username = ? AND (deleted IS NULL OR deleted = 0)
       `).all(username);
 
@@ -549,6 +552,7 @@ export function gatherSyncData(username, since = 0) {
   // Convert integer flags back to client-expected types
   for (const s of summaries) {
     s.usedFallback = !!s.usedFallback;
+    s.truncated = !!s.truncated;
     s.deleted = s.deleted || undefined;
   }
   for (const n of notes) {
