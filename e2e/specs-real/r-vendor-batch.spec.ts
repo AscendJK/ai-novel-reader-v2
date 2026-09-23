@@ -1,5 +1,11 @@
 /**
- * R-E5..E7：批量生成在真厂商上各跑一次（全书总览 / 地图 / 人物关系图谱）。
+ * R-E5..E12：产品里每一条 AI 路径都打在真厂商上各跑一次。
+ *
+ * E5～E7 是最贵的三条（全书总览 / 地图 / 人物关系图谱）；E8～E12 补齐此前从没在真厂商上
+ * 走过的五条：人物关系文字分析、剧情时间线、范围总结、自定义问答、逐章批量总结。
+ * 它们过去只在同源假厂商（`e2e/fixtures/vendor.ts`）上跑过形状，而假厂商的回包是照着
+ * 我们自己写的剧本给的——"真模型会不会回空正文、产品会不会把自己写的占位话当成结果"
+ * 这两件事一次都没被量过。
  *
  * 这三类是产品里最贵的三条路径：一次点击要把全书目录或长样本发出去，地图与图谱还要
  * 模型回一份结构化的 JSON。今天它们只在同源假厂商（`e2e/fixtures/vendor.ts`）上跑过形状——
@@ -24,14 +30,31 @@
 import { test, expect, type Page } from "@playwright/test";
 import { panel } from "../pages/panel";
 import { openSummaryPanel, addProvider, openSettings, leaveSettings } from "../pages/settings";
-import { importFiles, longNovel, openBook, shelfCard, txtFile } from "../pages/shelf";
-import { RUN, signIn, vendorReach } from "./fixtures";
+import { importFiles, longNovel, navChapter, openBook, shelfCard, txtFile } from "../pages/shelf";
+import { RUN, realNovel, signIn, vendorReach } from "./fixtures";
 
-const key = process.env.ANR_VENDOR1_KEY ?? "";
-const BASE = process.env.ANR_VENDOR1_BASE ?? "https://411.cc.cd/v1";
-const MODEL = process.env.ANR_VENDOR1_MODEL ?? "gpt-5.6-luna";
+/**
+ * 用哪一家真厂商：优先厂商一，缺 key 时退到厂商二（sensenova）。
+ *
+ * 写死厂商一是这一组最初的形状，代价是"只有 sensenova 一把 key"的时候这一组整组静默跳过——
+ * 全书总览/地图/图谱这三条最贵的路径于是永远只被一家厂商量过。key 仍旧只从 env 来，不落文件。
+ */
+const WHICH: "1" | "2" = process.env.ANR_VENDOR1_KEY ? "1" : "2";
+const key = (WHICH === "1" ? process.env.ANR_VENDOR1_KEY : process.env.ANR_VENDOR2_KEY) ?? "";
+const BASE = (WHICH === "1" ? process.env.ANR_VENDOR1_BASE : process.env.ANR_VENDOR2_BASE)
+  ?? (WHICH === "1" ? "https://411.cc.cd/v1" : "https://token.sensenova.cn/v1");
+const MODEL = (WHICH === "1" ? process.env.ANR_VENDOR1_MODEL : process.env.ANR_VENDOR2_MODEL)
+  ?? (WHICH === "1" ? "gpt-5.6-luna" : "sensenova-6.8-flash-lite");
 const USER = `r组批量-${RUN}`;
 const BOOK = `批量长书-${RUN}`;
+/**
+ * 给厂商配的输出上限（`ANR_VENDOR_MAX_OUTPUT` 可覆盖）。
+ *
+ * 留空时产品按模型表默认 4096，而 sensenova 的 `deepseek-flash` 是推理模型：实测
+ * `completion_tokens=4096 / reasoning_tokens=4096 / 正文 0 字`，地图整张图什么都拿不到。
+ * 那是"预算不够"，不是"产品坏了"——按设置页那行说明给它的量配上，判据才在量产品。
+ */
+const MAX_OUTPUT = Number(process.env.ANR_VENDOR_MAX_OUTPUT ?? 8192);
 
 /**
  * 把一发厂商回包摊成纯文本。
@@ -64,8 +87,8 @@ function vendorText(body: string, contentType: string): string {
 
 // 不用 `.serial`：三条各自有 `beforeEach`（各自一份 context），串起来只会让第一条红了
 // 把后面两条一起吞掉（实测报 `did not run`），变异验收时看不全
-test.describe("真后端：批量生成三条打在真厂商上", () => {
-  test.skip(!key, "没设 ANR_VENDOR1_KEY：这一组要真厂商，缺了就跳过（不算红）");
+test.describe(`真后端：批量生成三条打在真厂商上（厂商${WHICH} · ${MODEL}）`, () => {
+  test.skip(!key, `没设 ANR_VENDOR${WHICH}_KEY：这一组要真厂商，缺了就跳过（不算红）`);
 
   // 与 r-vendor.spec.ts 同一套分类：厂商"不在"（连不出去/5xx）跳过并写明原因，
   // 4xx 照红——key 失效与"发出去的整本书没回内容"都是这一条要报的。
@@ -76,12 +99,26 @@ test.describe("真后端：批量生成三条打在真厂商上", () => {
     test.skip(r.skip, `预探：${r.why}`);
   });
 
+  /** 每个用例一份，在 `beforeEach` 导航之前装好（见 `watchWire` 为什么要进页面里读） */
+  let V: Replies;
+
   /** 三条都要同一份前置：配好厂商 + 一本 40 章长书 + 面板展开到「全书分析」 */
   test.beforeEach(async ({ page, baseURL }) => {
-    test.setTimeout(10 * 60_000);
+    test.setTimeout(12 * 60_000);
+    // 抓包必须在**任何导航之前**装好（init script 只作用于之后的页面加载），所以放在 signIn 前面
+    V = await watchWire(page);
+    /**
+     * 别把那条注定失败的直连真发到厂商。
+     *
+     * sensenova 不响应 `OPTIONS`，浏览器直连必然拿不到响应——可请求是真的发出去了，
+     * 于是每一发逻辑调用在厂商那边记成两发，而它的配额是按分钟算的（实测 429
+     * `RateLimitExceeded.EndpointTPMExceeded`）。这一层只在这组里拦：R-E1/E2/E4 那组
+     * 判的正是"浏览器真的试过直连"，那边不能拦。
+     */
+    await page.route((u) => u.href.startsWith(BASE), (route) => route.abort());
     await signIn(page, baseURL!, USER);
     await openSettings(page);
-    await addProvider(page, { name: `R-E 批量-${RUN}`, key, baseUrl: BASE, model: MODEL });
+    await addProvider(page, { name: `R-E 批量-${RUN}`, key, baseUrl: BASE, model: MODEL, maxTokens: MAX_OUTPUT });
     const trigger = page.locator("#active-provider");
     if (!(await trigger.innerText()).includes(`R-E 批量-${RUN}`)) {
       await trigger.click();
@@ -93,10 +130,26 @@ test.describe("真后端：批量生成三条打在真厂商上", () => {
     await openBook(page, BOOK);
     await openSummaryPanel(page);
     await panel.tab(page, "全书分析").click();
+    // 用例之间的冷却：八条连着打同一只 key，配额窗口还没滑过去就会整组红在 429 上
+    const cooldown = Number(process.env.ANR_VENDOR_COOLDOWN_MS ?? 45_000);
+    if (cooldown > 0) {
+      console.log(`[R-E 批量] 冷却 ${cooldown / 1000} 秒再打厂商（配额按分钟算）`);
+      await page.waitForTimeout(cooldown);
+    }
   });
 
-  /** 一次点击之后的两条通用底线：不许失败条、不许静默无事发生 */
-  async function expectNoFailure(page: Page) {
+  /**
+   * 一次点击之后的两条通用底线：不许静默无事发生、配额没放行不许算产品坏了。
+   *
+   * 配额这件事只看**线上回的那份**，不看面板上还有没有那行红字：一次 429 之后界面会把
+   * 「频率过高」一直挂着（`callVendor` 退避重发的下一发已经成功了），拿面板文案判配额
+   * 会把已经跑通的 R-E7/R-E8 整条跳掉——实测跳过 2 条就是这么来的。
+   */
+  async function expectNoFailure(page: Page, v: Replies) {
+    const lastRaw = v.raw[v.raw.length - 1] ?? "";
+    if (THROTTLED.test(lastRaw)) {
+      test.skip(true, `厂商配额没放行（最后一发回的是：${lastRaw.slice(0, 160)}）：这一档测不了，与产品无关`);
+    }
     await expect(panel.text(page, /生成失败|总结生成失败|无法生成|解析失败|上下文不足/)).toHaveCount(0);
   }
 
@@ -123,10 +176,11 @@ test.describe("真后端：批量生成三条打在真厂商上", () => {
         prompts.push(r.postData() ?? "");
       }
     });
+    const v = collectReplies();
 
-    await panel.button(page, "生成全书总览").click();
+    await callVendor(page, v, () => panel.button(page, "生成全书总览").click(), "全书总览");
     await expect(panel.button(page, /^全书总览$/)).toBeVisible({ timeout: 5 * 60_000 });
-    await expectNoFailure(page);
+    await expectNoFailure(page, v);
     await panel.button(page, /^全书总览$/).click();
 
     const blob = prompts.join("\n\n=== 一封请求 ===\n\n");
@@ -175,13 +229,16 @@ test.describe("真后端：批量生成三条打在真厂商上", () => {
   });
 
   test("R-E6 小说地图：40 章目录换来一张真图，父级幻觉只许可见降级", async ({ page }) => {
-    await panel.button(page, "生成小说地图").click();
-    const header = panel.button(page, /小说地图/);
+    const v = collectReplies();
+    await callVendor(page, v, () => panel.button(page, "生成小说地图").click(), "小说地图");
+    // 锚死整名：`/小说地图/` 会同时认上「生成小说地图」那枚按钮（`NovelMapSection.tsx:337/352`），
+    // 于是"折叠头出现了"变成一句空话，而下面那次 `header.click()` 实际又发起了一整发真请求
+    const header = panel.button(page, /^小说地图$/);
     await expect(header).toBeVisible({ timeout: 5 * 60_000 });
     // 「小说地图」这枚折叠头在**生成过程中是 disabled 的**（实测直接点会卡在 actionTimeout 的
     // 60 秒上，报出来像"按钮点不动"的产品缺陷，其实是模型还在写），所以先等它放开
     await expect(header).toBeEnabled({ timeout: 5 * 60_000 });
-    await expectNoFailure(page);
+    await expectNoFailure(page, v);
     await header.click();
 
     // 数量读界面自己写的那行（`NovelMapSection.tsx:397` 的「N 个层级 · M 个地点 · K 个势力」），
@@ -210,31 +267,19 @@ test.describe("真后端：批量生成三条打在真厂商上", () => {
     // 厂商回包也收下来：`graph-agent.ts:103-105` 在"模型一条关系都没回（或全部引用无效节点）"时
     // 会自动补一条 nodes[i]→nodes[i+1] 的「关联」链。所以界面上"关系 ≥1"**几乎恒真**，
     // 单看它等于什么都没钉住——这条判据必须同时看模型自己回了多少条。
-    const modelEdgeCounts: number[] = [];
     const responses: string[] = [];
-    const pending: Promise<void>[] = [];
     page.on("response", (res) => {
       if (!res.url().startsWith(BASE) && !res.url().includes("/api/proxy/")) return;
+      // 只要元信息（状态码与类型）：正文一律走 `watchWire` 那份页面内抓包
       responses.push(`${res.status()} ${res.headers()["content-type"] ?? "?"}`);
-      pending.push(
-        res
-          .text()
-          .then((t) => {
-            const content = vendorText(t, res.headers()["content-type"] ?? "");
-            if (!content) return;
-            // 数 `"source":` 而不是解析 JSON：模型爱在 JSON 外面裹 ```json 围栏，
-            // 而产品自己那份 `extractJSON` 的容错形状不该被测试复刻一遍当判据
-            modelEdgeCounts.push((content.match(/"source"\s*:/g) ?? []).length);
-          })
-          .catch(() => {}),
-      );
     });
 
-    await panel.button(page, "生成人物关系图谱").click();
+    const v = collectReplies();
+    await callVendor(page, v, () => panel.button(page, "生成人物关系图谱").click(), "人物关系图谱");
     const header = panel.button(page, /人物关系分析图/);
     await expect(header).toBeVisible({ timeout: 5 * 60_000 });
     await expect(header).toBeEnabled({ timeout: 5 * 60_000 });   // 生成中折叠头是禁用的
-    await expectNoFailure(page);
+    await expectNoFailure(page, v);
     await header.click();
 
     // 同 R-E6：读界面自己写的那行数量。内联视图里是 `CharacterGraphSection.tsx:88` 的
@@ -243,7 +288,9 @@ test.describe("真后端：批量生成三条打在真厂商上", () => {
     const caption = panel.text(page, /\d+ 个角色 · \d+ 条关系/).first();
     await expect(caption).toBeVisible({ timeout: 30_000 });
     const [, nodes, edges] = (await caption.innerText()).match(/(\d+) 个角色 · (\d+) 条关系/) ?? [];
-    await Promise.all(pending);
+    // 数 `"source":` 而不是解析 JSON：模型爱在 JSON 外面裹 ```json 围栏，
+    // 而产品自己那份 `extractJSON` 的容错形状不该被测试复刻一遍当判据
+    const modelEdgeCounts = v.texts.map((t) => (t.match(/"source"\s*:/g) ?? []).length);
     // 重试会有多份回包，图谱最终只来自其中一次 → 取最大的那份，不累加
     const modelEdges = modelEdgeCounts.length ? Math.max(...modelEdgeCounts) : -1;
     expect(nodes, "图谱的计数行没读出来").toBeTruthy();
@@ -258,5 +305,300 @@ test.describe("真后端：批量生成三条打在真厂商上", () => {
     ).toBeLessThanOrEqual(modelEdges);
     await expect(panel.root(page).locator("svg line").first()).toBeVisible();
     console.log(`[R-E7] 图谱：${nodes} 人 / 界面 ${edges} 条关系（模型自己回了 ${modelEdges} 条，回包 ${modelEdgeCounts.length} 份）`);
+  });
+
+  /**
+   * 文字型产物（人物分析 / 时间线 / 范围总结 / 问答）共用的两条底线判据。
+   *
+   * 为什么不能只断言"面板有字"：产品自己会写「暂无总结，点击上方按钮生成」「正在检索相关内容」
+   * 这类占位与状态文案，模型一次都没回正文时界面照样有字。所以两条一起钉：
+   *  ① 厂商确实回过一段可比对的正文（去掉 SSE 帧壳与 Markdown 符号后 ≥20 字）；
+   *  ② 从厂商回包里取三段等距窗口，只要有一段原样出现在界面上就算上屏。
+   *
+   * 两条都是量出来的：
+   *  - 第 ② 条以前是"找一段连续汉字，够长就算"，那个长度是硬伤——中文回包里逗号、顿号、
+   *    Markdown 会把汉字切成短段（实测最长一跑分别只有 14 与 11 字），钉 12 就红在判据自己身上。
+   *    换成"任意一段定长窗口"后与标点密度无关，而产品的占位话凑不出 20 字。
+   *  - 第 ① 条原本钉 80 字"回够正文"，但这条路径的预算会被厂商截断到 60 字（实测
+   *    `范围总结 completion_tokens=2048 / reasoning_tokens=2009`）——**截断是厂商的事，
+   *    上屏才是产品的事**，所以地板降到"够切一段窗口"的 20 字；连 20 字都不够时不画红，
+   *    按"这一档测不了"跳过（`skipIfVendorGaveNoBody` 管的是另一个形状：正文一个字都没有）。
+   */
+  async function expectModelWordsShown(page: Page, replies: string[], label: string): Promise<void> {
+    const squash = (s: string) => s.replace(/[\s*_`>#~]/g, "");
+    const wire = squash(replies.slice().sort((a, b) => b.length - a.length)[0] ?? "");
+    if (wire.length < 20) {
+      // 回了几个字就被预算截断（实测 R-E8 一回只给「## 受限人物」）：界面上是真有字的，
+      // 只是短到切不出一段不误撞占位话的窗口。那是"这一档测不了"，不是产品坏了。
+      console.log(`[R-E 截断] ${label}：厂商去壳后只回 ${wire.length} 字（${replies.length} 份回包），切不出一段可比对窗口`);
+      test.skip(true, `${label}：厂商回的正文短到 ${wire.length} 字就被截断，判不了"上屏"这半条`);
+      return;
+    }
+    const win = Math.min(20, Math.floor(wire.length / 3));
+    const windows = [0, Math.floor(wire.length / 3), Math.floor((wire.length * 2) / 3)]
+      .map((i) => wire.slice(i, i + win))
+      .filter((w) => w.length === win);
+    const body = squash(await panel.root(page).innerText());
+    expect(
+      windows.some((w) => body.includes(w)),
+      `${label}：界面上找不到厂商回包里的任何一段原话（试过 ${windows.map((w) => `「${w.slice(0, 8)}…」`).join(" ")}）`,
+    ).toBe(true);
+  }
+
+  /**
+   * 厂商配额压力的形状。实测这一家有两种：SSE 流里直接夹着限流正文（状态码 200），
+   * 以及 `server/routes/proxy.js:165` 原样带上游状态码的 `429 + {error, details}`。
+   * 所以判"是不是配额"只看**响应正文里的关键词**，不依赖状态码。
+   */
+  const THROTTLED = /(频率过高|Too Many Requests|rate_limit_error|RateLimitExceeded)/i;
+  type Replies = { texts: string[]; raw: string[]; settle: () => Promise<void> };
+
+  /**
+   * 抓厂商回包**只能在页面里抓**。
+   *
+   * Playwright 那侧读不到正确正文：代理透传 SSE 时写的是 `Content-Type: text/event-stream`
+   * 而不带 charset（`proxy.js:176`），于是 Chromium 先按 windows-1252 解一遍再把文本还给测试——
+   * `res.text()` 与 `res.body()` **两条都一样**（实测同一份 `就所给原文而言`：页面内 fetch 读到 75 字
+   * 正常中文，测试侧读到 101 字 `å°±æ‰€ç»™åŽŸæ–‡`）。判据在乱码上找连续汉字永远找到 0 个，
+   * 于是 R-E8/R-E10 假红，而界面自己显示的中文一直是好的。
+   * 页面里 `fetch` 按规范解 UTF-8，所以 hook 掉 `window.fetch`、`clone()` 一份出来读，
+   * 拿到的就是产品真正吃进去的那份字（顺带还多钉住一件事：判据看的是浏览器实际收到的内容）。
+   */
+  async function watchWire(page: Page): Promise<Replies> {
+    const texts: string[] = [];
+    const raw: string[] = [];
+    await page.exposeBinding("__anrWire", (_source, f: { text: string; ct: string }) => {
+      raw.push(f.text);
+      const c = vendorText(f.text, f.ct);
+      if (c.trim()) texts.push(c);
+    });
+    await page.addInitScript(({ base }) => {
+      const orig = window.fetch.bind(window);
+      window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const res = await (orig as typeof fetch)(input, init);
+        try {
+          const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+          const ct = res.headers.get("content-type") ?? "";
+          const mine = url.includes("/api/proxy/") || url.startsWith(base);
+          if (mine && (ct.includes("event-stream") || ct.includes("json"))) {
+            void res.clone().text().then((t) => {
+              (window as unknown as { __anrWire(f: { text: string; ct: string }): void }).__anrWire({ text: t, ct });
+            }).catch(() => {});
+          }
+        } catch {
+          // 抓包这一步出任何问题都不许影响真请求
+        }
+        return res;
+      }) as typeof fetch;
+    }, { base: BASE });
+    // 页面内那一读是"流读完才回调"，所以 raw 增长本身就等价于旧版 `settle()` 等 body 读完
+    return { texts, raw, settle: async () => {} };
+  }
+
+  /** 取本用例那份回包（在 `beforeEach` 里已经装好，这里只是给用例一个短名字） */
+  function collectReplies(): Replies {
+    return V;
+  }
+
+  /**
+   * 厂商**一个字正文都没回**时的两条。
+   *
+   * 推理模型（实测 `deepseek-flash`）会把任务级输出预算全花在思考上：时间线那一发
+   * `completion_tokens=4096 / reasoning_tokens=4096 / 正文 0 字 / finish_reason=length`。
+   * 这时候"模型原话有没有上屏"没有可判的东西，但有一件事必须判：**界面得把这句话说出来**。
+   * 所以先钉产品该做对的那半（不许静默吞掉空正文，实测面板确实报
+   * 「API 返回了空结果（流式响应无内容）」），再跳过后半截。
+   *
+   * 只在"完全没有正文"时触发：回了几个字又被截断的那种，界面上是真有字的，
+   * 那是可比对长度不够（见 `expectModelWordsShown` 的 skip），不该拿"界面没说话"红它。
+   */
+  async function skipIfVendorGaveNoBody(page: Page, v: Replies, label: string): Promise<void> {
+    if (v.texts.some((t) => t.trim())) return;
+    const lastRaw = v.raw[v.raw.length - 1] ?? "";
+    const think = lastRaw.match(/"reasoning_tokens"\s*:\s*(\d+)/)?.[1] ?? "?";
+    const finish = lastRaw.match(/"finish_reason"\s*:\s*"?([a-z_]+)"?/g)?.slice(-1)[0] ?? "没有 finish_reason";
+    const said = await panel.root(page).innerText();
+    expect(said, `${label}：厂商回的是空正文（${finish}、思考 ${think} token 把预算吃满），界面却一个字都没说`
+      ).toMatch(/空结果|API 返回|失败/);
+    test.skip(true, `${label}：厂商在这条路径的输出上限内只思考不吐字（${finish}、reasoning=${think}），界面已如实报错 → 后半截"模型原话上屏"没有可判的东西`);
+  }
+
+  /**
+   * 点一发厂商、等回包；撞上配额就退避重点。
+   *
+   * sensenova 的限额按分钟（实测 `RateLimitExceeded.EndpointTPMExceeded`），硬连着点只会
+   * 让整组红在"厂商没回内容"上——那报的不是产品的毛病。退到第 5 次仍不放行就整条跳过，
+   * 并把原因写清楚：**这一档测不了**，不是产品坏了。
+   */
+  async function callVendor(page: Page, v: Replies, trigger: () => Promise<void>, label: string): Promise<void> {
+    const backoff = Number(process.env.ANR_VENDOR_BACKOFF_MS ?? 90_000);
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      const before = v.raw.length;
+      await trigger();
+      await expect
+        .poll(() => v.raw.length, { timeout: 4 * 60_000, message: `${label}：点了没等到厂商响应` })
+        .toBeGreaterThan(before);
+      await v.settle();
+      const lastRaw = v.raw[v.raw.length - 1] ?? "";
+      if (!THROTTLED.test(lastRaw)) {
+        const finish = [...lastRaw.matchAll(/"finish_reason"\s*:\s*"?([a-z_]+)"?/g)].map((m) => m[1]).join(",") || "?";
+        console.log(
+          `[R-E 回包] ${label}：${v.raw.length} 份响应、正文合计 ${v.texts.reduce((n, s) => n + s.length, 0)} 字、finish_reason=${finish}\n` +
+            `  正文前 200 字：${(v.texts[v.texts.length - 1] ?? "（空）").slice(0, 200).replace(/\s+/g, " ")}\n` +
+            `  原始帧尾巴 200 字：${lastRaw.slice(-200).replace(/\s+/g, " ")}`,
+        );
+        await skipIfVendorGaveNoBody(page, v, label);
+        return;
+      }
+      if (attempt === 5) test.skip(true, `厂商配额连续 ${attempt} 次 429 没放行（每次退避 ${backoff / 1000} 秒）：这一档测不了，与产品无关`);
+      console.log(`[R-E 限流] ${label} 第 ${attempt} 次撞上 429，退避 ${backoff / 1000} 秒后重点`);
+      await page.waitForTimeout(backoff);
+    }
+  }
+
+  /**
+   * 打开一个文字型子项并等它写完。
+   *
+   * 顺序很要紧：先等厂商回包、把回包摊出来，再等界面换态。反过来写的话，"点了没反应"
+   * 只会留下一条超时 5 分钟的 `toBeVisible`，看不出是模型没回、回了空的、
+   * 还是产品把一份好回包丢掉了（2026-09-23 R-E8 就是这么红的）。
+   */
+  async function generateAndWait(page: Page, v: Replies, emptyLabel: string, header: RegExp): Promise<void> {
+    await callVendor(page, v, () => panel.button(page, emptyLabel).click(), emptyLabel);
+    const head = panel.button(page, header);
+    // 这一条超时了先看上一行 `[R-E 回包]`：厂商有回包而界面没换到结果态，才是产品的问题
+    await expect(head).toBeVisible({ timeout: 60_000 });
+    await expect(head).toBeEnabled({ timeout: 60_000 });
+    await expectNoFailure(page, v);
+    await head.click();
+  }
+
+  test("R-E8 全书人物关系（文字分析）：模型回的人物分析真的上屏", async ({ page }) => {
+    const v = collectReplies();
+    await generateAndWait(page, v, "生成人物关系分析", /^全书人物关系$/);
+    await expectModelWordsShown(page, v.texts, "人物关系分析");
+    console.log(`[R-E8] 人物关系分析：厂商回包 ${v.texts.length} 份，面板 ${ (await panel.root(page).innerText()).length } 字`);
+  });
+
+  test("R-E9 剧情时间线：模型回的时间线真的上屏", async ({ page }) => {
+    const v = collectReplies();
+    await generateAndWait(page, v, "生成剧情时间线", /^剧情时间线$/);
+    await expectModelWordsShown(page, v.texts, "剧情时间线");
+    console.log(`[R-E9] 剧情时间线：厂商回包 ${v.texts.length} 份`);
+  });
+
+  test("R-E10 范围总结（第 2-5 章）：喂给模型的就是这四章，回来的话上屏", async ({ page }) => {
+    // 「范围」是这条路径唯一容易被做错的事：做错了界面照样出结果、照样花钱，用户看不出差别。
+    // 所以钉的是发出去的章节清单——`useSummarizer.ts:517-530` 按 `loadChapters(id, from-1, count)`
+    // 取章、逐章拼成 `--- 第N章 渡口N ---`，界面上却完全不体现喂了哪几章。
+    const prompts: string[] = [];
+    page.on("request", (r) => {
+      if (!r.url().startsWith(BASE) && !r.url().includes("/api/proxy/")) return;
+      prompts.push(r.postData() ?? "");
+    });
+    const v = collectReplies();
+
+    await panel.tab(page, "问答").click();
+    // 「范围总结」那行是**默认展开**的（`QATab.tsx:36` `useState(true)`），再点一次等于把它收起，
+    // 于是 `#range-from` 整块从 DOM 里消失——实测红在 `fill` 的 60 秒超时上，看着像控件不见了的
+    // 产品缺陷，其实是判据多点了一下。这里只验它展开着，不去碰那枚开关。
+    // 面板挂了两份（桌面侧栏 + 移动端整屏，后者常驻），所以任何定位都要走 `panel.*` 分域，
+    // 连 `#qa-input` 这种 id 也不能拿 `page.fill` 用——那会命中两份、报 strict mode violation
+    await expect(panel.root(page).locator("#range-from")).toBeVisible();
+    await panel.root(page).locator("#range-from").fill("2");
+    await panel.root(page).locator("#range-to").fill("5");
+    await callVendor(page, v, () => panel.button(page, /^生成$/).click(), "范围总结");
+    await expectNoFailure(page, v);
+
+    const sent = prompts.join("\n");
+    // 去重：撞配额时 `callVendor` 会重点，同一份范围会被记两遍
+    const included = [...new Set([...sent.matchAll(/--- 第(\d+)章 渡口\1 ---/g)].map((m) => Number(m[1])))].sort((a, b) => a - b);
+    expect(included, `范围总结实际喂给模型的章节是 ${included.join(",")}（要的是第 2-5 章，第 1 章和第 6 章都不该出现）`).toEqual([2, 3, 4, 5]);
+    await expectModelWordsShown(page, v.texts, "范围总结");
+    console.log(`[R-E10] 范围总结：喂了第 ${included.join("/")} 章、发出 ${sent.length} 字（全书 ${longNovel(40).length} 字），回包 ${v.texts.length} 份`);
+  });
+
+  test("R-E11 问答：两问各回一发，第二问的 prompt 里带着第一问", async ({ page }) => {
+    // 追问要吃掉上一问是这条路径的全部要点：不带历史时，"它叫什么名字"这种第二问
+    // 模型只能瞎答，而界面看不出来。所以钉的是**发出去的第二份 prompt 含第一问的原文**。
+    const prompts: string[] = [];
+    page.on("request", (r) => {
+      if (!r.url().startsWith(BASE) && !r.url().includes("/api/proxy/")) return;
+      prompts.push(r.postData() ?? "");
+    });
+    const v = collectReplies();
+    const Q1 = "这本书的渡口主要在做什么营生？";
+    const Q2 = "上一个问题里说到的地方，守渡口的人姓什么？";
+
+    await panel.tab(page, "问答").click();
+    // **填问题和点发送必须一起放进 trigger**：`useQA` 发出去就把输入框清空（`QATab.tsx:96`
+    // 是受控输入），而「发送」在输入为空时是 disabled 的。实测把 fill 写在外面时，撞上限流
+    // 之后的那次重试永远点在禁用的按钮上，红成"点不动"——那是判据在骗自己。
+    const ask = (q: string) => async () => {
+      await panel.root(page).locator("#qa-input").fill(q);
+      await panel.button(page, "发送").click();
+    };
+    await callVendor(page, v, ask(Q1), "问答第一问");
+    await expectNoFailure(page, v);
+
+    await callVendor(page, v, ask(Q2), "问答第二问");
+    expect(v.texts.length, "两问至少要两份回包").toBeGreaterThanOrEqual(2);
+
+    const second = prompts[prompts.length - 1] ?? "";
+    expect(second.includes(Q1), "第二问的 prompt 里没有第一问的原文：追问历史没被带上去").toBe(true);
+    await expectModelWordsShown(page, v.texts, "问答");
+    console.log(`[R-E11] 问答：${prompts.length} 发请求、${v.texts.length} 份回包，第二问带上了第一问`);
+  });
+
+  test("R-E12 逐章批量总结：每章各发一次；再点一次批量不该重烧已有章节", async ({ page }) => {
+    // 批量这条路径的两个失败形状正好相反：漏章（只有第一章出了结果，用户以为全书跑完）
+    // 与重烧（每次都把已有的再过一遍，钱花在用户看不见的地方）。两边各钉一条。
+    const SMALL = `批量小书-${RUN}`;
+    await page.getByRole("button", { name: "书架" }).first().click();
+    await expect(shelfCard(page, BOOK)).toBeVisible({ timeout: 30_000 });
+    await importFiles(page, [txtFile(`${SMALL}.txt`, realNovel())]);
+    await expect(shelfCard(page, SMALL)).toBeVisible({ timeout: 30_000 });
+    await openBook(page, SMALL);
+    await openSummaryPanel(page);
+    // 「批量」在**本章分析**那一页（`ChapterTab.tsx:115`），而 `beforeEach` 为了前几条已经切到
+    // 「全书分析」并留着——不在这里切回去，就是 60 秒等一枚不存在的按钮
+    await panel.tab(page, "本章分析").click();
+
+    // 计数含"直连那一发"：sensenova 不响应 OPTIONS，浏览器直连必失败但请求确实发出去了
+    // （见 r-vendor.spec.ts 的 legs()），所以一章可能是 2 发而不是一发——判据只钉"至少每章一发"
+    let calls = 0;
+    page.on("request", (r) => {
+      if (r.url().startsWith(BASE) || r.url().includes("/api/proxy/")) calls++;
+    });
+    // 批量这一腿不经过 `callVendor`（一次点击打出三发，没有"重点一次"的余地），
+    // 所以配额得靠回包体自己认：撞限流时这一条是"现在测不了"，不是产品坏了
+    const v = collectReplies();
+
+    await panel.button(page, "批量").click();
+    await panel.button(page, "跳过已有总结").click();
+    // 进度条里和头部各有一枚「停止」（`ChapterTab.tsx` 两处），不限一枚就是 strict mode violation
+    await expect(panel.button(page, /^停止$/).first()).toBeVisible({ timeout: 30_000 });
+    // 三章 = 三发（少一发就是漏章；多出来的按重试计，判据只钉"至少每章一次"）
+    await expect.poll(() => calls, { timeout: 6 * 60_000, message: "批量总结等不到三发厂商请求" }).toBeGreaterThanOrEqual(3);
+    await expect(panel.button(page, "批量")).toBeVisible({ timeout: 6 * 60_000 });   // 「停止」换回来 = 批量跑完
+    await expectNoFailure(page, v);
+    // 本章摘要的任务级预算只有 1024（`summarizer.ts:26`），推理模型光思考就能把它吃满 →
+    // 三章全空时先钉"界面说没说出来"，再判这一档在这只模型上量不到后半截
+    await skipIfVendorGaveNoBody(page, v, "逐章批量总结");
+
+    // 每一章都得有自己的正文，不能三章共用一段
+    for (const i of [0, 1, 2]) {
+      await navChapter(page, i).click();
+      await expect(panel.text(page, /暂无总结/)).toHaveCount(0);
+      expect((await panel.root(page).innerText()).length, `第${i + 1}章跑完还是空的`).toBeGreaterThan(60);
+    }
+
+    // 反向：全部已有总结时再点批量，一次都不许多发
+    const before = calls;
+    await panel.button(page, "批量").click();
+    await panel.button(page, "跳过已有总结").click();
+    await page.waitForTimeout(6_000);
+    expect(calls - before, `已有总结的书再点一次批量，还是打了 ${calls - before} 发厂商：跳过的意思是没跳过`).toBe(0);
+    console.log(`[R-E12] 逐章批量：三章共 ${calls} 发，重跑批量再没发过`);
   });
 });

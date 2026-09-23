@@ -48,7 +48,7 @@ export async function leaveSettings(page: Page): Promise<void> {
 /** 走完"添加 API → 填表 → 保存"。不填的字段留产品默认（格式默认 OpenAI，流式默认开）。 */
 export async function addProvider(
   page: Page,
-  f: { name: string; key?: string; baseUrl?: string; model?: string },
+  f: { name: string; key?: string; baseUrl?: string; model?: string; maxTokens?: number },
 ): Promise<void> {
   const s = settings(page);
   await s.add.click();
@@ -56,6 +56,10 @@ export async function addProvider(
   if (f.key !== undefined) await s.key.fill(f.key);
   if (f.baseUrl !== undefined) await s.baseUrl.fill(f.baseUrl);
   if (f.model !== undefined) await s.model.fill(f.model);
+  // 「最大输出 token」留空时产品按模型表给默认 4096。推理模型会先把这段预算花在"想"上
+  // （实测 sensenova 的 deepseek-flash：completion_tokens=4096、reasoning_tokens=4096、正文 0 字），
+  // 于是地图/时间线这类长结构化产物必然拿不到正文。设置页那行说明本来就叫用户"设为模型自身上限"。
+  if (f.maxTokens !== undefined) await page.locator("#api-max-output").fill(String(f.maxTokens));
   await s.save.click();
 }
 
@@ -65,7 +69,16 @@ export function summaryPanelToggle(page: Page): Locator {
 }
 
 export async function openSummaryPanel(page: Page): Promise<void> {
-  await summaryPanelToggle(page).click();
+  const toggle = summaryPanelToggle(page);
+  const open = page.getByLabel("收起 AI 分析面板");
+  // 面板可能本来就开着：同一浏览器会话里读完一本回书架、再开另一本，展开状态是留着的。
+  // 那时「展开」这枚按钮不存在，硬点会把 60 秒耗在超时上，报出来像"按钮不见了"的产品缺陷
+  // （实测 R-E12 就是这么红的）。
+  if (await toggle.count() === 0) {
+    await expect(open).toBeVisible();
+    return;
+  }
+  await toggle.click();
   // 面板里第一枚收起按钮，同时也就等到了 Suspense 后面的真组件
-  await expect(page.getByLabel("收起 AI 分析面板")).toBeVisible();
+  await expect(open).toBeVisible();
 }
