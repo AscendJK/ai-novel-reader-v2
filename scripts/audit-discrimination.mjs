@@ -17,12 +17,15 @@
  *     不干净立即中止整轮，绝不在污染状态下继续；
  *  5. 先跑模块内子集（快），若一个都没红再跑全量确认（防止跨模块保护被漏判）。
  *
- * 用法：node scripts/audit-discrimination.mjs [--from 176c21d] [--scope src|server|all]
+ *  用法：node scripts/audit-discrimination.mjs [--from 176c21d] [--scope src|server]
+ *       [--files a.js,b.ts] [--limit N] [--reach reach.json]
+ *       --reach 不给就现场跑一遍 import 图生成（不给又会不看测试可达，server 范围会多报假地板）。
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { PROBE_FOR } from "./lib/probe-map.mjs";
 
 const args = process.argv.slice(2);
 const getArg = (name, dflt) => {
@@ -32,10 +35,26 @@ const getArg = (name, dflt) => {
 const FROM = getArg("from", "176c21d");
 const SCOPE = getArg("scope", "src");
 
-/** audit-import-graph.mjs 产出的可达表：file → 能到达它的测试文件列表 */
-const REACH_FILE = getArg("reach", "");
+/**
+ * audit-import-graph.mjs 产出的可达表：file → 能到达它的测试文件列表。
+ * 不手工传 `--reach` 就现场生成一份（先跑过一次全量 import 图，几秒钟）——不带这张表时
+ * server 分支只会看 `PROBE_FOR`，于是 `server/lib/tts-assemble.mjs` 这类**被 vitest 直接
+ * import** 的文件会被报成"★ 无保护"，2026-09-23 数过：13 只这样的假地板。
+ */
+let REACH_FILE = getArg("reach", "");
+if (!REACH_FILE) {
+  REACH_FILE = path.join(os.tmpdir(), "anr-discrimination", "reach.json");
+  const gen = spawnSync(process.execPath, ["scripts/audit-import-graph.mjs", "--all", "--json", REACH_FILE], {
+    encoding: "utf8",
+    stdio: "ignore",
+    timeout: 180_000,
+  });
+  if (gen.status !== 0 || !fs.existsSync(REACH_FILE)) console.error("可达表自动生成失败，server 分支会多报假地板（改用 --reach 指一份现成的）");
+}
 const reachMap = REACH_FILE && fs.existsSync(REACH_FILE)
-  ? Object.fromEntries(JSON.parse(fs.readFileSync(REACH_FILE, "utf8")).map((r) => [r.file, r.tests]))
+  ? Object.fromEntries(
+      JSON.parse(fs.readFileSync(REACH_FILE, "utf8")).map((r) => [r.file, (r.tests ?? []).filter((t) => !t.startsWith("探针映射:"))]),
+    )
   : {};
 
 const git = (...a) => execFileSync("git", a, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
@@ -97,22 +116,8 @@ function runVitest(filter) {
   return { failed: json.numFailedTests ?? failedFiles.length, total: json.numTotalTests ?? 0, exit: run.status, failedFiles };
 }
 
-/**
- * server 文件 → 该跑哪只探针。空数组 = 真没人看着。
- * 判据与 verification-matrix §6 同源；新增探针时要一起改。
- */
-const PROBE_FOR = {
-  "server/index.js": ["probe:boot", "probe:proxy"],
-  "server/admin.js": ["probe:boot"],
-  "server/sync-handler.js": ["probe:maps", "probe:sync"],
-  "server/routes/sync.js": ["probe:sync"],
-  "server/routes/proxy.js": ["probe:proxy"],
-  "server/routes/rag.js": ["probe:rag"],
-  "server/rag-builder.js": ["probe:rag"],
-  "server/database.js": ["probe:backup", "probe:maps", "probe:reupload"],
-  "server/lib/engine-config.js": [],
-  "server/rag-worker.mjs": [],
-};
+// `PROBE_FOR` 从 `./lib/probe-map.mjs` 引（与覆盖地板共用，别在这儿再抄一份）
+
 
 /** 跑一只探针：只认它自己打印的 "探针结果：n/m"，读不到就不算通过 */
 function runProbe(name) {
@@ -149,28 +154,26 @@ const changed = LIMIT > 0 ? changedRaw.slice(0, LIMIT) : changedRaw;
 console.log(`范围内 ${changed.length} 个源文件（scope=${SCOPE}）。先取基线…`);
 const IS_SERVER = SCOPE === "server";
 const PROBE_UNION = IS_SERVER ? [...new Set(changed.flatMap((f) => PROBE_FOR[f] ?? []))] : [];
-const baseline = IS_SERVER
-  ? (PROBE_UNION.map(runProbe).find((r) => r.error || r.failed !== 0) ?? { failed: 0 })
-  : runVitest(null);
+// server 范围里也可能有"没探针映射、但有 vitest 直接 import"的文件（下面循环会走 vitest 那条），
+// 那也得先有一次全量绿当基线，否则把已有的红算到还原头上。
+const ALSO_VITEST = !IS_SERVER || changed.some((f) => (PROBE_FOR[f] ?? []).length === 0 && (reachMap[f] ?? []).length > 0);
+const probeBaseline = IS_SERVER ? (PROBE_UNION.map(runProbe).find((r) => r.error || r.failed !== 0) ?? { failed: 0 }) : { failed: 0 };
+const vitestBaseline = ALSO_VITEST ? runVitest(null) : { failed: 0 };
+const baseline = probeBaseline.error || probeBaseline.failed !== 0 ? probeBaseline : vitestBaseline;
 if (baseline.error || baseline.failed !== 0) {
   console.error("基线就不是全绿，审计结果无法解释。先修好当前 HEAD。", baseline);
   process.exit(3);
 }
-console.log(`基线全绿（${IS_SERVER ? `探针 ${PROBE_UNION.join(", ")}` : "vitest 全量"}），开始逐文件还原。\n`);
+console.log(`基线全绿（${[IS_SERVER && PROBE_UNION.length ? `探针 ${PROBE_UNION.join(", ")}` : "", ALSO_VITEST ? "vitest 全量" : ""].filter(Boolean).join(" + ")}），开始逐文件还原。\n`);
 
 for (const [i, file] of changed.entries()) {
   // 先判"要不要跑"，再动文件。上一版把可达性判断放在 revert 之后却直接 continue，
   // 于是 4 个文件留在还原态被守卫抓到、整轮中止。
   const reach = reachMap[file] ?? [];
   const probes = IS_SERVER ? (PROBE_FOR[file] ?? []) : [];
-  if (IS_SERVER && probes.length === 0) {
-    record({ file, status: "★ 无保护（无探针映射）" });
-    console.log(`[${i + 1}/${changed.length}] ${file} — ★ 无保护（无探针映射）`);
-    continue;
-  }
-  if (!IS_SERVER && REACH_FILE && reach.length === 0) {
-    record({ file, status: "★ 无保护（无任何测试可达）" });
-    console.log(`[${i + 1}/${changed.length}] ${file} — ★ 无保护（无任何测试可达）`);
+  if (probes.length === 0 && reach.length === 0) {
+    record({ file, status: "★ 无保护（既无探针映射，也无测试可达）" });
+    console.log(`[${i + 1}/${changed.length}] ${file} — ★ 无保护（既无探针映射，也无测试可达）`);
     continue;
   }
   const targets = reach.length ? reach : [`src/${file.split("/")[1] ?? ""}`];
@@ -188,7 +191,7 @@ for (const [i, file] of changed.entries()) {
   }
   inFlight = file;
   let res, stage;
-  if (IS_SERVER) {
+  if (IS_SERVER && probes.length > 0) {
     const runs = probes.map((n) => ({ name: n, ...runProbe(n) }));
     stage = runs.map((r) => `${r.name}:${r.error ? "跑不起来" : `${r.failed}红/${r.total}`}`).join("  ");
     const reds = runs.reduce((n, r) => n + (r.error ? 0 : r.failed), 0);

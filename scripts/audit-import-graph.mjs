@@ -19,6 +19,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { PROBE_FOR } from "./lib/probe-map.mjs";
 
 const args = process.argv.slice(2);
 const getArg = (n, d) => { const i = args.indexOf(`--${n}`); return i >= 0 && args[i + 1] ? args[i + 1] : d; };
@@ -112,7 +113,14 @@ const changed = ALL
       .trim().split("\n")
       .filter((f) => /^(src|server)\//.test(f) && !isTest(f) && fs.existsSync(path.join(ROOT, f)));
 
-const rows = changed.map((f) => ({ file: f, tests: reachingTests(f), browser: browserLoaded.has(f) }));
+const rows = changed.map((f) => {
+  const tests = reachingTests(f);
+  // 探针是**另起进程** `node server/index.js` 再发真 HTTP 的，静态 import 图跨不过这条边界，
+  // 于是 `server/routes/*.js` 这类会被误报成"没人看着"。映射表里有的补上，带 `探针映射:` 前缀
+  // 与真 import 分开——那张表每只都经手工变异证过"改坏了探针会红"，见 lib/probe-map.mjs 头上。
+  for (const p of PROBE_FOR[f] ?? []) if (!tests.includes(`探针映射:${p}`)) tests.push(`探针映射:${p}`);
+  return { file: f, tests, browser: browserLoaded.has(f) };
+});
 const naked = rows.filter((r) => r.tests.length === 0 && !r.browser);
 const onlyBrowser = rows.filter((r) => r.tests.length === 0 && r.browser);
 
@@ -126,11 +134,10 @@ for (const n of onlyBrowser) console.log(`  ${n.file}`);
 console.log(`\n两层都没碰到（= 改动 100% 无用例守着）：${naked.length}\n`);
 for (const n of naked) console.log(`  ${n.file}`);
 if (naked.some((n) => n.file.startsWith("server/"))) {
-  // 别把下面这句读成"那 52 只组件有人断言"，也别把 server/ 读成"完全没人看"：
-  // 七只探针是**真起 `node server/index.js` 再发 HTTP**、或者 `await import(算出来的 URL)`
-  // 加载 `server/database.js`，静态 import 图两种都看不见。server 的地板只能靠"改坏了探针红不红"
-  // 来量 —— 那就是 `npm run audit:discrimination` 的活（它自带 PROBE_FOR 映射）。
-  console.log("\n注：`server/` 这几只不代表「完全没人看着」。探针是真起后端发 HTTP、或者运行时 import 那些文件的，");
-  console.log("    静态图看不见这两件事；服务端地板请用 npm run audit:discrimination（它自带 PROBE_FOR 映射）量。");
+  // 走到这里还没被算进"有人看着"的 server 文件，意味着三件事同时成立：没有测试静态 import 到它、
+  // 浏览器层没加载它（server 文件本来也不会被浏览器加载）、**探针映射表里也没有它**。
+  // 最后那张表是人工维护的（`lib/probe-map.mjs`），漏填会在这里报成假地板——先照那张表头上的
+  // 量法手工变异一次（改坏 → 看 `probe:boot` 红不红 → 还原），确认了再动手补判据。
+  console.log("\n注：`server/` 这几只是「映射表里也没有」——先手工变异确认一次，别直接读成裸奔（量法见 lib/probe-map.mjs 头上）。");
 }
 if (!jsonOut) console.log("\n（加 --json 路径 可导出完整可达表）");
