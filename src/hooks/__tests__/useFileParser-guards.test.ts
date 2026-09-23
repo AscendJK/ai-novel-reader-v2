@@ -119,13 +119,12 @@ describe("解析与落库", () => {
 
   it("EPUB 走 EPUB 解析器，书的来源格式要记对", async () => {
     const { result } = renderHook(() => useFileParser());
-    let novel: { fileFormat?: string } | null = null;
     await act(async () => {
-      novel = await result.current.parseFile(fileOf("书.epub", MB));
+      await result.current.parseFile(fileOf("书.epub", MB));
     });
     expect(parseEpub).toHaveBeenCalledTimes(1);
     expect(parseTxt).not.toHaveBeenCalled();
-    expect(novel).not.toBeNull();
+    expect(addNovel).toHaveBeenCalledTimes(1);
     expect(addNovel.mock.calls[0][0].fileFormat).toBe("epub");
   });
 
@@ -166,14 +165,16 @@ describe("解析与落库", () => {
     expect(result.current.error).toBeNull();
   });
 
-  it("成功那一趟要喊其他标签页重读书架", async () => {
+  it("成功那一趟要喊其他标签页重读书架，且喊的是刚上架那一本", async () => {
     const { result } = renderHook(() => useFileParser());
-    let novel: { id?: string } | null = null;
     await act(async () => {
-      novel = await result.current.parseFile(fileOf("新书.txt", MB));
+      await result.current.parseFile(fileOf("新书.txt", MB));
     });
     expect(result.current.progress).toBe(100);
-    expect(broadcast.send).toHaveBeenCalledWith("data-changed", { kind: "novel-added", id: novel?.id });
+    // 拿"上架那本书的 id"当基准，而不是再取一次返回值：广播错 id 才是这一条要抓的
+    const shelved = addNovel.mock.calls[0][0];
+    expect(shelved.id).toBeTruthy();
+    expect(broadcast.send).toHaveBeenCalledWith("data-changed", { kind: "novel-added", id: shelved.id });
     expect(result.current.isParsing).toBe(false);
   });
 });
