@@ -306,3 +306,71 @@ test("D11 备份：真浏览器里导出 JSON，正文要带得上去、钥匙�
   expect(text, "备份里出现钥匙=把钥匙交给了拿到文件的人").not.toContain(FAKE_KEY);
   expect(text).not.toMatch(/api-providers/);
 });
+
+/** 往浏览器真 Cache Storage 的 transformers-cache 里种条目（嵌入模型缓存就是这只桶） */
+async function seedTransformersCache(page: Page, entries: { url: string; bytes: number }[]): Promise<void> {
+  await page.evaluate(async (list) => {
+    const cache = await caches.open("transformers-cache");
+    for (const e of list) {
+      await cache.put(e.url, new Response(new Blob([new Uint8Array(e.bytes)])));
+    }
+  }, entries);
+}
+
+async function transformersCacheCount(page: Page): Promise<number> {
+  return page.evaluate(async () => {
+    const cache = await caches.open("transformers-cache");
+    return (await cache.keys()).length;
+  });
+}
+
+test("D12 分类明细里每一枚「清理」都要弹自己那一类的确认（不许有死按钮）", async ({ page }) => {
+  // D9 只盯嵌入模型那一行；这一条把"清单会不会各写一份然后对不上"变成机器判据：
+  // storage-stats 以后再加一类 cleanable，忘了接出口就在这儿红，不用人再去看源码。
+  await openSettings(page);
+  // 从按钮往上找它所在的那一行（`div.rounded-lg.border` 会连包住整组的外层一起命中，
+  // 那样第一"行"里就有三枚按钮，红了也说不清是哪一类没接上）
+  const rows = page.locator(
+    'xpath=//button[normalize-space(.)="清理"]/ancestor::div[contains(@class,"rounded-lg")][1]'
+  );
+  const n = await rows.count();
+  expect(n, "前提：分类明细里至少有一行带清理出口，一格都没有等于这屏没东西可清").toBeGreaterThan(0);
+
+  const asked: string[] = [];
+  page.on("dialog", async (d) => {
+    asked.push(d.message());
+    await d.dismiss();
+  });
+  for (let i = 0; i < n; i++) {
+    const row = rows.nth(i);
+    const label = (await row.locator("p").first().innerText()).replace(/[0-9.]+\s*(B|KB|MB|GB)\s*$/i, "").trim();
+    asked.length = 0;
+    await row.getByRole("button", { name: "清理", exact: true }).click();
+    await expect.poll(() => asked.length, { message: `「${label}」这一行的清理按钮点了没反应` }).toBe(1);
+    expect(asked[0], `「${label}」弹的必须是它自己的确认文案（错接=删错东西）`).toContain(label);
+  }
+});
+
+test("D13 清理「嵌入模型」要真把缓存文件删掉，删完那一行的数要落回 0", async ({ page }) => {
+  await seedTransformersCache(page, [
+    { url: "https://huggingface.co/Xenova/bge-small-zh-v1.5/resolve/main/config.json", bytes: 4096 },
+    { url: "https://huggingface.co/Xenova/gte-small/resolve/main/tokenizer.json", bytes: 8192 },
+    // 不属于任何已知模型的孤儿条目：逐 key 删的那种实现正是会漏掉它，而这一行的字节数算的是整只桶
+    { url: "https://example.invalid/orphan/model/onnx", bytes: 2048 },
+  ]);
+  expect(await transformersCacheCount(page), "前提：三条都种进去了").toBe(3);
+
+  await openSettings(page);
+  const row = storageRow(page, "嵌入模型");
+  const bytes = row.locator("span.font-mono");
+  await expect(bytes, "前提：这一行报的不是 0 B，否则下面的\"落回 0\"是空场").not.toHaveText("0 B");
+
+  page.on("dialog", (d) => void d.accept());
+  await row.getByRole("button", { name: "清理", exact: true }).click();
+  await expect(page.getByText("清理完成")).toBeVisible();
+  await expect
+    .poll(() => transformersCacheCount(page), { message: "点了确认之后 transformers-cache 里还剩条目，没删干净" })
+    .toBe(0);
+  // 报数与动手同一口径：清完之后界面那格必须跟着归零（runCleanup 里那次 refresh）
+  await expect(bytes).toHaveText("0 B");
+});

@@ -388,6 +388,36 @@ export async function deleteModelCache(modelKey: string): Promise<number> {
 }
 
 /**
+ * 清空整只 transformers-cache。
+ *
+ * 不逐 key 调 deleteModelCache：那删不掉"不属于任何已知模型"的孤儿条目，而存储管理
+ * 那一行报的字节数是整只 cache 的总量——清完必须能对上用户刚才看见的那个数。
+ * @returns 删除的条目数
+ */
+export async function clearAllModelCache(): Promise<number> {
+  const cache = await openTransformersCache();
+  if (!cache) return 0;
+  try {
+    const requests = await cache.keys();
+    let removed = 0;
+    for (const req of requests) {
+      if (await cache.delete(req)) removed++;
+    }
+    if (removed > 0) {
+      // 文件没了，下载标记也就成了假账：一并清掉，否则面板上"已下载的模型"仍列着它们
+      for (const key of [...useRAGStore.getState().downloadedModels]) {
+        useRAGStore.getState().removeDownloadedModel(key);
+      }
+      console.log(`[model-loader] 已清空模型缓存 (${removed} 个文件)`);
+    }
+    return removed;
+  } catch (e) {
+    console.warn("[model-loader] 清空模型缓存失败:", e);
+    return 0;
+  }
+}
+
+/**
  * 校验 localStorage 的 downloadedModels 标记与 Cache Storage 实际内容是否一致。
  * 返回已标记下载但实际缓存丢失的模型 key 列表（自动修正标记）。
  */

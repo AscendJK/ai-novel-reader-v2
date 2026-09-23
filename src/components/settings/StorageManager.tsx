@@ -3,7 +3,7 @@
  * 展示浏览器存储总览与各分类占用，提供可清理分类的清理入口：
  * - RAG 索引缓存：清除全部索引（重新构建）
  * - TTS 语音模型：删除浏览器离线模型（服务端推理 / Web Speech 不受影响）
- * - 嵌入模型：按模型删除 transformers-cache 中的缓存文件
+ * - 嵌入模型：整类清空 transformers-cache，也可按模型删除其中的缓存文件
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -16,7 +16,7 @@ import {
 import { getStorageBreakdown, formatBytes, type StorageBreakdown } from "@/lib/storage-stats";
 import { clearCache as clearRAGCache } from "@/rag/index";
 import { clearCache as clearTTSCache, cleanupOrphanFiles } from "@/tts/tts-cache";
-import { deleteModelCache, getTransformersCacheInfo, type TransformersCacheInfo } from "@/rag/model-loader";
+import { clearAllModelCache, deleteModelCache, getTransformersCacheInfo, type TransformersCacheInfo } from "@/rag/model-loader";
 import { useRAGStore } from "@/stores/rag-store";
 import { getActiveTTSManager } from "@/tts/tts-manager";
 import { resetWorker } from "@/tts/zipvoice-engine";
@@ -102,6 +102,13 @@ export function StorageManager() {
     },
   );
 
+  // 嵌入模型整类清理（清的是整只 transformers-cache，与这一行报的字节数同一口径）
+  const cleanEmbeddingModels = () => runCleanup(
+    "embedding-models",
+    "确认删除浏览器里的全部嵌入模型缓存？\n\n• 不影响小说正文与 AI 分析结果\n• 下次使用语义检索时需重新下载模型文件",
+    async () => { await clearAllModelCache(); },
+  );
+
   // 嵌入模型缓存清理（按模型删除）
   const removeEmbeddingModel = (key: string) => runCleanup(
     `model-${key}`,
@@ -177,6 +184,7 @@ export function StorageManager() {
                     onClick={() => {
                       if (cat.id === "rag-index") cleanRAG();
                       else if (cat.id === "tts-cache") cleanTTS();
+                      else if (cat.id === "embedding-models") cleanEmbeddingModels();
                     }}
                   >
                     {busyAction === cat.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
