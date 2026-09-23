@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 import { stubBackend, idleTtsStatus } from "../fixtures/backend";
 import { sel, expectUnblocked } from "../pages/app";
 import { addProvider, openSettings, settings, signIn, signOut } from "../pages/settings";
@@ -8,6 +9,8 @@ import { importFiles, miniNovel, shelfCard, txtFile } from "../pages/shelf";
  * D 组：设置与 API Key。守两条铁律——
  *   ① key 只存浏览器 IndexedDB，永不出本机（CLAUDE.md「API key 仅存浏览器」）；
  *   ② 配置按用户名分键存放，切用户不许串。
+ * D9~D11 是同一屏往下两块的接线判据（存储管理 / 备份导出）：那两块都握着"删东西"和
+ * "把东西写进文件"的出口，静态加载过不等于出口接对。
  *
  * 这一组一律**走真登录/真退出 UI**，不用 localStorage 预置会话：退出是
  * `window.confirm` + `location.reload()`（Header.tsx:44-49），而 init script 会在刷新后
@@ -218,4 +221,88 @@ test("D8 改用户名：API 配置跟着搬到新名字下，旧名的键不许�
     { name: "跟着改名的配置" },
   ]);
   expect(await readSharedSetting(page, `api-providers:${USER_A}`), "旧名的键留下就是永远取不回来的残留").toBeUndefined();
+});
+
+/**
+ * 存储管理面板里某一类的那一行（label → 所在行）。
+ *
+ * 走 DOM 关系而不是给产品加 data-testid：这一组要验的就是"界面上写着可清理的那一行，
+ * 出口到底接没接上"，加了测试专用属性就等于把定位方式与产品实现解耦开，红了也说不清
+ * 是接线断了还是属性没渲染。`text()[1]` 取第一个文本节点：分类行是 `label + <span>字节数</span>`，
+ * 而"已下载的嵌入模型"那一节的标题以"已下载的"开头，不会误命中。
+ */
+function storageRow(page: Page, label: string) {
+  return page.locator(
+    `xpath=//p[normalize-space(text()[1])="${label}"]/ancestor::div[contains(@class,"justify-between")][1]`
+  );
+}
+
+test("D9 存储管理：写着「可清理」的每一行都必须真有出口，点了不许毫无反应", async ({ page }) => {
+  await openSettings(page);
+  const clean = storageRow(page, "嵌入模型").getByRole("button", { name: "清理" });
+  // 前提：storage-stats 把 embedding-models 标成 cleanable，面板必然渲染出这枚按钮。
+  // 这枚按钮本身有没有效才是这条判据要问的。
+  await expect(clean, "分类明细里「嵌入模型」这一行的清理按钮").toBeVisible();
+
+  const asked: string[] = [];
+  page.on("dialog", async (d) => {
+    asked.push(d.message());
+    await d.dismiss();
+  });
+  await clean.click();
+  // 用 poll 而不是 waitForTimeout：真没弹窗时它红在 5 秒预算内，报的是"点了没反应"
+  await expect
+    .poll(() => asked.length, { message: "点了「嵌入模型」的清理：既没弹确认，也没任何反馈" })
+    .toBe(1);
+  expect(asked[0], "弹的必须是这一类自己的确认文案（错接到别类=删错东西）").toContain("嵌入模型");
+});
+
+test("D10 存储管理：确认框点取消不许谎报「清理完成」，点确认要有落点且按钮要放开", async ({ page }) => {
+  await openSettings(page);
+  const clean = storageRow(page, "TTS 语音模型").getByRole("button", { name: "清理" });
+  await expect(clean).toBeEnabled();
+
+  let accept = false;
+  const asked: string[] = [];
+  page.on("dialog", async (d) => {
+    asked.push(d.message());
+    await (accept ? d.accept() : d.dismiss());
+  });
+
+  await clean.click();
+  expect(asked[0], "取消之前得让用户看见后果：删了要重新下载").toContain("重新下载");
+  await expect(page.getByText("清理完成"), "用户点的是取消，界面不许报完成").toHaveCount(0);
+
+  accept = true;
+  await clean.click();
+  await expect(page.getByText("清理完成")).toBeVisible();
+  // busyAction 复位：finally 没跑的话这枚按钮（和这一屏所有清理按钮）会永久禁用
+  await expect(clean).toBeEnabled();
+});
+
+test("D11 备份：真浏览器里导出 JSON，正文要带得上去、钥匙一个字节都不许带上", async ({ page }) => {
+  // 这一条不走桩：备份读的是浏览器真 IndexedDB，单测里那层是 fake-indexeddb。
+  // 备份文件会被用户拿去分享/换机器，钥匙一旦在里面，D1 守的"key 永不出本机"就白立了。
+  await importFiles(page, [txtFile("备份里的书.txt", miniNovel())]);
+  await expect(shelfCard(page, "备份里的书")).toBeVisible();
+  await openSettings(page);
+  await addProvider(page, { name: "备份里的配置", key: FAKE_KEY });
+
+  // 前提：钥匙真已落进浏览器存储。少了这一步，下面的"不含"可能只是没写进去的空场。
+  const stored = await readSharedSetting<{ apiKey?: string }[]>(page, `api-providers:${USER_A}`);
+  expect(stored?.[0]?.apiKey, "前提：钥匙已在 sharedDB.settings 里").toBe(FAKE_KEY);
+
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("button", { name: "导出 JSON" }).click(),
+  ]);
+  expect(download.suggestedFilename()).toContain("小说阅读器备份");
+  const file = await download.path();
+  if (!file) throw new Error("下载没落成临时文件，这条判据无从下手");
+  const text = await readFile(file, "utf8");
+
+  expect(text).toContain("备份里的书");
+  expect(text, "只有书目没有正文的备份，恢复出来是空壳").toContain("洛阳城下的雪");
+  expect(text, "备份里出现钥匙=把钥匙交给了拿到文件的人").not.toContain(FAKE_KEY);
+  expect(text).not.toMatch(/api-providers/);
 });
