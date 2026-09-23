@@ -354,15 +354,16 @@ test.describe(`真后端：批量生成三条打在真厂商上（厂商${WHICH}
   type Replies = { texts: string[]; raw: string[]; settle: () => Promise<void> };
 
   /**
-   * 抓厂商回包**只能在页面里抓**。
+   * 抓厂商回包在页面里做，不在测试侧做。
    *
-   * Playwright 那侧读不到正确正文：代理透传 SSE 时写的是 `Content-Type: text/event-stream`
-   * 而不带 charset（`proxy.js:176`），于是 Chromium 先按 windows-1252 解一遍再把文本还给测试——
-   * `res.text()` 与 `res.body()` **两条都一样**（实测同一份 `就所给原文而言`：页面内 fetch 读到 75 字
-   * 正常中文，测试侧读到 101 字 `å°±æ‰€ç»™åŽŸæ–‡`）。判据在乱码上找连续汉字永远找到 0 个，
-   * 于是 R-E8/R-E10 假红，而界面自己显示的中文一直是好的。
-   * 页面里 `fetch` 按规范解 UTF-8，所以 hook 掉 `window.fetch`、`clone()` 一份出来读，
-   * 拿到的就是产品真正吃进去的那份字（顺带还多钉住一件事：判据看的是浏览器实际收到的内容）。
+   * 起因是一次实测到的假红：代理透传 SSE 当时只写 `Content-Type: text/event-stream`（不带
+   * charset），Chromium 会先按 windows-1252 解一遍再把体交给测试——`res.text()` 与 `res.body()`
+   * **两条都坏**（同一份正文：页面内 fetch 读到 75 字正常中文，测试侧 101 字 `å°±æ‰€ç»™åŽŸæ–‡`），
+   * 于是"模型原话上屏"在乱码上永远找不到可比对片段，而界面显示的中文一直是好的。
+   * 服务端那两处现在已经补上 `charset=utf-8`（`0542568`，补完复测两条读法都正确），
+   * 页面内这份抓包仍然保留，理由换成正面的：它读的是**产品真正吃进去的那一份字节**
+   * （hook `window.fetch` 后 `clone()`），而不是测试另开一条读法；对着不带 charset 的
+   * 旧后端或别家厂商也不会再被解码方式骗一次。
    */
   async function watchWire(page: Page): Promise<Replies> {
     const texts: string[] = [];
