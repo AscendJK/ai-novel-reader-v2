@@ -39,7 +39,8 @@ const SCOPE = getArg("scope", "src");
  * audit-import-graph.mjs 产出的可达表：file → 能到达它的测试文件列表。
  * 不手工传 `--reach` 就现场生成一份（先跑过一次全量 import 图，几秒钟）——不带这张表时
  * server 分支只会看 `PROBE_FOR`，于是 `server/lib/tts-assemble.mjs` 这类**被 vitest 直接
- * import** 的文件会被报成"★ 无保护"，2026-09-23 数过：13 只这样的假地板。
+ * import** 的文件会被报成"★ 无保护"，2026-09-23 按可达表数过是 15 只这样的假地板
+ * （`server/lib/*` 13 只 + `server/middleware/auth.js`、`rateLimit.js`）。
  */
 let REACH_FILE = getArg("reach", "");
 if (!REACH_FILE) {
