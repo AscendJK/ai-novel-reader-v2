@@ -20,6 +20,14 @@ export function estimateTokens(text: string): number {
 export interface TokenBudget {
   contextWindow: number;
   maxOutputTokens: number;
+  /**
+   * 用户在设置里亲手填的输出上限（没填为 undefined）。
+   *
+   * 必须与 `maxOutputTokens` 分开存：后者在用户填过之后就等于用户值，光看它分不出
+   * "模型本来就能写 8192" 和 "用户说了 8192"。而这两件事的待遇不同——只有用户显式说过的，
+   * 才允许顶掉任务级的默认预算（见 `resolveOutputReserve`）。
+   */
+  userMaxOutputTokens?: number;
 }
 
 const MODEL_LIMITS: Record<string, TokenBudget> = {
@@ -187,41 +195,20 @@ export function getDiscoveredContextWindow(model: string): number | undefined {
 }
 
 export function getTokenBudget(model: string, contextWindow?: number, maxOutputTokens?: number): TokenBudget {
-  // Look up model's known output token limit
-  let knownOutput = DEFAULT_BUDGET.maxOutputTokens;
-  if (MODEL_LIMITS[model]) {
-    knownOutput = MODEL_LIMITS[model].maxOutputTokens;
-  } else {
-    for (const [key, budget] of SORTED_MODEL_ENTRIES) {
-      if (model.startsWith(key)) { knownOutput = budget.maxOutputTokens; break; }
-    }
-  }
-  // User-configured max output tokens takes priority
-  if (maxOutputTokens && maxOutputTokens > 0) {
-    knownOutput = maxOutputTokens;
-  }
-  // 用户配置的上下文窗口优先
-  if (contextWindow && contextWindow > 0) {
-    return { contextWindow, maxOutputTokens: knownOutput };
-  }
-  // Runtime-discovered context window (from 400 self-healing) takes next priority
-  const discovered = discoveredContextWindows.get(model);
-  if (discovered) {
-    return { contextWindow: discovered, maxOutputTokens: knownOutput };
-  }
+  const userCap = maxOutputTokens && maxOutputTokens > 0 ? maxOutputTokens : undefined;
+  // 表命中（精确优先，其次按 key 长度降序做前缀匹配，长 key 先命中：
+  // "gpt-4o-mini" 要抢在 "gpt-4o" 前面）
+  const hit = MODEL_LIMITS[model] ?? SORTED_MODEL_ENTRIES.find(([key]) => model.startsWith(key))?.[1];
+  const knownOutput = userCap ?? hit?.maxOutputTokens ?? DEFAULT_BUDGET.maxOutputTokens;
+  // 上下文窗口的优先级：用户填的 > 服务端自报的（400 自愈缓存，仅会话内）> 表值 > 默认。
+  // 四条来源在这里算完，最后一次性组装对象——过去四个 return 各拼一份字面量，
+  // 新增字段极易漏带（`userMaxOutputTokens` 就是这么要求统一的）。
+  const resolvedWindow = contextWindow && contextWindow > 0
+    ? contextWindow
+    : discoveredContextWindows.get(model) ?? hit?.contextWindow ?? DEFAULT_BUDGET.contextWindow;
   // 表命中路径必须带走上面算好的 knownOutput：过去直接 return 表对象，用户在设置里
   // 调的输出上限对已知模型完全不生效，而预算不足的报错文案正是让他去调这个。
-  const withUserCap = (b: TokenBudget): TokenBudget => ({
-    contextWindow: b.contextWindow,
-    maxOutputTokens: knownOutput,
-  });
-  // Exact match first
-  if (MODEL_LIMITS[model]) return withUserCap(MODEL_LIMITS[model]);
-  // Prefix match for versioned models (e.g. "gpt-4o-mini-2024-07-18" → "gpt-4o-mini")
-  for (const [key, budget] of SORTED_MODEL_ENTRIES) {
-    if (model.startsWith(key)) return withUserCap(budget);
-  }
-  return withUserCap(DEFAULT_BUDGET);
+  return { contextWindow: resolvedWindow, maxOutputTokens: knownOutput, userMaxOutputTokens: userCap };
 }
 
 /**
@@ -280,6 +267,41 @@ export function computeAvailableInput(budget: TokenBudget, agentMaxTokens: numbe
 
 /** 低于这个输入预算，截断后的 prompt 只剩指令本身，模型会凭空产出正文 */
 export const MIN_USABLE_INPUT_TOKENS = 512;
+
+/** 输出预留的下限：比这更小，模型连一段像样的分析都写不完，宁可直接失败 */
+export const MIN_OUTPUT_RESERVE = 512;
+
+/**
+ * 一个任务的输出预留——**同时**是发出去的 `max_tokens` 和输入侧要扣掉的量。
+ *
+ * 为什么只能有一个出处：过去这两件事分别写成 `Math.min(上限, 字面常数)`，于是
+ * ① 用户在设置里填的输出上限被常数顶掉（设置页那句"填写后优先使用"是假的，真厂商实测
+ * `deepseek-flash` 在 4096 预留里把预算全花在 reasoning 上、正文 0 字）；
+ * ② `analyzers.ts` 与全书总结的输入侧按 2048 留、请求却发 4096——正是 `map-agent.ts` /
+ * `graph-agent.ts` 注释里警告的"预算算小了，严格校验 input+max_tokens≤窗口的服务商必 400"。
+ *
+ * 让路的范围限定在"用户显式填过"：没填时逐字等于旧的 `Math.min(上限, 常数)`，零回归面。
+ * 钳制的理由是实测出来的兑换率：预留与可用输入 1:1（128k 窗口预留 2048→8192，
+ * 可用输入 124,952→118,808；32k 窗口 + 上限 8192 时范围总结能带的整章数 9→7）。
+ * 也就是说抬预留**不会**换来"上下文不足"，换来的是少喂原文——所以要按窗口钳住，
+ * 不许把输入挤到 `MIN_USABLE_INPUT_TOKENS` 门下。
+ *
+ * @param budget 该 provider 的预算（含用户填的上限）
+ * @param taskDefault 该任务的默认输出预算（原写死在各 agent 里的常数）
+ * @param what 报错文案里的任务名，与 `requireUsableInput` 同一口径
+ */
+export function resolveOutputReserve(budget: TokenBudget, taskDefault: number, what = "该请求"): number {
+  const margin = Math.min(1000, Math.floor(budget.contextWindow * 0.05));
+  const wanted = budget.userMaxOutputTokens ?? taskDefault;
+  const reserve = Math.min(wanted, budget.maxOutputTokens, budget.contextWindow - margin - MIN_USABLE_INPUT_TOKENS);
+  if (reserve < MIN_OUTPUT_RESERVE) {
+    // 两种可能：窗口真的供不起最小预留 → 这句必抛；或者用户自己把上限调得比 512 还小 →
+    // 那是合法偏好（窗口够大时 available 远超下限），原样返回他的话，不替他改主意。
+    requireUsableInput(budget, MIN_OUTPUT_RESERVE, what);
+    return reserve;
+  }
+  return reserve;
+}
 
 /**
  * 需要真正拼进 prompt 的输入预算：不够用就直接失败。
