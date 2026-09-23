@@ -271,9 +271,14 @@ export async function chatWithContextRetry(
       const real = extractContextLength(raw);
       if (real && real > 0) {
         setDiscoveredContextWindow(env.modelName, real);
-        // 只换上下文窗口：输出上限沿用本次任务已经在用的值（可能是用户在设置里定的），
-        // 直接 getTokenBudget(modelName) 会把它抹回表里的默认值，重试反而更容易截断。
-        budget = getTokenBudget(env.modelName, undefined, env.budget.maxOutputTokens);
+        // 只换上下文窗口：输出上限连同"这是不是用户亲手填的"一起原样带过去。
+        // 直接 getTokenBudget(modelName) 会把它抹回表里的默认值，重试反而更容易截断；
+        // 而把 `maxOutputTokens` 当作用户值回灌，会让重试那一发误以为"用户显式要过这么大"、
+        // 从而顶掉任务默认预算（章节摘要从 1024 变 16384），比第一次要得更多。
+        budget = {
+          ...getTokenBudget(env.modelName, undefined, env.budget.userMaxOutputTokens),
+          maxOutputTokens: env.budget.maxOutputTokens,
+        };
         // 用新预算重试一次（重新裁剪 + 重建 prompt）
         return await attempt(budget);
       }

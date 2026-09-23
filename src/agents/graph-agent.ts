@@ -9,7 +9,7 @@ import { BaseAgent } from "./base-agent";
 import { getRelevantContent, chatWithContextRetry, sampleChapterTitles } from "./utils";
 import { extractJSON } from "./json-extractor";
 import { useUIStore } from "@/stores/ui-store";
-import { estimateTokens, computeAvailableInput } from "@/api/token-manager";
+import { estimateTokens, computeAvailableInput, resolveOutputReserve, type TokenBudget } from "@/api/token-manager";
 
 interface GraphData {
   nodes: { id: string; group: string; description: string }[];
@@ -39,13 +39,18 @@ class CharacterGraphAgent extends BaseAgent {
   description = "只生成人物关系图谱JSON数据";
   taskType = TaskType.GRAPH;
 
+  /** 同一个数：既从输入侧扣掉，也作为 `max_tokens` 发出去（原来三处的字面量 8192，值没变） */
+  private reserve(b: TokenBudget): number {
+    return resolveOutputReserve(b, 8192, "人物关系图谱");
+  }
+
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider } = env;
 
     // 目录按预算抽样：上千章的书带着全量目录必 400（round 2 R-40）
     const chapterList = sampleChapterTitles(
       novel.chapters.map((c, i) => `${i + 1}. ${c.title}`),
-      Math.floor(computeAvailableInput(env.budget, 8192) * 0.25)
+      Math.floor(computeAvailableInput(env.budget, this.reserve(env.budget)) * 0.25)
     ).text;
 
     const { content: relevantContent, label: promptLabel } = getRelevantContent(context, novel.chapters);
@@ -66,9 +71,10 @@ class CharacterGraphAgent extends BaseAgent {
         context.onStatus?.(attempt === 1 ? "AI 正在生成分析..." : "AI 正在重新分析...");
 
         const response = await chatWithContextRetry(env, async (b) => {
+          const reserve = this.reserve(b);
           const prompt = buildPrompt(novel, chapterList, relevantContent, promptLabel, charLimit, lastError);
           const est = estimateTokens(prompt);
-          const useFb = est >= computeAvailableInput(b, 8192);
+          const useFb = est >= computeAvailableInput(b, reserve);
           const useP = useFb
             ? `请根据小说《${novel.title}》的章节目录生成人物关系图谱JSON。\n章节目录：\n${chapterList}\n请只输出JSON。`
             : prompt;
@@ -79,10 +85,11 @@ class CharacterGraphAgent extends BaseAgent {
               { role: "user", content: useP },
             ],
             // 大 JSON 需要尽量多的输出空间，但不得超过模型自身的输出上限，
-            // 否则上限低于 16384 的模型（如 4096 档）会直接 400。
-            // 上限 8192 与输入侧 computeAvailableInput(b, 8192) 的预留一致，
-            // 避免 input+output 超上下文在严格服务商必然 400
-            max_tokens: Math.min(b.maxOutputTokens, 8192),
+            // 否则上限低于 8192 的模型（如 4096 档）会直接 400。
+            // 与输入侧 `computeAvailableInput(b, reserve)` 同一个数：分开写就会一个要得多、
+            // 一个留得少，严格校验 input+max_tokens≤窗口的服务商必然 400。
+            // 用户在设置里填过上限时由它顶开 8192（`resolveOutputReserve`）。
+            max_tokens: reserve,
             temperature: 0.3,
             signal: context.signal,
           });

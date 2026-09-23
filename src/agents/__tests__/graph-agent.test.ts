@@ -321,13 +321,34 @@ describe("图谱的边兜底与引用过滤", () => {
 });
 
 describe("图谱的请求参数", () => {
-  it("输出上限 8192：模型上限更高时也不能超发", async () => {
+  it("模型上限高于 8192 时：用户没填就守 8192，填了就照他的走", async () => {
+    // gpt-4o 在预算表里是 128k 窗口 / 16384 输出。用户没填上限时图谱只给 8192——
+    // 这条是过去"不能超发"的保护，原样保留。
+    store.config = { ...SMALL_CONFIG, model: "gpt-4o", contextWindow: undefined, maxTokens: undefined };
+    chat.mockResolvedValue(reply(graphJson([N("令狐冲")], [])));
+    await run();
+    expect(chat.mock.calls[0][0].max_tokens).toBe(8192);
+
+    // 用户在设置里填过总上限之后，8192 不再是硬顶（设置页那句"填写后优先使用"）。
+    // 真厂商就是这么被逼到墙角的：推理模型会把 8192 以内的预算全花在思考上、正文回 0 字。
+    store.config = { ...BIG_CONFIG, model: "gpt-4o" };
+    await run();
+    expect(chat.mock.calls[1][0].max_tokens).toBe(32768);
+  });
+
+  it("用户填的上放不下窗口时按窗口钳：宁可少给输出，不许把输入挤穿", async () => {
+    // bound = 12000 − min(1000, 600) − 512 = 10888；不钳就是 32768 压进 12000 的窗口
+    store.config = { ...BIG_CONFIG, model: "gpt-4o", contextWindow: 12000 };
+    chat.mockResolvedValue(reply(graphJson([N("令狐冲")], [])));
+    await run();
+    expect(chat.mock.calls[0][0].max_tokens).toBe(12000 - 600 - 512);
+  });
+
+  it("模型上限低于 8192 时照模型上限发（4096 档不超发）", async () => {
+    store.config = SMALL_CONFIG;
     chat.mockResolvedValue(reply(graphJson([N("令狐冲")], [])));
     await run();
     expect(chat.mock.calls[0][0].max_tokens).toBe(4096);
-    store.config = BIG_CONFIG;
-    await run();
-    expect(chat.mock.calls[1][0].max_tokens).toBe(8192);
   });
 
   it("取消信号与温度随请求送出", async () => {

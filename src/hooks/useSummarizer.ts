@@ -15,7 +15,7 @@ import { getProvider } from "@/api/registry";
 import { saveSummary, saveMap, saveGraph, deleteMap, loadChapters, loadNovel } from "@/db/repositories";
 import { getUserDB } from "@/db/database";
 import { APIError } from "@/api/error-handler";
-import { getTokenBudget, requireUsableInput, estimateTokens } from "@/api/token-manager";
+import { getTokenBudget, requireUsableInput, resolveOutputReserve, estimateTokens } from "@/api/token-manager";
 import { sampleChapterTitles } from "@/agents/utils";
 import { buildIndex, retrieveRelevantWithDetails } from "@/rag/index";
 import { useRAGStore } from "@/stores/rag-store";
@@ -515,9 +515,13 @@ export function useSummarizer() {
             const startIndex = fromChapter - 1;
             const count = toChapter - fromChapter + 1;
             const rangeChapters = await loadChapters(novel.id, startIndex, count);
-            // 根据模型 Token 预算精确计算最大字符数（可用输入 = 上下文 - 输出预算2048 - 安全余量）
+            // 输出预算只算一次：它既是发出去的 max_tokens，也是输入侧要扣掉的量，
+            // 分两处算就会一个 2048 一个 4096（`map-agent.ts` 注释里警告的那次 400）。
+            const RANGE_OUTPUT_TOKENS = 2048;
             const budget = getTokenBudget(provider.model, provider.contextWindow, provider.maxTokens);
-            const maxTokens = requireUsableInput(budget, 2048, "范围总结");
+            const rangeReserve = resolveOutputReserve(budget, RANGE_OUTPUT_TOKENS, "范围总结");
+            // 可用输入 = 上下文 - 输出预留 - 安全余量
+            const maxTokens = requireUsableInput(budget, rangeReserve, "范围总结");
             const maxChars = Math.floor(maxTokens); // 中文约 1 字 = 1 token
             let combinedText = "";
             let totalChars = 0;
@@ -555,7 +559,7 @@ ${combinedText}`;
             const providerInstance = getProvider(provider);
             const response = await providerInstance.chat({
               model: "", messages: [{ role: "user", content: prompt }],
-              max_tokens: Math.min(2048, budget.maxOutputTokens ?? 2048),
+              max_tokens: rangeReserve,
               signal,
             });
 
@@ -600,11 +604,14 @@ ${combinedText}`;
       // chatWithContextRetry → 长书 + 多轮追问必然 400，且不会自愈。
       const QA_OUTPUT_TOKENS = 2048;
       const budget = getTokenBudget(provider.model, provider.contextWindow, provider.maxTokens);
-      // 预算校验必须发生在入队之前（round 3 R-73）：它是这段装配里唯一会抛的调用，
-      // 一次"上下文窗口不足"若发生在任务已经记账之后，那本书的槽位就会被它占住。
+      // 预留与请求值同一个数；两件事都发生在入队之前（round 3 R-73）：`resolveOutputReserve`
+      // 与 `requireUsableInput` 都可能抛，一次"上下文窗口不足"若落在任务已经记账之后，
+      // 那本书的槽位就会被它占住。
       let available: number;
+      let qaReserve: number;
       try {
-        available = requireUsableInput(budget, QA_OUTPUT_TOKENS, "问答");
+        qaReserve = resolveOutputReserve(budget, QA_OUTPUT_TOKENS, "问答");
+        available = requireUsableInput(budget, qaReserve, "问答");
       } catch (err) {
         handleError(err);
         return null;
@@ -685,9 +692,9 @@ ${chapterSample.text}
             const response = await providerInstance.chat({
               model: "",
               messages,
-              // 与上面 computeAvailableInput 的输出预留取同一值，否则预算算小了
-              // 而请求要得多，严格校验的服务商必 400
-              max_tokens: Math.min(QA_OUTPUT_TOKENS, budget.maxOutputTokens),
+              // 与上面 `requireUsableInput(budget, qaReserve, "问答")` 的输出预留同一个值，
+              // 否则预算算小了而请求要得多，严格校验 input+max_tokens≤窗口的服务商必 400
+              max_tokens: qaReserve,
               temperature: 0.5,
               signal,
             });

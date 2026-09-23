@@ -9,7 +9,7 @@ import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
 import { extractJSON } from "./json-extractor";
 import { prepareAgentContext, chatWithContextRetry, sampleChapterTitles } from "./utils";
-import { computeAvailableInput } from "@/api/token-manager";
+import { computeAvailableInput, resolveOutputReserve, type TokenBudget } from "@/api/token-manager";
 
 /**
  * 模型偶尔把坐标写成 `"620"` 这种数字字符串——今天它照样能渲染，所以收下并归一。
@@ -96,6 +96,19 @@ class MapAgent extends BaseAgent {
   description = "生成小说地图，分析地理位置和势力分布";
   taskType = TaskType.MAP;
 
+  /**
+   * 同一个数：既从输入侧扣掉，也作为 `max_tokens` 发出去。
+   *
+   * 这里原来是**两处不同的数**：输入侧按 4096 留、请求发 `min(上限, 16384)`。等于说地图
+   * 跟服务商要了 16384 的输出，却只给整张图留出 4096——在严格校验
+   * `input + max_tokens ≤ 窗口` 的服务商上，长书必 400（`graph-agent.ts` 的注释警告的就是
+   * 这一格，它自己那两处本来就同值）。统一之后小窗口的目录抽样会变小，那是把账算对的
+   * 应得结果，不是回归。
+   */
+  private reserve(b: TokenBudget): number {
+    return resolveOutputReserve(b, 16384, "小说地图");
+  }
+
   /** 地图只需要章节目录（标题），不需要章节内容，避免加载全书 */
   protected async prepareEnvironment(context: AgentContext) {
     return prepareAgentContext(context, { loadAllContent: false });
@@ -109,7 +122,7 @@ class MapAgent extends BaseAgent {
     // 目录按预算抽样（round 2 R-40）
     const chapterList = sampleChapterTitles(
       novel.chapters.map((c, i) => `${i + 1}. ${c.title}`),
-      Math.floor(computeAvailableInput(env.budget, 4096) * 0.25)
+      Math.floor(computeAvailableInput(env.budget, this.reserve(env.budget)) * 0.25)
     ).text;
 
     // 尝试两次：第一次正常生成，第二次带上错误反馈
@@ -128,6 +141,7 @@ class MapAgent extends BaseAgent {
         let response;
         try {
           response = await chatWithContextRetry(env, async (b) => {
+            const reserve = this.reserve(b);
             return provider.chat({
               model: "",
               messages: [
@@ -135,8 +149,9 @@ class MapAgent extends BaseAgent {
                 { role: "user", content: this.buildPrompt(novel, chapterList, lastError) },
               ],
               // 大 JSON 需要尽量多的输出空间，但不得超过模型自身的输出上限，
-              // 否则上限低于 16384 的模型（如 4096 档）会直接 400
-              max_tokens: Math.min(b.maxOutputTokens, 16384),
+              // 否则上限低于 16384 的模型（如 4096 档）会直接 400。
+              // 与输入侧抽样同一个数，见 `reserve` 的说明。
+              max_tokens: reserve,
               temperature: 0.3,
               signal: context.signal,
             });

@@ -41,7 +41,10 @@ beforeEach(() => {
     providers: [{
       id: "p-small", format: "openai", name: "小窗口模型", apiKey: "sk-test",
       baseUrl: "https://example.test/v1", model: "tiny-model",
-      contextWindow: 2000, maxTokens: 2048,
+      // 1000 而不是 2000：输出预留现在按窗口钳（`resolveOutputReserve` 保证不会把输入挤到
+      // 512 以下），2000 的窗口钳完之后刚好还剩 512 —— 那是一道真能干的活，不该报错。
+      // 要的是"窗口连最小预留 512 都供不起"这种真没法用的配置：1000−50−512 = 438。
+      contextWindow: 1000, maxTokens: 2048,
     }],
     activeProviderId: "p-small",
   });

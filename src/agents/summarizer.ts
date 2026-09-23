@@ -8,7 +8,7 @@ import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
 import { buildChapterSummaryPrompt } from "@/lib/prompt-templates";
 import { sampleChapterContent, prepareAgentContext, chatWithContextRetry, isAbortError, sampleChapterTitles, usablePreRetrieval } from "./utils";
-import { estimateTokens, computeAvailableInput, requireUsableInput } from "@/api/token-manager";
+import { estimateTokens, computeAvailableInput, requireUsableInput, resolveOutputReserve, type TokenBudget } from "@/api/token-manager";
 import { APIError } from "@/api/error-handler";
 import { formatAPIError } from "./runTask";
 
@@ -25,6 +25,16 @@ class SummarizerAgent extends BaseAgent {
   // 长章节必然 400，且自愈重试按同样预算重算、无法恢复
   private static readonly OUTPUT_TOKENS = 1024;
 
+  /**
+   * 本任务的输出预留——同一个数既从输入侧扣掉、又作为 `max_tokens` 发出去。
+   *
+   * 用户在设置里填过上限时按他的值走（设置页那句"填写后优先使用"过去对常数不生效），
+   * 没填时逐字等于 `OUTPUT_TOKENS`。重试回调拿到的是自愈后的新预算，所以每次都现算。
+   */
+  private reserve(b: TokenBudget): number {
+    return resolveOutputReserve(b, SummarizerAgent.OUTPUT_TOKENS, "章节总结");
+  }
+
   /** 章节总结需要读取原文内容，强制加载全书 */
   protected async prepareEnvironment(context: AgentContext) {
     return prepareAgentContext(context, { loadAllContent: true });
@@ -35,7 +45,7 @@ class SummarizerAgent extends BaseAgent {
     // 精确计算：可用输入空间 = 上下文总长 - 输出预算 - 安全余量(5%)
     // 不够用就直接失败：预算被算成 0 时截断出的正文只剩提示语，模型会凭章节
     // 标题凭空产出一篇"总结"并正常入库，界面上看不出任何异常（R-07）
-    const maxChapterChars = Math.floor(requireUsableInput(budget, SummarizerAgent.OUTPUT_TOKENS, "章节总结"));
+    const maxChapterChars = Math.floor(requireUsableInput(budget, this.reserve(budget), "章节总结"));
 
     const targetChapterIds = context.chapterIds || novel.chapters.map((c) => c.id);
     const chapters = novel.chapters.filter((c) => targetChapterIds.includes(c.id));
@@ -70,7 +80,8 @@ class SummarizerAgent extends BaseAgent {
         context.onStatus?.("AI 正在生成分析...");
         const response = await chatWithContextRetry(env, async (b) => {
           // 用最新预算重新计算章节截断阈值（400 自愈时预算缩小会触发更严格截断）
-          const maxChars = Math.floor(requireUsableInput(b, SummarizerAgent.OUTPUT_TOKENS, "章节总结"));
+          const reserve = this.reserve(b);
+          const maxChars = Math.floor(requireUsableInput(b, reserve, "章节总结"));
           let content = chapter.content;
           if (chapter.content.length > maxChars) {
             content = sampleChapterContent(chapter.content, maxChars);
@@ -79,7 +90,7 @@ class SummarizerAgent extends BaseAgent {
           return provider.chat({
             model: "",
             messages: [{ role: "user", content: p }],
-            max_tokens: Math.min(b.maxOutputTokens, SummarizerAgent.OUTPUT_TOKENS),
+            max_tokens: reserve,
             temperature: 0.5,
             signal: context.signal,
           });
@@ -153,6 +164,18 @@ class GlobalSummarizerAgent extends BaseAgent {
   description = "生成全书总结（发送小说结构信息+内容样本，让大模型自行分析）";
   taskType = TaskType.GLOBAL;
 
+  /**
+   * 全书总览的输出预算。用户在设置里填过总上限时按他的走，没填就是这个数——
+   * 不跟着总上限一起抬到 8192，是因为实测预留与可用输入 1:1 兑换：128k 窗口抬 4096
+   * 就少喂 4,096 字的书，对一本几百章的书是净亏，而它本来也没写满 4096。
+   */
+  private static readonly OUTPUT_TOKENS = 4096;
+
+  /** 同一个数：既从输入侧扣掉，也作为 `max_tokens` 发出去 */
+  private reserve(b: TokenBudget): number {
+    return resolveOutputReserve(b, GlobalSummarizerAgent.OUTPUT_TOKENS, "全书总结");
+  }
+
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider, budget } = env;
 
@@ -166,7 +189,7 @@ class GlobalSummarizerAgent extends BaseAgent {
       });
     // 目录按预算抽样：全书总结的"精简版"此前仍带着全量目录，上千章必 400
     // （round 2 R-40）
-    const chapterList = sampleChapterTitles(chapterLines, Math.floor(computeAvailableInput(budget, 4096) * 0.25)).text;
+    const chapterList = sampleChapterTitles(chapterLines, Math.floor(computeAvailableInput(budget, this.reserve(budget)) * 0.25)).text;
 
     // Use pre-retrieved relevant text from RAG if available, else fall back to samples
     const pre = usablePreRetrieval(context.preRetrieved);
@@ -180,16 +203,17 @@ class GlobalSummarizerAgent extends BaseAgent {
     // If the full prompt is too large, use the fallback
     context.onStatus?.("正在准备分析数据...");
     const estimatedInput = estimateTokens(metadataPrompt);
-    const useFallback = estimatedInput >= computeAvailableInput(budget, 4096);
+    const useFallback = estimatedInput >= computeAvailableInput(budget, this.reserve(budget));
     let effectiveFallback = useFallback;
 
     try {
       context.onStatus?.("AI 正在生成分析...");
       const response = await chatWithContextRetry(env, async (b) => {
         // 用最新预算重建 fallback prompt 并重新决定是否精简（400 自愈时上下文缩小）
+        const reserve = this.reserve(b);
         const fb = this.buildFallbackPrompt(novel, chapterList, relevantContent, b.contextWindow);
         const est = estimateTokens(metadataPrompt);
-        const useFb = est >= computeAvailableInput(b, 4096);
+        const useFb = est >= computeAvailableInput(b, reserve);
         effectiveFallback = useFb;
         const useP = useFb ? fb : metadataPrompt;
         return provider.chat({
@@ -201,8 +225,8 @@ class GlobalSummarizerAgent extends BaseAgent {
             },
             { role: "user", content: useP },
           ],
-          // 与上方 computeAvailableInput(b, 4096) 的输出预留一致（同章节路径）
-          max_tokens: Math.min(b.maxOutputTokens, 4096),
+          // 与上面 `computeAvailableInput(b, reserve)` 的输出预留同一个值（同章节路径）
+          max_tokens: reserve,
           temperature: 0.5,
           signal: context.signal,
         });

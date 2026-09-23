@@ -7,7 +7,16 @@ import { TaskType } from "./types";
 import type { AgentEnvironment } from "./base-agent";
 import { BaseAgent } from "./base-agent";
 import { getRelevantContent, chatWithContextRetry, sampleChapterTitles } from "./utils";
-import { estimateTokens, computeAvailableInput } from "@/api/token-manager";
+import { estimateTokens, computeAvailableInput, resolveOutputReserve, type TokenBudget } from "@/api/token-manager";
+
+/**
+ * 人物分析与时间线的默认输出预算：就是原先散在每个类四处的字面量 4096，值没变。
+ *
+ * 变的是它从"硬顶"降级成"默认"——用户在设置里填过输出上限时由它顶开。真厂商实测过
+ * 卡在这里的代价：`deepseek-flash` 会把 4096 的预算全花在 reasoning 上、正文回 0 字，
+ * 而同一个人在设置里填的 8192 对地图（常数 16384）生效、对这两类任务一点作用都没有。
+ */
+const ANALYZER_OUTPUT_TOKENS = 4096;
 
 /**
  * 人物分析 Agent
@@ -16,6 +25,11 @@ class CharacterAnalysisAgent extends BaseAgent {
   name = "character-analysis";
   description = "分析小说主要人物及其关系";
   taskType = TaskType.CHARACTER;
+
+  /** 同一个数：既从输入侧扣掉，也作为 `max_tokens` 发出去 */
+  private reserve(b: TokenBudget): number {
+    return resolveOutputReserve(b, ANALYZER_OUTPUT_TOKENS, "人物关系分析");
+  }
 
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider, budget } = env;
@@ -27,7 +41,7 @@ class CharacterAnalysisAgent extends BaseAgent {
       });
     // 长书的全量目录本身就能把请求顶到 400（旧实现的"精简版"也带着它），
     // 所以目录同样按预算抽样，并明确告诉模型这是抽样（round 2 R-40）
-    const chapterList = sampleChapterTitles(chapterLines, Math.floor(computeAvailableInput(budget, 4096) * 0.25)).text;
+    const chapterList = sampleChapterTitles(chapterLines, Math.floor(computeAvailableInput(budget, this.reserve(budget)) * 0.25)).text;
 
     const { content: relevantContent, label: promptLabel } = getRelevantContent(context, novel.chapters);
 
@@ -53,15 +67,16 @@ ${relevantContent}
 5. **人物重要性评估**：按剧情推动作用排序，说明每个角色对主线的影响`;
 
     const estimatedInput = estimateTokens(prompt);
-    const usedFallback = estimatedInput >= computeAvailableInput(budget, 4096);
+    const usedFallback = estimatedInput >= computeAvailableInput(budget, this.reserve(budget));
     let effectiveFallback = usedFallback;
 
     try {
       context.onStatus?.("AI 正在生成分析...");
       const response = await chatWithContextRetry(env, async (b) => {
-        // 400 自愈时用最新预算重新决定是否精简
+        // 400 自愈时用最新预算重新决定是否精简（预留与请求同一个数，见 `reserve`）
+        const reserve = this.reserve(b);
         const est = estimateTokens(prompt);
-        const useFb = est >= computeAvailableInput(b, 4096);
+        const useFb = est >= computeAvailableInput(b, reserve);
         effectiveFallback = useFb;
         const useP = useFb
           ? `请根据小说《${novel.title}》的章节目录分析人物关系。\n\n章节目录：\n${chapterList}\n\n请分析主要人物的关系网络、性格特征与成长变化。`
@@ -72,9 +87,9 @@ ${relevantContent}
             { role: "system", content: "你是一位资深的小说人物分析师，擅长深入剖析角色性格、关系网络和人物弧光。" },
             { role: "user", content: useP },
           ],
-          // 与上方 computeAvailableInput 的 4096 输出预留一致：请求超过预留量
-          // 会在严格校验 input+max_tokens≤context 的服务商触发 400
-          max_tokens: Math.min(b.maxOutputTokens, 4096),
+          // 与上面 `computeAvailableInput(b, reserve)` 同一个值：请求超过预留量会在
+          // 严格校验 input+max_tokens≤context 的服务商触发 400
+          max_tokens: reserve,
           temperature: 0.4,
           signal: context.signal,
         });
@@ -104,6 +119,11 @@ class TimelineAgent extends BaseAgent {
   description = "提取小说剧情时间线";
   taskType = TaskType.TIMELINE;
 
+  /** 同一个数：既从输入侧扣掉，也作为 `max_tokens` 发出去 */
+  private reserve(b: TokenBudget): number {
+    return resolveOutputReserve(b, ANALYZER_OUTPUT_TOKENS, "剧情时间线");
+  }
+
   protected async execute(context: AgentContext, env: AgentEnvironment): Promise<AgentResult> {
     const { novel, provider, budget } = env;
 
@@ -114,7 +134,7 @@ class TimelineAgent extends BaseAgent {
       });
     // 长书的全量目录本身就能把请求顶到 400（旧实现的"精简版"也带着它），
     // 所以目录同样按预算抽样，并明确告诉模型这是抽样（round 2 R-40）
-    const chapterList = sampleChapterTitles(chapterLines, Math.floor(computeAvailableInput(budget, 4096) * 0.25)).text;
+    const chapterList = sampleChapterTitles(chapterLines, Math.floor(computeAvailableInput(budget, this.reserve(budget)) * 0.25)).text;
 
     const { content: relevantContent, label: promptLabel } = getRelevantContent(context, novel.chapters);
 
@@ -150,15 +170,16 @@ ${relevantContent}
 列出重要的伏笔及其回收章节。`;
 
     const estimatedInput = estimateTokens(prompt);
-    const usedFallback = estimatedInput >= computeAvailableInput(budget, 4096);
+    const usedFallback = estimatedInput >= computeAvailableInput(budget, this.reserve(budget));
     let effectiveFallback = usedFallback;
 
     try {
       context.onStatus?.("AI 正在生成分析...");
       const response = await chatWithContextRetry(env, async (b) => {
-        // 400 自愈时用最新预算重新决定是否精简
+        // 400 自愈时用最新预算重新决定是否精简（预留与请求同一个数，见 `reserve`）
+        const reserve = this.reserve(b);
         const est = estimateTokens(prompt);
-        const useFb = est >= computeAvailableInput(b, 4096);
+        const useFb = est >= computeAvailableInput(b, reserve);
         effectiveFallback = useFb;
         const useP = useFb
           ? `请根据《${novel.title}》的章节目录推断剧情时间线。\n章节目录：\n${chapterList}\n\n请按时间顺序逐条列出关键事件（不要用表格，不要在列表项内使用子列表），每个事件格式：\n1. **【事件名称】**（第X章 · 类型）发生了什么。→ 因果关系。\n\n标注"基于目录推断"。`
@@ -169,8 +190,8 @@ ${relevantContent}
             { role: "system", content: "你是一位资深的小说剧情分析师，擅长提取和梳理剧情时间线。" },
             { role: "user", content: useP },
           ],
-          // 与 4096 输出预留一致（同人物分析 Agent 的说明）
-          max_tokens: Math.min(b.maxOutputTokens, 4096),
+          // 与上面 `computeAvailableInput(b, reserve)` 同一个值（同人物分析 Agent）
+          max_tokens: reserve,
           temperature: 0.4,
           signal: context.signal,
         });

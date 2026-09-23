@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Novel } from "@/parsers/types";
 import { mapAgent } from "../map-agent";
+import { estimateTokens } from "@/api/token-manager";
 
 const repo = vi.hoisted(() => ({ loadNovel: vi.fn() }));
 const chat = vi.hoisted(() => vi.fn());
@@ -121,8 +122,26 @@ describe("地图任务的取数与请求参数", () => {
     expect(p).toContain("共 1000 章");
   });
 
+  it("目录抽样的预算与发出去的输出预留同源（不许一边按 4096 留、一边要 16384）", async () => {
+    // 这里原来是两处不同的数：目录按 4096 的输出预留算，请求却发 `min(上限, 16384)`。
+    // 等于地图向服务商要了 16384 的输出，只给整张图留出 4096——严格校验
+    // `input + max_tokens ≤ 窗口` 的服务商在长书上必 400（`graph-agent.ts` 的注释
+    // 警告的就是这一格，它自己那两处本来就同值）。
+    repo.loadNovel.mockResolvedValue(makeNovel(1000));
+    // gpt-4o 表内 16384 输出上限；12k 窗口把预留钳到 12000−600−512 = 10888，
+    // 目录因此只配拿 (12000−10888−600)×0.25 = 128 tokens。
+    store.config = { ...SMALL_CONFIG, model: "gpt-4o", contextWindow: 12000, maxTokens: undefined };
+    chat.mockResolvedValue(reply(validMap()));
+    await run();
+    const req = chat.mock.calls[0][0];
+    const lines = promptOf().split("\n").filter((l) => /^\d+\. 第\d+章 标题$/.test(l));
+    expect(lines.length).toBeGreaterThan(1);
+    expect(estimateTokens(lines.join("\n")))
+      .toBeLessThanOrEqual(Math.floor((12000 - (req.max_tokens as number) - 600) * 0.25));
+  });
   it("max_tokens 既不超过模型上限也不超过 16384，并把取消信号透传", async () => {
-    store.config = BIG_CONFIG;
+    // gpt-4o 表内上限正好 16384：用户没填上限时，16384 是硬顶（这条保护原样保留）
+    store.config = { ...BIG_CONFIG, model: "gpt-4o", maxTokens: undefined };
     chat.mockResolvedValue(reply(validMap()));
     const controller = new AbortController();
     await run({ signal: controller.signal });
@@ -130,6 +149,13 @@ describe("地图任务的取数与请求参数", () => {
     expect(req.max_tokens).toBe(16384);
     expect(req.signal).toBe(controller.signal);
     expect(req.temperature).toBe(0.3);
+  });
+
+  it("用户在设置里填过上限时地图照他的走——过去 16384 这个常数把 8192 之外的都要不回来", async () => {
+    store.config = BIG_CONFIG; // 128k 窗口 / 用户填 32768
+    chat.mockResolvedValue(reply(validMap()));
+    await run();
+    expect(chat.mock.calls[0][0].max_tokens).toBe(32768);
   });
 
   it("信号已经 abort 时一次都不许调用厂商（取消不许被当成一次普通失败去重试）", async () => {

@@ -222,7 +222,22 @@ describe("getProviderBudget", () => {
     });
     const r = getProviderBudget();
     expect(r.model).toBe("custom-xyz");
-    expect(r.budget).toEqual({ contextWindow: 32768, maxOutputTokens: 8192 });
+    // 逐字段比，不拿 toEqual 整对象：`userMaxOutputTokens` 记录的是"这个上限是用户亲手
+    // 填的"，任务默认预算要不要给它让路全看这一格，被 toEqual 的 undefined 宽松规则
+    // 混过去就等于把这条事实从判据里抹掉了。
+    expect(r.budget.contextWindow).toBe(32768);
+    expect(r.budget.maxOutputTokens).toBe(8192);
+    expect(r.budget.userMaxOutputTokens).toBe(8192);
+  });
+
+  it("用户没填输出上限时不许凭空造一个（否则任务默认预算就永远让路）", () => {
+    apiStore.state.getActiveProvider.mockReturnValue({
+      id: "p", format: "openai", name: "t", apiKey: "k", baseUrl: "u",
+      model: "gpt-4o",
+    });
+    const r = getProviderBudget();
+    expect(r.budget.maxOutputTokens).toBe(16384); // 表值
+    expect(r.budget.userMaxOutputTokens).toBeUndefined();
   });
 
   it("未配置 API 时不抛异常：config 为空、model 为空串（调用方据此走失败分支）", () => {
@@ -271,6 +286,23 @@ describe("chatWithContextRetry — context_length 自愈", () => {
     });
     await expect(chatWithContextRetry(env("selfheal-model-5", 128000), attempt as never)).rejects.toThrow("上下文超长");
     expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("自愈重试不许把表里的默认上限冒充成用户亲手填的", async () => {
+    // 用户没填上限时 `maxOutputTokens` 来自预算表。回灌时若把它当作 getTokenBudget 的
+    // 第三参，重试那一发就凭空多出"用户显式要过 4096"这条事实，任务默认预算会误让路
+    // （章节摘要从 1024 变 4096），比第一次还要得更多——正好是这次改动要修的反面。
+    const seen: Array<{ maxOutputTokens: number; userMaxOutputTokens?: number }> = [];
+    const attempt = vi.fn(async (b: { maxOutputTokens: number; userMaxOutputTokens?: number }) => {
+      seen.push({ maxOutputTokens: b.maxOutputTokens, userMaxOutputTokens: b.userMaxOutputTokens });
+      if (seen.length === 1) throw new APIError("This model's maximum context length is 8192 tokens", "context_length");
+      return { content: "ok", tokensUsed: { input: 1, output: 1, total: 2 } } as never;
+    });
+    await chatWithContextRetry(env("selfheal-usercap-model", 128000), attempt);
+    expect(seen).toHaveLength(2);
+    expect(seen[0].userMaxOutputTokens).toBeUndefined();
+    expect(seen[1].userMaxOutputTokens).toBeUndefined();
+    expect(seen[1].maxOutputTokens).toBe(4096); // 表值原样带走，没被改小也没被冒充成用户值
   });
 
   it("自愈只换上下文窗口，不许顺手把用户的输出上限换成表里的默认值", async () => {
