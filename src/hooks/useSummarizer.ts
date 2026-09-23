@@ -607,7 +607,7 @@ ${combinedText}${omittedChapters > 0 ? `\n\n注意：请求范围内的后 ${omi
     async (
       question: string,
       history: { role: "user" | "assistant"; content: string }[]
-    ): Promise<{ answer: string; tokensUsed: number } | null> => {
+    ): Promise<{ answer: string; tokensUsed: number; droppedTurns: number } | null> => {
       const novel = currentNovel;
       if (!novel || !checkProvider()) return null;
       const provider = getActiveProvider();
@@ -631,7 +631,7 @@ ${combinedText}${omittedChapters > 0 ? `\n\n注意：请求范围内的后 ${omi
         return null;
       }
 
-      return await runAiTask<{ answer: string; tokensUsed: number } | null>(
+      return await runAiTask<{ answer: string; tokensUsed: number; droppedTurns: number } | null>(
         { novelId, name: "问答", type: TaskType.QA },
         async (ctx) => {
           const { signal, status } = ctx;
@@ -664,6 +664,11 @@ ${combinedText}${omittedChapters > 0 ? `\n\n注意：请求范围内的后 ${omi
           }
           const keptHistory = keptReversed.reverse();
           const droppedTurns = Math.max(0, history.length - keptHistory.length);
+          // 裁了就要说出来：对模型说，是为了让它别把没送上的早先内容猜着往下编；
+          // 对用户说（随返回值上屏），是因为"答非所问"在这条链上本来是无声的。
+          const historyNote = droppedTurns > 0
+            ? `\n\n注意：更早的 ${droppedTurns} 条对话因上下文预算限制没有附上，涉及它们的追问请直接说明信息不足，不要凭猜测接续。`
+            : "";
 
           const chapterSample = sampleChapterTitles(allTitles, Math.floor(available * 0.2));
 
@@ -678,7 +683,7 @@ ${chapterSample.text}
           const tailNote = chapterSample.sampled
             ? "\n\n注意：章节目录过长，上面只给了抽样部分。若抽样不足以回答，请明确说明需要查阅哪些章节，不要凭目录猜测剧情。"
             : "";
-          const fixedCost = estimateTokens(systemSkeleton) + estimateTokens(tailNote) + estimateTokens(question);
+          const fixedCost = estimateTokens(systemSkeleton) + estimateTokens(tailNote) + estimateTokens(historyNote) + estimateTokens(question);
           const ragCap = Math.max(200, available - historyTokens - fixedCost);
           let relevantBody = relevantText || "（无额外参考信息，请基于章节目录回答）";
           if (estimateTokens(relevantBody) > ragCap) {
@@ -686,7 +691,7 @@ ${chapterSample.text}
             relevantBody = relevantBody.slice(0, Math.max(0, ragCap)) + "\n……（检索结果因长度限制被截断）";
           }
 
-          const systemPrompt = `${systemSkeleton}${relevantBody}${tailNote}`;
+          const systemPrompt = `${systemSkeleton}${relevantBody}${tailNote}${historyNote}`;
 
           // Build messages: system context + conversation history + new question
           const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
@@ -696,9 +701,6 @@ ${chapterSample.text}
             messages.push(msg);
           }
           messages.push({ role: "user", content: question });
-          if (droppedTurns > 0) {
-            console.log(`[qa] 历史超出预算，省略最早 ${droppedTurns} 条消息`);
-          }
 
           try {
             status("正在等待 AI 回答...");
@@ -719,7 +721,7 @@ ${chapterSample.text}
               return null;
             }
 
-            return { answer: response.content, tokensUsed: response.content.length };
+            return { answer: response.content, tokensUsed: response.content.length, droppedTurns };
           } catch (err) {
             // 用户主动取消（停止按钮触发 abort）：向上抛出让调用方静默处理，
             // 否则 useQA 会把它当成失败显示"问答失败，请重试"

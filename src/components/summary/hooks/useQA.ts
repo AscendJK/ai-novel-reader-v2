@@ -15,6 +15,8 @@ interface QAMessage {
   role: "user" | "assistant";
   content: string;
   tokensUsed?: number;
+  /** 这一答发出去时，有多少条更早的对话因上下文预算没附上（0/未定义＝全带上了） */
+  droppedTurns?: number;
 }
 
 interface RangeResult {
@@ -79,12 +81,12 @@ interface UseQAReturn {
   handleSubmitQuestion: () => Promise<void>;
   handleRangeSummary: () => Promise<void>;
   handleClearQaCache: () => void;
-  addMessage: (role: "user" | "assistant", content: string, tokensUsed?: number) => void;
+  addMessage: (role: "user" | "assistant", content: string, tokensUsed?: number, droppedTurns?: number) => void;
 }
 
 interface UseQAOptions {
   novelId: string;
-  askCustomQuestion: (question: string, history: { role: "user" | "assistant"; content: string }[]) => Promise<{ answer: string; tokensUsed: number } | null>;
+  askCustomQuestion: (question: string, history: { role: "user" | "assistant"; content: string }[]) => Promise<{ answer: string; tokensUsed: number; droppedTurns?: number } | null>;
   generateRangeSummary: (from: number, to: number) => Promise<{ id: string; title: string; content: string; tokensUsed: number; createdAt: number; metadata?: AnalysisMetadata } | null>;
   clearQaCache: () => void;
 }
@@ -150,8 +152,8 @@ export function useQA({ novelId, askCustomQuestion, generateRangeSummary, clearQ
     if (mountedNovelIdRef.current === novelId) _setRangeResults(next);
   }, [novelId, save, getData]);
 
-  const addMessage = useCallback((role: "user" | "assistant", content: string, tokensUsed?: number) => {
-    const message: QAMessage = { id: uuid(), role, content, tokensUsed };
+  const addMessage = useCallback((role: "user" | "assistant", content: string, tokensUsed?: number, droppedTurns?: number) => {
+    const message: QAMessage = { id: uuid(), role, content, tokensUsed, droppedTurns };
     setQaMessages((prev) => [message, ...prev]);
   }, [setQaMessages]);
 
@@ -174,7 +176,7 @@ export function useQA({ novelId, askCustomQuestion, generateRangeSummary, clearQ
       })).reverse();
       const result = await askCustomQuestion(question, currentHistory);
       if (result) {
-        addMessage("assistant", result.answer, result.tokensUsed);
+        addMessage("assistant", result.answer, result.tokensUsed, result.droppedTurns ?? 0);
       } else {
         setQaError("问答失败，请重试");
       }

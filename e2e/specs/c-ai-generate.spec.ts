@@ -395,6 +395,53 @@ test("C16 范围总结装不下时：prompt 只点名真送出去的章，界面
     .toBeVisible();
 });
 
+test("C17 问答历史装不下时：少带的轮次要上屏，prompt 也要对模型明说", async ({ page }) => {
+  test.setTimeout(90_000);
+  // 窗口 4096 / 输出上限 3000 → 可用输入 892，历史上限 = 30% ≈ 267 tokens。
+  // 第一答故意写长（400 字），一轮就吃掉整个历史额度，第三问必然要丢轮次。
+  const LONG_A1 = "船家把篷布掀开又盖上，说这条船等了半月，".repeat(20);
+  const Q1 = "渡口那条船是谁的？";
+  const Q2 = "它等了多久？";
+  const Q3 = "那船后来开走了吗？";
+  let call = 0;
+  const backend = await readyWithBook(
+    page,
+    vendorTable(() => {
+      call += 1;
+      return { content: call === 1 ? LONG_A1 : `第${call}答。`, usage: { input: 800, output: 40 } };
+    }),
+    { provider: { contextWindow: 4096, maxTokens: 3000 } },
+  );
+
+  const ask = async (q: string) => {
+    await panel.tab(page, "问答").click();
+    await panel.root(page).locator("#qa-input").fill(q);
+    await panel.button(page, "发送").click();
+  };
+  await ask(Q1);
+  await expect(panel.text(page, LONG_A1.slice(0, 24))).toBeVisible({ timeout: 20_000 });
+  await ask(Q2);
+  await expect(panel.text(page, "第2答。")).toBeVisible({ timeout: 20_000 });
+  await ask(Q3);
+  await expect(panel.text(page, "第3答。")).toBeVisible({ timeout: 20_000 });
+
+  const chats = chatRequests(backend);
+  expect(chats.length).toBeGreaterThanOrEqual(3);
+  const last = chats.at(-1)!.messages as { role: string; content: string }[];
+  const kept = last.filter((m) => m.role !== "system").length - 1; // 去掉本次提问本身
+  const historyLen = 4; // Q1 + A1 + Q2 + A2
+  const dropped = historyLen - kept;
+  // 前提先成立：这一档真的丢了轮次，否则下面每一条都是空判
+  expect(dropped, "历史没被裁——预算没生效，这条判据就是空判").toBeGreaterThan(0);
+  expect(JSON.stringify(last), "被裁掉的轮次不许还留在请求里").not.toContain(Q1);
+
+  // 对模型要明说：不说它就会把没送上的内容猜着往下编
+  expect(last.find((m) => m.role === "system")!.content).toContain(`更早的 ${dropped} 条对话`);
+  // 对用户也要明说，数字与请求面同源
+  // 变异：删掉 QATab 那三行提示 → 这一句红；把返回值写成 droppedTurns: 0 → 两句都红
+  await expect(panel.text(page, new RegExp(`更早 ${dropped} 条对话超出上下文预算`))).toBeVisible();
+});
+
 test("C12 问答追问：第二发的 messages 里要带上第一问和第一答", async ({ page }) => {
   test.setTimeout(60_000);
   const Q1 = "渡口那条船是谁的？";

@@ -166,6 +166,12 @@ export function QATab({
                 >
                   <MarkdownRenderer content={m.content} variant="chat" />
                 </div>
+                {/* 模型只看过最近几轮时，"答不上来"不该让用户去猜原因 */}
+                {m.role === "assistant" && !!m.droppedTurns && (
+                  <span className="max-w-[90%] text-[10px] text-muted-foreground">
+                    更早 {m.droppedTurns} 条对话超出上下文预算，这一答没带上
+                  </span>
+                )}
                 {m.role === "assistant" && (
                   <div className="flex gap-1 mt-0.5">
                     <Button
