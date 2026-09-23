@@ -5,7 +5,7 @@ import { MAP_PLACES, mapFixture } from "../fixtures/map";
 import { openApp, seedSession } from "../pages/app";
 import { addProvider, leaveSettings, openSettings, openSummaryPanel } from "../pages/settings";
 import { panel } from "../pages/panel";
-import { importFiles, miniNovel, navChapter, openBook, txtFile } from "../pages/shelf";
+import { importFiles, longNovel, miniNovel, navChapter, openBook, txtFile } from "../pages/shelf";
 
 /**
  * C 组：AI 生成链。厂商由 `fixtures/vendor.ts` 的假端点扮演（同源 `/api/e2e-llm/v1`），
@@ -33,9 +33,9 @@ const FAKE_KEY = "sk-e2e-c-fake-key-0123456789";
 async function readyWithBook(
   page: Page,
   table: StubTable,
-  opts: { bookTitle?: string; offline?: boolean; session?: boolean } = {},
+  opts: { bookTitle?: string; offline?: boolean; session?: boolean; chapters?: number } = {},
 ): Promise<Backend> {
-  const { bookTitle = "AI 测试", offline = true, session = false } = opts;
+  const { bookTitle = "AI 测试", offline = true, session = false, chapters = 0 } = opts;
   const backend = await stubBackend(page, { ...idleTtsStatus, ...table });
   // 离线态起步：chat() 在离线或没有 sync-token 时只走直连腿（openai.ts:209-215），
   // C1~C8 要的就是这一条腿；需要代理腿的 C9 传 offline:false + session:true。
@@ -45,7 +45,9 @@ async function readyWithBook(
   await openSettings(page);
   await addProvider(page, { name: "e2e 假商", key: FAKE_KEY, baseUrl: vendorBaseUrl(page), model: "e2e-model" });
   await leaveSettings(page);
-  await importFiles(page, [txtFile(`${bookTitle}.txt`, miniNovel())]);
+  // 三章样本够判"发的是这一章还是那一章"，但判不了"范围"——按章号取内容的那类判据
+  // 需要章数明显多于范围，否则"少取一章"和"取错一章"分不开
+  await importFiles(page, [txtFile(`${bookTitle}.txt`, chapters > 3 ? longNovel(chapters) : miniNovel())]);
   await openBook(page, bookTitle);
   await openSummaryPanel(page);
   return backend;
@@ -313,4 +315,132 @@ test("C7 问答：问题连同检索到的原文一起发出去，答案落在�
   // 而不是让模型凭问题本身空答
   expect(wire).toContain("守将把盔缨系了两遍又松开");
   expect(backend.count("POST", VENDOR_CHAT_PATH)).toBe(1);
+});
+
+/* ── C11~C15：五条只有真厂商量过的路径，在假厂商层各钉一条能天天跑的 ──────────── */
+
+/**
+ * 这五条的形状各自抓一种"界面看不出来的错"：
+ * 范围总结喂错章、追问丢掉上一问、批量漏章或重烧、两个文字产物不落地。
+ * 真厂商那一档（`specs-real/r-vendor-batch.spec.ts` R-E8~R-E12）量的是"真模型回的
+ * 东西能不能走完这条链"，而那两处判据在没有真模型时**从没被证过有牙**——所以这里
+ * 补上同源版本，逐条做过变异（改坏产品必须红）。
+ */
+
+test("C11 范围总结：选了第 2-4 章就只喂这三章，第 1 章和第 5、6 章一个字都不许出去", async ({ page }) => {
+  test.setTimeout(60_000);
+  const RANGE_TEXT = "这三章反复说的是等待：鼓声、笛声、渡口。";
+  const backend = await readyWithBook(
+    page,
+    vendorTable({ content: RANGE_TEXT, usage: { input: 1500, output: 70 } }),
+    { bookTitle: "范围书", chapters: 6 },
+  );
+  // 每章第一句带自己的章号（`shelf.ts` 的 `渡口N这一站的第一句`），是唯一的"这章进没进去"标记；
+  // 书里另外那句共有话每章都一样，拿它判范围等于没判
+  await panel.tab(page, "问答").click();
+  await expect(panel.root(page).locator("#range-from")).toBeVisible();
+  await panel.root(page).locator("#range-from").fill("2");
+  await panel.root(page).locator("#range-to").fill("4");
+  await panel.button(page, /^生成$/).click();
+  await expect(panel.text(page, RANGE_TEXT)).toBeVisible({ timeout: 20_000 });
+
+  const wire = JSON.stringify(chatRequests(backend).at(-1)?.messages ?? []);
+  for (const n of [2, 3, 4]) expect(wire, `第${n}章没喂进去`).toContain(`渡口${n}这一站的第一句`);
+  for (const n of [1, 5, 6]) expect(wire, `第${n}章不在所选范围里，却出现在请求里`).not.toContain(`渡口${n}这一站的第一句`);
+});
+
+test("C12 问答追问：第二发的 messages 里要带上第一问和第一答", async ({ page }) => {
+  test.setTimeout(60_000);
+  const Q1 = "渡口那条船是谁的？";
+  const A1 = "船家是同一个船家，每天把篷布掀开又盖上。";
+  const Q2 = "它等了多久？";
+  const A2 = "半月：正文里写的是“等了半月”。";
+  let call = 0;
+  const backend = await readyWithBook(page, vendorTable(() => {
+    call += 1;
+    return { content: call === 1 ? A1 : A2, usage: { input: 800, output: 40 } };
+  }));
+
+  // 填与点必须成对：发出去之后输入框被清空、发送键随之 disabled（`QATab.tsx:111`），
+  // 分两步写的话第二次点在禁用按钮上，红成"点不动"而不是判据想说的东西
+  const ask = async (q: string) => {
+    await panel.tab(page, "问答").click();
+    await panel.root(page).locator("#qa-input").fill(q);
+    await panel.button(page, "发送").click();
+  };
+  await ask(Q1);
+  await expect(panel.text(page, A1)).toBeVisible({ timeout: 20_000 });
+  await ask(Q2);
+  await expect(panel.text(page, A2)).toBeVisible({ timeout: 20_000 });
+
+  const chats = chatRequests(backend);
+  expect(chats.length, "两问至少要两发请求").toBeGreaterThanOrEqual(2);
+  const second = JSON.stringify(chats.at(-1)?.messages ?? []);
+  expect(second, "第二问的 prompt 里没有第一问的原文：追问历史没带上去").toContain(Q1);
+  expect(second, "带了上一问却没带上一答：模型等于看见半截对话").toContain(A1);
+});
+
+test("C13 逐章批量总结：三章各发一次且各有各的正文；已有总结再点批量一发都不许多", async ({ page }) => {
+  test.setTimeout(120_000);
+  // 按请求里出现的章节标记回不同的话：三章若共用一段（或只跑了第一章），下面那三条断言会分开红
+  const byChapter: [string, string][] = [
+    ["洛阳城下的雪", "第一章讲的是雪与城门。"],
+    ["虎牢关的鼓声", "第二章讲的是鼓声与不敢信的探马。"],
+    ["黑木崖上有人吹笛", "第三章讲的是笛声与等不来的下崖人。"],
+  ];
+  let calls = 0;
+  const backend = await readyWithBook(page, vendorTable((body) => {
+    calls += 1;
+    const text = JSON.stringify((body?.messages ?? []) as unknown[]);
+    const hit = byChapter.find(([mark]) => text.includes(mark));
+    return { content: hit ? hit[1] : `第${calls}发没有对上任何一章的正文`, usage: { input: 600, output: 30 } };
+  }));
+
+  await panel.button(page, "批量").click();
+  await panel.button(page, "跳过已有总结").click();
+  // 这里**不**断言「停止」出现过：假厂商是秒回的，整批可能在这一句之前就完了（M3 变异就是这么
+  // 红在错的那句上，看着像判据咬住了、其实咬的是竞态）。"生成中要看得见停止"归 C8 用 delayMs 钉。
+  // 三章 = 三发，一发不多一发不少（真厂商那档只能钉"至少每章一发"，这里能钉死）
+  await expect
+    .poll(() => backend.count("POST", VENDOR_CHAT_PATH), { timeout: 30_000, message: "三章等不到三发请求" })
+    .toBe(3);
+  await expect(panel.button(page, "批量")).toBeVisible({ timeout: 30_000 });
+
+  for (const [i, [, text]] of byChapter.entries()) {
+    await navChapter(page, i).click();
+    await expect(panel.text(page, text)).toBeVisible({ timeout: 20_000 });
+  }
+
+  // 反向：全部章节都已有总结时，「跳过已有总结」必须真的跳过——重烧的钱用户看不见
+  const before = backend.count("POST", VENDOR_CHAT_PATH);
+  await panel.button(page, "批量").click();
+  await panel.button(page, "跳过已有总结").click();
+  await page.waitForTimeout(4_000);
+  expect(backend.count("POST", VENDOR_CHAT_PATH) - before, `已有总结的书再点批量还是打了 ${backend.count("POST", VENDOR_CHAT_PATH) - before} 发`).toBe(0);
+});
+
+test("C14 全书人物关系（文字分析）：模型回的分析落在折叠区里，不是只有按钮变了", async ({ page }) => {
+  test.setTimeout(60_000);
+  const CHAR_TEXT = "令狐冲与岳不群：师徒名分在场，人心已散；左冷禅是并肩的另一股劲。";
+  await readyWithBook(page, vendorTable({ content: CHAR_TEXT, usage: { input: 2200, output: 120 } }));
+
+  await panel.tab(page, "全书分析").click();
+  await panel.button(page, "生成人物关系分析").click();
+  const head = panel.button(page, /^全书人物关系$/);
+  await expect(head).toBeVisible({ timeout: 20_000 });
+  await head.click();
+  await expect(panel.text(page, CHAR_TEXT)).toBeVisible();
+});
+
+test("C15 剧情时间线：模型回的时间线落在折叠区里", async ({ page }) => {
+  test.setTimeout(60_000);
+  const TL_TEXT = "雪落三日 → 鼓声一夜 → 崖上笛声，三步都在等同一个人。";
+  await readyWithBook(page, vendorTable({ content: TL_TEXT, usage: { input: 2200, output: 120 } }));
+
+  await panel.tab(page, "全书分析").click();
+  await panel.button(page, "生成剧情时间线").click();
+  const head = panel.button(page, /^剧情时间线$/);
+  await expect(head).toBeVisible({ timeout: 20_000 });
+  await head.click();
+  await expect(panel.text(page, TL_TEXT)).toBeVisible();
 });
