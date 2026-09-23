@@ -11,6 +11,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Novel } from "@/parsers/types";
 import type { AgentContext } from "../types";
 import { APIError } from "@/api/error-handler";
+import { getTokenBudget } from "@/api/token-manager";
 import {
   sampleChaptersContent,
   getRelevantContent,
@@ -278,6 +279,18 @@ describe("chatWithContextRetry — context_length 自愈", () => {
     });
     await expect(chatWithContextRetry(env("selfheal-model-4", 128000), attempt as never)).rejects.toThrow("上游 500");
     expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("输出超限（output_limit）不许走自愈：那条消息里的数字是输出上限", async () => {
+    // 消息故意写成"限制 4096"——`extractContextLength` 读得出来。所以这一条只可能靠
+    // apiCode 判定拦住：一旦有人把重试条件放宽到"任何 400"，模型窗口就被 4096 污染，
+    // 之后整场会话都按小窗口喂原文，界面上却一次异常都没有。
+    const attempt = vi.fn(async () => {
+      throw new APIError("输出长度超过模型限制 4096，请求的 max_tokens 是 16000", "output_limit");
+    });
+    await expect(chatWithContextRetry(env("selfheal-model-7", 128000), attempt as never)).rejects.toThrow("输出长度");
+    expect(attempt).toHaveBeenCalledTimes(1);
+    expect(getTokenBudget("selfheal-model-7").contextWindow).toBe(128000);
   });
 
   it("错误信息里读不到真实窗口时抛出，而不是拿旧预算再撞一次", async () => {

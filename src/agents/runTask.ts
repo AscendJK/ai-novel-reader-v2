@@ -44,6 +44,7 @@ export function formatAPIError(err: unknown): string {
   if (err instanceof APIError) {
     const code = err.apiCode || err.code;
     if (code === "context_length") return `[上下文超限] ${err.message}`;
+    if (code === "output_limit") return `[输出超限] ${err.message}`;
     if (code === "auth") return `[认证失败] ${err.message}`;
     if (code === "quota_exceeded") return `[额度用尽] ${err.message}`;
     if (code === "rate_limit") return `[频率限制] ${err.message}`;

@@ -26,6 +26,7 @@ export type ErrorCode =
   | 'RATE_LIMIT'
   | 'QUOTA_EXCEEDED'
   | 'CONTEXT_LENGTH'
+  | 'OUTPUT_LIMIT'
   | 'SERVER_ERROR';
 
 /** 应用错误类 */
@@ -59,6 +60,7 @@ const API_ERROR_CODE_MAP: Record<string, ErrorCode> = {
   'auth': 'AUTH',
   'network': 'NETWORK',
   'context_length': 'CONTEXT_LENGTH',
+  'output_limit': 'OUTPUT_LIMIT',
   'rate_limit': 'RATE_LIMIT',
   'quota_exceeded': 'QUOTA_EXCEEDED',
   'server': 'SERVER_ERROR',
@@ -241,6 +243,8 @@ export function getUserFriendlyMessage(error: unknown): string {
       return 'API 额度已用尽，请充值或等待重置';
     case 'CONTEXT_LENGTH':
       return '请求内容超过模型上下文长度限制';
+    case 'OUTPUT_LIMIT':
+      return '请求的输出长度超过模型上限，请在设置里调小「最大输出 token」';
     case 'SERVER_ERROR':
       return 'API 服务器错误，请稍后重试';
     default:

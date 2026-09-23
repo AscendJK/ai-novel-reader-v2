@@ -137,6 +137,7 @@ describe("getUserFriendlyMessage", () => {
     ["RATE_LIMIT", "请求频率过高，请稍后重试"],
     ["QUOTA_EXCEEDED", "API 额度已用尽，请充值或等待重置"],
     ["CONTEXT_LENGTH", "请求内容超过模型上下文长度限制"],
+    ["OUTPUT_LIMIT", "请求的输出长度超过模型上限，请在设置里调小「最大输出 token」"],
     ["SERVER_ERROR", "API 服务器错误，请稍后重试"],
   ];
 

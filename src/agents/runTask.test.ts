@@ -134,6 +134,14 @@ describe("formatAPIError", () => {
     expect(formatAPIError(new APIError("msg", "context_length"))).toContain("上下文超限");
   });
 
+  // 变异：删掉 output_limit 那一行 → 这条红在 `[output_limit]`（默认分支）上。
+  // 两类超限的标签必须分得开，界面上才有"调哪个"的信息。
+  it("映射 output_limit，且不 fall 回上下文那一类", () => {
+    const s = formatAPIError(new APIError("msg", "output_limit"));
+    expect(s).toContain("[输出超限]");
+    expect(s).not.toContain("上下文超限");
+  });
+
   it("映射 auth", () => {
     expect(formatAPIError(new APIError("msg", "auth"))).toContain("认证失败");
   });

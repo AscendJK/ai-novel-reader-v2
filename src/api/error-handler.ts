@@ -1,13 +1,14 @@
 import { AppError, type ErrorCode } from "@/lib/error-handler";
 
 /** API 错误代码类型 */
-export type APIErrorCode = "auth" | "network" | "context_length" | "rate_limit" | "quota_exceeded" | "server" | "unknown";
+export type APIErrorCode = "auth" | "network" | "context_length" | "output_limit" | "rate_limit" | "quota_exceeded" | "server" | "unknown";
 
 /** API 错误代码到统一错误代码的映射 */
 const API_TO_ERROR_CODE: Record<APIErrorCode, ErrorCode> = {
   "auth": "AUTH",
   "network": "NETWORK",
   "context_length": "CONTEXT_LENGTH",
+  "output_limit": "OUTPUT_LIMIT",
   "rate_limit": "RATE_LIMIT",
   "quota_exceeded": "QUOTA_EXCEEDED",
   "server": "SERVER_ERROR",
@@ -72,14 +73,25 @@ function classifyError(status: number, body: string): { code: APIErrorCode; mess
     };
   }
 
-  // 413 / 400 — possible context length exceeded
+  // 413 / 400 — 长度类错误。这里要分两种，它们的解法正好相反：
+  //  · 喂进去的原文太长 → 换更长上下文的模型、或拆短请求；
+  //  · 要的输出太长 → 把设置里那个「最大输出 token」调小（跟模型有没有长上下文无关）。
+  // 混成一类时第二种收到的是第一条的建议，用户照做也不会有任何变化。
   if (status === 413 || status === 400) {
     const lower = apiMessage.toLowerCase();
-    if (
-      lower.includes("context") || lower.includes("token") || lower.includes("length") ||
-      lower.includes("maximum") || lower.includes("limit") || lower.includes("too long") ||
-      lower.includes("reduce") || lower.includes("truncat")
-    ) {
+    // 输出侧的信号很窄，只认"max_tokens / completion_tokens / 输出长度"这类字样
+    const outputSide = /max[_\s-]?tokens|completion[ _]tokens?|maximum output|output[ _]?tokens?|输出长度|输出 ?token|回复长度/.test(lower);
+    // 输入侧一旦同时出现，以上下文为准：那种情况真正该减的是原文（厂商给的数字才对得上）
+    const inputSide = /context|上下文|prompt|输入长度|输入 ?token|messages/.test(lower);
+    const genericLength = /length|maximum|limit|too long|reduce|truncat|token|长度|超限|超过/.test(lower);
+    // 413 是"整个请求体太大"，只可能出在喂进去的内容上，不参与输出侧判断
+    if (status === 400 && outputSide && !inputSide) {
+      return {
+        code: "output_limit",
+        message: `请求的输出长度超过模型单次允许的上限 (400)。请把设置里的「最大输出 token」调小，或留空用模型默认值。厂商原话：${apiMessage || body.slice(0, 200)}`,
+      };
+    }
+    if (status === 413 || inputSide || genericLength) {
       return {
         code: "context_length",
         message: `请求内容超过模型上下文长度限制 (${status})。请尝试使用支持更长上下文的模型，或拆分成较短的请求。`,
