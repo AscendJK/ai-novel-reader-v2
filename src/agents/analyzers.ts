@@ -10,13 +10,16 @@ import { getRelevantContent, chatWithContextRetry, sampleChapterTitles } from ".
 import { estimateTokens, computeAvailableInput, resolveOutputReserve, type TokenBudget } from "@/api/token-manager";
 
 /**
- * 人物分析与时间线的默认输出预算：就是原先散在每个类四处的字面量 4096，值没变。
+ * 人物分析与时间线的默认输出预算。
  *
- * 变的是它从"硬顶"降级成"默认"——用户在设置里填过输出上限时由它顶开。真厂商实测过
- * 卡在这里的代价：`deepseek-flash` 会把 4096 的预算全花在 reasoning 上、正文回 0 字，
+ * 两次变化。第一次：它从"硬顶"降级成"默认"——用户在设置里填过输出上限时由它顶开。
+ * 起因是真厂商实测：`deepseek-flash` 会把 4096 的预算全花在 reasoning 上、正文回 0 字，
  * 而同一个人在设置里填的 8192 对地图（常数 16384）生效、对这两类任务一点作用都没有。
+ * 第二次：这个默认本身从 4096 抬到 8192（制作人拍的）——人物名单连关系、大事记连评述，
+ * 都是"一次写一整篇"，4096 对一本长篇真的会写在半句上收尾。代价实测过：预留与可用输入
+ * 1:1 兑换，128k 窗口少喂 4,096 字，所以只抬这两类和全书总览，章节总结的 1024 不动。
  */
-const ANALYZER_OUTPUT_TOKENS = 4096;
+const ANALYZER_OUTPUT_TOKENS = 8192;
 
 /**
  * 人物分析 Agent

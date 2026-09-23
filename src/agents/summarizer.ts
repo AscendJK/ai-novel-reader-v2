@@ -165,11 +165,14 @@ class GlobalSummarizerAgent extends BaseAgent {
   taskType = TaskType.GLOBAL;
 
   /**
-   * 全书总览的输出预算。用户在设置里填过总上限时按他的走，没填就是这个数——
-   * 不跟着总上限一起抬到 8192，是因为实测预留与可用输入 1:1 兑换：128k 窗口抬 4096
-   * 就少喂 4,096 字的书，对一本几百章的书是净亏，而它本来也没写满 4096。
+   * 全书总览的输出预算。用户在设置里填过总上限时按他的走，没填就是这个数。
+   *
+   * 从 4096 抬到 8192 是制作人拍的：总览要一次写完整篇（骨架 + 各条线 + 主题），4096
+   * 对一本几百章的书会写在半句上收尾。代价实测过——预留与可用输入 1:1 兑换，128k 窗口
+   * 少喂 4,096 字（约 4k 中文字），所以只抬这一类"一次写一整篇"的任务；章节总结 1024
+   * 不动，它一章一份、实测没写满过，抬它等于白扣每章的原文。
    */
-  private static readonly OUTPUT_TOKENS = 4096;
+  private static readonly OUTPUT_TOKENS = 8192;
 
   /** 同一个数：既从输入侧扣掉，也作为 `max_tokens` 发出去 */
   private reserve(b: TokenBudget): number {
