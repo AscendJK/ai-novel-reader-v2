@@ -125,7 +125,9 @@ describe("备份导入：坏输入不许留下半成品库", () => {
         graphs: [{ id: "g1", novelId: "b1", title: "图谱" }],
       }),
     );
-    expect(counts).toEqual({ novels: 1, chapters: 1, summaries: 1, notes: 1, maps: 1, graphs: 1 });
+    // 整份返回形状钉死（toEqual 不是 matchObject）：新加一个计数字段时这里必须一起改，
+    // 否则"界面拿不到那个字段"会静默通过
+    expect(counts).toEqual({ novels: 1, chapters: 1, summaries: 1, notes: 1, maps: 1, graphs: 1, ignoredSettings: 0 });
     for (const [table, id] of [["summaries", "s1"], ["notes", "n1"], ["maps", "m1"], ["graphs", "g1"]] as const) {
       const row = await udb[table].get(id);
       expect(typeof row?.updatedAt, `${table} 的 updatedAt`).toBe("number");
@@ -151,5 +153,40 @@ describe("备份导入：坏输入不许留下半成品库", () => {
     expect(mine).toEqual({ mine: { chapter: 1 }, theirs: { chapter: 9 } });
     expect(localStorage.getItem(`novel-reader-positions:${OTHER}`)).toBeNull();
     expect(reload).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * 备份"进来"这一侧的设防（制作人 2026-09-25 定的口径）。
+ *
+ * 导出特意滤掉 `api-providers`，导入原来整份 `settings` 原样 put 进共享库——
+ * 一份别人给的备份就能往这台机器灌一把 Key 加 baseUrl，之后所有 AI 请求的去向
+ * 由那个人说了算。规则与服务器侧同源：`api-providers*` / `api-active-provider*`
+ * 一律丢弃，而且不许静默（回执里要数得出丢了几条）。
+ */
+describe("备份导入不许把 API 配置带进来", () => {
+  it("外来 api-providers 与 api-active-provider 一律丢弃，普通设置照收，且报出丢了几条", async () => {
+    const r = await importFromJSON(jsonFile({
+      novels: [{ id: "b9", title: "带钥匙的备份" }],
+      settings: [
+        { key: `api-providers:${OTHER}`, value: [{ name: "外来服务商", apiKey: "sk-外来钥匙", baseUrl: "https://attacker.invalid/v1" }] },
+        { key: `api-active-provider:${OTHER}`, value: "p1" },
+        { key: "reading-theme", value: "sepia" },
+      ],
+    }));
+
+    expect(r.novels, "前提：主数据正常进来了，别把\"挡住了钥匙\"混成\"整份都没导入\"").toBe(1);
+    expect(r.ignoredSettings).toBe(2);
+    expect(await sharedDB.settings.get(`api-providers:${OTHER}`), "外来钥匙进了浏览器，之后的请求就归别人了").toBeUndefined();
+    expect(await sharedDB.settings.get(`api-active-provider:${OTHER}`)).toBeUndefined();
+    expect(await sharedDB.settings.get("reading-theme"), "非敏感设置不许被一起挡掉").toBeTruthy();
+  });
+
+  it("备份里没有 API 配置时不许谎报「忽略了 0 条」", async () => {
+    const r = await importFromJSON(jsonFile({
+      novels: [{ id: "b10", title: "干净备份" }],
+      settings: [{ key: "reading-theme", value: "dark" }],
+    }));
+    expect(r.ignoredSettings).toBe(0);
   });
 });

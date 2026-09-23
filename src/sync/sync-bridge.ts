@@ -4,7 +4,7 @@ import type { Collection, Table } from "dexie";
 import { sharedDB, getUserDB } from "@/db/database";
 import { useAPIStore } from "@/stores/api-store";
 import { useNovelStore } from "@/stores/novel-store";
-import { userKey } from "@/lib/user-utils";
+import { userKey, isSensitiveSettingKey } from "@/lib/user-utils";
 
 // 每批同步的最大记录数
 const BATCH_SIZE = 50;
@@ -85,7 +85,7 @@ export async function gatherChanges(
   try {
     const allSettings = await sharedDB.settings.toArray();
     for (const s of allSettings) {
-      if (s.key.startsWith("api-providers:") || s.key.startsWith("api-active-provider:")) continue;
+      if (isSensitiveSettingKey(s.key)) continue;
       // character-graph 已迁移到 UserDB.graphs，不再通过 settings 同步
       if (s.key.startsWith("character-graph:")) continue;
       settings[s.key] = s.value;
@@ -202,7 +202,13 @@ export async function applyServerData(data: SyncData): Promise<void> {
   // Settings (shared database) — prefix with username for isolation
   if (data.settings) {
     const username = localStorage.getItem("sync-username");
-    const entries = Object.entries(data.settings).filter(([, v]) => v !== null && v !== undefined);
+    const incoming = Object.entries(data.settings).filter(([, v]) => v !== null && v !== undefined);
+    // 服务器也不许往这台机器写 API 配置：钥匙与"请求发去哪"只能由用户自己在界面上填。
+    // 正常后端不会下发（它那两份 SENSITIVE_PREFIXES 从不入库），走到这一步说明那头
+    // 有问题或被换掉了，所以丢弃要留一行日志——静默收下是事故，静默丢掉也是。
+    const entries = incoming.filter(([k]) => !isSensitiveSettingKey(k));
+    const dropped = incoming.length - entries.length;
+    if (dropped > 0) console.warn(`[sync] 服务器下发了 ${dropped} 条 API 配置，已丢弃`);
     if (entries.length > 0) {
       await sharedDB.transaction("rw", sharedDB.settings, async () => {
         for (const [key, value] of entries) {

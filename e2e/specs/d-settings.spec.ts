@@ -42,6 +42,22 @@ async function localStorageDump(page: Page): Promise<string> {
   return page.evaluate(() => Object.entries(localStorage).map(([k, v]) => `${k}=${v}`).join("\n"));
 }
 
+/** 直接读某个用户的 IndexedDB 书架（不读应用的 store：store 会跟着代码一起错） */
+async function userDbTitles(page: Page, user: string): Promise<string[]> {
+  return page.evaluate(async (name) => {
+    return await new Promise<string[]>((resolve) => {
+      const openReq = indexedDB.open(name);
+      openReq.onsuccess = () => {
+        const db = openReq.result;
+        const req = db.transaction("novels", "readonly").objectStore("novels").getAll();
+        req.onsuccess = () => resolve((req.result as { title?: string }[]).map((n) => n.title || ""));
+        req.onerror = () => resolve([]);
+      };
+      openReq.onerror = () => resolve([]);
+    });
+  }, `ai-novel-reader-${user}`);
+}
+
 test.beforeEach(async ({ page }) => {
   // D 组每条都要在开头做一次"真 boot + 从 IndexedDB 读回书架 + 登录"，这一步的耗时随并发
   // **线性恶化**：本机 `--workers=1` 单条 2.7 秒，`--workers=10` 下 D8 直接顶穿 30 秒的
@@ -384,4 +400,29 @@ test("D14 清理 TTS 残留：回执要报数，不许被一句「清理完成�
   await page.getByRole("button", { name: "清理残留" }).click();
   await expect(page.getByText("没有发现残留文件")).toBeVisible();
   await expect(page.getByText("清理完成"), "带信息的回执不许被通用文案覆盖").toHaveCount(0);
+});
+
+test("D15 导入别人给的备份：里面的 API 配置不许进浏览器，而且界面要说明白", async ({ page }) => {
+  // D11 钉的是"导出侧不带钥匙"，这一条钉另一头：备份会被拿去分享、换机器，
+  // 一份带 api-providers 的文件如果能原样灌进来，这台机器之后所有 AI 请求的
+  // 去向就由给文件的那个人说了算。"不许静默"这半句只有界面层能证。
+  const backup = {
+    novels: [{ id: "bk-1", title: "外来备份里的书", author: "某人", chapterCount: 1 }],
+    chapters: [{ id: "bk-1-c1", novelId: "bk-1", index: 0, title: "第一章", content: "洛阳城下的雪落了三天，街面上没有一个卖炭的人。" }],
+    settings: [
+      { key: `api-providers:${USER_A}`, value: [{ name: "外来服务商", apiKey: "sk-外来钥匙", baseUrl: "https://attacker.invalid/v1" }] },
+    ],
+  };
+  await openSettings(page);
+  await page.locator("#import-backup").setInputFiles({
+    name: "backup.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(backup), "utf8"),
+  });
+
+  await expect(page.getByText("导入成功").first()).toBeVisible();
+  await expect(page.getByText(/已忽略 1 条 API 配置/)).toBeVisible();
+  expect(await readSharedSetting(page, `api-providers:${USER_A}`), "钥匙进了浏览器=这台机器的请求去向被改走").toBeUndefined();
+  // 主数据不许被连坐：书要真落进这台机器的用户库。
+  // 刻意不判"书架上看得见"——导入备份之后 store 从不重读（AppLayout 只在开机时
+  // loadAllNovels 一次），那是另一条没修的口子，已单独报给制作人，别拿这条判据替它背书。
+  expect(await userDbTitles(page, USER_A)).toContain("外来备份里的书");
 });

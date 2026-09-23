@@ -29,7 +29,11 @@ export function ExportPanel() {
     setImportResult(null);
     try {
       const result = await importFromJSON(file);
-      setImportResult(`导入成功：${result.novels} 本小说，${result.chapters} 个章节，${result.summaries} 条摘要，${result.notes} 条笔记，${result.maps} 张地图，${result.graphs} 份人物图谱`);
+      // 丢弃不许静默：用户会以为"恢复了却找不到自己的服务商"是这功能坏了
+      const ignored = result.ignoredSettings > 0
+        ? `；已忽略 ${result.ignoredSettings} 条 API 配置（备份不携带钥匙，请重新填写）`
+        : "";
+      setImportResult(`导入成功：${result.novels} 本小说，${result.chapters} 个章节，${result.summaries} 条摘要，${result.notes} 条笔记，${result.maps} 张地图，${result.graphs} 份人物图谱${ignored}`);
       loadAllNovelMeta().then(setNovels);
     } catch (e) {
       setImportResult(`导入失败：${e instanceof Error ? e.message : "文件格式错误"}`);

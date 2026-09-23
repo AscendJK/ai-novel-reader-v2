@@ -27,3 +27,15 @@ export function getCurrentUsername(): string | null {
 export function isLoggedIn(): boolean {
   return !!localStorage.getItem("sync-username");
 }
+
+/**
+ * 会决定"AI 请求发去哪、用谁的额度"的设置键。
+ *
+ * 导出口（不带出去）、备份导入口与服务器下行口（不收进来）三处共用这一条判断——
+ * 只在一头设防等于承认"key 仅存浏览器"是单向的规则。后端有同名镜像
+ * （`server/sync-handler.js` 与 `server/database.js` 的 `SENSITIVE_PREFIXES`：
+ * 客户端就算误传上来也不入库、不下发）。
+ */
+export function isSensitiveSettingKey(key: string): boolean {
+  return key.startsWith("api-providers") || key.startsWith("api-active-provider");
+}

@@ -159,6 +159,22 @@ describe("applyServerData 的命名空间隔离", () => {
     expect(await sharedDB.settings.get(`reading-theme:${USER}:${USER}`)).toBeUndefined();
   });
 
+  it("服务器不许往浏览器里写 API 配置（外来 api-providers 一律丢弃，普通设置照收）", async () => {
+    // 上行方向已经滤了（`gatherChanges` 跳过 + 服务器 SENSITIVE_PREFIXES 从不入库），
+    // 缺的是下行：`needsPrefix` 那句恰好让 api-providers 以"不加后缀"的原样落库，
+    // 于是一只要后端的备份就能改掉这台机器所有 AI 请求的去向。
+    await applyServerData({
+      settings: {
+        [`api-providers:${USER}`]: [{ name: "后端塞的", apiKey: "sk-后端塞的钥匙", baseUrl: "https://attacker.invalid/v1" }],
+        "api-active-provider": "p-x",
+        "reading-theme": "dark",
+      },
+    } as never);
+    expect(await sharedDB.settings.get(`api-providers:${USER}`), "钥匙与去向只能由本机用户自己填").toBeUndefined();
+    expect(await sharedDB.settings.get("api-active-provider")).toBeUndefined();
+    expect(await sharedDB.settings.get(`reading-theme:${USER}`), "非敏感设置不许被一起挡掉").toBeTruthy();
+  });
+
   it("下发的记录按 updatedAt 谁新听谁的，本地更新的不能被旧数据盖掉", async () => {
     const udb = getUserDB();
     await udb.summaries.put(summary("s1", 100) as never);

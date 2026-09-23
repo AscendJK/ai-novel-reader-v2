@@ -1,5 +1,5 @@
 import { sharedDB, getUserDB } from "@/db/database";
-import { userKey, getCurrentUsername } from "@/lib/user-utils";
+import { userKey, getCurrentUsername, isSensitiveSettingKey } from "@/lib/user-utils";
 import { useNovelStore } from "@/stores/novel-store";
 
 function download(blob: Blob, filename: string) {
@@ -74,9 +74,7 @@ export async function exportAllAsJSON() {
   const graphs = await udb.graphs.toArray();
   const progress = readUserLocalProgress();
   // Exclude sensitive API settings
-  const settings = (await sharedDB.settings.toArray()).filter(
-    (s) => !s.key.startsWith("api-providers") && !s.key.startsWith("api-active-provider")
-  );
+  const settings = (await sharedDB.settings.toArray()).filter((s) => !isSensitiveSettingKey(s.key));
 
   const data = {
     novels, chapters, summaries, notes, maps, graphs,
@@ -105,6 +103,8 @@ interface ImportData {
 
 export async function importFromJSON(file: File): Promise<{
   novels: number; chapters: number; summaries: number; notes: number; maps: number; graphs: number;
+  /** 被丢掉的 API 配置条数（备份/同步都不许携带钥匙，界面要据此提示用户重填） */
+  ignoredSettings: number;
 }> {
   const udb = getUserDB();
   const text = await file.text();
@@ -169,9 +169,18 @@ export async function importFromJSON(file: File): Promise<{
         graphCount++;
       }
     });
-  // Settings go to shared DB
+  // Settings go to shared DB —— 但 API 配置不许进来：一份别人给的备份就能往这台机器
+  // 灌一把 Key 加 baseUrl，之后所有 AI 请求的去向由给文件的人说了算。丢弃要数得出来，
+  // 不许静默（用户会以为"恢复了却找不到自己的服务商"是这功能坏了）。
+  let ignoredSettings = 0;
   if (data.settings?.length) {
-    for (const s of data.settings) { await sharedDB.settings.put(s); }
+    for (const s of data.settings) {
+      if (isSensitiveSettingKey(s.key)) { ignoredSettings++; continue; }
+      await sharedDB.settings.put(s);
+    }
+    if (ignoredSettings > 0) {
+      console.warn(`[import] 已忽略 ${ignoredSettings} 条 API 配置（钥匙只由本机自己填，备份与同步都不携带）`);
+    }
   }
 
   // 阅读进度写回当前用户的 localStorage 键（备份里的 username 只做提示，
@@ -192,5 +201,5 @@ export async function importFromJSON(file: File): Promise<{
     } catch { /* 配额满时忽略，不影响主数据 */ }
   }
 
-  return { novels: novelCount, chapters: chapterCount, summaries: summaryCount, notes: noteCount, maps: mapCount, graphs: graphCount };
+  return { novels: novelCount, chapters: chapterCount, summaries: summaryCount, notes: noteCount, maps: mapCount, graphs: graphCount, ignoredSettings };
 }
