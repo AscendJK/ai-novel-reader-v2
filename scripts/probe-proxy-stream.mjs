@@ -217,6 +217,11 @@ try {
   const gotType = sse?.headers.get("content-type") || "";
   check("SSE 响应未被降级成 500 JSON", sse && sse.status === 200 && gotType.includes("text/event-stream"),
     `status=${sse?.status} ct=${gotType}`);
+  // 透传出去的是模型写的中文正文。不带 charset 时，消费方按自己的默认字节编码解就是乱码——
+  // 真厂商那一档实测踩到：Chromium 把无 charset 的 text/* 先按 windows-1252 解一遍，
+  // Playwright 侧 `res.text()` 与 `res.body()` 拿到的都是 `å°±æ‰€ç»™`（产品自己用 TextDecoder 才没坏）。
+  check("SSE 透传声明 charset=utf-8（不把单字节默认解码留给消费方）", /charset=utf-8/i.test(gotType),
+    `ct=${gotType}`);
 
   const reader = sse?.body?.getReader();
   const dec = new TextDecoder();

@@ -173,7 +173,10 @@ router.post("/chat", rateLimit(60), async (req, res) => {
     // 于是"只能走代理的服务商"整条 AI 链路全部不可用（round 2 R-06）
     const upstreamType = response.headers.get("content-type") || "";
     if (upstreamType.includes("text/event-stream")) {
-      res.setHeader("Content-Type", "text/event-stream");
+      // charset 必须写：这一腿透传的是模型生成的中文，而无 charset 的 text/* 会被
+      // Chromium 按 windows-1252 解（实测：Playwright 侧两种读法都拿到乱码，只有页面内
+      // fetch 正常，因为产品自己用 TextDecoder）。不声明等于把乱码留给下一个消费方。
+      res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
       res.flushHeaders?.();

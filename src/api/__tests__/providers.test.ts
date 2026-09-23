@@ -74,7 +74,7 @@ function mockOpenAIStream(chunks: { content?: string; reasoning?: string }[], us
   (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
     new Response(lines.join("\n"), {
       status: 200,
-      headers: { "Content-Type": "text/event-stream" },
+      headers: { "Content-Type": "text/event-stream; charset=utf-8" },
     })
   );
 }
@@ -97,7 +97,7 @@ function mockAnthropicStream(textChunks: string[], usage?: unknown) {
   (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
     new Response(lines.join("\n"), {
       status: 200,
-      headers: { "Content-Type": "text/event-stream" },
+      headers: { "Content-Type": "text/event-stream; charset=utf-8" },
     })
   );
 }
@@ -224,7 +224,7 @@ describe("OpenAI provider parseResponse", () => {
           "data: [DONE]",
           "",
         ].join("\n"),
-        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+        { status: 200, headers: { "Content-Type": "text/event-stream; charset=utf-8" } }
       )
     );
     const provider = createOpenAIProvider(openaiConfig);
@@ -237,7 +237,7 @@ describe("OpenAI provider parseResponse", () => {
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
       new Response(
         ['data: {"id":"1","choices":[{"index":0,"delta":{"content":""}}]}', "", "data: [DONE]", ""].join("\n"),
-        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+        { status: 200, headers: { "Content-Type": "text/event-stream; charset=utf-8" } }
       )
     );
     const provider = createOpenAIProvider(openaiConfig);
@@ -340,7 +340,7 @@ describe("Anthropic provider parseResponse", () => {
           'data: {"type":"error","error":{"type":"invalid_request_error","message":"bad key"}}',
           "",
         ].join("\n"),
-        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+        { status: 200, headers: { "Content-Type": "text/event-stream; charset=utf-8" } }
       )
     );
     const provider = createAnthropicProvider(anthropicConfig);
@@ -358,7 +358,7 @@ describe("Anthropic provider parseResponse", () => {
           'data: {"type":"message_stop"}',
           "",
         ].join("\n"),
-        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+        { status: 200, headers: { "Content-Type": "text/event-stream; charset=utf-8" } }
       )
     );
     const provider = createAnthropicProvider(anthropicConfig);

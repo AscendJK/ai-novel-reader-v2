@@ -98,6 +98,10 @@ describe("正常一路", () => {
     try {
       const { frames, headers, ended } = await readFrames(srv.base);
       expect(headers.contentType, "不是 event-stream，浏览器不会当流读").toContain("text/event-stream");
+      // 这些帧里是「检查 TTS 资源...」「就绪 ✓」这种要给用户看的中文。不声明 charset 时，
+      // 消费方按自己默认的字节编码解就成乱码（真厂商那一档实测：Playwright 读到的是
+      // windows-1252 解出来的 `æ£€æŸ...`，界面却正常，因为产品自己用 TextDecoder）。
+      expect(headers.contentType, "SSE 不写 charset=把单字节默认解码留给消费方，中文进度帧会变乱码").toContain("charset=utf-8");
       expect(headers.cacheControl, "SSE 被缓存住=所有人看到同一份旧进度").toContain("no-cache");
       expect(steps(frames)).toEqual([
         "开始|检查 TTS 资源...",

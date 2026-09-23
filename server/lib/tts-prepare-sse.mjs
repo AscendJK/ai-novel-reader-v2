@@ -14,7 +14,9 @@ export function createTtsPrepareHandler({ ensureWasmReady, ensureModelReady }) {
     // 自己解析 query：这条路由挂在 express 上，但判据不该依赖 req.query 才存在
     const force = new URL(req.url || "/", "http://internal").searchParams.get("force") === "true";
 
-    res.setHeader("Content-Type", "text/event-stream");
+    // 帧里是「检查 TTS 资源...」「就绪 ✓」这类要给用户看的中文：不声明 charset 时，
+    // 按默认单字节解码的消费方会把进度读成乱码
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
     // ACAO 由全局 cors() 白名单设置，这里不手写 "*"
