@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { stubBackend, idleTtsStatus } from "../fixtures/backend";
 import { sel, expectUnblocked } from "../pages/app";
-import { addProvider, openSettings, settings, signIn, signOut } from "../pages/settings";
+import { addProvider, leaveSettings, openSettings, settings, signIn, signOut } from "../pages/settings";
 import { importFiles, miniNovel, shelfCard, txtFile } from "../pages/shelf";
 
 /**
@@ -40,22 +40,6 @@ async function readSharedSetting<T>(page: Page, key: string): Promise<T | undefi
 
 async function localStorageDump(page: Page): Promise<string> {
   return page.evaluate(() => Object.entries(localStorage).map(([k, v]) => `${k}=${v}`).join("\n"));
-}
-
-/** 直接读某个用户的 IndexedDB 书架（不读应用的 store：store 会跟着代码一起错） */
-async function userDbTitles(page: Page, user: string): Promise<string[]> {
-  return page.evaluate(async (name) => {
-    return await new Promise<string[]>((resolve) => {
-      const openReq = indexedDB.open(name);
-      openReq.onsuccess = () => {
-        const db = openReq.result;
-        const req = db.transaction("novels", "readonly").objectStore("novels").getAll();
-        req.onsuccess = () => resolve((req.result as { title?: string }[]).map((n) => n.title || ""));
-        req.onerror = () => resolve([]);
-      };
-      openReq.onerror = () => resolve([]);
-    });
-  }, `ai-novel-reader-${user}`);
 }
 
 test.beforeEach(async ({ page }) => {
@@ -407,7 +391,14 @@ test("D15 导入别人给的备份：里面的 API 配置不许进浏览器，�
   // 一份带 api-providers 的文件如果能原样灌进来，这台机器之后所有 AI 请求的
   // 去向就由给文件的那个人说了算。"不许静默"这半句只有界面层能证。
   const backup = {
-    novels: [{ id: "bk-1", title: "外来备份里的书", author: "某人", chapterCount: 1 }],
+    // 按"真导出"的样子造：`loadAllNovelMeta` 走的是 `db.novels.orderBy("createdAt")`，
+    // 缺 createdAt 的记录会被 IndexedDB 索引游标直接跳过——第一版样本没带这个字段，
+    // 于是红在"书架看不见"，那是我样本假，不是产品坏（D11 里那句"正文要带得上去"
+    // 之所以稳，就是因为它是从真库里导出来再灌回去的）。
+    novels: [{
+      id: "bk-1", title: "外来备份里的书", author: "某人", fileName: "外来备份里的书.txt",
+      fileFormat: "txt", totalChars: 24, chapterCount: 1, createdAt: Date.now(), updatedAt: Date.now(),
+    }],
     chapters: [{ id: "bk-1-c1", novelId: "bk-1", index: 0, title: "第一章", content: "洛阳城下的雪落了三天，街面上没有一个卖炭的人。" }],
     settings: [
       { key: `api-providers:${USER_A}`, value: [{ name: "外来服务商", apiKey: "sk-外来钥匙", baseUrl: "https://attacker.invalid/v1" }] },
@@ -421,8 +412,8 @@ test("D15 导入别人给的备份：里面的 API 配置不许进浏览器，�
   await expect(page.getByText("导入成功").first()).toBeVisible();
   await expect(page.getByText(/已忽略 1 条 API 配置/)).toBeVisible();
   expect(await readSharedSetting(page, `api-providers:${USER_A}`), "钥匙进了浏览器=这台机器的请求去向被改走").toBeUndefined();
-  // 主数据不许被连坐：书要真落进这台机器的用户库。
-  // 刻意不判"书架上看得见"——导入备份之后 store 从不重读（AppLayout 只在开机时
-  // loadAllNovels 一次），那是另一条没修的口子，已单独报给制作人，别拿这条判据替它背书。
-  expect(await userDbTitles(page, USER_A)).toContain("外来备份里的书");
+  // 主数据不许被连坐：书要真回到书架上（离开设置会重挂 BookSelect → 重读库）。
+  // 判"看得见"而不是"在库里"：用户唯一能感知的就是前者。
+  await leaveSettings(page);
+  await expect(shelfCard(page, "外来备份里的书")).toBeVisible();
 });
