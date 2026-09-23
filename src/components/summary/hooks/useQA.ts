@@ -8,6 +8,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { create } from "zustand";
 
 import { uuid } from "@/parsers/utils";
+import type { AnalysisMetadata } from "@/agents/types";
 
 interface QAMessage {
   id: string;
@@ -22,6 +23,8 @@ interface RangeResult {
   content: string;
   tokensUsed: number;
   createdAt: number;
+  /** 实际送出去多少、丢了几章——卡片标题写的是用户请求的范围，这行说的是真相 */
+  metadata?: AnalysisMetadata;
 }
 
 interface QAData {
@@ -82,7 +85,7 @@ interface UseQAReturn {
 interface UseQAOptions {
   novelId: string;
   askCustomQuestion: (question: string, history: { role: "user" | "assistant"; content: string }[]) => Promise<{ answer: string; tokensUsed: number } | null>;
-  generateRangeSummary: (from: number, to: number) => Promise<{ id: string; title: string; content: string; tokensUsed: number; createdAt: number } | null>;
+  generateRangeSummary: (from: number, to: number) => Promise<{ id: string; title: string; content: string; tokensUsed: number; createdAt: number; metadata?: AnalysisMetadata } | null>;
   clearQaCache: () => void;
 }
 

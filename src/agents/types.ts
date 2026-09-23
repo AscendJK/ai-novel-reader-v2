@@ -26,6 +26,14 @@ export interface AnalysisMetadata {
   analyzedLength?: number;
   /** 分段数（如果使用了分段分析） */
   segments?: number;
+  /**
+   * 该次分析**根本没送到模型**的章节数。
+   *
+   * 范围总结按上下文预算拼正文，装不下就整章丢弃（`useSummarizer.ts` 的
+   * `if (remaining <= 0) break`）。丢弃本身没错，错在界面上一字不提：输出预留越大，
+   * 丢的章越多，而卡片看着跟"整段都读过"一模一样。
+   */
+  omittedChapters?: number;
 }
 
 export interface AgentResult {

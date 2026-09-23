@@ -137,6 +137,7 @@ export function QATab({
             content={r.content}
             tokens={r.tokensUsed}
             date={r.createdAt}
+            metadata={r.metadata}
             isTemp
             onRemove={() =>
               qaHook.setRangeResults((p) => p.filter((x) => x.id !== r.id))

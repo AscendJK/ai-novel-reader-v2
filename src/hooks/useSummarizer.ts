@@ -8,7 +8,7 @@ import { summarizerAgent, globalSummarizerAgent } from "@/agents/summarizer";
 import { characterAnalysisAgent, timelineAgent } from "@/agents/analyzers";
 import { characterGraphAgent } from "@/agents/graph-agent";
 import { mapAgent } from "@/agents/map-agent";
-import type { Agent, AgentContext, AgentResult, MapData, TaskTypeValue } from "@/agents/types";
+import type { Agent, AgentContext, AgentResult, AnalysisMetadata, MapData, TaskTypeValue } from "@/agents/types";
 import { TaskType } from "@/agents/types";
 import { runAgentTask as runAgentTaskPure, formatAPIError, type TaskStatusHooks } from "@/agents/runTask";
 import { getProvider } from "@/api/registry";
@@ -39,6 +39,7 @@ interface TempResult {
   content: string;
   tokensUsed: number;
   createdAt: number;
+  metadata?: AnalysisMetadata;
 }
 
 /** Compute keyword overlap between two Chinese/English texts (0-1) using bigrams */
@@ -525,23 +526,29 @@ export function useSummarizer() {
             const maxChars = Math.floor(maxTokens); // 中文约 1 字 = 1 token
             let combinedText = "";
             let totalChars = 0;
-            const includedTitles: string[] = [];
-            for (const ch of rangeChapters) {
-              if (!ch.content) continue;
+            const sentTitles: string[] = [];
+            let tailCut = false;
+            const wantedChapters = rangeChapters.filter((ch) => ch.content);
+            for (const ch of wantedChapters) {
               const remaining = maxChars - totalChars;
               if (remaining <= 0) break;
               const text = ch.content.length > remaining ? ch.content.slice(0, remaining) : ch.content;
+              tailCut = text.length < ch.content.length;
               combinedText += `\n\n--- ${ch.title} ---\n${text}`;
               totalChars += text.length;
-              includedTitles.push(ch.title);
+              sentTitles.push(ch.title);
             }
-            const actualFrom = rangeChapters[0]?.title || `第${fromChapter}章`;
-            const actualTo = rangeChapters[rangeChapters.length - 1]?.title || `第${toChapter}章`;
-            ragLog(`范围总结: ${includedTitles.length}章, combinedText=${totalChars}字`);
+            // 起止章只能取**真正送出去**的那两章。过去取自 `rangeChapters` 的首尾——那是
+            // 丢弃循环之前的切片，于是"请求 2-10 章、实际只送了 2-4 章"时，prompt 会告诉
+            // 模型它看到了第 10 章的原文，模型就照着不存在的内容往下总结。
+            const actualFrom = sentTitles[0] || rangeChapters[0]?.title || `第${fromChapter}章`;
+            const actualTo = sentTitles[sentTitles.length - 1] || `第${toChapter}章`;
+            const omittedChapters = wantedChapters.length - sentTitles.length;
+            ragLog(`范围总结: 送入 ${sentTitles.length}/${wantedChapters.length} 章, combinedText=${totalChars}字`);
 
             const prompt = `你是一位专业的小说分析助手。请对以下小说章节范围进行总结分析。
 
-章节范围：${actualFrom} 到 ${actualTo}（共 ${includedTitles.length} 章）
+章节范围：${actualFrom} 到 ${actualTo}（请求第 ${fromChapter}-${toChapter} 章共 ${wantedChapters.length} 章，实际提供原文 ${sentTitles.length} 章）
 
 要求：
 1. **核心情节**（概括该段落的整体剧情走向）
@@ -551,9 +558,9 @@ export function useSummarizer() {
 
 请用简洁清晰的中文回答。
 
-以下是该范围内的章节原文（已按顺序拼接，超出的部分被截断）：
+以下是该范围内的章节原文${tailCut ? "（末章按上下文预算截断）" : ""}：
 
-${combinedText}`;
+${combinedText}${omittedChapters > 0 ? `\n\n注意：请求范围内的后 ${omittedChapters} 章原文没有提供。只对上面实际给出的内容下结论，未给出的部分请写"该段原文未提供"，不要凭章节标题推断情节。` : ""}`;
 
             status("正在等待 AI 回答...");
             const providerInstance = getProvider(provider);
@@ -575,6 +582,13 @@ ${combinedText}`;
               content: response.content,
               tokensUsed: response.content.length,
               createdAt: Date.now(),
+              // 少送了多少必须留痕：卡片标题写的是用户请求的范围，这行说的是实际送出去的
+              metadata: {
+                truncated: tailCut,
+                originalLength: wantedChapters.reduce((s, ch) => s + ch.content.length, 0),
+                analyzedLength: totalChars,
+                omittedChapters: omittedChapters > 0 ? omittedChapters : undefined,
+              },
             };
           } catch (err) {
             // 用户主动取消不是错误：不写错误条，静默返回

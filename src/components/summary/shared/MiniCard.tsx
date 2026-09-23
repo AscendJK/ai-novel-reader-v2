@@ -8,20 +8,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+// 元数据的形状由产出方（agents）定，界面只是读它。过去这里另抄了一份字段完全相同的
+// 定义，加字段就要改两处——第二处不改的症状是"数据在对象里、卡片上却看不见"。
+import type { AnalysisMetadata } from "@/agents/types";
 
-/** 分析元数据 */
-export interface AnalysisMetadata {
-  /** 是否使用了精简模式 */
-  usedFallback?: boolean;
-  /** 是否截断了内容 */
-  truncated?: boolean;
-  /** 原始内容长度（字符数） */
-  originalLength?: number;
-  /** 实际分析的内容长度（字符数） */
-  analyzedLength?: number;
-  /** 分段数（如果使用了分段分析） */
-  segments?: number;
-}
+export type { AnalysisMetadata };
 
 interface MiniCardProps {
   /** 标题 */
@@ -62,7 +53,7 @@ export function MiniCard({
   metadata,
 }: MiniCardProps) {
   // 判断是否显示元数据提示
-  const showMetadata = metadata?.usedFallback || metadata?.truncated;
+  const showMetadata = metadata?.usedFallback || metadata?.truncated || !!metadata?.omittedChapters;
 
   return (
     <Card className={`shadow-none overflow-hidden max-w-full ${isTemp ? "border-dashed border-amber-300 dark:border-amber-700" : ""}`}>
@@ -134,8 +125,13 @@ export function MiniCard({
           <div className="mt-2 p-1.5 bg-amber-500/10 border border-amber-500/20 rounded text-[10px] space-y-0.5">
             <div className="flex items-center gap-1 text-amber-600">
               <AlertTriangle className="h-3 w-3" />
-              <span>本分析使用了精简模式</span>
+              <span>{metadata?.usedFallback || metadata?.truncated ? "本分析使用了精简模式" : "送入模型的原文不完整"}</span>
             </div>
+            {!!metadata?.omittedChapters && (
+              <p className="text-muted-foreground">
+                另有 {metadata.omittedChapters.toLocaleString()} 章原文因上下文预算没送出去，结论只覆盖已送入的部分
+              </p>
+            )}
             {metadata?.truncated && metadata?.originalLength && (
               <p className="text-muted-foreground">
                 原始内容 {metadata.originalLength.toLocaleString()} 字符

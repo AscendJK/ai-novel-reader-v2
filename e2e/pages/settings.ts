@@ -48,7 +48,7 @@ export async function leaveSettings(page: Page): Promise<void> {
 /** 走完"添加 API → 填表 → 保存"。不填的字段留产品默认（格式默认 OpenAI，流式默认开）。 */
 export async function addProvider(
   page: Page,
-  f: { name: string; key?: string; baseUrl?: string; model?: string; maxTokens?: number },
+  f: { name: string; key?: string; baseUrl?: string; model?: string; maxTokens?: number; contextWindow?: number },
 ): Promise<void> {
   const s = settings(page);
   await s.add.click();
@@ -56,6 +56,9 @@ export async function addProvider(
   if (f.key !== undefined) await s.key.fill(f.key);
   if (f.baseUrl !== undefined) await s.baseUrl.fill(f.baseUrl);
   if (f.model !== undefined) await s.model.fill(f.model);
+  // 「上下文窗口」留空时按模型表取值；表里没有的模型（假厂商的 e2e-model 就是）默认 128k，
+  // 要演"预算把原文挤掉"的那类判据就得把它填小。
+  if (f.contextWindow !== undefined) await page.locator("#api-ctx").fill(String(f.contextWindow));
   // 「最大输出 token」留空时产品按模型表给默认 4096。推理模型会先把这段预算花在"想"上
   // （实测 sensenova 的 deepseek-flash：completion_tokens=4096、reasoning_tokens=4096、正文 0 字），
   // 于是地图/时间线这类长结构化产物必然拿不到正文。设置页那行说明本来就叫用户"设为模型自身上限"。

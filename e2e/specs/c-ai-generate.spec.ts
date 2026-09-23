@@ -33,9 +33,13 @@ const FAKE_KEY = "sk-e2e-c-fake-key-0123456789";
 async function readyWithBook(
   page: Page,
   table: StubTable,
-  opts: { bookTitle?: string; offline?: boolean; session?: boolean; chapters?: number } = {},
+  opts: {
+    bookTitle?: string; offline?: boolean; session?: boolean; chapters?: number;
+    /** 服务商表单里的两个预算字段；不填就走产品默认（模型表 → 未匹配模型 128k/4096） */
+    provider?: { contextWindow?: number; maxTokens?: number };
+  } = {},
 ): Promise<Backend> {
-  const { bookTitle = "AI 测试", offline = true, session = false, chapters = 0 } = opts;
+  const { bookTitle = "AI 测试", offline = true, session = false, chapters = 0, provider = {} } = opts;
   const backend = await stubBackend(page, { ...idleTtsStatus, ...table });
   // 离线态起步：chat() 在离线或没有 sync-token 时只走直连腿（openai.ts:209-215），
   // C1~C8 要的就是这一条腿；需要代理腿的 C9 传 offline:false + session:true。
@@ -43,7 +47,7 @@ async function readyWithBook(
   if (session) await page.addInitScript(() => localStorage.setItem("sync-token", "e2e-session-token"));
   await openApp(page);
   await openSettings(page);
-  await addProvider(page, { name: "e2e 假商", key: FAKE_KEY, baseUrl: vendorBaseUrl(page), model: "e2e-model" });
+  await addProvider(page, { name: "e2e 假商", key: FAKE_KEY, baseUrl: vendorBaseUrl(page), model: "e2e-model", ...provider });
   await leaveSettings(page);
   // 三章样本够判"发的是这一章还是那一章"，但判不了"范围"——按章号取内容的那类判据
   // 需要章数明显多于范围，否则"少取一章"和"取错一章"分不开
@@ -347,6 +351,48 @@ test("C11 范围总结：选了第 2-4 章就只喂这三章，第 1 章和第 5
   const wire = JSON.stringify(chatRequests(backend).at(-1)?.messages ?? []);
   for (const n of [2, 3, 4]) expect(wire, `第${n}章没喂进去`).toContain(`渡口${n}这一站的第一句`);
   for (const n of [1, 5, 6]) expect(wire, `第${n}章不在所选范围里，却出现在请求里`).not.toContain(`渡口${n}这一站的第一句`);
+});
+
+/**
+ * C16：范围总结装不下时，"少带了几章"不许只留在 console。
+ *
+ * 抬输出预留换来的是什么，这条判据把它演成现场：窗口 4096、用户在设置里把输出上限填成
+ * 3000，可用输入就只剩 `4096 − 3000 − 204`（5% 安全余量按窗口算，这里 204）≈ 892 字，
+ * 而 `longNovel` 每章约 120 字——请求第 2-10 章共 9 章，只塞得下前面几章。
+ * 旧实现在这里是双重说谎：prompt 的结束章取自丢弃**之前**的切片（告诉模型"第 10 章的
+ * 原文在这"，其实没有），界面上一句提示都没有。
+ */
+test("C16 范围总结装不下时：prompt 只点名真送出去的章，界面说清少带了几章", async ({ page }) => {
+  test.setTimeout(60_000);
+  const OUT = "这一段反复说的是等待。";
+  const REQUESTED = 9; // 第 2-10 章
+  const backend = await readyWithBook(
+    page,
+    vendorTable({ content: OUT, usage: { input: 800, output: 40 } }),
+    { bookTitle: "长范围书", chapters: 12, provider: { contextWindow: 4096, maxTokens: 3000 } },
+  );
+
+  await panel.tab(page, "问答").click();
+  await panel.root(page).locator("#range-from").fill("2");
+  await panel.root(page).locator("#range-to").fill("10");
+  await panel.button(page, /^生成$/).click();
+  await expect(panel.text(page, OUT)).toBeVisible({ timeout: 20_000 });
+
+  const wire = JSON.stringify(chatRequests(backend).at(-1)?.messages ?? []);
+  const sent = Number(wire.match(/实际提供原文 (\d+) 章/)?.[1] ?? 0);
+  // 前提要先成立：这一档确实丢了章。没丢就是预算算错（或窗口没填小），后面那些断言会全空判
+  expect(sent, "可用输入只够几章，却没丢章——预算没生效，这条判据就是空判").toBeGreaterThan(1);
+  expect(sent).toBeLessThan(REQUESTED);
+  const lastSent = 1 + sent; // 从第 2 章起连续送入
+  expect(wire).toContain(`渡口${lastSent}这一站的第一句`);
+  // 起止章必须落在真送出去的那两章上。变异：把 `actualTo` 改回取 `rangeChapters` 末位 →
+  // 这句红：prompt 会写"到 第10章 渡口10"，而第 10 章的正文根本不在请求里。
+  expect(wire).toContain(`章节范围：第2章 渡口2 到 第${lastSent}章 渡口${lastSent}`);
+  expect(wire, "prompt 声称的结束章不许是一章没送出去的").not.toContain(`渡口${lastSent + 1}这一站的第一句`);
+
+  // 界面上要说得清少带了几章（数字与请求面同源，不是写死的一句"内容较长"）
+  await expect(panel.text(page, new RegExp(`另有 ${REQUESTED - sent} 章原文因上下文预算没送出去`)))
+    .toBeVisible();
 });
 
 test("C12 问答追问：第二发的 messages 里要带上第一问和第一答", async ({ page }) => {
