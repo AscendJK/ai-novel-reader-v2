@@ -31,6 +31,10 @@ const cap = vi.hoisted(() => ({
   wake: [] as { active: boolean; reason: string }[],
 }));
 
+/** 桩下来的"浏览器动了没有"：判的是组件请求动到哪，不是浏览器真动到哪 */
+const scrolledIntoView: HTMLElement[] = [];
+const scrollRequests: { el: HTMLElement; top: number | null }[] = [];
+
 vi.mock("@/hooks/useAutoRead", () => ({
   useAutoRead: (opts: UseAutoReadOptions) => {
     cap.autoRead = opts;
@@ -59,11 +63,13 @@ vi.mock("@/db/repositories", () => ({
   loadChapters: vi.fn().mockResolvedValue([]),
 }));
 
-// ── 假几何：容器 600×500，每个 <p> 高 60、段间隔 4 ─────────────────
-// 分页真实依赖这两个数字：容器定 contentHeight，<p> 的 top 定切页位置。
+// ── 假几何：容器 600×500，每个 <p> 高 60、段间隔 4；滚动模式的章节盒各 2000 高 ──
+// 分页真实依赖这两个数字：容器定 contentHeight，<p> 的 top 定切页位置；
+// 章节盒的 top 定"章内偏移"（calcChapterOffset 判的就是它）。
 const VIEW = { width: 600, height: 500 };
 const PARA_HEIGHT = 60;
 const PARA_STEP = 64;
+const SECTION_STEP = 2000;
 
 function rect(top: number, height: number, width: number): DOMRect {
   return {
@@ -75,11 +81,20 @@ function rect(top: number, height: number, width: number): DOMRect {
 const realGetBoundingClientRect = Element.prototype.getBoundingClientRect;
 const realScrollIntoView = Element.prototype.scrollIntoView;
 const realScrollBy = Element.prototype.scrollBy;
+const realScrollTo = Element.prototype.scrollTo;
 
 function fakeGetBoundingClientRect(this: Element): DOMRect {
   const el = this as HTMLElement;
   // 翻页容器：ChapterContent 里唯一写了 touch-action:none 的那块
   if (el.style?.touchAction === "none") return rect(0, VIEW.height, VIEW.width);
+  if (el.classList?.contains("chapter-section")) {
+    const sibs = Array.from(el.parentElement?.children ?? []);
+    const idx = sibs.filter((s) => s.classList.contains("chapter-section")).indexOf(el);
+    // 真实几何是**视口坐标**：滚得越深，章节盒的 top 越往负走。组件算"章内偏移"用的
+    // 正是 `elRect.top - containerRect.top + scrollTop`，桩要是直接给文档坐标就重复加了一次
+    const box = el.closest(".chapter-scroll-container");
+    return rect(Math.max(0, idx) * SECTION_STEP - (box?.scrollTop ?? 0), SECTION_STEP, VIEW.width);
+  }
   if (el.tagName === "P") {
     let idx = 0;
     for (let sib = el.previousElementSibling; sib; sib = sib.previousElementSibling) idx++;
@@ -157,12 +172,51 @@ const handed = () => {
   return opts;
 };
 
+const scrollBox = () => document.querySelector<HTMLElement>(".chapter-scroll-container")!;
+const positions = () => useNovelStore.getState().readingPositions;
+
+function seedPosition(novelId: string, pos: { chapterId: string; chapterIndex: number; scrollTop: number; chapterOffset: number }): void {
+  useNovelStore.setState({ readingPositions: { ...positions(), [novelId]: pos } });
+}
+
+/** jsdom 里 `el.scrollTop = v` 写不进去（元素量不出可滚动尺寸，读回恒 0），所以钉在元素身上 */
+function pinScrollTop(el: HTMLElement, value: number): void {
+  Object.defineProperty(el, "scrollTop", { configurable: true, writable: true, value });
+}
+
+function setVisibility(state: "visible" | "hidden"): void {
+  Object.defineProperty(document, "visibilityState", { configurable: true, value: state });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
+function renameNovel(n: Novel, id: string): Novel {
+  return { ...n, id, chapters: n.chapters.map((c) => ({ ...c, novelId: id })) } as Novel;
+}
+
 beforeEach(() => {
   Element.prototype.getBoundingClientRect = fakeGetBoundingClientRect;
-  // jsdom 没实现这两个：滚动模式一挂载就真会走到它们（恢复进度、跟随朗读）
-  Element.prototype.scrollIntoView = () => {};
+  // jsdom 没实现这些：滚动模式一挂载就真会走到它们（恢复进度、跟随朗读）。
+  // 只桩"浏览器会怎么动"，判的还是组件决定动到哪。
+  scrolledIntoView.length = 0;
+  scrollRequests.length = 0;
+  Element.prototype.scrollIntoView = function (this: Element) {
+    scrolledIntoView.push(this as HTMLElement);
+  };
+  Element.prototype.scrollTo = function (this: Element, arg?: ScrollToOptions | number | null) {
+    const top = typeof arg === "object" && arg !== null ? (arg.top ?? null) : null;
+    scrollRequests.push({ el: this as HTMLElement, top });
+  } as typeof Element.prototype.scrollTo;
   Element.prototype.scrollBy = () => {};
-  vi.useFakeTimers();
+  Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+  // 默认那档假时钟不含 requestAnimationFrame（分页那圈是靠真实 16ms 混过去的），
+  // 而"跳到朗读那一段所在的那一页"正是排在 rAF 上——不纳进来就推不动
+  vi.useFakeTimers({
+    toFake: [
+      "setTimeout", "clearTimeout", "setInterval", "clearInterval",
+      "setImmediate", "clearImmediate", "Date",
+      "requestAnimationFrame", "cancelAnimationFrame", "performance",
+    ],
+  });
   useUIStore.setState({
     fontSize: 16, fontWeight: 400, lineHeight: 1.8, paragraphSpacing: 12,
     fontFamily: "serif", readingMode: "single", autoSwitchPageMode: false,
@@ -181,6 +235,7 @@ afterEach(() => {
   Element.prototype.getBoundingClientRect = realGetBoundingClientRect;
   Element.prototype.scrollIntoView = realScrollIntoView;
   Element.prototype.scrollBy = realScrollBy;
+  Element.prototype.scrollTo = realScrollTo;
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -438,6 +493,145 @@ describe("章节装载", () => {
     });
     expect(vi.mocked(loadChapters)).not.toHaveBeenCalled();
     expect(useNovelStore.getState().selectedChapterId).toBe("ch-2");
+  });
+});
+
+describe("阅读进度落盘", () => {
+  it("头一发当场落，之后每 3 秒最多一次，攒下的那一次要补上", async () => {
+    useUIStore.getState().setReadingMode("scroll");
+    seedPosition("n1", { chapterId: "ch-1", chapterIndex: 0, scrollTop: 0, chapterOffset: 0 });
+    mount({ novel: novelOf(3, [true, true, true]), chapterId: "ch-1" });
+    await settle();
+    const box = scrollBox();
+
+    pinScrollTop(box, 500);
+    fireEvent.scroll(box);
+    expect(positions().n1.scrollTop, "第一次滚动要当场落盘").toBe(500);
+
+    pinScrollTop(box, 2500);
+    fireEvent.scroll(box);
+    expect(positions().n1.scrollTop, "3 秒内的滚动不该每次都写盘").toBe(500);
+
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(positions().n1.scrollTop).toBe(2500);
+    expect(positions().n1.chapterOffset, "章内偏移 = scrollTop − 章节盒顶部：第二章盒从 2000 起").toBe(500);
+  });
+
+  it("切到后台那一下当场落盘，不等剩下的 3 秒", async () => {
+    useUIStore.getState().setReadingMode("scroll");
+    seedPosition("n1", { chapterId: "ch-1", chapterIndex: 0, scrollTop: 0, chapterOffset: 0 });
+    mount({ novel: novelOf(3, [true, true, true]), chapterId: "ch-1" });
+    await settle();
+    const box = scrollBox();
+
+    pinScrollTop(box, 1200);
+    fireEvent.scroll(box);
+    pinScrollTop(box, 1800);
+    fireEvent.scroll(box);
+    expect(positions().n1.scrollTop).toBe(1200);
+
+    setVisibility("hidden");
+    expect(positions().n1.scrollTop, "切后台时必须把攒下的那一次写掉").toBe(1800);
+  });
+
+  it("回到前台：请求回到那一章那一格，不是回到顶", async () => {
+    useUIStore.getState().setReadingMode("scroll");
+    seedPosition("n1", { chapterId: "ch-2", chapterIndex: 1, scrollTop: 4000, chapterOffset: 200 });
+    mount({ novel: novelOf(3, [true, true, true]), chapterId: "ch-2" });
+    await settle();
+    await act(async () => {
+      vi.advanceTimersByTime(700); // 让开机那趟恢复的静默窗走完，下面才只量"回前台"这一发
+    });
+    scrollRequests.length = 0;
+    pinScrollTop(scrollBox(), 0);
+
+    setVisibility("visible");
+    await act(async () => {
+      vi.advanceTimersByTime(60);
+    });
+    expect(scrollRequests.length, "回前台要重发一次回位请求").toBeGreaterThan(0);
+    // 第二章盒顶在 2000、章内偏移 200 → 该请求落到 1800
+    expect(scrollRequests[0].top).toBe(1800);
+  });
+
+  it("切书：上一本用「上次量自它」的那份收尾；攒着没落的那一发不许写到新书头上", async () => {
+    const a = novelOf(3, [true, true, true]);
+    const b = renameNovel(a, "n2");
+    useUIStore.getState().setReadingMode("scroll");
+    seedPosition("n1", { chapterId: "ch-1", chapterIndex: 0, scrollTop: 0, chapterOffset: 0 });
+    seedPosition("n2", { chapterId: "ch-1", chapterIndex: 0, scrollTop: 4000, chapterOffset: 3000 });
+    mount({ novel: a, chapterId: "ch-1" });
+    await settle();
+    const box = scrollBox();
+
+    pinScrollTop(box, 2500);
+    fireEvent.scroll(box);
+    expect(positions().n1.scrollTop).toBe(2500);
+    pinScrollTop(box, 2800);
+    fireEvent.scroll(box); // 3 秒内 → 攒着
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(positions().n1.scrollTop).toBe(2500);
+
+    // 换书：这一刻容器已经是新书的 DOM，位置归零
+    pinScrollTop(box, 0);
+    useNovelStore.setState({ currentNovel: b, selectedChapterId: "ch-1" });
+    await act(async () => {}); // 先把切书那次提交冲干净（含"取消攒下的保存"），再推时钟
+    expect(positions().n1.scrollTop, "收尾要交回上一次量自旧书的那份，不许现场重新量").toBe(2500);
+
+    await act(async () => {
+      vi.advanceTimersByTime(6000);
+    });
+    expect(positions().n1.scrollTop).toBe(2500);
+    expect(positions().n2.scrollTop, "攒着的那一发不能落到刚换上的新书头上").toBe(4000);
+  });
+});
+
+describe("朗读跟随", () => {
+  it("翻页模式：跟到哪一段就翻到那一段所在的那一页", async () => {
+    mount({ novel: novelOf(3, [true, true, true]), chapterId: "ch-1" });
+    await settle();
+    expect(pageLabel().textContent).toBe("1 / 3");
+
+    // 两步走：setState 之后要先让 React 把 effect 跑完，再推时钟——跟随那一发是排在
+    // requestAnimationFrame 上的，同一个 act 里先推时钟就永远推不到它
+    await act(async () => {
+      useTTSStore.setState({ playing: true, currentChapterIndex: 0, currentParagraph: 3 });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(60);
+    });
+    expect(pageLabel().textContent, "第 4 段就在本页，不许乱跳").toBe("1 / 3");
+    expect(
+      document.querySelector("p.bg-primary\\/10")?.getAttribute("data-tts-paragraph"),
+      "要跟的那一段得被标出来",
+    ).toBe("3");
+
+    await act(async () => {
+      useTTSStore.setState({ currentParagraph: 15 });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(60);
+    });
+    expect(pageLabel().textContent, "第 16 段落在本章第 3 页").toBe("3 / 3");
+  });
+
+  it("滚动模式：scrollIntoView 落在被读的那一段自己身上", async () => {
+    useUIStore.getState().setReadingMode("scroll");
+    mount({ novel: novelOf(3, [true, true, true]), chapterId: "ch-2" });
+    await settle();
+    scrolledIntoView.length = 0;
+
+    useTTSStore.setState({ playing: true, currentChapterIndex: 1, currentParagraph: 2 });
+    await act(async () => {
+      vi.advanceTimersByTime(60);
+    });
+    const el = scrolledIntoView.at(-1);
+    expect(el?.getAttribute("data-tts-paragraph"), "要跟的是朗读的那一段").toBe("2");
+    expect(el?.closest(".chapter-section")?.getAttribute("data-chapter-id"), "只能在本章里找那一段").toBe("ch-2");
   });
 });
 
