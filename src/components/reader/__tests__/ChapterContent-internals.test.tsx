@@ -344,24 +344,29 @@ describe("翻页手势", () => {
     expect(pageLabel().textContent).toBe("1 / 3");
   });
 
-  it("空格翻页：焦点落在按钮上时让给按钮", async () => {
+  it("空格翻页：字体面板开着、或焦点落在按钮上时让开", async () => {
     mount({ novel: novelOf(3, [true, true, true]), chapterId: "ch-1" });
     await settle();
-    const space = cap.shortcuts.find((b) => b.key === " ");
-    if (!space?.when) throw new Error("空格绑定没带前置条件");
+    if (!cap.shortcuts.some((b) => b.key === " " && b.when)) throw new Error("空格绑定没带前置条件");
+    // 必须每次现取：面板一开绑定表就换了一份新的（真监听器每次渲染重读 ref），
+    // 抓住旧那份来判，判的就不是当前界面状态了
+    const space = () => cap.shortcuts.find((b) => b.key === " ")!;
 
-    expect(space.when()).toBe(true);
+    expect(space().when!()).toBe(true);
     await act(async () => {
-      space.action();
+      space().action();
       vi.advanceTimersByTime(50);
     });
     expect(pageLabel().textContent).toBe("2 / 3");
 
+    fireEvent.click(fontPanelButton());
+    expect(space().when!(), "字体面板开着时空格该让给面板里的输入").toBe(false);
+    fireEvent.click(fontPanelButton());
+    expect(space().when!(), "关回面板又要能翻").toBe(true);
+
     screen.getByRole("button", { name: "上一页" }).focus();
     expect(document.activeElement?.tagName).toBe("BUTTON");
-    expect(space.when(), "焦点在按钮上时空格该归按钮").toBe(false);
-    // 「字体面板开着时空格不翻页」那一半也写在同一个 when 里，但它读的是 useMemo 里
-    // 被冻结的 showFontPanel（memo 依赖没列它），当场验出来是坏的，另立一条修
+    expect(space().when!(), "焦点在按钮上时空格该归按钮").toBe(false);
   });
 
   it("横向滑动才算翻页，斜着滑不算", async () => {

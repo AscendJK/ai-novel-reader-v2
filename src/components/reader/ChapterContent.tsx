@@ -542,7 +542,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
       { key: "-", action: () => setFontSize(Math.max(12, fontSize - 1)), description: "减小字号" },
       { key: "i", action: onToggleImmersive, description: "切换沉浸模式" },
     ];
-  }, [isPaginated, fontSize, setFontSize, onToggleImmersive, scrollContainerRefForKeys]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isPaginated, fontSize, setFontSize, onToggleImmersive, scrollContainerRefForKeys, showFontPanel]);
   useKeyboardShortcuts(readingShortcuts);
 
   // 翻页模式触摸滑动
