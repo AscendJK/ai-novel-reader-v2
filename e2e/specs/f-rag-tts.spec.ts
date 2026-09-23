@@ -496,3 +496,123 @@ test("F8 播到章末之前就得把下一章推进缓冲：章界不许有冷�
   expect(texts.length, "预热的段数超了：下一章只该热当前引擎预生成段数那么多").toBeLessThanOrEqual(4);
 });
 
+
+// ── F10~F12：`TTSSettings` 那一屏（朗读引擎三选一与"启用"的两条出口）─────────
+/*
+ * 这只组件 831 行，之前一次开机都被加载（覆盖地板第 2 档），断言从没穿过它。
+ * 这一层挑的是"看得见且坏起来不报错"的三件事：
+ *  - 启用没跑成（流里 error 帧 / HTTP 非 2xx）不许停在「下载中...」，也不许报喜（F10）
+ *  - 服务器不支持时，它给的原因原话要上屏——那是用户唯一的可操作线索（F11）
+ *  - 三档引擎各自的说明与卡片状态不许串位；选完刷新还得停在选的那一档（F12）
+ *
+ * "下载成功翻已就绪"归 F4，"半截流没 done"归 F4b，这里不重复。而 SSE 逐帧文案在浏览器
+ * 层天生量不到（`route.fulfill` 不能分块，见上面那段注释）——切引擎要先停朗读、试听前要
+ * 停生成、语音列表去重这三件组件内部的事，全部归单测层。
+ */
+
+/** 服务端推理状态：`ready` 由外部闭包决定，好让"下载完成之后服务器改口"这一圈可演 */
+function serverInferenceStatus(ready: () => boolean, supported = true, reason = ""): StubTable {
+  return {
+    "GET /api/rag/tts/status": () => ({
+      body: {
+        serverInference: { supported, ready: supported ? ready() : false, reason },
+        wasmReady: true,
+        modelReady: true,
+        vocoderReady: true,
+      },
+    }),
+  };
+}
+
+const engineCard = (page: Page, name: string) => page.getByRole("button", { name: `朗读引擎：${name}` });
+const enableServerButton = (page: Page) => page.getByRole("button", { name: "启用服务端推理（下载模型）" });
+
+/** 走到设置页的「语音朗读」那一屏，并把朗读引擎切到 server（引擎卡片自己会滚进视口） */
+async function openTtsSettings(page: Page): Promise<void> {
+  await openSettings(page);
+  await expect(engineCard(page, "服务端推理")).toBeVisible();
+}
+
+/**
+ * 启用失败的两条出口。F4 管"成功"、F4b 管"流断了没说完成"，这两条都还没人判：
+ * 服务器在流里明说失败（error 帧）、以及 HTTP 层直接非 2xx —— 两种都得落成
+ * 「启用失败：<原话>」，并且按钮还能再点（挂着「下载中...」等于把重试入口没收了）。
+ */
+test("F10 启用失败的另外两条出口：error 帧与非 2xx 都要把原因摊开、留着重试入口", async ({ page }) => {
+  test.setTimeout(120_000);
+  // 自己数第几次：桩在跑到 responder 之前就把请求记进了 seen，拿 backend.count 判"第一次"
+  // 会当场少一次（实测两发都走了第二套剧本）
+  let calls = 0;
+  await stubBackend(
+    page,
+    baseTable({
+      ...serverInferenceStatus(() => false),
+      "GET /api/rag/tts/prepare": () => {
+        calls++;
+        return calls === 1
+          ? SSE([{ type: "step", step: "下载模型" }, { type: "error", message: "磁盘空间不足" }])
+          : { status: 503, body: { error: "另一台机器正在下载" } };
+      },
+    }),
+  );
+  await openOnline(page, { ttsEngine: "server" });
+  await openTtsSettings(page);
+  const enable = enableServerButton(page);
+
+  await enable.click();
+  await expect(page.getByText("启用失败：磁盘空间不足")).toBeVisible({ timeout: 20_000 });
+  await expect(enable).toBeEnabled();
+  await expect(page.getByText("服务端推理已就绪")).toHaveCount(0);
+
+  await enable.click();
+  await expect(page.getByText("启用失败：服务器返回 503")).toBeVisible({ timeout: 20_000 });
+  await expect(enable).toBeEnabled();
+  await expect(page.getByText("服务端推理已就绪")).toHaveCount(0);
+  // 这条是**诊断用**不是独立判据：两次点击的文案断言排在它前面，先红的永远是文案。
+  // 它只负责在红的时候说清"第二发根本没出门"。（"两次点击在服务器上共享同一次下载"
+  // 由 `probe:rag` 那条真后端判据管，不归这里。）
+  expect(calls, "两次点击各问服务器一次，不许自己攒着").toBe(2);
+});
+
+test("F11 服务器不支持服务端推理：它给的原因原话要上屏，界面还要给出下一步", async ({ page }) => {
+  await stubBackend(
+    page,
+    baseTable({
+      ...serverInferenceStatus(() => false, false, "未检测到 python3（服务端推理需要 3.9+）"),
+    }),
+  );
+  await openOnline(page, { ttsEngine: "server" });
+  await openTtsSettings(page);
+
+  await expect(engineCard(page, "服务端推理")).toContainText("服务器不支持");
+  // 「不该出现的那枚按钮」排在原因之前：这三条各管一格，排错了后面会被前面盖住
+  // （不支持时若漏了分支，落到"未下载"那一格 → 先红的是这条，而不是文案那条）
+  await expect(enableServerButton(page), "不支持时不该摆出「启用（下载模型）」——点了只会空转").toHaveCount(0);
+  // 服务器 reason 的原话（不是产品自己编的"未启用"），加上那条可操作的下一步
+  await expect(page.getByText(/未检测到 python3/)).toBeVisible();
+  await expect(page.getByText(/pip install sherpa-onnx/)).toBeVisible();
+});
+
+test("F12 三档引擎各自的说明不许串位，选完刷新还得停在选的那一档", async ({ page }) => {
+  await stubBackend(page, baseTable({ ...serverInferenceStatus(() => true) }));
+  // 种子刻意不带 ttsEngine：带了的话 addInitScript 会在每次导航（含 reload）重写这条
+  // 设置，把"用户点过的那一档活下来"这半条判据自己抹掉
+  await openOnline(page);
+  await openTtsSettings(page);
+
+  await expect(page.getByText("浏览器内置 Web Speech API（免下载）")).toBeVisible();
+  await expect(engineCard(page, "浏览器推理（离线）")).toContainText("需下载模型");
+
+  await engineCard(page, "服务端推理").click();
+  await expect(page.getByText("服务端推理：服务器 Python 多线程生成")).toBeVisible();
+  await expect(engineCard(page, "服务端推理")).toHaveClass(/border-primary/);
+
+  await engineCard(page, "浏览器推理（离线）").click();
+  await expect(page.getByText("浏览器推理：本地 wasm 生成（可离线）")).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByRole("button", { name: "从文件夹导入" })).toBeVisible({ timeout: 20_000 });
+  await openTtsSettings(page);
+  await expect(page.getByText("浏览器推理：本地 wasm 生成（可离线）")).toBeVisible();
+  await expect(engineCard(page, "浏览器推理（离线）")).toHaveClass(/border-primary/);
+});
