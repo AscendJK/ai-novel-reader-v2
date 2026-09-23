@@ -219,7 +219,8 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
                 onChange={(e) => setEditing((d) => d ? { ...d, contextWindow: e.target.value ? parseInt(e.target.value) : undefined } : d)}
                 className="h-7 text-xs" />
               <p className="text-[10px] text-muted-foreground">
-                模型的最大输入 token 数。留空则使用上方匹配到的默认值{modelInfo ? `（${modelInfo.budget.contextWindow.toLocaleString()}）` : "（128,000）"}，填写后优先使用。此值决定了发送给 AI 的文本最大长度，超过会被自动截断。
+                模型的最大输入 token 数。留空则使用上方匹配到的默认值{modelInfo ? `（${modelInfo.budget.contextWindow.toLocaleString()}）` : "（128,000）"}，填写后优先使用。
+                这是模型一次能看见的全部内容（指令 + 原文 + 它自己的回答）：窗口填得比模型真值大，请求会被服务商打回；填得小则送进模型的原文更少，问答的检索上下文会被裁短、范围总结会整章不送并在卡片上注明。
               </p>
               <details className="text-[10px] text-muted-foreground">
                 <summary className="cursor-pointer hover:text-foreground">查看常用模型参考值</summary>
@@ -258,7 +259,9 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
                 onChange={(e) => setEditing((d) => d ? { ...d, maxTokens: e.target.value ? parseInt(e.target.value) : undefined } : d)}
                 className="h-7 text-xs" />
               <p className="text-[10px] text-muted-foreground">
-                模型单次调用的最大输出 token 数。留空则使用上方匹配到的默认值{modelInfo ? `（${modelInfo.budget.maxOutputTokens.toLocaleString()}）` : "（4,096）"}，填写后优先使用。此值决定了 AI 生成内容的长度上限，设为模型自身上限即可避免回答被截断。
+                模型单次调用的最大输出 token 数。留空则使用上方匹配到的默认值{modelInfo ? `（${modelInfo.budget.maxOutputTokens.toLocaleString()}）` : "（4,096）"}，填写后优先使用。
+                填大它能避免回答被截断（推理模型会先把这段预算花在"思考"上，太小就一个字都拿不到）。
+                代价在同一只窗口里：输出留得越多，喂给模型的原文就越少，送不进去的部分会在分析卡片上写明（如「另有 N 章原文没送出去」）。
               </p>
             </div>
             <div className="flex gap-2 pt-1">
