@@ -338,6 +338,58 @@ describe("SummaryPanel：indexReady 的四条出口", () => {
     expect(m.rag.addKey).toHaveBeenLastCalledWith(`B-${BGE}`);
     expect(m.rag.removeKey).toHaveBeenLastCalledWith(`B-${BGE}`);
   });
+
+  it("换书打断的那趟：标记照摘，但晚到的结果不许改这一本的引擎名", async () => {
+    // 门放在对象字段上：闭包里的赋值 TS 追不到，直接 releaseA?.() 会被窄化成 never
+    const gate: { release: (v?: unknown) => void; reject: (e: unknown) => void } = {
+      release: () => {},
+      reject: () => {},
+    };
+    m.rag.engine = BGE;
+    m.rag2.buildIndex = vi.fn((id: string) =>
+      id === "A"
+        ? new Promise((res, rej) => { gate.release = res as (v?: unknown) => void; gate.reject = rej; })
+        : Promise.resolve({}),
+    );
+    m.novel.current = book("A");
+    setup();
+    await flush();
+    expect(m.rag.addKey).toHaveBeenCalledWith(`A-${BGE}`);
+    expect(calls(m.rag.removeKey), "前提：A 那趟还挂在天上，标记此刻不该少").toBe(0);
+
+    m.novel.current = book("B", "书乙");
+    await again();
+    await flush();
+    expect(m.rag.addKey).toHaveBeenLastCalledWith(`B-${BGE}`);
+    expect(m.rag.removeKey).toHaveBeenLastCalledWith(`B-${BGE}`);
+
+    // A 那趟晚到、而且是失败收场：它自己挂上的标记必须摘掉（阅读页那枚转圈靠它收），
+    // 但"这一本用的是什么引擎"归 B 说话，晚到的失败不许把它改成 TF-IDF。
+    gate.reject(new Error("上一本的缓存没命中"));
+    await flush();
+    expect(m.rag.removeKey, "被打断的那趟也要把自己挂上的标记摘掉").toHaveBeenCalledWith(`A-${BGE}`);
+    expect(screen.getByText(/检索引擎:/).textContent).toContain(BGE_NAME);
+  });
+
+  it("换引擎打断的那趟：晚到的「嵌入成功」不许把这一本改回嵌入引擎", async () => {
+    // 上一格的门管的是失败那条腿；成功那条腿写的值是引擎名本身。换书时两本的引擎同名，
+    // 那一刀推不出差别（实测：`if (!cancelled)` 摘掉 33 条全绿），只有**换引擎**才让它显形。
+    const gate: { release: (v?: unknown) => void } = { release: () => {} };
+    m.rag.engine = BGE;
+    m.rag2.buildIndex = vi.fn(() => new Promise((res) => { gate.release = res as (v?: unknown) => void; }));
+    m.novel.current = book("A");
+    setup();
+    await flush();
+
+    m.rag.engine = "tfidf";
+    await again();
+    await flush();
+    expect(screen.getByText(/检索引擎:/).textContent).toContain(TFIDF_NAME);
+
+    gate.release({});
+    await flush();
+    expect(screen.getByText(/检索引擎:/).textContent, "晚到的那趟已经不作数了，引擎名归这一趟说了算").toContain(TFIDF_NAME);
+  });
 });
 
 describe("SummaryPanel：换书的收尾与晚到的旧请求", () => {

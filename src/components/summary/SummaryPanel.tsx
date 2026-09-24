@@ -135,7 +135,9 @@ export function SummaryPanel({ defaultTab = "chapter", value, onValueChange }: {
       } else {
         if (!cancelled) setActualEngine("tfidf");
       }
-      if (!cancelled) removeIndexLoadingKey(preloadKey);
+      // 标记是这趟自己挂上的，换书打断也要自己摘掉——所以它不看 cancelled
+      // （上面那几处 setActualEngine 看：晚到的结果不许改口说这一本用什么引擎）
+      removeIndexLoadingKey(preloadKey);
     })();
 
     // Check server-side build status (for badge display)
