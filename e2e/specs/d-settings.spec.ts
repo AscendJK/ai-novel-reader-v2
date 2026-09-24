@@ -333,8 +333,16 @@ test("D12 分类明细里每一枚「清理」都要弹自己那一类的确认�
   const rows = page.locator(
     'xpath=//button[normalize-space(.)="清理"]/ancestor::div[contains(@class,"rounded-lg")][1]'
   );
+  // 分类明细是异步统计出来的（storage-stats 要把 IndexedDB 扫完才报数）：**一次性读 count
+  // 会在统计还没完时拿到 0**，单跑永远量不到、整档并跑就假红（2026-09-26 实测：单跑 3/3 绿，
+  // 全量第三跑到这条红在前提上）。所以这条前提要等，不许抢。
+  await expect
+    .poll(() => rows.count(), {
+      timeout: 20_000,
+      message: "前提：分类明细里至少有一行带清理出口，一格都没有等于这屏没东西可清",
+    })
+    .toBeGreaterThan(0);
   const n = await rows.count();
-  expect(n, "前提：分类明细里至少有一行带清理出口，一格都没有等于这屏没东西可清").toBeGreaterThan(0);
 
   const asked: string[] = [];
   page.on("dialog", async (d) => {
