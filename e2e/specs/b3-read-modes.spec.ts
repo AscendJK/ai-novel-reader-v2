@@ -60,12 +60,17 @@ async function openPagedBook(page: Page, title: string): Promise<void> {
  * 分页要量完才有真实页数：量出来之前那一格写的是兜底的 `1 / 1`（`displayTotalPages = max(totalPages,1)`）。
  * 所以"总页数"必须等它长出来再读，否则整条判据会在"一页"上空转（第一版就是这么红的）。
  */
+/** 页码那一格此刻写的总页数 */
+async function totalNow(page: Page): Promise<number> {
+  const [, raw] = (await pageLabel(page).textContent())!.split(" / ");
+  return Number(raw);
+}
+
 async function settledTotal(page: Page): Promise<number> {
   let total = 1;
   await expect
     .poll(async () => {
-      const [, raw] = (await pageLabel(page).textContent())!.split(" / ");
-      total = Number(raw);
+      total = await totalNow(page);
       return total;
     }, { message: "分页一直没量出多于一页，样本或测量没生效", timeout: 20_000 })
     .toBeGreaterThan(1);
@@ -190,4 +195,28 @@ test("B22 关掉「自动切页」之后：用户选的 double 只在宽屏生�
 
   await page.setViewportSize({ width: 700, height: 720 });
   await expect(pageLabel(page)).toHaveText(/^1 \/ \d+$/);
+});
+
+test("B23 容器尺寸变了要重量：窗口拉矮之后正文得重新排成更多页", async ({ page }) => {
+  // 钉的是 `ChapterContent.tsx:337-349` 那只 ResizeObserver。量出来的容器尺寸只喂
+  // `pageWidth`/`contentHeight`（`:307-313`）再进 usePagination，而 usePagination 自己
+  // 没有观察器——"尺寸变了要重排"这条路上它是唯一入口。B21 那种"展开右栏"的断言挡不住：
+  // 单页/双页那一步读的是 windowWidth（`:103-110`，走 resize 监听），不是量出来的尺寸。
+  // 实测：摘掉 `obs.observe(el)` 之后 B18~B22 五条全绿，只有这条红（"拉一次只重量一次"
+  // 那种写法也试了，红的是同一个位置，所以这里不另加"拉回原尺寸"那一半——它没有自己的靶子）。
+  // 单测层没有立足点：`src/test/setup.ts` 那只 ResizeObserver 桩的 `observe()` 是空的，回调永远不会被叫醒。
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await seedReadingMode(page, "single");
+  await openApp(page);
+  await openPagedBook(page, "阅读页");
+
+  const before = await settledTotal(page);
+
+  await page.setViewportSize({ width: 1280, height: 420 });
+  await expect
+    .poll(() => totalNow(page), {
+      message: "拉矮之后总页数没变＝没重量容器，正文会按旧高度排、底下那一截看不见",
+      timeout: 15_000,
+    })
+    .toBeGreaterThan(before);
 });
