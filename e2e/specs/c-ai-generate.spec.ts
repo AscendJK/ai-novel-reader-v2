@@ -685,3 +685,148 @@ test("C21 输入框里回车＝发送，Shift+回车＝只换行（半截问题�
   await expect(panel.text(page, ANSWER)).toBeVisible({ timeout: 20_000 });
   expect(backend.count("POST", VENDOR_CHAT_PATH)).toBe(1);
 });
+
+/* ── C22~C25：`NotesTab` 那一屏的四条出口（写 / 改 / 移 / 删） ─────────────────── */
+/**
+ * 笔记这一屏之前只在 C19 被判过"AI 回答收藏落到哪儿"，用户自己写的那四条出口一条都没被穿过。
+ * 它们坏起来的形状是同一个：**界面上看着成了，库里那条其实没动**——下次重开面板才露出来，
+ * 而那时候谁也想不到是上一次点的。所以每条都断"这一屏之外"的那一半：换章之后、翻页之后、
+ * 重看那一条之后。
+ *
+ * 挂在 C 组只因为 `readyWithBook` 已经把"开一本书 + 展开面板 + 选好第一章"铺好了；
+ * 这四条本身一个子都不该花，所以每条都顺手数了一遍厂商请求数。
+ */
+
+/**
+ * 一条笔记那张卡片。**按序号认条，不按正文认**：笔记列表是"最新在上"，而改正文那一条
+ * 判据正好会把用来认据的那段文字换掉——用 hasText 定位的卡片会在点下「保存」的瞬间自己失效。
+ */
+function noteCard(page: Page, index: number): Locator {
+  // 这三枚 class 只有笔记卡片凑齐（`NotesTab.tsx:92`）：问答的范围卡没 overflow-hidden，
+  // MiniCard（`shared/MiniCard.tsx:59`）有 overflow-hidden 但没 min-w-0
+  return panel.root(page).locator("div.shadow-none.overflow-hidden.min-w-0").nth(index);
+}
+
+/** 卡片右上角那枚没有文字的删除按钮（图标 = lucide `trash-2`，类名由图标名直接拼出来） */
+function deleteButton(card: Locator): Locator {
+  return card.locator("button:has(svg.lucide-trash-2)");
+}
+
+/**
+ * 在「本章笔记」这一页写一条并保存；返回时输入框该是空的。
+ * 认这条笔记存没存上只认卡片，不认 `getByText`：受控 textarea 的 value 会以子文本节点的形式
+ * 留在 DOM 里（MUT-N2 实测：清空那行一去掉，`getByText` 当场数到 2 个命中），而"输入框还留着字"
+ * 本身就是这条用例要判的事，不能拿它当认据。
+ */
+async function writeNote(page: Page, text: string): Promise<void> {
+  await panel.tab(page, "笔记").click();
+  await panel.root(page).locator("#note-input").fill(text);
+  await panel.button(page, "保存笔记").click();
+  await expect(noteCard(page, 0)).toContainText(text);
+}
+
+test("C22 手写笔记存的是当前章：换章看不见、翻回来还在，纯空格那一下按不下去", async ({ page }) => {
+  test.setTimeout(60_000);
+  const N1 = "这一条只属于第一章：城下的雪落了三天。";
+  const backend = await readyWithBook(page, vendorTable({ content: "不该被打到", usage: { input: 1, output: 1 } }));
+  await panel.tab(page, "笔记").click();
+
+  const box = panel.root(page).locator("#note-input");
+  await box.fill("    ");
+  await expect(panel.button(page, "保存笔记"), "一个字都没有的笔记不许上架").toBeDisabled();
+
+  await box.fill(N1);
+  await panel.button(page, "保存笔记").click();
+  await expect(noteCard(page, 0)).toContainText(N1);
+  await expect(box, "存完还留着字，下一条会连着写成两遍").toHaveValue("");
+  expect(backend.count("POST", VENDOR_CHAT_PATH), "写笔记不该花一个子").toBe(0);
+
+  // 全书那一页不该有待它（写的是本章，落点就该是本章）
+  await panel.button(page, "全书笔记").click();
+  await expect(panel.text(page, "暂无全书笔记")).toBeVisible();
+  await expect(panel.text(page, N1)).toHaveCount(0);
+  await panel.button(page, "本章笔记").click();
+
+  // 换到第二章：本章那一页必须换一屏，不是"跟着人走"
+  await navChapter(page, 1).click();
+  await expect(panel.text(page, "暂无本章笔记")).toBeVisible();
+  await expect(panel.text(page, N1)).toHaveCount(0);
+  await navChapter(page, 0).click();
+  await expect(panel.text(page, N1)).toBeVisible();
+});
+
+test("C23 改笔记：保存只动被点那一条，取消一个字都不动", async ({ page }) => {
+  test.setTimeout(60_000);
+  const A = "渡口那条船，缆绳换过两次。";
+  const B = "崖上的笛声只在第三夜出现过。";
+  const B2 = "崖上的笛声只在第二夜出现过。";
+  await readyWithBook(page, vendorTable({ content: "不该被打到", usage: { input: 1, output: 1 } }));
+  await writeNote(page, A);
+  await writeNote(page, B);
+  // 最新在上：B 是第 0 张，A 是第 1 张
+  const cardB = noteCard(page, 0);
+  const cardA = noteCard(page, 1);
+  await expect(cardB).toContainText(B);
+
+  // 先走「取消」：输入框里改了字，点取消之后卡片还得是原文
+  await cardB.getByRole("button", { name: "编辑" }).click();
+  await cardB.locator("textarea").fill("随手打错的一半");
+  await cardB.getByRole("button", { name: "取消" }).click();
+  await expect(cardB).toContainText(B);
+  await expect(panel.text(page, "随手打错的一半")).toHaveCount(0);
+
+  // 再走「保存」：只改 B 那一条，A 一个字不许跟着动
+  await cardB.getByRole("button", { name: "编辑" }).click();
+  await cardB.locator("textarea").fill(B2);
+  await cardB.getByRole("button", { name: "保存" }).click();
+  await expect(cardB).toContainText(B2);
+  await expect(panel.text(page, B)).toHaveCount(0);
+  await expect(cardA).toContainText(A);
+});
+
+test("C24「移入全书」：本章那一页要让位，全书那一页要接手，标签还得说真话", async ({ page }) => {
+  test.setTimeout(60_000);
+  const N = "这条本来写在第三章，后来归到全书。";
+  await readyWithBook(page, vendorTable({ content: "不该被打到", usage: { input: 1, output: 1 } }));
+  await writeNote(page, N);
+  await expect(noteCard(page, 0)).toContainText(N);
+
+  await noteCard(page, 0).getByRole("button", { name: "移入全书" }).click();
+  await expect(panel.text(page, "暂无本章笔记")).toBeVisible();
+  await expect(panel.text(page, N)).toHaveCount(0);
+
+  await panel.button(page, "全书笔记").click();
+  await expect(panel.text(page, N)).toBeVisible();
+  // 标签要说清这条是从章节移来的——留着"用户笔记"就等于把来路抹掉了
+  await expect(panel.text(page, "从章节移入")).toBeVisible();
+});
+
+test("C25 删除：确认框上说不删就不许多删一条，说删才删得掉", async ({ page }) => {
+  test.setTimeout(60_000);
+  const A = "先写的那一条：鼓声。";
+  const B = "后写的那一条：号声。";
+  await readyWithBook(page, vendorTable({ content: "不该被打到", usage: { input: 1, output: 1 } }));
+  await writeNote(page, A);
+  await writeNote(page, B);
+
+  const asked: string[] = [];
+  let accept = false;
+  page.on("dialog", async (dialog) => {
+    asked.push(dialog.message());
+    await (accept ? dialog.accept() : dialog.dismiss());
+  });
+
+  // 拒一次：这条笔记一个字都不能少
+  await deleteButton(noteCard(page, 0)).click();
+  await expect.poll(() => asked.length).toBe(1);
+  expect(asked[0]).toContain("确定删除");
+  await expect(noteCard(page, 0)).toContainText(B);
+  await expect(noteCard(page, 1)).toContainText(A);
+
+  // 点一次：删的必须是被点那一条，另一条不许陪着没
+  accept = true;
+  await deleteButton(noteCard(page, 0)).click();
+  await expect.poll(() => asked.length).toBe(2);
+  await expect(panel.text(page, B)).toHaveCount(0);
+  await expect(panel.text(page, A)).toBeVisible();
+});
