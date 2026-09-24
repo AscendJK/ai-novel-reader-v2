@@ -55,7 +55,10 @@ function renderNotes(
       chapters: [{ id: "c-1", title: "第一章 风起" }, { id: "c-2", title: "第二章 云涌" }],
     }),
   );
-  if (opts.notes) act(() => hook.result.current.setNotes(opts.notes));
+  if (opts.notes) {
+    const seed = opts.notes;
+    act(() => hook.result.current.setNotes(seed));
+  }
   act(() => hook.result.current.setNoteTab(noteTab));
   return hook;
 }
