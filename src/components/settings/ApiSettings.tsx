@@ -118,10 +118,10 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
                 </div>
               </div>
               <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleEdit(p)}>
+                <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="编辑" onClick={() => handleEdit(p)}>
                   <Edit2 className="h-3.5 w-3.5" />
                 </Button>
-                <Button variant="ghost" size="icon" className="h-7 w-7 hover:text-destructive" onClick={() => handleDelete(p.id)}>
+                <Button variant="ghost" size="icon" className="h-7 w-7 hover:text-destructive" aria-label="删除" onClick={() => handleDelete(p.id)}>
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>
               </div>

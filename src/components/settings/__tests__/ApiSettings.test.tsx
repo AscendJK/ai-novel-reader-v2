@@ -82,11 +82,13 @@ function provider(over: Partial<ProviderConfig> & { id: string }): ProviderConfi
 
 const state = () => useAPIStore.getState();
 
-/** 卡片里那两枚图标按钮没有可访问名（已单独报给制作人），只能按图标类名定位。 */
-function iconButtons(container: HTMLElement, which: "pen" | "trash") {
-  const cls = which === "pen" ? "lucide-pen" : "lucide-trash-2";
-  return Array.from(container.querySelectorAll(`button svg.${cls}`))
-    .map((svg) => svg.closest("button") as HTMLButtonElement);
+/**
+ * 卡片里那两枚图标按钮**按可访问名**认（`aria-label="编辑"` / `"删除"`）。
+ * 以前这里按 `svg.lucide-pen`、`svg.lucide-trash-2` 类名定位——那等于把"读屏念不出这枚按钮"
+ * 这件事一起写进判据：类名不是名字，界面能点但辅助技术里它是两枚无名按钮。
+ */
+function iconButtons(which: "编辑" | "删除"): HTMLButtonElement[] {
+  return screen.getAllByRole("button", { name: which });
 }
 
 function openAddForm() {
@@ -136,8 +138,8 @@ describe("添加与编辑的身份", () => {
       activeProviderId: null,
       loaded: true,
     });
-    const { container } = render(<ApiSettings />);
-    fireEvent.click(iconButtons(container, "pen")[0]);
+    render(<ApiSettings />);
+    fireEvent.click(iconButtons("编辑")[0]);
     expect(screen.getByRole("heading", { name: "编辑 API" })).toBeInTheDocument();
 
     openAddForm();
@@ -198,13 +200,15 @@ describe("列表卡片：点哪儿算哪儿", () => {
       loaded: true,
     });
     vi.spyOn(window, "confirm").mockReturnValue(false);
-    const { container } = render(<ApiSettings />);
+    render(<ApiSettings />);
 
-    fireEvent.click(iconButtons(container, "trash")[1]);
+    fireEvent.click(iconButtons("删除")[1]);
     expect(state().activeProviderId, "删除按钮的点击不许冒泡到卡片").toBe("p1");
     expect(state().providers, "confirm 回 false 时一条都不许少").toHaveLength(2);
+    // 「删除」按下去只能弹确认框，不许顺手把编辑表单打开——这条也是把两枚标签串位时的现场
+    expect(screen.queryByLabelText("API Key"), "点删除不该出现编辑表单").toBeNull();
 
-    fireEvent.click(iconButtons(container, "pen")[1]);
+    fireEvent.click(iconButtons("编辑")[1]);
     expect(state().activeProviderId).toBe("p1");
     expect(screen.getByLabelText("API Key")).toHaveValue("sk-2");
   });
@@ -219,8 +223,8 @@ describe("列表卡片：点哪儿算哪儿", () => {
       loaded: true,
     });
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-    const { container } = render(<ApiSettings />);
-    fireEvent.click(iconButtons(container, "trash")[0]);
+    render(<ApiSettings />);
+    fireEvent.click(iconButtons("删除")[0]);
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(state().providers.map((p) => p.id)).toEqual(["p2"]);
   });
