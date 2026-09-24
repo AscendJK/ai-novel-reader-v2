@@ -48,8 +48,17 @@ const allFiles = execFileSync("git", ["ls-files"], { encoding: "utf8" }).trim().
 const isTest = (f) => /__tests__|[.]test[.]/.test(f) || /^scripts[/]probe-[a-z-]+\.mjs$/.test(f);
 const prod = allFiles.filter((f) => /^(src|server)\//.test(f) && !isTest(f));
 
+/**
+ * 抽说明符之前先剥注释：判据文件的头注释里常会出现 `vi.mock("@/...")`、`import … from "@/..."`
+ * 这类**句子**（本仓 2026-09-25 实测到一处：`AudioPlayer-bar.test.tsx` 的注释写了
+ * `vi.mock("@/components/tts/AudioPlayer")`，于是那只栏被读成"被本文件桩掉"，从裸奔名单里
+ * 漏算一格）。剥掉块注释与行注释之后，正则只看真代码。
+ */
+const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+/** 抽出 import/export-from/动态 import 的模块说明符 */
 function specsOf(file) {
-  const src = fs.readFileSync(path.join(ROOT, file), "utf8");
+  const src = stripComments(fs.readFileSync(path.join(ROOT, file), "utf8"));
   const out = new Set();
   const re = /(?:^|[\s;}])(?:import|export)[\s\S]*?from\s*["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|\bimport\s+["']([^"']+)["']/g;
   let m;
@@ -66,9 +75,9 @@ function resolve(spec, fromFile) {
   return null;
 }
 
-/** 这只测试 `vi.mock` 掉了哪些模块——被桩掉的不算它盯着的对象 */
+/** 这只测试 `vi.mock` 掉了哪些模块——被桩掉的不算它盯着的对象（同样先剥注释） */
 function mockedOf(file) {
-  const src = fs.readFileSync(path.join(ROOT, file), "utf8");
+  const src = stripComments(fs.readFileSync(path.join(ROOT, file), "utf8"));
   const out = new Set();
   const re = /vi\.mock\(\s*["']([^"']+)["']/g;
   let m;

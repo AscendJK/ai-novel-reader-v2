@@ -81,9 +81,12 @@ function resolve(spec, fromFile) {
   return null;
 }
 
-/** 抽出 import/export-from/动态 import 的模块说明符 */
+/** 抽出 import/export-from/动态 import 的模块说明符（先剥注释：判据文件的头注释里常写
+ * `import … from "@/..."` 这类句子，2026-09-25 实测到会把不存在的边算进图里） */
 function specsOf(file) {
-  const src = fs.readFileSync(path.join(ROOT, file), "utf8");
+  const src = fs.readFileSync(path.join(ROOT, file), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
   const out = new Set();
   const re = /(?:^|[\s;}])(?:import|export)[\s\S]*?from\s*["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|\bimport\s+["']([^"']+)["']/g;
   let m;
