@@ -89,7 +89,10 @@ class MockIntersectionObserver {
 }
 
 Object.defineProperty(window, "IntersectionObserver", {
+  // writable/configurable 必须给：不给的话这只桩在整个进程里换不掉，
+  // 想测"回调真被触发"的那类判据一上手就是 `TypeError: Cannot redefine property`
   writable: true,
+  configurable: true,
   value: MockIntersectionObserver,
 });
 
