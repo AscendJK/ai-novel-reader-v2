@@ -126,10 +126,12 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
                 </div>
               </div>
               <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-                <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="编辑" onClick={() => handleEdit(p)}>
+                {/* 可访问名带上卡片那句名字：屏上几张卡片长得几乎一样（差一个「当前」徽章），
+                    只念「编辑」/「删除」的话，读屏用户不知道按下去动的是哪一条配置 */}
+                <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`编辑 ${p.name || "未命名"}`} onClick={() => handleEdit(p)}>
                   <Edit2 className="h-3.5 w-3.5" />
                 </Button>
-                <Button variant="ghost" size="icon" className="h-7 w-7 hover:text-destructive" aria-label="删除" onClick={() => handleDelete(p.id)}>
+                <Button variant="ghost" size="icon" className="h-7 w-7 hover:text-destructive" aria-label={`删除 ${p.name || "未命名"}`} onClick={() => handleDelete(p.id)}>
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>
               </div>

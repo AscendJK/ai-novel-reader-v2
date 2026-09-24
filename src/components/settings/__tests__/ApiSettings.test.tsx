@@ -90,12 +90,13 @@ function provider(over: Partial<ProviderConfig> & { id: string }): ProviderConfi
 const state = () => useAPIStore.getState();
 
 /**
- * 卡片里那两枚图标按钮**按可访问名**认（`aria-label="编辑"` / `"删除"`）。
- * 以前这里按 `svg.lucide-pen`、`svg.lucide-trash-2` 类名定位——那等于把"读屏念不出这枚按钮"
- * 这件事一起写进判据：类名不是名字，界面能点但辅助技术里它是两枚无名按钮。
+ * 卡片里那两枚图标按钮**按可访问名**认，而且名里必须带配置名（`aria-label="编辑 甲"`）。
+ * 两代坑都在这行上：以前按 `svg.lucide-pen`、`svg.lucide-trash-2` 类名定位，等于把"读屏念不出
+ * 这枚按钮"写进判据；只写 `编辑` 又漏掉真正会出事的那一半——屏上几张卡片长得几乎一样
+ * （差一个「当前」徽章），读屏报"编辑按钮"人不知道按下去改的是哪一条。
  */
-function iconButtons(which: "编辑" | "删除"): HTMLButtonElement[] {
-  return screen.getAllByRole("button", { name: which });
+function iconButtons(which: "编辑" | "删除", name: string): HTMLButtonElement[] {
+  return screen.getAllByRole("button", { name: `${which} ${name}` });
 }
 
 function openAddForm() {
@@ -146,7 +147,7 @@ describe("添加与编辑的身份", () => {
       loaded: true,
     });
     render(<ApiSettings />);
-    fireEvent.click(iconButtons("编辑")[0]);
+    fireEvent.click(iconButtons("编辑", "未命名")[0]);
     expect(screen.getByRole("heading", { name: "编辑 API" })).toBeInTheDocument();
 
     openAddForm();
@@ -249,13 +250,13 @@ describe("列表卡片：点哪儿算哪儿", () => {
     vi.spyOn(window, "confirm").mockReturnValue(false);
     render(<ApiSettings />);
 
-    fireEvent.click(iconButtons("删除")[1]);
+    fireEvent.click(iconButtons("删除", "乙")[0]);
     expect(state().activeProviderId, "删除按钮的点击不许冒泡到卡片").toBe("p1");
     expect(state().providers, "confirm 回 false 时一条都不许少").toHaveLength(2);
     // 「删除」按下去只能弹确认框，不许顺手把编辑表单打开——这条也是把两枚标签串位时的现场
     expect(screen.queryByLabelText("API Key"), "点删除不该出现编辑表单").toBeNull();
 
-    fireEvent.click(iconButtons("编辑")[1]);
+    fireEvent.click(iconButtons("编辑", "乙")[0]);
     expect(state().activeProviderId).toBe("p1");
     expect(screen.getByLabelText("API Key")).toHaveValue("sk-2");
   });
@@ -271,9 +272,30 @@ describe("列表卡片：点哪儿算哪儿", () => {
     });
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<ApiSettings />);
-    fireEvent.click(iconButtons("删除")[0]);
+    fireEvent.click(iconButtons("删除", "甲")[0]);
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(state().providers.map((p) => p.id)).toEqual(["p2"]);
+  });
+
+  it("两枚按钮念得出「编辑 甲」——屏上几张卡片长得几乎一样，只念「编辑」会按错一条", () => {
+    useAPIStore.setState({
+      providers: [
+        provider({ id: "p1", name: "甲", apiKey: "sk-1" }),
+        provider({ id: "p2", name: "", apiKey: "" }),
+      ],
+      activeProviderId: "p1",
+      loaded: true,
+    });
+    render(<ApiSettings />);
+    // 名字从**卡片上写着的那句**取，不写死——这样"aria-label 与屏上名字不同源"也判得出来
+    // （「未命名」那一档尤其要紧：兜底文案改了而 aria-label 没跟着改，读屏和眼睛就是两套名字）
+    for (const shown of ["甲", "未命名"]) {
+      const title = screen.getByText(shown);
+      for (const which of ["编辑", "删除"] as const) {
+        expect(screen.getAllByRole("button", { name: `${which} ${title.textContent}` }),
+          `可访问名该是「${which} + 屏上那句名字」`).toHaveLength(1);
+      }
+    }
   });
 
   it("卡片上的第二行：配了 key 说「模型 · 地址」，没配就说「未配置」", () => {
