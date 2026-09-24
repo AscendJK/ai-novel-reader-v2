@@ -161,8 +161,14 @@ export function useQA({ novelId, askCustomQuestion, generateRangeSummary, clearQ
   const qaMessagesRef = useRef(qaMessages);
   useEffect(() => { qaMessagesRef.current = qaMessages; }, [qaMessages]);
 
+  // 一次问答在飞时的同步闸门：ref 赋值当场生效，不像 state 要等重渲染
+  const qaSubmitRef = useRef(false);
+
   const handleSubmitQuestion = useCallback(async () => {
-    if (!customQuestion.trim() || qaLoading) return;
+    // 闸读 ref 不读 qaLoading 这个 state：同一拍里连点两下，两次闭包看到的都还是旧的
+    // false，两道都会放行（组件层也拦不住——按钮 disabled 读的是面板级 loading）
+    if (!customQuestion.trim() || qaSubmitRef.current) return;
+    qaSubmitRef.current = true;
     const question = customQuestion.trim();
     setCustomQuestion("");
     setQaLoading(true);
@@ -185,9 +191,10 @@ export function useQA({ novelId, askCustomQuestion, generateRangeSummary, clearQ
       if (err instanceof Error && err.name === "AbortError") return;
       setQaError(err instanceof Error ? err.message : "问答失败");
     } finally {
+      qaSubmitRef.current = false;
       setQaLoading(false);
     }
-  }, [customQuestion, qaLoading, askCustomQuestion, addMessage]);
+  }, [customQuestion, askCustomQuestion, addMessage]);
 
   const handleRangeSummary = useCallback(async () => {
     const from = parseInt(rangeFrom, 10);
@@ -200,6 +207,9 @@ export function useQA({ novelId, askCustomQuestion, generateRangeSummary, clearQ
       setQaError("范围不能超过 20 章");
       return;
     }
+    // 与提问共用同一把闸：两者过去都读 qaLoading，本就是要互相挡（一次只跑一个 AI 活儿）
+    if (qaSubmitRef.current) return;
+    qaSubmitRef.current = true;
     setQaLoading(true);
     setQaError(null);
     try {
@@ -212,6 +222,7 @@ export function useQA({ novelId, askCustomQuestion, generateRangeSummary, clearQ
     } catch (err) {
       setQaError(err instanceof Error ? err.message : "范围总结失败");
     } finally {
+      qaSubmitRef.current = false;
       setQaLoading(false);
     }
   }, [rangeFrom, rangeTo, generateRangeSummary, setRangeResults]);
