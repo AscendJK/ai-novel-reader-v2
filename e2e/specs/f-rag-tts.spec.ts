@@ -1,8 +1,9 @@
 import { test, expect, type Page, type Request } from "@playwright/test";
 import { stubBackend, idleTtsStatus, type Backend, type Reply, type StubTable } from "../fixtures/backend";
 import { openApp } from "../pages/app";
-import { openSettings } from "../pages/settings";
-import { importFiles, miniNovel, openBook, shelfCard, txtFile } from "../pages/shelf";
+import { openSettings, openSummaryPanel } from "../pages/settings";
+import { backToShelf, importFiles, miniNovel, openBook, shelfCard, txtFile } from "../pages/shelf";
+import { panel } from "../pages/panel";
 
 /**
  * F 组：RAG 建库与 TTS 资源。这一组管的是"服务器答了之后，界面到底变成了什么"——
@@ -81,14 +82,28 @@ async function openOnline(page: Page, opts: { engine?: string; ttsEngine?: strin
   await expect(page.getByRole("button", { name: "从文件夹导入" })).toBeVisible({ timeout: 20_000 });
 }
 
-/** RAG 索引二进制的形状：12 字节小端头（chunksJson 长度 / 维度 / 条数）+ JSON + 向量。 */
-function ragIndexBinary(chunks: string[], dim: number): Buffer {
+/**
+ * 带**真向量**的索引夹具：一段一热（`[[1,0,0,0],[0,1,0,0],…]`），配一只已知的查询向量，
+ * 点积分数与命中顺序就完全可预测（F13 用）。
+ *
+ * 为什么不给 `ragIndexBinary` 加个"顺便填一热"的开关：那条零填充本身是判据要的形状
+ * ——F1 只关心"落库了没有"，向量全 0 正好把"检索根本没跑"这条路挡在它的判据之外。
+ */
+function ragIndexWithVectors(chunks: string[], vectors: number[][]): Buffer {
   const json = Buffer.from(JSON.stringify(chunks), "utf8");
+  const dim = vectors[0].length;
   const header = Buffer.alloc(12);
   header.writeUInt32LE(json.length, 0);
   header.writeUInt32LE(dim, 4);
   header.writeUInt32LE(chunks.length, 8);
-  return Buffer.concat([header, json, Buffer.alloc(chunks.length * dim * 4)]);
+  const f32 = new Float32Array(chunks.length * dim);
+  chunks.forEach((_, i) => f32.set(vectors[i], i * dim));
+  return Buffer.concat([header, json, Buffer.from(f32.buffer as ArrayBuffer)]);
+}
+
+/** RAG 索引二进制的形状：12 字节小端头（chunksJson 长度 / 维度 / 条数）+ JSON + 向量。 */
+function ragIndexBinary(chunks: string[], dim: number): Buffer {
+  return ragIndexWithVectors(chunks, chunks.map(() => Array(dim).fill(0)));
 }
 
 /**
@@ -615,4 +630,102 @@ test("F12 三档引擎各自的说明不许串位，选完刷新还得停在选�
   await openTtsSettings(page);
   await expect(page.getByText("浏览器推理：本地 wasm 生成（可离线）")).toBeVisible();
   await expect(engineCard(page, "浏览器推理（离线）")).toHaveClass(/border-primary/);
+});
+
+/** F13 的索引夹具：三段正文各占一维（一热向量），于是"谁命中、排第几"完全可预测。 */
+const SEARCH_CHUNKS = [
+  "洛阳城下的雪落了三天，街面上没有一个卖炭的人。",
+  "虎牢关的鼓声一夜未停，守将把盔缨系了两遍又松开。",
+  "黑木崖上有人吹笛，笛声里带着饕餮二字的古意。",
+];
+/** 查询向量与这三条的点积分别是 1 / 0.5 / 0——三个互不相同的值，顺序写反就红 */
+const SEARCH_VECS = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]];
+const QUERY_VEC = [1, 0.5, 0, 0];
+const BGE_NAME = "BGE Small 中文专精（推荐）";
+
+/**
+ * F13：语义检索这一屏。
+ *
+ * 为什么单开一条，而不是算进 F1：建库那几条量的是"服务器说 ready 之后本地库里有没有东西"，
+ * 而检索真正的形状在另一头——查询向量从哪儿来、点积出来的分数怎么排、降级了界面说不说。
+ * 这一整段过去只在真后端套（R-C3）里穿过一遍，而那一套不进 CI。
+ *
+ * 关键夹具是**一热向量**：`ragIndexBinary` 那份全 0 的填充在这里会让每条点积都得 0 分，
+ * "有命中"和"根本没检索"就分不开了。配上桩掉的 `POST /api/rag/encode`，1/0.5/0 三个分数
+ * 只可能来自"服务端编码回来的向量 × 索引里的那三条"，任何一环掉回本地编码或 TF-IDF 都凑不出这组数。
+ *
+ * **这里没有"在飞那趟不许铺回来"那一半，是量过之后判定做不了**：我第一版把第二次检索挂在
+ * 闸门上、换书后放行，再断言屏幕空——结果拿掉 `useSearch.ts:92` 那道过期检查照样绿。原因在
+ * 链路本身：换书 abort 的是查询编码那一趟，编码一空，后面本地兜底与 TF-IDF 兜底一律回空数组，
+ * `setSearchResults([])` 与"根本没调用"在 DOM 上是同一张脸。浏览器层能判的是"换书要把屏幕抹干净"
+ * （下面那半段，摘掉 `clearSearch` 里的抹除就红），而"过期结果不许铺回来"只有单测那种
+ * 能直接观察调用与状态的层能钉（`useSearch-internals.test.ts` 用三只闸门按不同顺序放行验过）。
+ */
+test("F13 语义检索：命中按查询向量的点积排序，换书时上一本的命中不许留在屏幕上", async ({ page }) => {
+  test.setTimeout(120_000);
+  const backend = await stubBackend(
+    page,
+    baseTable({
+      // POST 直接回 ready：`doBuild` 在 trigger 阶段拿到 ready 就当场下载（`build-index.ts:357-360`），
+      // 于是这条不需要假时钟，也不用睡 3 秒一轮的轮询。进度状态机归 F1。
+      "POST /api/rag/**": { body: { status: "ready", engine: ENGINE } },
+      "POST /api/rag/encode": { body: { vectors: [QUERY_VEC] } },
+      "GET /api/rag/**": ragRouter({
+        status: () => ({ body: { status: "ready", engine: ENGINE } }),
+        index: () => ({
+          body: ragIndexWithVectors(SEARCH_CHUNKS, SEARCH_VECS),
+          contentType: "application/octet-stream",
+        }),
+      }),
+    }),
+  );
+  await openOnline(page);
+  await importOne(page, "检索测试");
+  // 书架上此刻只有一本书，所以这枚「构建」是全局唯一的；第二本在点完之后才导入
+  await page.getByRole("button", { name: "构建" }).click();
+  await expect(page.getByText("BGE 已缓存")).toBeVisible({ timeout: 20_000 });
+  await importOne(page, "另一本");
+
+  await openBook(page, "检索测试");
+  await openSummaryPanel(page);
+  await panel.tab(page, "搜索").click();
+
+  const input = panel.root(page).getByLabel("语义搜索");
+  const hits = panel.root(page).locator("p.break-all");
+  const scores = panel.root(page).locator("div.rounded-full", { hasText: /^\d\.\d{3}$/ });
+  const engineLine = panel.root(page).getByText(/^引擎:/);
+
+  // 输入带前后空格：`.trim()` 没做的话发出去的就是 " 洛阳 "，只有请求体那一头拆得穿
+  await input.fill(" 洛阳 ");
+  await panel.button(page, "搜索").click();
+
+  // 1) 命中顺序 = 分数从高到低，分数就是点积原值（把 `scores.sort` 写反就红）
+  await expect(hits).toHaveText(SEARCH_CHUNKS, { timeout: 20_000 });
+  await expect(scores).toHaveText(["1.000", "0.500", "0.000"]);
+  // 2) 引擎那一格报的是"这次真用了嵌入引擎"。向量检索一空回来，`retrieveRelevantWithDetails`
+  //    会静默改口 tfidf（`index.ts:422-433`），界面跟着降级才是用户能看懂的那半句
+  await expect(engineLine).toContainText(BGE_NAME);
+  await expect(engineLine).toContainText("· 3 条结果");
+  // 3) 面板顶上那行"检索引擎"走的是另一条路（preload 成功 → actualEngine），两处都得是 BGE
+  await expect(panel.text(page, /^检索引擎:/)).toContainText(BGE_NAME);
+  // 4) 发出去的查询是 trim 过的原文，engine 带的是用户选的那只
+  const [enc] = pathsOf(backend, "POST", "/encode");
+  expect(JSON.parse(enc.body ?? "{}"), "检索请求要带 trim 后的查询与所选引擎").toEqual({
+    texts: ["洛阳"],
+    engine: ENGINE,
+  });
+
+  // ===== 换书：上一本的命中不许留在这一本的屏幕上 =====
+  await backToShelf(page);
+  await openBook(page, "另一本");
+  await panel.tab(page, "搜索").click();
+  // 先确认"看的就是搜索这一屏"：整屏没渲染出来时"没有结果卡片"也成立（§4.5 第 2 条）
+  await expect(input).toBeVisible();
+  await expect(hits).toHaveCount(0);
+  await expect(scores).toHaveCount(0);
+  await expect(panel.text(page, /条结果/)).toHaveCount(0);
+  await expect(input).toHaveValue("");
+  await expect(panel.text(page, "输入查询进行语义搜索")).toBeVisible();
+  // 引擎那一格也得回到"这趟没跑过检索"的样子：挂上任何东西都是假话
+  await expect(engineLine).toContainText(BGE_NAME);
 });
