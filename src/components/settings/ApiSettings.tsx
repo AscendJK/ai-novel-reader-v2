@@ -50,7 +50,15 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
 
   const handleSave = () => {
     if (!editing || !editing.apiKey.trim()) return;
-    addProvider(editing);
+    // 门槛按 trim 判空，存进库的也必须是 trim 过的：地址的尾随空格进 URL 会编成 %20（服务商 404），
+    // 模型名带首尾空格则匹配不上预算表（`getMatchedModelInfo` 只做精确 + startsWith，静默落兜底值）
+    addProvider({
+      ...editing,
+      name: editing.name.trim(),
+      apiKey: editing.apiKey.trim(),
+      baseUrl: editing.baseUrl.trim(),
+      model: editing.model.trim(),
+    });
     setEditing(null);
   };
 

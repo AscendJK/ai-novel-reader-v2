@@ -7,7 +7,7 @@
  * 这两件事都必须真跑才判得出来），`token-manager` 也用真的——placeholder 那条要的就是
  * "界面说的数和表里的数是同一个"。
  *
- * 判的十格，每格都对应一种"坏了不报错、只是悄悄不对"：
+ * 判的十一格，每格都对应一种"坏了不报错、只是悄悄不对"：
  * 1) `newId()` 不许撞号：`api-store.ts:63-66` 的 `addProvider` 是"同 id 就覆盖"，所以两次
  *    添加如果给出同一个 id，症状是**第一份配置无声消失**。
  * 2) 「编辑 API」/「添加 API」按 id 在不在列表里分，不按名字、不按是不是当前。
@@ -22,6 +22,8 @@
  * 9) 离线模式：`resetAutoOffline()` 必须**先于**翻档调用（顺序反了自动检测会立刻把它拨回去），
  *    且"开"要过 confirm、"关"不过。
  * 10) 四块子面板各挂一次——摘掉任何一块，症状是"这一屏少了整功能"。
+ * 11) 保存落库的四串必须 trim 过（门槛按 trim 判空、存原值是两回事），并且**后果单独钉一条**：
+ *     存进去的地址拼出来的请求 URL 不许带 %20、存进去的模型名还得匹配得上预算表。
  *
  * **刻意不判的三格**（都实测过"没有后果"，写了就是装饰性判据）：
  * ① 两个 number 输入留空时存 `undefined` 而不是 `NaN` 会不会算坏预算——`getTokenBudget`
@@ -32,7 +34,12 @@
  * ③ `min`/`step` 这两个原生属性——这一屏没有 `<form>` 提交路径，浏览器校验根本不参与，
  *    它们是装饰（真要拦"填了 512 以下"得写在产品代码里）。
  * 另有一处**读到的缺陷没在这里判**（要改产品代码，已单独报给制作人）：`handleSave` 存的是
- * 未 trim 的原值，粘贴进来的 key 若含换行会撞 `Headers.set` 的非法值 TypeError。
+ * 未 trim 的原值。——**这条已经修完并有判据了**（第 11 格），顺手更正一处旧账：原先记的理由是
+ * "粘贴带 \r\n 的 key 会撞 `Headers.set` 的非法值 TypeError"，**那个形状在本屏不可达**——
+ * 单行 `<input>` 按规范会剥掉所有 ASCII 换行（jsdom `HTMLInputElement-impl` 走
+ * `sanitizeValueByType` → `stripNewlines`，浏览器同规则，实测这条前提断言直接红给我看过）。
+ * 真可达的是另外两种：地址的尾随空格进 URL 编成 `%20`（服务商 404）、模型名带首尾空格匹配不上
+ * 预算表（`getMatchedModelInfo` 只做精确 + startsWith，静默落兜底 128k/4096，只有黄字提示）。
  */
 
 // @vitest-environment jsdom
@@ -161,6 +168,22 @@ describe("添加与编辑的身份", () => {
   });
 });
 
+/** 填进表单、保存，返回落库那一条。四串都带首尾空白——正是要判的东西。 */
+function saveMessyProvider() {
+  render(<ApiSettings />);
+  openAddForm();
+  fireEvent.change(screen.getByLabelText("名称"), { target: { value: "  甲配置  " } });
+  fireEvent.change(screen.getByLabelText("API Key"), { target: { value: " sk-a " } });
+  fireEvent.change(screen.getByLabelText("Base URL"), { target: { value: "https://x/v1 " } });
+  fireEvent.change(screen.getByLabelText("模型名称"), { target: { value: " deepseek-chat " } });
+  // 前提：首尾空白真留在控件里。**换行留不住**——单行 input 按规范剥掉所有 ASCII 换行
+  // （jsdom `sanitizeValueByType` → `stripNewlines`，浏览器同规则），所以"粘贴带 \r\n 的 key
+  // 撞 `Headers.set` 非法值"这个形状在本屏**不可达**，别拿它当这两条判据的理由。
+  expect(screen.getByLabelText("Base URL")).toHaveValue("https://x/v1 ");
+  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  return state().providers[0];
+}
+
 describe("保存的门槛与出口", () => {
   it("key 只填空格时保存按钮是死的（门槛按 trim 后判空）", () => {
     render(<ApiSettings />);
@@ -171,6 +194,30 @@ describe("保存的门槛与出口", () => {
     expect(save, "几个空格不算配了 key").toBeDisabled();
     fillKey("sk-真key");
     expect(save).toBeEnabled();
+  });
+
+  it("存进库的四串都 trim 过——门槛按 trim 判空、存原值是两回事", () => {
+    const saved = saveMessyProvider();
+    expect(saved, "粘贴带进来的首尾空白不许进库").toMatchObject({
+      name: "甲配置",
+      apiKey: "sk-a",
+      baseUrl: "https://x/v1",
+      model: "deepseek-chat",
+    });
+  });
+
+  /**
+   * 后果单独一条：不只看"存进去的字符串长什么样"，还看**那两个数会被谁拿去用**。
+   * 两半合成一次 `toEqual`——分开写的话先红的那条会把后面那条吃掉（同一条测试里的顺序坑）。
+   */
+  it("带空格的原值进了库会怎么坏：地址编成 %20、模型名对不上预算表", () => {
+    const saved = saveMessyProvider();
+    expect({
+      // 尾随空格进 URL 被 WHATWG 编成 %20 → 服务商 404
+      href: new URL(`${saved.baseUrl}/chat/completions`).href,
+      // 模型名只做精确 + startsWith、不 trim → 匹配不上就静默落兜底 128k/4096（只有黄字提示）
+      matchedKey: getMatchedModelInfo(saved.model)?.matchedKey ?? null,
+    }).toEqual({ href: "https://x/v1/chat/completions", matchedKey: "deepseek-chat" });
   });
 
   it("保存之后表单要关掉；点取消则一条都不落库", () => {
