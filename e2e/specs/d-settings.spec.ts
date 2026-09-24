@@ -425,3 +425,101 @@ test("D15 导入别人给的备份：里面的 API 配置不许进浏览器，�
   await leaveSettings(page);
   await expect(shelfCard(page, "外来备份里的书")).toBeVisible();
 });
+
+/**
+ * 一次进架 n 本小书。书名带两位序号，方便在「单本导出」那只下拉里数条数、认最后一条。
+ */
+function shelfOf(n: number): { name: string; mimeType: string; buffer: Buffer }[] {
+  return Array.from({ length: n }, (_, i) => txtFile(`下拉书${String(i).padStart(2, "0")}.txt`, miniNovel()));
+}
+
+/**
+ * 把目标元素"底边贴近视口底"：往上找第一个真的会滚的祖先，按差值抬它的 scrollTop。
+ * 返回贴完之后元素底边距视口底还剩多少像素——测试拿它当**前提**断言，
+ * 不然"滚没滚到"这件事一旦没成立，后面所有几何判据都变成空判。
+ *
+ * 为什么要手动滚：设置屏不是整页滚，而是 `AppLayout.tsx:259` 那只
+ * `<div class="h-full overflow-auto">`（外面还套着 `overflow-hidden` 的 main）。
+ * 下拉列表正是被这一层裁的，所以这一档判的是"贴到容器底开列表会怎样"。
+ */
+async function stickToBottom(page: Page, selector: string, keepBottom = 56): Promise<number> {
+  await page.locator(selector).evaluate((el, keep) => {
+    const rect = el.getBoundingClientRect();
+    const delta = rect.bottom - (window.innerHeight - keep);
+    let node: HTMLElement | null = el.parentElement;
+    while (node) {
+      const s = getComputedStyle(node);
+      if (/auto|scroll/.test(s.overflowY)) {
+        node.scrollTop += delta;
+        return;
+      }
+      node = node.parentElement;
+    }
+  }, keepBottom);
+  const box = await page.locator(selector).boundingBox();
+  const vh = page.viewportSize()?.height ?? 0;
+  return box ? vh - box.y - box.height : vh;
+}
+
+test("D16 设置屏滚到底再开下拉：列表不许跑到屏幕外，最后一项要真点得着", async ({ page }) => {
+  // `ui/select` 这只组件在浏览器层此前一条判据都没有（B16 打的是原生 <select>）。
+  // 它替全应用做的两个决定——列表走 Portal、默认 position="popper"——真后果只有
+  // 真浏览器量得到：列表会不会被设置页那只 overflow-auto 容器裁掉、贴底时会不会翻向。
+  await importFiles(page, shelfOf(4));
+  // 等导入真落地再进设置：`ExportPanel.tsx:16` 是挂载时读一次库（`useEffect(..., [])`），
+  // 导入还在飞就进设置的话，这一屏拿到的是空列表，「单本导出」整块都不出现。
+  // 25 秒：一本书要走解析 + 同步重试，实测 4 本在满并发下超默认 5 秒预算（停在「正在批量导入…」）——
+  // 抬的只有这一步的等待，几何判据仍在原预算内。
+  await expect(shelfCard(page, "下拉书03")).toBeVisible({ timeout: 25_000 });
+  await openSettings(page);
+
+  const gap = await stickToBottom(page, "#export-novel");
+  expect(gap, "前提：触发器得贴着视口底，不然这一条量不到「贴底往哪儿开」").toBeLessThan(140);
+
+  await page.locator("#export-novel").click();
+  const list = page.getByRole("listbox");
+  await expect(list).toBeVisible();
+  const box = await list.boundingBox();
+  const vh = page.viewportSize()?.height ?? 0;
+  expect(box, "列表得量得到几何尺寸").not.toBeNull();
+  expect(box!.y, "列表不许顶出屏幕上沿").toBeGreaterThanOrEqual(0);
+  expect(box!.y + box!.height, `列表掉到屏幕外了（贴底时 popper 该翻到上方）：底边 ${box!.y + box!.height} > 视口 ${vh}`)
+    .toBeLessThanOrEqual(vh + 1);
+
+  const last = page.getByRole("option").last();
+  await expect(last).toHaveText(/下拉书\d\d/);
+  // 最后一项：看得见（几何）之外还要点得着（命中测试）——被容器裁掉的元素照样有几何尺寸
+  await expectUnblocked(last);
+});
+
+test("D17 下拉选项超过一屏时：最后一条要滚得见、也选得中", async ({ page }) => {
+  // 判两件事：① Viewport 那套尺寸类没把列表压成不可滚（`h-[var(--radix-select-trigger-height)]`
+  //    就挂在那儿，只有真浏览器量得出它到底裁掉多少）；② 选中值在浏览器层真能回显到触发器上。
+  // 用服务商那只下拉凑长列表：一本书要走解析 + 同步重试（实测 4 本就超 5 秒），
+  // 一个服务商只写 IndexedDB。
+  await openSettings(page);
+  for (let i = 0; i < 13; i++) {
+    await addProvider(page, { name: `服务商${String(i).padStart(2, "0")}`, key: `sk-e2e-${i}` });
+  }
+  const trigger = page.locator("#active-provider");
+  await expect(trigger, "有一条带 key 的配置就该出现「当前使用的 API」那张卡").toBeVisible();
+
+  await trigger.click();
+  const options = page.getByRole("option");
+  await expect(options, "13 条服务商就该有 13 个选项").toHaveCount(13);
+  const last = options.last();
+  await last.scrollIntoViewIfNeeded();
+  const box = await last.boundingBox();
+  const vh = page.viewportSize()?.height ?? 0;
+  expect(box, "最后一项得量得到几何尺寸").not.toBeNull();
+  const over = Math.round(box!.y + box!.height - vh);
+  // ratio:1 = 整条都在窗口里。默认那档（ratio 0）只要有一像素露出来就算过，
+  // 而"被屏幕下沿切掉一截"恰恰是这一条要抓的症状——用默认档它会绿。
+  await expect(last, `最后一项整条都要在窗口内（实测底边超出视口 ${over}px）`).toBeInViewport({ ratio: 1 });
+  await expectUnblocked(last);
+
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  await expect(trigger, "选中之后的回显只可能来自 ItemText").toContainText("服务商12");
+});
+
