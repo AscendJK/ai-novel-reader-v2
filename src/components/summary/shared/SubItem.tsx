@@ -4,7 +4,7 @@
  */
 
 import type { ReactNode } from "react";
-import { ChevronDown, ChevronRight, RefreshCw, FileText, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronRight, RefreshCw, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MiniCard } from "./MiniCard";
 
@@ -94,29 +94,19 @@ export function SubItem({
 
       {isOpen && (
         <div className="mt-1 space-y-1.5 pl-4">
-          {/* 总结列表 */}
-          {summaries.length > 0 ? (
-            summaries.map((s) => (
-              <MiniCard
-                key={s.id}
-                title={s.chapterTitle}
-                content={s.content}
-                tokens={s.tokensUsed}
-                date={s.updatedAt || s.createdAt}
-                onRegenerate={onRegenerate}
-                loading={loading}
-                usedFallback={s.usedFallback}
-              />
-            ))
-          ) : (
-            <button
-              onClick={onGenerate}
-              disabled={loading}
-              className="text-xs text-muted-foreground hover:text-primary transition-colors py-0.5 flex items-center gap-1"
-            >
-              <FileText className="h-3 w-3" />生成文字分析
-            </button>
-          )}
+          {/* 走到这里 summaries 必非空：空态在函数开头就早退了，生成入口只有一处 */}
+          {summaries.map((s) => (
+            <MiniCard
+              key={s.id}
+              title={s.chapterTitle}
+              content={s.content}
+              tokens={s.tokensUsed}
+              date={s.updatedAt || s.createdAt}
+              onRegenerate={onRegenerate}
+              loading={loading}
+              usedFallback={s.usedFallback}
+            />
+          ))}
         </div>
       )}
     </div>
