@@ -51,9 +51,11 @@ function setup(
       onBuild={onBuild}
     />,
   );
-  /** 搜索按钮是个只有图标的按钮（没 aria-label），只能按结构认。 */
-  const searchBtn = () =>
-    view.container.querySelector("div.flex.gap-1 > button") as HTMLButtonElement;
+  /**
+   * 搜索按钮只有图标，**靠可访问名认**——它没有 `aria-label` 时这几条一起红，
+   * 因为读屏软件念不出这是什么键（拿结构认就看不见这件事）。
+   */
+  const searchBtn = () => screen.getByRole("button", { name: "搜索" }) as HTMLButtonElement;
   const engineSpan = () => screen.getByText(/引擎:/).querySelector("span") as HTMLElement;
   return { ...view, searchHook, onBuild, searchBtn, engineSpan };
 }
@@ -168,16 +170,10 @@ describe("SearchTab · 界面说的话要和状态对上", () => {
     expect(engineSpan().className).toContain("text-yellow-400");
   });
 
-  /**
-   * 钉住**现状**，不是认可它。`SearchTab.tsx:92-101` 判颜色用 `searchHook.searchEngine`
-   * （没搜过时是 `"none"`，`isEmbeddingEngine` 只认 `"tfidf"`，于是 "none" 算嵌入），
-   * 名字却回落到配置的 `engine`。结果：配的是内置 TF-IDF，第一次进搜索页那行是**绿的**，
-   * 用户读到的是"你在用语义引擎"。修法是把名字和颜色用同一个变量。
-   */
-  it("（当前如此，等修）没搜过时：名字报 TF-IDF，颜色却是绿色", () => {
+  it("没搜过时名字与颜色必须同源：配的是内置 TF-IDF 就不许标成绿色", () => {
     const { engineSpan } = setup({ engine: "tfidf" });
     expect(engineSpan().textContent).toBe("TF-IDF（内置）");
-    expect(engineSpan().className).toContain("text-green-400");
+    expect(engineSpan().className, "名字说你在用内置打分，颜色却说你在用语义引擎").toContain("text-yellow-400");
   });
 
   it("有结果才报条数，一条没有就不许挂个「· 0 条结果」", () => {

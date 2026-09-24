@@ -31,6 +31,9 @@ export function SearchTab({
   offlineMode,
   onBuild,
 }: SearchTabProps) {
+  // 名字与颜色同源：没搜过之前那一格说的是配置里的引擎，标色也得跟着它
+  const shownEngine = searchHook.searchEngine === "none" ? engine : searchHook.searchEngine;
+
   // 索引未构建时显示提示
   if (isEmbeddingEngine(engine) && indexReady === false) {
     return (
@@ -74,6 +77,7 @@ export function SearchTab({
         <Button
           size="sm"
           className="h-7 text-xs px-2"
+          aria-label="搜索"
           onClick={searchHook.handleSearch}
           disabled={searchHook.searchLoading || !searchHook.searchQuery.trim()}
         >
@@ -89,15 +93,9 @@ export function SearchTab({
       <div className="text-[10px] text-muted-foreground text-center">
         引擎:{" "}
         <span
-          className={
-            isEmbeddingEngine(searchHook.searchEngine)
-              ? "text-green-400"
-              : "text-yellow-400"
-          }
+          className={isEmbeddingEngine(shownEngine) ? "text-green-400" : "text-yellow-400"}
         >
-          {getEngineDisplayName(
-            searchHook.searchEngine === "none" ? engine : searchHook.searchEngine
-          )}
+          {getEngineDisplayName(shownEngine)}
         </span>
         {searchHook.searchResults.length > 0 && (
           <span className="ml-2">· {searchHook.searchResults.length} 条结果</span>
