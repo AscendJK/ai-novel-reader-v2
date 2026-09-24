@@ -3,7 +3,7 @@
  * 固定在阅读界面底部，显示播放控制和进度
  */
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Play, Pause, Square, SkipForward, SkipBack,
@@ -110,25 +110,42 @@ export function AudioPlayer({
     return () => cancelAnimationFrame(raf);
   }, [isActive]);
 
-  // F4: 睡眠定时器
+  // F4: 睡眠定时器。口径（制作人 2026-09-25 定）：**用完自动清档**——到点停住之后这一档就没了，
+  // 再开播是新的一趟，不许替他再倒一轮；**暂停再继续要接着倒数**——中途去倒杯水不能把走过的分钟抹掉。
   const [sleepTimer, setSleepTimer] = useState(0);
   const [sleepRemaining, setSleepRemaining] = useState(0);
-  const sleepTimerRef = useRef(sleepTimer);
-  useEffect(() => { sleepTimerRef.current = sleepTimer; }, [sleepTimer]);
+  // 剩余时间同时留一份在 ref：到点那一发要做"停播放 + 归档数"两件副作用，而函数式 updater 里
+  // 不能做副作用（React 开发模式会双调用），所以判断读 ref、上屏走 state。
+  const sleepRemainingRef = useRef(0);
+  const setRemaining = useCallback((v: number) => {
+    sleepRemainingRef.current = v;
+    setSleepRemaining(v);
+  }, []);
   useEffect(() => {
     if (sleepTimer > 0 && isPlaying) {
-      // 先重置剩余时间为新设值，再启动倒计时。用 rAF 避免 effect 中同步 setState
-      const raf = requestAnimationFrame(() => setSleepRemaining(sleepTimer));
-      const t = setInterval(() => setSleepRemaining(r => {
-        if (r <= 1) { clearInterval(t); if (sleepTimerRef.current > 0) stop(); return 0; }
-        return r - 1;
-      }), 60000);
+      // 只有"还没在倒数"时才给满值初值；暂停再继续（effect 重跑）必须从剩下的接着走
+      let raf = 0;
+      if (sleepRemainingRef.current <= 0) {
+        // 用 rAF 避免 effect 中同步 setState
+        raf = requestAnimationFrame(() => setRemaining(sleepTimer));
+      }
+      const t = setInterval(() => {
+        const next = sleepRemainingRef.current - 1;
+        if (next <= 0) {
+          // 归档数：effect 依赖一变就替我们把 interval 收掉，不用再补一句 clearInterval
+          setRemaining(0);
+          setSleepTimer(0);
+          stop();
+        } else {
+          setRemaining(next);
+        }
+      }, 60000);
       return () => { cancelAnimationFrame(raf); clearInterval(t); };
     } else if (sleepTimer === 0) {
-      const raf = requestAnimationFrame(() => setSleepRemaining(0));
+      const raf = requestAnimationFrame(() => setRemaining(0));
       return () => cancelAnimationFrame(raf);
     }
-  }, [sleepTimer, isPlaying, stop]);
+  }, [sleepTimer, isPlaying, stop, setRemaining]);
 
   // 弹出面板状态
   const [showSleepPopup, setShowSleepPopup] = useState(false);

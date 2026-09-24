@@ -1,7 +1,7 @@
 /**
  * `src/components/tts/AudioPlayer.tsx`：播放栏自己那几格决定。
  *
- * 为什么要单独钉：这只 382 行的文件 2026-06 以来被改 22 笔，而**每个碰到它的测试都把它桩掉**
+ * 为什么要单独钉：这只近 400 行的文件 2026-06 以来被改 22 笔，而**每个碰到它的测试都把它桩掉**
  * （`ChapterContent-internals.test.tsx:56` 一句 `vi.mock("@/components/tts/AudioPlayer")` 换成
  * 只印 chapterIndex 的空壳，理由是"真实现要 Web Audio"），三个 `useAudioPlayer-*` 测的是 hook
  * 不是栏；浏览器层只有 F5/F10 碰到"朗读出错"、F8 碰到"缓冲"。于是"改坏了会不会有东西红"
@@ -11,10 +11,10 @@
  * 刻意不重复浏览器层：F6 判"停止后栏收掉"、F5 判"服务器那句原因上屏"。这里判的是
  * 那两下按钮点不出来的算术与条件。
  *
- * 读到、没判也没改的一条现状：倒数到零那一发只 `clearInterval` + `stop()`，
- * **档位 `sleepTimer` 仍留在 15**（界面这格显示"0m"）。于是用户再按一次播放，
- * `sleepTimer > 0 && isPlaying` 会重新成立 → 又倒一整轮 15 分钟，而他这一轮并没有重新设过。
- * 这一条要改得先问制作人（"用完自动清档" vs "定时一直有效"是产品口径），所以只写在这里，不做成判据。
+ * 读到、当时没判的一条现状已按口径改掉（制作人 2026-09-25 定 A + 暂停不重置）：旧实现倒数到零只
+ * `clearInterval` + `stop()`，档位仍留在 15 → 再按一次播放会替他再倒一整轮；且每次 effect 重跑
+ * （含暂停再继续）都把剩余抹回满值。现在到点那一发顺手 `setSleepTimer(0)` 归档，满值初值只在
+ * 剩余为 0（= 刚新设档位）时给一次。上面两格各有一刀变异验过判别力。
  *
  * 两处夹具形状要说清（都不是产品缺陷）：
  *  - `h.*` 的值在**渲染那一刻**才被读，所以改完桩状态必须真重渲染一次才算数；重渲染用同一次
@@ -414,6 +414,53 @@ describe("计时与定时关闭", () => {
 
     act(() => { vi.advanceTimersByTime(20 * 60_000); });
     expect(h.stop, "取消完了还被人按下暂停键，是最难查的那种").not.toHaveBeenCalled();
+    r.unmount();
+  });
+
+  it("到点停住之后档位自己归零：再开播不许替他再倒一轮（口径 A）", () => {
+    const r = playing();
+    fireEvent.click(byTitle(r, "定时关闭")!);
+    fireEvent.click(r.container.querySelector('[class*="grid-cols-2"]')!.children[0]);
+    flushRaf();
+    act(() => { vi.advanceTimersByTime(15 * 60_000); });
+    flushRaf();
+    expect(h.stop, "到零得真的停").toHaveBeenCalledTimes(1);
+    expect(text(r)).not.toContain("15m");
+    expect(byTitle(r, "定时关闭"), "图标得回到「关」，不然用户以为还管着下一次").not.toBeNull();
+
+    // 停住 → 收摊 → 再开一趟：他没重新设过定时，就不该再被停一次
+    h.isPlaying = false;
+    h.isActive = false;
+    r.re();
+    flushRaf();
+    h.isActive = true;
+    h.isPlaying = true;
+    r.re();
+    flushRaf();
+    act(() => { vi.advanceTimersByTime(15 * 60_000); });
+    expect(h.stop, "用完就清档，第二次播放是新的一趟").toHaveBeenCalledTimes(1);
+    r.unmount();
+  });
+
+  it("暂停一会儿再继续：接着倒数，不许把已经走过的分钟数抹掉", () => {
+    const r = playing();
+    fireEvent.click(byTitle(r, "定时关闭")!);
+    fireEvent.click(r.container.querySelector('[class*="grid-cols-2"]')!.children[0]);
+    flushRaf();
+    act(() => { vi.advanceTimersByTime(60_000); });
+    expect(byTitle(r, "剩余 14 分钟")).not.toBeNull();
+
+    h.isPlaying = false;
+    h.isPaused = true;
+    r.re();
+    h.isPlaying = true;
+    h.isPaused = false;
+    r.re();
+    flushRaf();
+    expect(byTitle(r, "剩余 14 分钟"), "倒水回来还得是 14 分钟，不是重新满格").not.toBeNull();
+
+    act(() => { vi.advanceTimersByTime(60_000); });
+    expect(byTitle(r, "剩余 13 分钟"), "继续之后还得真往下走").not.toBeNull();
     r.unmount();
   });
 
