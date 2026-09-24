@@ -830,3 +830,34 @@ test("C25 删除：确认框上说不删就不许多删一条，说删才删得�
   await expect(panel.text(page, B)).toHaveCount(0);
   await expect(panel.text(page, A)).toBeVisible();
 });
+
+/* ── C26：`ChapterTab` 那个批量确认框的另两条出口（取消 / 全部重新生成） ───────── */
+/**
+ * 批量入口的确认框有三条出口，之前只被判过一条：C13 与 L6 都点「跳过已有总结」。
+ * 剩下两条坏起来的形状都是**直接花钱**的：「取消」没关闸就等于点一下白烧一整本，
+ * 「全部重新生成」被串成"也跳过"就等于用户按了重烧、拿到的却还是旧结果。
+ */
+test("C26 批量确认框：「取消」一发都不许多，「全部重新生成」要把已有总结那章也重烧", async ({ page }) => {
+  test.setTimeout(120_000);
+  const backend = await readyWithBook(page, vendorTable({ content: SUMMARY_TEXT, usage: { input: 600, output: 30 } }));
+  const fired = () => backend.count("POST", VENDOR_CHAT_PATH);
+
+  // 先让第一章有一条真总结落库（后面"跳过 vs 重烧"的分岔全靠它存在）
+  await panel.button(page, "总结本章").click();
+  await expect(panel.text(page, SUMMARY_TEXT)).toBeVisible({ timeout: 20_000 });
+  expect(fired(), "起步就该只烧这一发").toBe(1);
+
+  // 出口一：取消——框要关回去，而且一发都不许多
+  await panel.button(page, "批量").click();
+  await expect(panel.text(page, "批量总结设置")).toBeVisible();
+  await panel.button(page, "取消").click();
+  await expect(panel.text(page, "批量总结设置")).toHaveCount(0);
+  await expect(panel.button(page, "批量")).toBeVisible();
+  expect(fired(), "点了取消还发请求").toBe(1);
+
+  // 出口二：全部重新生成——三章都要重烧一遍（跳过已有那条路径是 3-1=2 发，分得开）
+  await panel.button(page, "批量").click();
+  await panel.button(page, "全部重新生成").click();
+  await expect.poll(fired, { timeout: 60_000, message: "三章等不到重烧的三发" }).toBe(4);
+  await expect(panel.button(page, "批量")).toBeVisible({ timeout: 30_000 });
+});
