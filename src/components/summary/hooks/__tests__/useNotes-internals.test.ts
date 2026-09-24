@@ -112,17 +112,17 @@ describe("useNotes · 新建落库那一笔", () => {
     expect(saved()[0].updatedAt).toBeGreaterThan(0);
   });
 
-  it("本章但没选中章节 → 落点退到全书，标题与标签却还留在章节口径（钉现状，不是钉正确）", async () => {
+  it("本章但没选中章节 → 落点退到全书，标题与标签必须跟着落到全书口径", async () => {
     const hook = renderNotes({ selectedChapterId: null });
     act(() => hook.result.current.setNoteContent("这一条其实没有章。"));
     await hook.result.current.handleSaveNote();
     await flush();
-    // `useNotes.ts:95-97` 只在算 chapterId 时看了 selectedChapterId，另两样只看 noteTab。
-    // 于是这条笔记会出现在「全书笔记」那一页（`SummaryPanel.tsx:239` 按 chapterId 筛），
-    // 头顶标签却写着"用户笔记 / 当前章节"。用户看到的意外是：写了"本章"笔记，本章页却
-    // 显示"暂无本章笔记"。先按现状钉住，改不改由制作人定。
+    // 旧写法只在算 chapterId 时看了 selectedChapterId，另两样只看 noteTab → 这条会出现在
+    // 「全书笔记」那一页（`SummaryPanel.tsx:239` 按 chapterId 筛），头顶却写着
+    // "用户笔记 / 当前章节"。用户看到的意外是"写了本章笔记，本章页显示暂无本章笔记"。
+    // 制作人定的口径：标签与落点同源。
     expect(saved()[0]).toMatchObject({
-      chapterId: "__book__", chapterTitle: "当前章节", sourceLabel: "用户笔记",
+      chapterId: "__book__", chapterTitle: "全书笔记", sourceLabel: "全书笔记",
     });
   });
 

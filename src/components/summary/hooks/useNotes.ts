@@ -93,9 +93,12 @@ export function useNotes({
     setSavingNote(true);
     try {
       const chapterId = noteTab === "chapter" && selectedChapterId ? selectedChapterId : "__book__";
-      const chapterTitle = noteTab === "chapter"
-        ? chapters.find((c) => c.id === selectedChapterId)?.title || "当前章节"
-        : "全书笔记";
+      // 标题与标签跟着**落点**走，不跟着 noteTab 走：本章 tab 但没选中章节时落点是全书，
+      // 写"当前章节/用户笔记"会让这条笔记在「本章」页永远找不到（列表按 chapterId 筛）
+      const landedOnBook = chapterId === "__book__";
+      const chapterTitle = landedOnBook
+        ? "全书笔记"
+        : chapters.find((c) => c.id === chapterId)?.title || "当前章节";
 
       const note: NoteItem = {
         id: uuid(),
@@ -104,7 +107,7 @@ export function useNotes({
         chapterTitle,
         content: noteContent.trim(),
         source: "user",
-        sourceLabel: noteTab === "chapter" ? "用户笔记" : "全书笔记",
+        sourceLabel: landedOnBook ? "全书笔记" : "用户笔记",
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
