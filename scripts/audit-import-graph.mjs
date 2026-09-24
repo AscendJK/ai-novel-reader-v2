@@ -137,8 +137,19 @@ const rows = changed.map((f) => {
   // `specs`：哪几条用例加载过它——第 2 档要逐只核"有没有断言穿过"，靠这个挑用例才不用盲读整套
   return { file: f, tests, browser: browserLoaded.has(f), specs: [...(browserSpecs.get(f) ?? [])] };
 });
-const naked = rows.filter((r) => r.tests.length === 0 && !r.browser);
+const nakedAll = rows.filter((r) => r.tests.length === 0 && !r.browser);
 const onlyBrowser = rows.filter((r) => r.tests.length === 0 && r.browser);
+
+/**
+ * 第 3 档里已经结案的（制作人 2026-09-25 定口径：**结案 = 结构上写不出判据，不再当欠账**，
+ * 但同样不并进"有覆盖"——这两行留着可见，只是别再每次读地板时被当成"还差两只"）：
+ *  - `src/test/setup.ts` 只被测试自己加载，给它写判据＝拿测试当被测对象，判不了；
+ *  - `src/vite-env.d.ts` 是纯类型声明，编译后一行代码都不留，没有可观察行为。
+ * 往这里加名字要一并写清"为什么写不出判据"，否则它会被当成漏网。
+ */
+const CLOSED_TIER3 = new Set(["src/test/setup.ts", "src/vite-env.d.ts"]);
+const closed = nakedAll.filter((r) => CLOSED_TIER3.has(r.file));
+const naked = nakedAll.filter((r) => !CLOSED_TIER3.has(r.file));
 
 const jsonOut = getArg("json", "");
 if (jsonOut) fs.writeFileSync(jsonOut, JSON.stringify(rows, null, 2));
@@ -149,6 +160,10 @@ console.log(`单测/探针到不了、浏览器跑到过（只证明界面加载
 for (const n of onlyBrowser) console.log(`  ${n.file}`);
 console.log(`\n两层都没碰到（= 改动 100% 无用例守着）：${naked.length}\n`);
 for (const n of naked) console.log(`  ${n.file}`);
+if (closed.length) {
+  console.log(`\n已结案（结构上写不出判据，不算欠账也不算覆盖，理由见脚本里的名单注释）：${closed.length}`);
+  for (const n of closed) console.log(`  ${n.file}`);
+}
 if (naked.some((n) => n.file.startsWith("server/"))) {
   // 走到这里还没被算进"有人看着"的 server 文件，意味着三件事同时成立：没有测试静态 import 到它、
   // 浏览器层没加载它（server 文件本来也不会被浏览器加载）、**探针映射表里也没有它**。
