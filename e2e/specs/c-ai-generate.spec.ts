@@ -593,3 +593,95 @@ test("C15 剧情时间线：模型回的时间线落在折叠区里", async ({ p
   await head.click();
   await expect(panel.text(page, TL_TEXT)).toBeVisible();
 });
+
+/* ── C19~C21：`QATab` 那一屏的出口（收藏落点 / 新会话 / 回车） ────────────────── */
+/**
+ * 问答这一屏之前只被判过"发出去的是什么"（C7/C11/C12/C16/C17），没被判过**拿到答案之后
+ * 那三个出口**：两枚收藏按钮各自把笔记落到哪儿、「新会话」清的是哪一半、回车键按下去算不算发送。
+ * 这三件事坏起来的形状都是"看着成功了，落点错了"——界面上一个错都不报。
+ */
+
+test("C19 收藏 AI 回答：「本章」和「全书」落的不是同一个地方", async ({ page }) => {
+  test.setTimeout(90_000);
+  const A1 = "船家说这条船等了半月，谁也没提昨夜那道影子。";
+  const A2 = "号声之后再也没有人上山，守卒说那是回营的号。";
+  let call = 0;
+  await readyWithBook(page, vendorTable(() => {
+    call += 1;
+    return { content: call === 1 ? A1 : A2, usage: { input: 800, output: 40 } };
+  }));
+
+  const ask = async (q: string, answer: string) => {
+    await panel.tab(page, "问答").click();
+    await panel.root(page).locator("#qa-input").fill(q);
+    await panel.button(page, "发送").click();
+    await expect(panel.text(page, answer)).toBeVisible({ timeout: 20_000 });
+  };
+  // 消息列表是"最新在上"，所以每问完一答立刻点第一枚就是刚那一答（两问之后会有两枚同名按钮）
+  await ask("那条船等了多久？", A1);
+  await panel.button(page, "收藏到全书").first().click();
+  await ask("后来有人上山吗？", A2);
+  await panel.button(page, "收藏到本章").first().click();
+
+  await panel.tab(page, "笔记").click();
+  await panel.button(page, "全书笔记").click();
+  await expect(panel.text(page, A1)).toBeVisible();
+  await expect(panel.text(page, A2)).toHaveCount(0);
+  await panel.button(page, "本章笔记").click();
+  await expect(panel.text(page, A2)).toBeVisible();
+  await expect(panel.text(page, A1)).toHaveCount(0);
+});
+
+test("C20「新会话」清的是整段历史：气泡清空，且下一问不再带上一次的答案", async ({ page }) => {
+  test.setTimeout(90_000);
+  const Q1 = "渡口那条船是谁的？";
+  const A1 = "船家是同一个船家，每天把篷布掀开又盖上。";
+  const Q2 = "黑木崖上谁在吹笛？";
+  let call = 0;
+  const backend = await readyWithBook(page, vendorTable(() => {
+    call += 1;
+    return { content: call === 1 ? A1 : "崖上那个人没有名字，正文里只写他会吹笛。", usage: { input: 800, output: 40 } };
+  }));
+
+  // 没有对话时这枚按钮不该占位（点了也没东西可清）。必须先切到「问答」那一格再看它——
+  // 面板默认停在别的 tab，整块内容根本不挂载，那时 count 0 是白拿的（N2 变异就是这么红在后面的）
+  await panel.tab(page, "问答").click();
+  await expect(panel.button(page, "新会话")).toHaveCount(0);
+  const ask = async (q: string) => {
+    await panel.tab(page, "问答").click();
+    await panel.root(page).locator("#qa-input").fill(q);
+    await panel.button(page, "发送").click();
+  };
+  await ask(Q1);
+  await expect(panel.text(page, A1)).toBeVisible({ timeout: 20_000 });
+
+  await panel.button(page, "新会话").click();
+  await expect(panel.text(page, A1)).toHaveCount(0);
+  await expect(panel.text(page, Q1)).toHaveCount(0);
+  await expect(panel.button(page, "新会话"), "清完没历史了，按钮就该收掉").toHaveCount(0);
+
+  await ask(Q2);
+  await expect(panel.text(page, "崖上那个人没有名字")).toBeVisible({ timeout: 20_000 });
+  const wire = JSON.stringify(chatRequests(backend).at(-1)?.messages ?? []);
+  expect(wire, "说好了新会话，却又把上一答喂给模型").not.toContain(A1);
+  expect(wire).toContain(Q2);
+});
+
+test("C21 输入框里回车＝发送，Shift+回车＝只换行（半截问题不许发出去）", async ({ page }) => {
+  test.setTimeout(60_000);
+  const ANSWER = "鼓声停了半日，看火的人换了一班。";
+  const backend = await readyWithBook(page, vendorTable({ content: ANSWER, usage: { input: 800, output: 40 } }));
+
+  await panel.tab(page, "问答").click();
+  const input = panel.root(page).locator("#qa-input");
+
+  await input.fill("虎牢关的鼓声响了几夜？");
+  await input.press("Shift+Enter");
+  // 换行本身是 textarea 的默认行为（产品只拦普通回车），这里判的是"没发出去、字还在"
+  await expect(input, "Shift+回车不该把问题发出去，字还得留着继续写").toHaveValue(/虎牢关的鼓声响了几夜？/);
+  expect(backend.count("POST", VENDOR_CHAT_PATH), "Shift+回车把半截问题发出去了").toBe(0);
+
+  await input.press("Enter");
+  await expect(panel.text(page, ANSWER)).toBeVisible({ timeout: 20_000 });
+  expect(backend.count("POST", VENDOR_CHAT_PATH)).toBe(1);
+});
