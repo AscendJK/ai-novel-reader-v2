@@ -33,6 +33,9 @@ const CHAPTERS = [
   { id: "c-2", title: "第二章", content: "正文乙" },
 ];
 
+/** 每一次检索都得带上这一趟的取消信号（第五个参数那个 opts 对象），不然"取消了"只丢结果、不停工 */
+const SIGNAL = expect.objectContaining({ signal: expect.any(AbortSignal) });
+
 function deferred<T>() {
   let resolve!: (v: T) => void;
   let reject!: (e: unknown) => void;
@@ -113,7 +116,7 @@ describe("useSearch · 该不该发这一趟", () => {
     await type("  剑修  ");
     fire();
     await flush();
-    expect(rag.retrieve).toHaveBeenCalledWith("book-1", "剑修", 10, "tfidf");
+    expect(rag.retrieve).toHaveBeenCalledWith("book-1", "剑修", 10, "tfidf", SIGNAL);
   });
 });
 
@@ -131,7 +134,7 @@ describe("useSearch · 引擎与索引", () => {
       undefined,
       { cacheOnly: true },
     );
-    expect(rag.retrieve).toHaveBeenCalledWith("book-1", "剑修", 10, "Xenova/bge-small-zh-v1.5");
+    expect(rag.retrieve).toHaveBeenCalledWith("book-1", "剑修", 10, "Xenova/bge-small-zh-v1.5", SIGNAL);
   });
 
   it("嵌入引擎建索引抛错 → 这一趟改用 tfidf，并且真的按 tfidf 建过一次", async () => {
@@ -146,6 +149,7 @@ describe("useSearch · 引擎与索引", () => {
       "剑修",
       10,
       "tfidf",
+      SIGNAL,
     );
     expect(hook.result.current.searchError, "降级是设计好的路，不该报错吓用户").toBeNull();
   });
@@ -313,15 +317,25 @@ describe("useSearch · 结果、报错与清空", () => {
     expect(hook.result.current.searchError).toBeNull();
   });
 
-  /**
-   * 钉住**现状**，不是认可它。`SummaryPanel.tsx:247` 在换书那一刻调 `clearSearch()`，
-   * 但 `clearSearch` 不碰 `abortRef`（`useSearch.ts:101-106`）——上一本那趟在飞的搜索
-   * 没有 signal 传进检索，只有它自己回来时才发现"没人要了"，可那时候 `clearSearch`
-   * 已经泼完水，它反手把上一本的结果又铺回界面。
-   * 修法就一行（`clearSearch` 里 `abortRef.current?.abort()`），等他点头再改，
-   * 改完这一条要翻成"上一本的结果不许回来"。
-   */
-  it("（当前如此，等修）换书清空掐不住在飞的那趟——上一本的结果会自己回来", async () => {
+  it("检索要收到这一次搜索的取消信号，清空之后这把信号得真的成立", async () => {
+    const gate = deferred<unknown>();
+    rag.retrieve.mockReturnValue(gate.p);
+    const { hook, type, fire } = setup();
+    await type("剑修");
+    fire();
+    await flush();
+
+    const signal = (rag.retrieve.mock.calls[0][4] as { signal?: AbortSignal } | undefined)?.signal;
+    expect(signal, "没把 signal 传进检索：取消了也停不下编码那一趟").toBeInstanceOf(AbortSignal);
+    if (!signal) throw new Error("检索没收到取消信号，后面两格无从判起");
+    expect(signal.aborted).toBe(false);
+
+    act(() => hook.result.current.clearSearch());
+    expect(signal.aborted, "清空说停了，检索那边却还以为有人要结果").toBe(true);
+    gate.resolve({ text: "", results: [], engine: "tfidf" });
+  });
+
+  it("换书清空要掐住在飞的那趟——上一本的结果不许回来", async () => {
     const gate = deferred<unknown>();
     rag.retrieve.mockReturnValue(gate.p);
     const { hook, type, fire } = setup();
@@ -334,6 +348,7 @@ describe("useSearch · 结果、报错与清空", () => {
       run,
       () => gate.resolve({ text: "", results: [{ content: "上一本的结果", score: 0.9 }], engine: "tfidf" }),
     );
-    expect(hook.result.current.searchResults.map((r) => r.content)).toEqual(["上一本的结果"]);
+    expect(hook.result.current.searchResults, "换书之后铺上来的是上一本的结果").toEqual([]);
+    expect(hook.result.current.searchLoading, "清空把那趟掐了，收尾就该由清空自己把转圈停下").toBe(false);
   });
 });

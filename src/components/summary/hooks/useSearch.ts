@@ -85,7 +85,10 @@ export function useSearch({
       }
 
       if (controller.signal.aborted) return; // 已被新搜索取消
-      const detail = await retrieveRelevantWithDetails(novelId, searchQuery.trim(), 10, searchEngine);
+      // 取消信号一路带进检索：只丢结果不停工，等于白烧一次查询编码
+      const detail = await retrieveRelevantWithDetails(novelId, searchQuery.trim(), 10, searchEngine, {
+        signal: controller.signal,
+      });
       if (controller.signal.aborted) return; // 结果已过期
       setSearchResults(detail.results);
       setSearchEngine(detail.engine);
@@ -97,12 +100,15 @@ export function useSearch({
     }
   }, [searchQuery, novelId, chapters, engine]);
 
-  // 清除搜索结果
+  // 清空不只是抹干界面：在飞的那一趟必须一起掐掉，否则它回来会把上一本的结果铺上去
   const clearSearch = useCallback(() => {
+    abortRef.current?.abort();
     setSearchQuery("");
     setSearchResults([]);
     setSearchEngine("none");
     setSearchError(null);
+    // 被掐掉那趟的 finally 只关"没被取消的"转圈，这一笔得替它做
+    setSearchLoading(false);
   }, []);
 
   return {
