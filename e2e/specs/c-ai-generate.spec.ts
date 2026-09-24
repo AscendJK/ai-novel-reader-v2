@@ -686,6 +686,37 @@ test("C21 输入框里回车＝发送，Shift+回车＝只换行（半截问题�
   expect(backend.count("POST", VENDOR_CHAT_PATH)).toBe(1);
 });
 
+/**
+ * C27：同一拍里连按两下回车，只许发一发。
+ *
+ * 两次按键必须**挤在同一个同步块里派发**：`input.press()` 每次自带一帧以上间隔，
+ * 那点间隔足够 React 重渲染一次，闸就算读的是 state 也照样挡住——那测的其实是
+ * "浏览器有多慢"。产品里这道闸读的是 ref（`useQA.ts` 的 `qaSubmitRef`），所以同拍
+ * 两下只出门一发；把闸换回读 state 那一格，这条当场红。
+ *
+ * 数请求排在"答案上屏"之后是故意的：两发若真发出去是并行同速的，第一发的答案
+ * 落地时第二发早就记上了，这时候数才不会漏。
+ */
+test("C27 连按两下回车只发一发：同拍的双击不许白烧一次厂商", async ({ page }) => {
+  test.setTimeout(60_000);
+  const ANSWER = "鼓声停了半日，看火的人换了一班。";
+  const backend = await readyWithBook(page, vendorTable({ content: ANSWER, usage: { input: 800, output: 40 } }));
+  const fired = () => backend.count("POST", VENDOR_CHAT_PATH);
+
+  await panel.tab(page, "问答").click();
+  const input = panel.root(page).locator("#qa-input");
+  await input.fill("虎牢关的鼓声响了几夜？");
+
+  await input.evaluate((el) => {
+    for (let i = 0; i < 2; i++) {
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    }
+  });
+
+  await expect(panel.text(page, ANSWER).first(), "两发答案刷两遍").toBeVisible({ timeout: 20_000 });
+  expect(fired(), "同一拍两下回车发出两发，用户白烧一次钱").toBe(1);
+});
+
 /* ── C22~C25：`NotesTab` 那一屏的四条出口（写 / 改 / 移 / 删） ─────────────────── */
 /**
  * 笔记这一屏之前只在 C19 被判过"AI 回答收藏落到哪儿"，用户自己写的那四条出口一条都没被穿过。
