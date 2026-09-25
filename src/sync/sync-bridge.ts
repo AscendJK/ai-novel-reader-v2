@@ -5,6 +5,7 @@ import { sharedDB, getUserDB } from "@/db/database";
 import { useAPIStore } from "@/stores/api-store";
 import { useNovelStore } from "@/stores/novel-store";
 import { userKey, isSensitiveSettingKey } from "@/lib/user-utils";
+import { showToast } from "@/lib/toast-store";
 
 // 每批同步的最大记录数
 const BATCH_SIZE = 50;
@@ -208,7 +209,12 @@ export async function applyServerData(data: SyncData): Promise<void> {
     // 有问题或被换掉了，所以丢弃要留一行日志——静默收下是事故，静默丢掉也是。
     const entries = incoming.filter(([k]) => !isSensitiveSettingKey(k));
     const dropped = incoming.length - entries.length;
-    if (dropped > 0) console.warn(`[sync] 服务器下发了 ${dropped} 条 API 配置，已丢弃`);
+    if (dropped > 0) {
+      // 只写控制台等于没写：这条链是"后端有问题或被换掉"时最后一道闸门，用户必须当着面
+      // 看见它挡下了东西（与备份导入那一侧同一口径，见 `lib/export.ts` 的 ignoredSettings）
+      showToast(`服务器下发的 ${dropped} 条 API 配置已丢弃：钥匙只在界面上由你自己填`, "warn");
+      console.warn(`[sync] 服务器下发了 ${dropped} 条 API 配置，已丢弃`);
+    }
     if (entries.length > 0) {
       await sharedDB.transaction("rw", sharedDB.settings, async () => {
         for (const [key, value] of entries) {
