@@ -183,7 +183,103 @@ describe("parseEpub：坏输入要报错，不许给一只空书", () => {
     const buffer = await zip.generateAsync({ type: "arraybuffer" });
     await expect(parseEpub(new File([buffer], "bomb.epub"))).rejects.toThrow(/条目过多/);
   });
-  // 注：另一道闸 `declaredBytes > 300MB`（`epub.ts:26`）**没有**判据，也没法在单测里造——
-  // 它读的是 zip 中央目录声明的 uncompressedSize，要触发就得真造 300MB 声明体积。
-  // 这条分支现在仍然没人看着，别把上面那条读成"zip bomb 两道都验过了"。
+  // 注：另一道闸原来写的是"没有判据，也没法在单测里造"。2026-09-25 这一档把它造出来了
+  // （给 `parseEpub` 开一个可注入的小上限），并且据此把闸的口径改了——见下面那一档。
+});
+
+/**
+ * 上面那条注释放的是"造不出来"，这一档把它造出来了——顺带把那道闸的毛病定位换了一个：
+ *
+ * - **站得住的一半**：它把整只包（含**从不解压**的图片/字体）声明的体积加起来拦，
+ *   于是 320MB 的图解 EPUB 被一句"解压后体积过大"误杀，而正文其实只有一百 KB。
+ * - **站不住的一半（我原本的判断，被夹具推翻）**：我以为"声明 4 字节、实际几百 KB"
+ *   的谎报包能骗过闸再在 `async("string")` 上撑死页面。实测 **JSZip 自己在校验**
+ *   ——inflate 完对不上声明就抛 `uncompressed data size mismatch`（见下面第一条），
+ *   所以谎报这条路本来就是封的，闸不必为它加逻辑。留着这条判据就是为了把这个结论钉住：
+ *   哪天 JSZip 不校验了，它会红。
+ *
+ * 上限从这里开始量的是**真解进来的文本字节**，判据需要一个能注入的小上限
+ * （`parseEpub(file, { maxDecompressedBytes })`，生产默认值与取值依据见 `epub.ts`）。
+ */
+describe("第二道闸：量真解进来的文本字节，图片与字体不计入", () => {
+  const KB = 1024;
+  /** 造约 N KB 的正文 */
+  const fat = (marker: string, kb: number) =>
+    `<html><body><p>${marker}</p><p>${("正文" + marker + "。").repeat(Math.max(1, Math.floor((kb * KB) / 10)))}</p></body></html>`;
+
+  /** 把每条头里的 uncompressedSize 改成 4 字节（本地头偏移 22、中央目录偏移 24，小端 u32） */
+  function lieAboutSizes(buffer: ArrayBuffer): ArrayBuffer {
+    const out = buffer.slice(0);
+    const view = new DataView(out);
+    const bytes = new Uint8Array(out);
+    const sig = (i: number, a: number, b: number) => bytes[i] === a && bytes[i + 1] === b;
+    for (let i = 0; i + 4 <= bytes.length; i++) {
+      if (sig(i, 0x50, 0x4b) && sig(i + 2, 0x03, 0x04)) view.setUint32(i + 22, 4, true);
+      else if (sig(i, 0x50, 0x4b) && sig(i + 2, 0x01, 0x02)) view.setUint32(i + 24, 4, true);
+    }
+    return out;
+  }
+
+  /** 一册 spine 有 `count` 章、每章约 `kbPer` KB 的样本 */
+  function manyChapters(count: number, kbPer: number): Record<string, string> {
+    const items: string[] = [];
+    const ids: string[] = [];
+    const entries: Record<string, string> = { "META-INF/container.xml": CONTAINER };
+    for (let i = 0; i < count; i++) {
+      items.push(`<item id="c${i}" href="chap${i}.xhtml" media-type="application/xhtml+xml"/>`);
+      ids.push(`c${i}`);
+      entries[`OEBPS/chap${i}.xhtml`] = fat(`第${i}章`, kbPer);
+    }
+    entries["OEBPS/content.opf"] = opf(items, ids);
+    return entries;
+  }
+
+  /** 往一册里塞一张不进 spine 的大图（manifest 里有它，spine 里没有） */
+  function withImage(entries: Record<string, string>, kb: number): Record<string, string> {
+    const e = { ...entries };
+    e["OEBPS/cover.jpg"] = "x".repeat(kb * KB);
+    const ids = Object.keys(e).filter((k) => /^OEBPS\/chap\d+\.xhtml$/.test(k)).map((k) => k.match(/chap(\d+)/)![1]);
+    e["OEBPS/content.opf"] = opf(
+      [
+        '<item id="img" href="cover.jpg" media-type="image/jpeg"/>',
+        ...ids.map((i) => `<item id="c${i}" href="chap${i}.xhtml" media-type="application/xhtml+xml"/>`),
+      ],
+      ["img", ...ids.map((i) => `c${i}`)],
+    );
+    return e;
+  }
+
+  it("谎报 header 的包由 JSZip 当场抛，不会静默解出真值（所以闸不必防谎报）", async () => {
+    const zip = new JSZip();
+    zip.file("mimetype", "application/epub+zip");
+    for (const [p, c] of Object.entries(manyChapters(1, 60))) zip.file(p, c);
+    const lied = lieAboutSizes(await zip.generateAsync({ type: "arraybuffer" }));
+    // 判的是"不静默放行"，不钉 JSZip 那句英文原文——文案换掉不算回归
+    await expect(parseEpub(new File([lied], "lie.epub"))).rejects.toThrow();
+  });
+
+  it("不在 spine 里的大图不许把书一起杀掉：正文只有一百 KB 就该导得进来", async () => {
+    const e = withImage(manyChapters(2, 40), 600);
+    const r = await parseEpub(await epubFile(e, "图解本.epub"), { maxDecompressedBytes: 100 * KB });
+    expect(r.chapters).toHaveLength(2);
+    expect(r.chapters[0].content).toContain("第0章");
+  });
+
+  it("换口径之后闸还在：spine 文本自己超上限必须拦", async () => {
+    const e = manyChapters(3, 80); // 三章各 80KB，累计远超 100KB
+    await expect(
+      parseEpub(await epubFile(e), { maxDecompressedBytes: 100 * KB })
+    ).rejects.toThrow(/解压后体积过大/);
+  });
+
+  it("报错文案要给出实测值，不能只说一句「过大」", async () => {
+    await expect(
+      parseEpub(await epubFile(manyChapters(3, 80)), { maxDecompressedBytes: 100 * KB })
+    ).rejects.toThrow(/0\.\d+MB|1\d*MB/);
+  });
+
+  it("没超上限的正常书不受影响", async () => {
+    const r = await parseEpub(await epubFile(manyChapters(2, 20)), { maxDecompressedBytes: 100 * KB });
+    expect(r.chapters).toHaveLength(2);
+  });
 });

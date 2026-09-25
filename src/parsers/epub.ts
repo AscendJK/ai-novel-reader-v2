@@ -3,30 +3,37 @@ import type { ParseResult } from "./types";
 import { detectChapters, splitByChapters } from "./chapter-detector";
 
 /**
- * zip bomb 上限：EPUB 就是 zip，几 MB 的压缩包可以声明几百 GB 的解压体积，
- * 浏览器会在解压途中被杀（iOS 尤其直接崩页面）。按中央目录里声明的
- * uncompressedSize 先拦一道；同时限制条目数（每个条目都会走一次路径解析）。
+ * zip bomb 上限。两条闸，各挡各的：
+ *  - 条目数：每个条目都会走一次路径解析。
+ *  - **正文体积**：只累计 spine 里真被 `async("string")` 解出来的那些文本条目。
+ *
+ * 原来这道闸量的是「整只包里**所有条目自报**的 uncompressedSize 之和」，两个毛病：
+ *  ① 图片/字体**从头到尾没解压过**也被计入，于是 320MB 的图解 EPUB 被整本拒掉，
+ *    而正文其实只有一百 KB（判据：`epub.test.ts` "不在 spine 里的大图不许把书一起杀掉"）；
+ *  ② 自报值本身不用防——JSZip 在 inflate 完会拿实际长度对账，谎报 `uncompressedSize`
+ *    的包当场抛 `uncompressed data size mismatch`，走不到撑爆内存那一步
+ *    （判据：同文件"谎报 header 的包由 JSZip 当场抛"；哪天 JSZip 不校验了那条会红）。
+ *
+ * 上限取 120MB：口径是**解出来的字符数**（UTF-16，真实驻留约两倍，所以这个数自带余量）。
+ * 一本超长网文正文约 30MB 字符，spine HTML 连标签算 2~3 倍 ≈ 90MB，120MB 留出冗余。
+ * 语料不在手上，所以这是**推算值不是实测分布**；要收紧得先量。
  */
-const MAX_EPUB_DECOMPRESSED = 300 * 1024 * 1024;
+const MAX_EPUB_DECOMPRESSED = 120 * 1024 * 1024;
 const MAX_EPUB_ENTRIES = 5000;
 
-export async function parseEpub(file: File): Promise<ParseResult> {
+export interface EpubParseOptions {
+  /** 只为判据开的注入口：单测里造不出 120MB 正文，用小上限走同一条代码路径 */
+  maxDecompressedBytes?: number;
+}
+
+export async function parseEpub(file: File, opts?: EpubParseOptions): Promise<ParseResult> {
+  const maxBytes = opts?.maxDecompressedBytes ?? MAX_EPUB_DECOMPRESSED;
   const arrayBuffer = await file.arrayBuffer();
   const zip = await JSZip.loadAsync(arrayBuffer);
 
   const entries = Object.values(zip.files);
   if (entries.length > MAX_EPUB_ENTRIES) {
     throw new Error(`EPUB 条目过多（${entries.length} > ${MAX_EPUB_ENTRIES}），已拒绝解析`);
-  }
-  let declaredBytes = 0;
-  for (const entry of entries) {
-    if (entry.dir) continue;
-    declaredBytes += (entry as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize ?? 0;
-  }
-  if (declaredBytes > MAX_EPUB_DECOMPRESSED) {
-    throw new Error(
-      `EPUB 解压后体积过大（${(declaredBytes / 1048576).toFixed(0)}MB > ${(MAX_EPUB_DECOMPRESSED / 1048576).toFixed(0)}MB），已拒绝解析`
-    );
   }
 
   // Find container.xml to locate the OPF file
@@ -96,6 +103,8 @@ export async function parseEpub(file: File): Promise<ParseResult> {
   // Extract text from all spine items
   let fullText = "";
   const chapterTexts: string[] = [];
+  // 累计**真解进来**的正文长度——上面那道体积闸从这里量，不再看 zip 头里自报的值
+  let decompressedChars = 0;
 
   for (const idref of idrefs) {
     const item = manifestItems.get(idref);
@@ -110,6 +119,15 @@ export async function parseEpub(file: File): Promise<ParseResult> {
     if (!contentFile) continue;
 
     const htmlContent = await contentFile.async("string");
+    // 闸落在**解出来之后**：这一发 `async("string")` 本身就是内存峰值，量 zip 头既挡不住
+    // 也拦错了东西（图片根本不走这条路）。累计超线立刻抛，后面的章节不再解。
+    decompressedChars += htmlContent.length;
+    if (decompressedChars > maxBytes) {
+      throw new Error(
+        `EPUB 解压后体积过大（正文累计 ${(decompressedChars / 1048576).toFixed(1)}MB > ` +
+        `${(maxBytes / 1048576).toFixed(0)}MB），已拒绝解析`
+      );
+    }
 
     // Strip HTML tags
     const text = htmlContent
