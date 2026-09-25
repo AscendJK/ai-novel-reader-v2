@@ -9,6 +9,7 @@ import {
   setServerUrl,
   clearServerUrl,
   hasServerUrl,
+  getEffectiveServerUrl,
   apiFetch,
   checkServerReachable,
   detectAndSetServerUrl,
@@ -390,4 +391,60 @@ describe("apiFetch 的总超时与调用方 signal 的关系（round 3 批次 D�
     expect(init.timeoutMs).toBeUndefined();
     expect(init.method).toBe("POST");
   });
+});
+
+/**
+ * `getEffectiveServerUrl` 是整条下载/代理链实际用的那只（`apiFetch`、`model-loader`、
+ * `client-encoder`、`worker-client` 都从它拿地址），而**碰到它的测试历来全把它 mock 掉**
+ * （`useSyncOrchestration-*`、`check-version`、`model-loader`、`client-encoder` 各 stub 一份），
+ * 于是"这台设备到底该往哪儿发请求"这件事从没被直接答过。
+ *
+ * `apiFetch` 那两格已经间接走过"同源回退"与"Pages 不回退"，这里补的是它没走到的三条：
+ * ① 显式配置优先（哪怕同源模式本来就可用，用户填了就得听他的）；② Pages 那条排除是
+ * `.github.io` **和** `.github.com` 两支；③ 判的是**后缀**而不是"名字里含 github.io"。
+ * 第四支 `typeof window === "undefined"` 在 jsdom 里永远走不到（这仓没有 SSR），
+ * 判它等于判桩，不写。
+ */
+describe("getEffectiveServerUrl 的三档决定", () => {
+  const KEY = "server-url";
+  const withHost = (hostname: string, origin: string, fn: () => void) => {
+    const original = window.location;
+    vi.stubGlobal("window", { ...window, location: { ...original, hostname, origin } });
+    try { fn(); } finally { vi.unstubAllGlobals(); }
+  };
+
+  beforeEach(() => { localStorage.clear(); });
+
+  it("填过服务器就以它为准：同源模式明明可用也不许被当前源顶掉", () => {
+    localStorage.setItem(KEY, "https://nas.example.com:8443");
+    withHost("reader.example.com", "https://reader.example.com", () => {
+      expect(getEffectiveServerUrl()).toBe("https://nas.example.com:8443");
+    });
+  });
+
+  it("Pages 那两条排除都在：只留 .github.io 的话，pages.github.com 那台会偷偷打自己", () => {
+    withHost("someone.github.com", "https://someone.github.com", () => {
+      expect(getEffectiveServerUrl(), "没配置时 Pages 域名要留在离线模式").toBe("");
+    });
+    withHost("someone.github.io", "https://someone.github.io", () => {
+      expect(getEffectiveServerUrl()).toBe("");
+    });
+  });
+
+  it("判的是后缀：自托管域名里带「github.io」字样也算不上 Pages，同源回退还得在", () => {
+    // 样本刻意选 endsWith 与 includes 结论不同的那个——`mygithub.io` 结尾并不是 `.github.io`
+    withHost("mygithub.io", "https://mygithub.io", () => {
+      expect(getEffectiveServerUrl(), "这是用户自己的机器，不该被当成 Pages").toBe("https://mygithub.io");
+    });
+  });
+
+  it("同源部署（局域网里后端伺服页面）未配置时回退当前源", () => {
+    withHost("192.168.1.7", "http://192.168.1.7:8443", () => {
+      expect(getEffectiveServerUrl()).toBe("http://192.168.1.7:8443");
+    });
+  });
+
+  // 刻意不写"配置是空串时也算没配置"那一格：`src/test/setup.ts` 的 localStorage 桩里
+  // `getItem` 把 `""` 归成 `null`，空串与"根本没这条"在这个夹具里不可区分——
+  // 写出来无论产品怎么改都会绿，属于凑数判据。
 });
