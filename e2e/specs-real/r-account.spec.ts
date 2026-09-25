@@ -8,15 +8,119 @@
  * 台架与红线见 docs/e2e-real-deploy-plan-2026-09.md §1：跑的是仓库外的全包，数据目录独立，
  * 开发目录的 `server/data/`（真库、证书、口令）只 stat 不读不写，收尾那条判据盯着它。
  */
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { join } from "node:path";
 import { sel } from "../pages/app";
 import { txtFile, importFiles, shelfCard, openBook, backToShelf, navChapter } from "../pages/shelf";
 import { DEV_DATA_BASELINE, devDataFingerprint } from "./preflight";
-import { ORIGIN, RUN, api, realNovel, signIn, waitIsolated } from "./fixtures";
+import { DATA_DIR, ORIGIN, RUN, api, realNovel, signIn, waitIsolated } from "./fixtures";
 
 const USER = `r组真账号-${RUN}`;
 const BOOK = `真后端测试书-${RUN}`;
+
+/** `better-sqlite3` 没带 @types，这一档只用到三个方法，手写最小形状 */
+interface BenchDb {
+  prepare(sql: string): { run(...args: unknown[]): unknown };
+  close(): void;
+}
+
+/**
+ * 往**台架自己那份一次性库**（`ANR_REAL_DATA_DIR/novels.db`）里塞 `user_settings` 行。
+ *
+ * 为什么要手改库：上行那一侧服务端本来就拒收 API 配置（`server/sync-handler.js:190`），
+ * 从界面上填钥匙再同步是塞不进库里的——"服务器库里真躺着一把别人塞进来的钥匙"这个前提
+ * 只有直接写库能造出来。写的对象是包外的一次性目录，开发目录的 `server/data/` 一个字不碰
+ * （R-B5 那条红线继续盯着它）。服务端是 WAL（`server/database.js:15`），第二只连接的
+ * 已提交事务对它下一次读可见；`timeout` 是给 checkpoint 让路的，撞上了等，不重试写。
+ */
+function seedBenchSettings(username: string, rows: [string, unknown][]): void {
+  if (!DATA_DIR) throw new Error("ANR_REAL_DATA_DIR 没给：这一档不许在开发目录上跑");
+  const Database = createRequire(import.meta.url)("better-sqlite3") as new (
+    file: string,
+    opts?: Record<string, unknown>
+  ) => BenchDb;
+  const db = new Database(join(DATA_DIR, "novels.db"), { timeout: 10_000 });
+  try {
+    const put = db.prepare("INSERT OR REPLACE INTO user_settings (username, key, value) VALUES (?, ?, ?)");
+    for (const [key, value] of rows) put.run(username, key, JSON.stringify(value));
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * 读浏览器共享库里的全部 settings 行。不走 Dexie——那是应用自己的模块，页面上没挂到 window，
+ * 而这一档要判的正是"落到这台机器存储里的东西"，直接开 IndexedDB 才是终态。
+ */
+function readSharedSettings(page: Page): Promise<{ key: string; value: unknown }[]> {
+  return page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const opened = indexedDB.open("ai-novel-reader-shared");
+      opened.onupgradeneeded = () => reject(new Error("共享库不存在：应用没在这台机器上建过库"));
+      opened.onsuccess = () => resolve(opened.result);
+      opened.onerror = () => reject(opened.error);
+    });
+    try {
+      return await new Promise<{ key: string; value: unknown }[]>((resolve, reject) => {
+        const all = db.transaction("settings", "readonly").objectStore("settings").getAll();
+        all.onsuccess = () => resolve(all.result as { key: string; value: unknown }[]);
+        all.onerror = () => reject(all.error);
+      });
+    } finally {
+      db.close();
+    }
+  });
+}
+
+/**
+ * 等下一轮同步真的走完一次 push（响应里就带着服务端的 settings）。
+ * 不拿界面那枚离线/在线按钮去抢：切离线之后"切换回在线"藏在要点开的弹层里，
+ * 多两处可坏的地方；客户端本来就每 30 秒一轮 `doSync`（`sync-client.ts:210`），
+ * 90 秒的预算够跑到第二轮。等完再顺手打一行耗时，红的时候看得出是哪一段慢。
+ */
+async function awaitPush(page: Page): Promise<number> {
+  const from = Date.now();
+  await page.waitForResponse((r) => r.url().endsWith("/api/sync/push") && r.status() === 200, {
+    timeout: 90_000,
+  });
+  return Date.now() - from;
+}
+
+/**
+ * 页内自采样「已丢弃」回执，覆盖整段下行。
+ *
+ * **为什么不能到点了再查一次**：回执是一只会自己消失的 toast。上一轮就栽在这里——诊断行读到
+ * `getByText=1`（回执正在屏上），紧接着的 `toHaveCount(0)` 却绿了，后面 12 次 250ms 采样全为 0。
+ * 一次性的断言盯不住一只会自己消失的东西，那条判据是空的。
+ *
+ * 所以改成：写库之前就把表开起来，页内每 120ms 认一次，命中一次就永久记住，三条读数判完再收表。
+ * 两头都要盖住：起点在 push 之前是"不许跟它抢那几毫秒"，尾巴塞一截是实测要的——
+ * 回执的 React 提交落在见证键写进共享库**之后**，前两秒内就收表会读成 false（见判据体）。
+ * 认的是 `textContent` 而不是 `innerText`：后者每轮强制一次排版，而这扇窗要张 30 多秒。
+ */
+async function openReceiptWindow(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as { __b7?: { hit: boolean; rounds: number; timer: number } };
+    if (w.__b7) clearInterval(w.__b7.timer);
+    w.__b7 = { hit: false, rounds: 0, timer: 0 };
+    w.__b7.timer = window.setInterval(() => {
+      const s = w.__b7!;
+      s.rounds++;
+      if (document.body.textContent?.includes("条 API 配置已丢弃")) s.hit = true;
+    }, 120);
+  });
+}
+
+/** 收表：停表并把命中与轮数一起带回来（轮数用来证明这扇窗真的张着，不是开了个空表） */
+async function readReceiptWindow(page: Page): Promise<{ hit: boolean; rounds: number }> {
+  return page.evaluate(() => {
+    const w = window as unknown as { __b7?: { hit: boolean; rounds: number; timer: number } };
+    if (w.__b7) clearInterval(w.__b7.timer);
+    return { hit: w.__b7?.hit ?? false, rounds: w.__b7?.rounds ?? 0 };
+  });
+}
 
 test.describe.serial("真后端：起得来、进得去、数据真是它的", () => {
   test("R-B0 首启为了拿隔离会自刷一次，登录页敲进去的用户名不许被这次刷新吃掉", async ({ page, baseURL }) => {
@@ -128,6 +232,65 @@ test.describe.serial("真后端：起得来、进得去、数据真是它的", (
     await page.waitForTimeout(1500);
     await expect(shelfCard(page, BOOK)).toHaveCount(0);
     await other.close();
+  });
+
+  test("R-B7 服务器库里真躺着一把 API 钥匙时，它不许落到这台机器的共享库里", async ({ page, baseURL }) => {
+    /**
+     * 这一条判的是**服务端读侧那道闸门**（`server/database.js:538-547`）在真后端 + 真库 +
+     * 真浏览器存储这条链上真的站着：库里那一行是台架手写的（上行拒收，界面上塞不进去），
+     * 客户端每次 push 的响应里服务端都会回一份 settings（`gatherSyncData` 对 settings
+     * 不看 since），所以只要它漏一条，钥匙就会顺着 `applyServerData` 落进共享库。
+     *
+     * 三条读数的分工要说清：
+     * - **见证键落地**：同一次下行里那条普通配置进了库——这条不成立就说明根本没发生过下行，
+     *   后面两条绿也是空转。
+     * - **钥匙不进共享库**：整张 settings 表序列化之后不许含那把 canary。
+     * - **屏上没有「已丢弃」回执**：客户端那道闸门（`src/sync/sync-bridge.ts:210`）真收到东西
+     *   才会当面报数。它在真后端这一档**正常情况下永远不响**——响了就说明服务端那条闸门坏了、
+     *   是客户端在替它兜（这条形状是用台架变异验的：把 `database.js:545` 那行过滤摘掉之后，
+     *   第三条翻红、第二条仍绿，两闸各自的岗位这才各自有证据）。
+     *   这一条只能页内自采样（见 `openReceiptWindow`）：上一轮拿一次性断言去盯，回执明明在屏上
+     *   （同一毫秒里 `getByText=1`），`toHaveCount(0)` 却还是绿的——那只 toast 活不过一次往返。
+     */
+    const holder = `r组钥匙-${RUN}`;
+    const CANARY = `EK-${RUN}-这把钥匙不该出现在浏览器里`;
+    const WITNESS = `e2e-witness-${RUN}`;
+    await signIn(page, baseURL!, holder);
+    // 窗从下行之前就张开：谁也不知道 toast 会落在响应回来后的第几毫秒，
+    // 而这一条要的判据是"整段下行里一次都没弹过"，不是"我查的那一刻没弹"。
+    await openReceiptWindow(page);
+
+    seedBenchSettings(holder, [
+      [`api-providers:${holder}`, { providers: [{ id: "bench", name: "台架塞进来的", engine: "openai", baseUrl: "http://127.0.0.1:9/v1", apiKey: CANARY, models: [] }] }],
+      [WITNESS, { landed: true }],
+    ]);
+
+    const waited = await awaitPush(page);
+    console.log(`[R-B7] 等这一次 push 走了 ${(waited / 1000).toFixed(1)} 秒（客户端每 30 秒一轮）`);
+
+    await expect
+      .poll(async () => (await readSharedSettings(page)).some((r) => r.key.startsWith(WITNESS)), {
+        timeout: 20_000,
+        message: "同一次下行里的普通配置都没落地：这一趟根本没走过 settings 那条路，后面两条判据是空的",
+      })
+      .toBe(true);
+
+    const rows = await readSharedSettings(page);
+    console.log(`[R-B7] 共享库 ${rows.length} 行，键：${rows.map((r) => r.key).join(",")}`);
+    expect(
+      rows.some((r) => r.key.startsWith("api-providers") || r.key.startsWith("api-active-provider")),
+      `浏览器共享库里出现了 API 配置键（共 ${rows.length} 行）`
+    ).toBe(false);
+    expect(JSON.stringify(rows), "服务器下发的内容里带着那把 canary").not.toContain(CANARY);
+
+    // 第三条收那扇窗（理由见 `openReceiptWindow`）。尾巴塞这一截是**实测要求的**：+32.6s 那句
+    // "已丢弃"报出来的同一瞬间，见证键就已经能在共享库里查到——toast 的 React 提交落在落库之后。
+    // 上一版判完前两条立刻收表，247 轮采样全空，把一条真会弹的回执读成了 false。
+    await page.waitForTimeout(1_500);
+    const receipt = await readReceiptWindow(page);
+    console.log(`[R-B7] 回执窗采样 ${receipt.rounds} 轮，命中=${receipt.hit}`);
+    expect(receipt.rounds, "页内采样没跑起来：第三条是空判据").toBeGreaterThan(50);
+    expect(receipt.hit, "屏上出现过「已丢弃」回执——服务端那道闸门漏了，是客户端在替它兜").toBe(false);
   });
 
   test("R-B5 整轮跑完，开发目录的 server/data 一项都没被碰过", async () => {
