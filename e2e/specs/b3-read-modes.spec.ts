@@ -220,3 +220,59 @@ test("B23 容器尺寸变了要重量：窗口拉矮之后正文得重新排成�
     })
     .toBeGreaterThan(before);
 });
+
+/** 目录里那一条此刻的横向形状（`read` 与探针逐项同源）。 */
+async function navWidths(page: Page): Promise<{ vpClient: number; vpScroll: number; spanClient: number; spanScroll: number }> {
+  return page.evaluate(() => {
+    const vp = document.querySelector<HTMLElement>('[data-sidebar="chapter-nav"] [data-radix-scroll-area-viewport]')!;
+    const span = vp.querySelector<HTMLElement>("span")!;
+    return {
+      vpClient: vp.clientWidth,
+      vpScroll: vp.scrollWidth,
+      spanClient: span.clientWidth,
+      spanScroll: span.scrollWidth,
+    };
+  });
+}
+
+test("B25 目录里一条超长章节标题：不许把列表拉宽，要走省略号", async ({ page }) => {
+  /**
+   * 钉的是 `ui/scroll-area` 那半段命令式覆盖（`useFixViewportDisplay`）在真布局里的后果。
+   * 单测层只能判"那两层 style 被写成了 block / 0"，判不了"会不会真撑破"——jsdom 没有表格
+   * 自动布局，`clientWidth`/`scrollWidth` 恒 0。所以这一条是这只壳在浏览器层的靶子
+   * （它历史上被修过六次：`0a5d594`→`5c9c00d`→`e2e9021`→`8ee5aee`→`57ceab8`→两笔清理）。
+   *
+   * 四组实测读数（`第N章 ` + 40 多个汉字，`text-xs`，侧栏 `md:w-56`=224px，viewport 可视宽 192px）：
+   * - 产品现在这样：viewport **192/192** 不溢；标题那一格可见 142 / 需要 534 → 省略号真在截。
+   * - 只把**内层**那行 `display` 退回 `"table"`（`minWidth` 仍按平到 0）：viewport **192/584**，
+   *   横向多出来 392px，标题那一格变成 534/534（不再被截）→ 本条红，报"溢出 392px"。
+   * - 两层都退回 Radix 默认的 `display:table` + `minWidth:100%`：同样是 192/584。
+   * - 把**外层**那两行整个删掉：viewport 仍然 192/192，本条**照绿**。
+   *   所以这一条只管得住内层那一只——外层那两行在目录这个调用点上量不出后果（它挡住的是
+   *   另一类"Viewport 自己带上 table/100%"的形状），它的判据在单测层那边。
+   *
+   * 三条读数按"前提 → 终态 → 用户口径"排：前提那句必须在两种形状下都成立，否则它会抢在
+   * 判据前面响（第一版就是拿"标题被截了没"当前提，结果刀落下先红的是它，报出来的像是样本坏了）。
+   */
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await seedReadingMode(page, "single");
+  await openApp(page);
+  const LONG = "渡口长亭短歌无名氏拟古其一其二其三其四其五其六其七其八其九其十并排再长一点看撑不撑";
+  const body =
+    "石阶被水泡过了三道，缆桩上系着的麻绳换了两回，等船的人始终没有来，只有船家每天把篷布掀开又盖上，天黑了才回屋。";
+  const text = Array.from({ length: 8 }, (_, i) => `第${i + 1}章 ${LONG}${i + 1}\n${body}${body}`).join("\n\n");
+  await importFiles(page, [txtFile("长标题目录.txt", text)]);
+  await expect(shelfCard(page, "长标题目录")).toBeVisible({ timeout: 30_000 });
+  await shelfCard(page, "长标题目录").click();
+  await page.waitForSelector('[data-sidebar="chapter-nav"] [data-radix-scroll-area-viewport] span', { timeout: 30_000 });
+
+  const w = await navWidths(page);
+  console.log(`[B25] 目录 viewport ${w.vpClient}/${w.vpScroll}，标题那一格 ${w.spanClient}/${w.spanScroll}`);
+  expect(w.spanScroll, `标题需要 ${w.spanScroll}px，这一列给得起 ${w.vpClient}px：样本不够长，后两条判据是空的`).toBeGreaterThan(
+    w.vpClient
+  );
+  expect(w.vpScroll, `目录列表横向溢出 ${w.vpScroll - w.vpClient}px（可视宽 ${w.vpClient}px）——Radix 那只 table 包裹没被按平`).toBeLessThanOrEqual(
+    w.vpClient + 1
+  );
+  expect(w.spanClient, "标题那一格没被截（可见宽就等于需要宽），省略号没生效").toBeLessThan(w.spanScroll);
+});
