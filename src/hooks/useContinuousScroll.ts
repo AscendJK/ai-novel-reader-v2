@@ -155,10 +155,11 @@ export function useContinuousScroll({
                 const grown = container.scrollHeight - oldScrollHeight;
                 if (grown !== 0) {
                   container.scrollTop = container.scrollTop + grown;
-                  // 这一笔自己有残差：章节盒带 `content-visibility:auto` +
-                  // `contain-intrinsic-size:0 500px`（ChapterContent.tsx:836），离屏章节按估算
-                  // 记账，量不准（B24 量到落点偏 204px）。所以落笔之后要把跳章那个"按目标章在
-                  // 视口里的位置核落点"的循环再叫起来一个窗——它才是落点的最终负责人。
+                  // 这一笔自己有 204px 残差（B24 量到的落点偏移），但**成因我没归因**：
+                  // 换过两种 Δ 取法——scrollHeight 的差 与 "新插入那些 section 的 offsetHeight
+                  // 之和"——残差一个像素没变，所以不是 Δ 里混了噪声那么简单。处理方式只按事实来：
+                  // 落笔之后把跳章那个"按目标章在视口里的位置核落点"的循环再叫起来一个窗，
+                  // 它才是落点的最终负责人。
                   rearmSettleRef.current?.();
                 }
                 // 补偿完成后再解锁，避免哨兵仍在检测区导致循环加载
