@@ -83,34 +83,3 @@ export abstract class BaseAgent implements Agent {
     return { success: false, error: userMessage };
   }
 }
-
-/**
- * 创建简单的 Agent（不需要类继承）
- * 适用于简单的 Agent 实现
- */
-export function createSimpleAgent(
-  name: string,
-  description: string,
-  execute: (context: AgentContext, env: AgentEnvironment) => Promise<AgentResult>
-): Agent {
-  return {
-    name,
-    description,
-    async run(context: AgentContext): Promise<AgentResult> {
-      const hasRetrieved = !!usablePreRetrieval(context.preRetrieved);
-      const envResult = await prepareAgentContext(context, { loadAllContent: hasRetrieved ? false : undefined });
-      if (!envResult.success) {
-        return { success: false, error: envResult.error };
-      }
-
-      try {
-        return await execute(context, envResult);
-      } catch (err) {
-        const appError = normalizeError(err);
-        const userMessage = getUserFriendlyMessage(appError);
-        console.error(`[Agent:${name}] Error:`, appError.code, appError.message);
-        return { success: false, error: userMessage };
-      }
-    },
-  };
-}
