@@ -30,7 +30,7 @@ import type { Novel } from "@/parsers/types";
  * 组件的两个实例，捕获顺序会被 lazy 的解析时机牵着走。
  *
  * 判别力（28 条 / 29 刀，逐刀手动下、跑完立刻反向还原，末了 `SHA256` 核回基线）：
- * 每刀都咬住了指定那一格，三处要如实记着——
+ * 每刀都咬住了指定那一格，四处要如实记着——
  * ① 刀 3 第一版是**假绿**：我把 JSX 的右括号吞了，文件没编译，`红=0` 看着像"判据没用"。
  *    从那以后每条跑刀命令都固定核三样：`Transform failed`、`skipped`、盘上 `MUT-` 数。
  * ② 刀 4／25 第一次红不到格上：夹具（预热与按 testid 单查）假设了"面板只有一个实例"，
@@ -40,6 +40,11 @@ import type { Novel } from "@/parsers/types";
  *    另：刀 6／14 属于"翻 else 分支"型判点。把 `currentNovelId ? … : false` 的整段 guard
  *    删掉是**等价变异**（`novelId` 类型上不可能是 undefined），只有翻那一支才红——
  *    这两格判的是可观察行为，不是那两行防御码本身。
+ * ④ 后一笔清死代码时改掉了本文件的一处**夹具级假绿**：`toggleSummary()` 原本是点
+ *    `ChapterContent` 桩里自己造的假按钮（直接调它收到的 `onToggleSummary`），压根没经过
+ *    真折叠按钮。同一个缺陷（把 `ReadingPanel.tsx:101` 那句 `onClick` 换成空函数）实测过：
+ *    旧夹具下 28 条全绿，改按真按钮之后红 5 条。桩驱动只能判"prop 有没有传"，判不到"屏上
+ *    那枚按钮接没接上线"——这一格从此按后者判。
  */
 
 type Props = Record<string, unknown>;
@@ -63,7 +68,6 @@ vi.mock("@/components/reader/ChapterContent", () => ({
     cap.content.push(p);
     return (
       <div data-testid="chapter-content">
-        <button data-testid="fire-toggle-summary" onClick={() => (p.onToggleSummary as () => void)()} />
         <button data-testid="fire-toggle-immersive" onClick={() => (p.onToggleImmersive as () => void)()} />
       </div>
     );
@@ -133,7 +137,13 @@ const pickBtnIn = (scope: HTMLElement | null) =>
 const pickMobileTab = (label: string) =>
   fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${label}$`) }));
 const toggleImmersive = () => fireEvent.click(screen.getByTestId("fire-toggle-immersive"));
-const toggleSummary = () => fireEvent.click(screen.getByTestId("fire-toggle-summary"));
+/**
+ * 开合右栏只按真出口：右栏那枚折叠按钮（`ReadingPanel.tsx:101`，"始终显示"）。
+ * 早先这里是往 `ChapterContent` 桩里塞一只假按钮、直接调它收到的 `onToggleSummary`——
+ * 那样即使真按钮的 onClick 整条断掉，判点也不会红，接到按钮上的那根线等于没判。
+ */
+const toggleSummary = () =>
+  fireEvent.click(screen.getByRole("button", { name: /(收起|展开) AI 分析面板/ }));
 const desktopHost = () => host("[data-sidebar='summary-panel']");
 /** lazy 那一帧：真挂载要等动态 import 落地，`fireEvent` 的 act 包不住 */
 const flush = async () => { await act(async () => { await new Promise((r) => setTimeout(r, 0)); }); };

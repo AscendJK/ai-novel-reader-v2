@@ -89,7 +89,6 @@ function AutoReadButton() {
           {speedOpen && (
             <div
               className="absolute right-0 top-full mt-1 z-30 rounded-lg border bg-card shadow-lg p-1.5 flex flex-col gap-0.5 min-w-[110px]"
-              onClick={(e) => e.stopPropagation()}
             >
               <span className="text-[10px] text-muted-foreground px-1.5 pt-0.5">滚动速度</span>
               {AUTO_READ_SPEED_PRESETS.map((v) => (
@@ -114,9 +113,7 @@ export interface TopBarProps {
   chapter: { id: string; title: string; content: string };
   currentIndex: number;
   chapters: Array<{ id: string }>;
-  summaries: Array<{ id: string; createdAt: number }>;
   summaryOpen: boolean;
-  onToggleSummary: () => void;
   hasSummary: boolean;
   showFontPanel: boolean;
   setShowFontPanel: (v: boolean) => void;

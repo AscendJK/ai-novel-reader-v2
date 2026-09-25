@@ -1,6 +1,5 @@
 import React, { useEffect, useCallback, useRef, useMemo, useState, startTransition } from "react";
 import { useNovelStore, pickFlushPosition } from "@/stores/novel-store";
-import { useSummaryStore } from "@/stores/summary-store";
 import { useUIStore } from "@/stores/ui-store";
 import { useRAGStore } from "@/stores/rag-store";
 import { useTTSStore } from "@/stores/tts-store";
@@ -18,7 +17,6 @@ import { showToast } from "@/lib/toast-store";
 
 interface ChapterContentProps {
   summaryOpen: boolean;
-  onToggleSummary: () => void;
   hasSummary: boolean;
   immersive: boolean;
   onToggleImmersive: () => void;
@@ -37,16 +35,12 @@ const PAGE_PADDING = 24;
 const PAGE_PADDING_MOBILE = 12;
 const MAX_SINGLE_WIDTH = 768;
 
-export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immersive, onToggleImmersive, scrollControlRef }: ChapterContentProps) {
+export function ChapterContent({ summaryOpen, hasSummary, immersive, onToggleImmersive, scrollControlRef }: ChapterContentProps) {
   const currentNovel = useNovelStore((s) => s.currentNovel);
   const selectedChapterId = useNovelStore((s) => s.selectedChapterId);
   const setSelectedChapter = useNovelStore((s) => s.setSelectedChapter);
   const addChapters = useNovelStore((s) => s.addChapters);
   const saveScrollTop = useNovelStore((s) => s.saveScrollTop);
-  // R-58：订阅到渲染真正用到的分片。注意必须订阅 summaries 本身而不是只拿
-  // getSummariesByNovel 这个函数引用——函数是稳定 identity，那样总结更新后
-  // 本组件不再重渲染，界面会停在旧数据（下方 618 行是在 render 期读的）
-  const allSummaries = useSummaryStore((s) => s.summaries);
   const fontSize = useUIStore((s) => s.fontSize);
   const setFontSize = useUIStore((s) => s.setFontSize);
   const fontWeight = useUIStore((s) => s.fontWeight);
@@ -602,9 +596,6 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     );
   }
 
-  const summaries = currentNovel
-    ? allSummaries.filter((s) => s.novelId === currentNovel.id && s.chapterId === chapter.id)
-    : [];
   const currentWeightLabel = FONT_WEIGHTS.find((w) => w.value === fontWeight)?.label || "正常";
   const textStyles: React.CSSProperties = { fontSize: `${fontSize}px`, lineHeight, fontWeight, fontFamily };
 
@@ -683,7 +674,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
       <div className="flex-1 flex flex-col h-full">
         <TopBar
           chapter={chapter} currentIndex={currentIndex} chapters={chapters}
-          summaries={summaries} summaryOpen={summaryOpen} onToggleSummary={onToggleSummary}
+          summaryOpen={summaryOpen}
           hasSummary={hasSummary}
           showFontPanel={showFontPanel} setShowFontPanel={setShowFontPanel}
           onToggleImmersive={onToggleImmersive}
@@ -795,7 +786,7 @@ export function ChapterContent({ summaryOpen, onToggleSummary, hasSummary, immer
     <div className="flex-1 flex flex-col h-full">
       <TopBar
         chapter={chapter} currentIndex={currentIndex} chapters={chapters}
-        summaries={summaries} summaryOpen={summaryOpen} onToggleSummary={onToggleSummary}
+        summaryOpen={summaryOpen}
         hasSummary={hasSummary}
         showFontPanel={showFontPanel} setShowFontPanel={setShowFontPanel}
         onToggleImmersive={onToggleImmersive}

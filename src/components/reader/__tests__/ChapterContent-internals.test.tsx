@@ -4,7 +4,6 @@ import { ChapterContent } from "../ChapterContent";
 import { useNovelStore } from "@/stores/novel-store";
 import { useUIStore } from "@/stores/ui-store";
 import { useTTSStore } from "@/stores/tts-store";
-import { useSummaryStore } from "@/stores/summary-store";
 import { useRAGStore } from "@/stores/rag-store";
 import { loadChapters } from "@/db/repositories";
 import type { Novel } from "@/parsers/types";
@@ -141,7 +140,6 @@ function mount(opts: {
   return render(
     <ChapterContent
       summaryOpen={opts.summaryOpen ?? false}
-      onToggleSummary={() => {}}
       hasSummary={false}
       immersive={false}
       onToggleImmersive={() => {}}
@@ -222,7 +220,6 @@ beforeEach(() => {
     fontFamily: "serif", readingMode: "single", autoSwitchPageMode: false,
     autoReadEnabled: false, autoReadInterval: 5, autoReadSpeed: 2, offlineMode: false,
   });
-  useSummaryStore.setState({ summaries: [] });
   useRAGStore.setState({ indexLoadingKeys: new Set() });
   useTTSStore.setState({ playing: false, paused: false, generating: false, currentChapterIndex: -1, currentParagraph: -1 });
   cap.autoRead = null;
@@ -259,7 +256,6 @@ describe("自动阅读的互斥：三停一不停", () => {
     rerender(
       <ChapterContent
         summaryOpen
-        onToggleSummary={() => {}}
         hasSummary={false}
         immersive={false}
         onToggleImmersive={() => {}}

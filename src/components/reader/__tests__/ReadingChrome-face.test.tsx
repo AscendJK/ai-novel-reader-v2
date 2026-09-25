@@ -12,11 +12,13 @@
  * "记下收到的 props"的桩（它自己另有判据），lucide 桩成 `<svg data-icon=名字>`。
  *
  * 三处刻意不判，理由写在各自的位置：
- * ① 底栏中间那行页码的覆盖层不吃点击（`:288` 的 `pointer-events-none`）——jsdom 不做命中测试，
+ * ① 底栏中间那行页码的覆盖层不吃点击（`:285` 的 `pointer-events-none`）——jsdom 不做命中测试，
  *    摘掉照样绿，判点在 e2e 的窄屏那一档；
- * ② `AutoReadButton` 浮层容器上那句 `onClick={(e) => e.stopPropagation()}`（`:92`）——本批跑过这一刀：
+ * ② `AutoReadButton` 浮层容器上那句 `onClick={(e) => e.stopPropagation()}`——本批跑过这一刀：
  *    把它换成"什么都不做"，29 条仍全绿。关掉浮层走的是 `document` 上的 `mousedown`，而
- *    `wrapRef.contains(t)` 已经把浮层内部放过，这句 `click` 阶段的阻止没有下游读者（记成死代码，不当判据也不改产品）；
+ *    `wrapRef.contains(t)` 已经把浮层内部放过，这句 `click` 阶段的阻止没有下游读者。
+ *    **判它是死代码之后就删了**（同一笔提交里连带删掉 `TopBarProps` 上从来没人读的
+ *    `summaries`/`onToggleSummary` 与它们背后那条 store 订阅）；
  * ③ 三处 `React.memo` 省下的渲染次数（屏上输出一样，没有可观察后果；比较器**判得起的那两半**——
  *    "高亮挪走要清掉"与"换正文必须重渲染"——各有一条）。
  */
@@ -73,9 +75,7 @@ function topBarProps(over: Partial<TopBarProps> = {}): TopBarProps {
     chapter: { id: "c-3", title: "第三章", content: "甲\n\n乙\n \n丙" },
     currentIndex: 2,
     chapters: [{ id: "c-1" }, { id: "c-2" }, { id: "c-3" }],
-    summaries: [],
     summaryOpen: false,
-    onToggleSummary: () => {},
     hasSummary: false,
     showFontPanel: false,
     setShowFontPanel,
@@ -136,7 +136,7 @@ function fontToggle(): HTMLElement {
 
 const panelBox = () => document.querySelector("[data-font-panel]");
 
-/** 产品把监听注册推迟一帧（`:176`），所以要能"先不冲帧"与"冲一帧"两种走法 */
+/** 产品把监听注册推迟一帧（`:173`），所以要能"先不冲帧"与"冲一帧"两种走法 */
 async function flushFrame(): Promise<void> {
   await act(async () => {
     await new Promise<void>((r) => requestAnimationFrame(() => r()));

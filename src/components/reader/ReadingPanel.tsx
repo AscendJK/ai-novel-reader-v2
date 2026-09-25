@@ -58,7 +58,6 @@ export function ReadingPanel() {
       <div className="flex-1 flex flex-col min-w-0">
         <ChapterContent
           summaryOpen={summaryOpen}
-          onToggleSummary={() => setSummaryOpen(!summaryOpen)}
           hasSummary={hasCurrentSummary}
           immersive={immersive}
           onToggleImmersive={() => setImmersive(!immersive)}
