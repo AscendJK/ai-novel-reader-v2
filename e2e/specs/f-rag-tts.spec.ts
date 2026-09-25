@@ -729,3 +729,81 @@ test("F13 语义检索：命中按查询向量的点积排序，换书时上一�
   // 引擎那一格也得回到"这趟没跑过检索"的样子：挂上任何东西都是假话
   await expect(engineLine).toContainText(BGE_NAME);
 });
+
+/**
+ * 睡眠定时（口径 A：用完自动清档、暂停再继续接着倒数）在浏览器层的那一半。
+ *
+ * 单位那一层（`AudioPlayer-bar.test.tsx`）拿假定时器判过同一套分支；这里判的是只有真
+ * 浏览器给得出的三件事：真的 `setInterval(…, 60000)` 挂在真的播放状态上、屏上那枚按钮
+ * 的 `title` 与角标跟着一起翻、到点之后 `stop()` 真的把播放栏收掉。
+ *
+ * 假时钟**在开口之后才装**：文件头记着"TTS 那几条不装假时钟"，因为合成链里有
+ * `await sleep(100)` 这类真等待，装早了会把"开始播放"这条路一起冻住。播起来之后再装，
+ * 音频走的是媒体时钟（不受假时钟影响），要拨的只剩那一发一分钟的 interval。
+ */
+test("F14 睡眠定时：倒数跟着分钟走、暂停不许重来、到点真停且这一档用完就没", async ({ page }) => {
+  test.setTimeout(180_000);
+  await stubBackend(page, baseTable({
+    ...ttsStatus(() => true),
+    // 一段 40 秒的长音：十几分钟假时间要在这段"还在播"的窗口里拨完，而真时间只用掉几秒。
+    "POST /api/rag/tts/synthesize": async () => ({
+      body: wav(Array.from({ length: 24000 * 40 }, (_, i) => Math.sin(i / 40)), 24000),
+      contentType: "audio/wav",
+    }),
+    "POST /api/rag/tts/cancel": { body: { ok: true } },
+  }));
+  await openOnline(page, { ttsEngine: "server" });
+  await importOne(page, "定时朗读");
+  await openBook(page, "定时朗读");
+  await page.getByTitle("语音朗读").click();
+  const bar = page.getByTitle("上一章", { exact: true });
+  await expect(bar, "先让它在真时钟下开口").toBeVisible({ timeout: 30_000 });
+
+  await page.clock.install();
+  // 这一格判的是"接线"，不是逻辑：按钮 = 顶栏那枚（title 在"定时关闭"与"剩余 N 分钟"之间翻），
+  // 角标 = 同一只按钮里的 `{sleepRemaining}m`。
+  const timerBtn = page.locator("button[title='定时关闭'], button[title^='剩余']");
+  await expect(timerBtn).toHaveAttribute("title", "定时关闭");
+  await timerBtn.click();
+  await page.getByRole("button", { name: "15分钟" }).click();
+
+  // 初值走的是 rAF（`AudioPlayer.tsx:130`），假时钟连 rAF 一起接管，所以要拨一帧才上屏
+  await page.clock.runFor(50);
+  await expect(timerBtn).toHaveAttribute("title", "剩余 15 分钟");
+  await expect(page.getByText("15m", { exact: true })).toBeVisible();
+
+  for (let i = 0; i < 9; i++) await page.clock.runFor(60_000);
+  await expect(page.getByText("6m", { exact: true }), "拨过 9 分钟，屏上得剩 6 分钟").toBeVisible({ timeout: 5_000 });
+  // 面板那句人话与按钮 title 读的是同一个数：两处不同源就会出现"角标 6 分钟、面板说 15 分钟"。
+  // 收面板走遮罩那一下（这只面板是手搓的，没有 Esc；再点按钮会被遮罩拦住）。
+  await timerBtn.click();
+  const panelLine = page.getByText("后停止播放");
+  await expect(panelLine).toContainText("6分钟");
+  await expect(page.getByRole("button", { name: "取消定时" })).toBeVisible();
+  await page.locator("div.fixed.inset-0.z-50").click();
+  await expect(panelLine).toHaveCount(0);
+
+  // ---- 暂停 → 表要停，且不把走过的分钟抹回来 ----
+  await page.getByTitle("暂停").click();
+  for (let i = 0; i < 3; i++) await page.clock.runFor(60_000);
+  await expect(page.getByText("6m", { exact: true }), "暂停期间不许继续倒数").toBeVisible({ timeout: 5_000 });
+  await page.getByTitle("继续").click();
+
+  // ---- 再继续：接着剩下的走，不是从 15 重来 ----
+  await page.clock.runFor(60_000);
+  await expect(page.getByText("5m", { exact: true }), "继续之后该从 6 往下走，而不是从 15 重来").toBeVisible({ timeout: 5_000 });
+
+  // ---- 到点：真的停下来 ----
+  for (let i = 0; i < 5; i++) await page.clock.runFor(60_000);
+  await expect(bar, "倒数到 0 必须真的停止朗读（播放栏收掉）").toHaveCount(0, { timeout: 8_000 });
+
+  // ---- 用完就清档：再开播是新的一趟，不许替他再倒一轮 ----
+  await page.getByTitle("语音朗读").click();
+  await expect(bar).toBeVisible({ timeout: 30_000 });
+  const timerAgain = page.locator("button[title='定时关闭'], button[title^='剩余']");
+  await expect(timerAgain, "到点之后这一档就没了：按钮得回到『定时关闭』")
+    .toHaveAttribute("title", "定时关闭", { timeout: 8_000 });
+  await timerAgain.click();
+  await expect(page.getByRole("button", { name: "15分钟" }), "面板要重新给档位，不是留着一个跑完的定时").toBeVisible();
+  await expect(page.getByText("取消定时")).toHaveCount(0);
+});
