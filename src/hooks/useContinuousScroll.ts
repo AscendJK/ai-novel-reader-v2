@@ -95,6 +95,12 @@ export function useContinuousScroll({
     return map;
   }, [chapters]);
 
+  // ── 跳章落点的所有权（loadMore 与 scrollToChapter 共享）──────
+  // token：每次跳章作废上一轮的逐帧纠正，否则两次跳章的纠正循环会互相抢 scrollTop。
+  // rearm：上翻补载那一笔也动这只 scrollTop，它落笔之后要把纠正再叫起来一个窗核落点。
+  const settleTokenRef = useRef(0);
+  const rearmSettleRef = useRef<(() => void) | null>(null);
+
   // ── 加载更多章节（使用 ref 读取最新数据，避免 stale closure）──
   const loadMore = useCallback(
     async (direction: "forward" | "backward") => {
@@ -134,17 +140,27 @@ export function useContinuousScroll({
             return;
           }
 
+          // 补偿只能写成"在**此刻**的位置上加这次长出来的高度"，不能写成"补载前抄的那个
+          // 绝对值 + Δ"：从抄到落笔隔了几十到几百毫秒，跳章的逐帧纠正（scrollToChapter）
+          // 可能已经把位置挪走了，两个写者之间没有互锁。修之前 B24 在 6 倍降速的慢机上量到
+          // 这一笔把文档整个甩回跳章前 4585px 外，界面停在第 9 章——用户看到的正是"点了
+          // 目录，跳到一个完全无关的地方"。
           const oldScrollHeight = container.scrollHeight;
-          const oldScrollTop = container.scrollTop;
-
           const newChapters = await loadChapters(novelId, startIndex, LOAD_BATCH);
           if (newChapters.length > 0) {
             addChapters(newChapters);
             // 双层 rAF 确保 DOM 更新完成后再补偿，补偿后才解锁
             requestAnimationFrame(() => {
               requestAnimationFrame(() => {
-                const newScrollHeight = container.scrollHeight;
-                container.scrollTop = oldScrollTop + (newScrollHeight - oldScrollHeight);
+                const grown = container.scrollHeight - oldScrollHeight;
+                if (grown !== 0) {
+                  container.scrollTop = container.scrollTop + grown;
+                  // 这一笔自己有残差：章节盒带 `content-visibility:auto` +
+                  // `contain-intrinsic-size:0 500px`（ChapterContent.tsx:836），离屏章节按估算
+                  // 记账，量不准（B24 量到落点偏 204px）。所以落笔之后要把跳章那个"按目标章在
+                  // 视口里的位置核落点"的循环再叫起来一个窗——它才是落点的最终负责人。
+                  rearmSettleRef.current?.();
+                }
                 // 补偿完成后再解锁，避免哨兵仍在检测区导致循环加载
                 isLoadingRef.current = false;
                 setIsLoadingMore(false);
@@ -165,8 +181,6 @@ export function useContinuousScroll({
   );
 
   // ── 滚动到指定章节（把章节顶部钉到容器顶部 + 章节内偏移）────────────
-  // 每次跳章作废上一轮的逐帧纠正，否则两次跳章的纠正循环会互相抢 scrollTop
-  const settleTokenRef = useRef(0);
   const scrollToChapter = useCallback(
     (chapterId: string, chapterOffset?: number) => {
       const container = containerRef.current;
@@ -182,16 +196,24 @@ export function useContinuousScroll({
         // 代价是这 500ms 里用户自己滚会被拽回去：刚点完目录，这一跳就是意图本身。
         const want = chapterOffset ?? 0;
         const token = ++settleTokenRef.current;
+        let until = performance.now() + SUPPRESS_RELEASE_MS;
+        let live = false;
         el.scrollIntoView({ behavior: "instant", block: "start" });
 
         // 纠正的判据是"目标章节在视口里的位置"，不是"它在文档里的坐标"：后者对滚动天生
         // 不变，而把落点搞错的正是浏览器改 scrollTop 这件事本身（scroll anchoring 为了
         // "留住眼前内容"反向拉），拿它当哨兵一帧都不会触发——那样写过，B10 红。
         // 循环要活到静默窗结束：漂移不是一帧到位的，只纠正头两帧的版本 B10 同样红。
-        const until = performance.now() + SUPPRESS_RELEASE_MS;
         const settle = () => {
           // token 变了 = 后来的跳章接管；元素脱挂 = 书已切换
-          if (settleTokenRef.current !== token || !el.isConnected || performance.now() >= until) return;
+          if (settleTokenRef.current !== token || !el.isConnected) {
+            live = false;
+            return;
+          }
+          if (performance.now() >= until) {
+            live = false;
+            return;
+          }
           const drift = el.getBoundingClientRect().top - container.getBoundingClientRect().top - want;
           if (Math.abs(drift) > SETTLE_EPSILON_PX) {
             // 显式 instant：容器带 .scroll-smooth，而 useAutoRead 也会临时改这只容器的
@@ -200,7 +222,19 @@ export function useContinuousScroll({
           }
           requestAnimationFrame(settle);
         };
-        requestAnimationFrame(settle);
+        const start = () => {
+          if (live) return;
+          live = true;
+          requestAnimationFrame(settle);
+        };
+        // 上翻补载的补偿落笔后会叫这一句（见 loadMore 的 backward 分支）：那个写手自己有
+        // 残差，落点的最终核对归本循环。已经在跑就只把窗口往后推，不叠第二条循环。
+        rearmSettleRef.current = () => {
+          if (settleTokenRef.current !== token || !el.isConnected) return;
+          until = Math.max(until, performance.now() + SUPPRESS_RELEASE_MS);
+          start();
+        };
+        start();
       };
 
       const target = container.querySelector(

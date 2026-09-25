@@ -341,3 +341,261 @@ test("B10 连点目录 20 次：每次的当前章都必须落回刚点的那一
 
   expect(terminal, `${terminal.length}/20 次点目录之后当前章不是点的那一章`).toEqual([]);
 });
+
+/**
+ * ── B24 台架：一只 scrollTop 上的两个写者 ─────────────────────────────
+ *
+ * 产品里对阅读容器的程序化写入只有两条路径（全仓 grep 过，`scrollTop =` 与 `.scrollTo(`
+ * 各只有一处命中）：
+ * - **补偿** `useContinuousScroll.ts:157`：上翻补载到内容之后
+ *   `container.scrollTop = container.scrollTop + grown`。
+ * - **逐帧纠正** `useContinuousScroll.ts:221`：跳章之后每帧
+ *   `container.scrollTo({ top: container.scrollTop + drift, behavior: "instant" })`，
+ *   跑到静默窗（500ms）结束；补偿落笔时会把它再叫起来一个窗（:162 → :232）。
+ * 修之前补偿拿的是"`await loadChapters` 之前抄的那个绝对位置 + Δ"，而 `settleTokenRef`
+ * 只挡下一次跳章、挡不住补偿——两个写者之间没有互锁，于是补偿只要落在跳章之后，就把整个
+ * 文档甩回跳章之前的位置。这一条判据就是量它还会不会走形，不是在描述现状。
+ *
+ * 台架怎么撞出这个交错：补偿只在"已载窗口不含第一章"时才可能发生
+ * （`useContinuousScroll.ts:136-142`：`firstLoaded.index - 10 >= firstLoaded.index` 直接返回），
+ * 而窗口从书架点进来时按 `loadNovel(novelId, chapterIndex)` 只载目标章前后各 10 章
+ * （`repositories.ts:82-87`）——所以先把进度推到第 20 章、回书架再点开，窗口就是
+ * 第 10~25 章；此刻把容器顶到 scrollTop≈30，顶部哨兵（`ChapterContent.tsx:829`，h-px）
+ * 落进 IO 的上沿 rootMargin 200px，上翻补载开始；在「IO 回调」与「补偿写」之间点目录，
+ * 就得到"跳章在前、补偿在后"的交错。这个交错不是编出来的：用户在补载没回来时点了目录，
+ * 就是这个时序。
+ */
+
+type WriteKind = "prepend" | "settle" | "jump" | "harness";
+
+/** 一次 scrollTop 变化。`from` 是写之前的真值，`to` 是想写的值 */
+interface ScrollWrite {
+  t: number;
+  kind: WriteKind;
+  from: number;
+  to: number;
+}
+
+/** 页内每帧抄一次现场。`drift` = 目标章顶部相对容器顶部的偏移（产品把落点钉在 0） */
+interface ScrollFrame {
+  t: number;
+  scrollTop: number;
+  scrollHeight: number;
+  drift: number | null;
+}
+
+interface ProbeWindow {
+  writes: ScrollWrite[];
+  frames: ScrollFrame[];
+  harness: boolean;
+  want: Element | null;
+}
+
+/**
+ * 三只 API 各包一层：scrollTop setter / scrollTo 装在容器实例上，scrollIntoView 装在
+ * Element.prototype 上（只给 `.chapter-section` 记账，目录侧栏自己那份
+ * `scrollIntoView({block:"nearest"})` 与朗读段落那条不算）。
+ */
+async function installScrollProbe(page: import("@playwright/test").Page): Promise<void> {
+  await page.evaluate(() => {
+    const container = document.querySelector(".chapter-scroll-container") as HTMLElement;
+    const proto = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop");
+    if (!proto?.get || !proto.set) throw new Error("B24 台架：包不住 scrollTop setter");
+    const state: ProbeWindow = { writes: [], frames: [], harness: false, want: null };
+    (window as unknown as { __b24: ProbeWindow }).__b24 = state;
+    const realTop = proto.get.bind(container) as () => number;
+    const write = (v: number) => (proto.set as (x: number) => void).call(container, v);
+
+    Object.defineProperty(container, "scrollTop", {
+      configurable: true,
+      get: () => realTop(),
+      set: (v: number) => {
+        state.writes.push({ t: performance.now(), kind: state.harness ? "harness" : "prepend", from: realTop(), to: v });
+        write(v);
+      },
+    });
+
+    const realScrollTo = container.scrollTo.bind(container);
+    (container as unknown as { scrollTo: (arg: ScrollToOptions) => void }).scrollTo = (arg: ScrollToOptions) => {
+      state.writes.push({ t: performance.now(), kind: "settle", from: realTop(), to: arg.top ?? 0 });
+      realScrollTo(arg);
+    };
+
+    const realInto = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element, ...args: Parameters<Element["scrollIntoView"]>) {
+      const before = realTop();
+      realInto.apply(this, args);
+      if (this.classList.contains("chapter-section")) {
+        state.writes.push({ t: performance.now(), kind: "jump", from: before, to: realTop() });
+      }
+    };
+
+    const sample = () => {
+      const want = state.want;
+      state.frames.push({
+        t: performance.now(),
+        scrollTop: realTop(),
+        scrollHeight: container.scrollHeight,
+        drift: want?.isConnected ? want.getBoundingClientRect().top - container.getBoundingClientRect().top : null,
+      });
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+}
+
+/** 一次争用尝试的现场 */
+interface Attempt {
+  clickedAt: number;
+  view: number;
+  writes: ScrollWrite[];
+  frames: ScrollFrame[];
+}
+
+/**
+ * 顶到哨兵区 → 等 `delayMs` → 真点一下目录里的目标章 → 采样 1.8 秒。
+ * 整段都在页内跑：CDP 一次往返几十到几百毫秒，"滚完再点"在页外根本排不进那两个间隙里。
+ */
+async function provokePrependRace(
+  page: import("@playwright/test").Page,
+  chapterId: string,
+  delayMs: number
+): Promise<Attempt> {
+  return page.evaluate(
+    async ({ id, delay }) => {
+      const container = document.querySelector(".chapter-scroll-container") as HTMLElement;
+      const state = (window as unknown as { __b24: ProbeWindow }).__b24;
+      const target = container.querySelector(`.chapter-section[data-chapter-id="${id}"]`);
+      if (!target) throw new Error("B24 台架：目标章不在 DOM 里，点它会走懒加载分支");
+      const entry = document.querySelector<HTMLButtonElement>(`[data-sidebar="chapter-nav"] button[data-chapter-id="${id}"]`);
+      if (!entry) throw new Error("B24 台架：侧栏目录里找不到这一章的按钮");
+
+      state.writes.length = 0;
+      state.frames.length = 0;
+      state.want = target;
+      // 内联 auto 只为了"这一下瞬移"，写完立刻交还给产品的 .scroll-smooth——
+      // 留着它会替产品改掉补偿写的动画口径，量到的就不是现场了
+      container.style.scrollBehavior = "auto";
+      state.harness = true;
+      container.scrollTop = 30;
+      state.harness = false;
+      container.style.scrollBehavior = "";
+
+      const clickedAt = performance.now();
+      await new Promise<void>((resolve) => setTimeout(resolve, delay));
+      entry.click();
+      await new Promise<void>((resolve) => setTimeout(resolve, 1_800));
+      return { clickedAt, view: container.clientHeight, writes: state.writes.slice(), frames: state.frames.slice() };
+    },
+    { id: chapterId, delay: delayMs }
+  );
+}
+
+/** 把一次尝试的现场折成几个数（都是"用户看得见"的量，不是内部状态） */
+function readAttempt(attempt: Attempt, storedIndex: number) {
+  const jump = attempt.writes.find((w) => w.kind === "jump");
+  const prepends = attempt.writes.filter((w) => w.kind === "prepend");
+  // 交错 = 补偿写在跳章那一跳之后落笔：两个写者真抢上了同一只 scrollTop
+  const raced = prepends.filter((p) => jump && p.t > jump.t);
+  const afterJump = attempt.frames.filter((f) => jump && f.t > jump.t + 32 && f.drift !== null);
+  const tail = attempt.frames.filter((f) => f.drift !== null).slice(-5);
+  return {
+    raced: raced.length,
+    prependWrites: prepends.length,
+    settleWrites: attempt.writes.filter((w) => w.kind === "settle").length,
+    // 补偿那一笔把 scrollTop 挪了多少像素（修好之后 ≈ 插进来的内容高度，本身不是缺陷）
+    writtenPx: Math.max(0, ...raced.map((p) => Math.abs(p.to - p.from))),
+    flashPx: Math.max(0, ...afterJump.map((f) => Math.abs(f.drift ?? 0))),
+    terminalPx: tail.length ? Math.max(...tail.map((f) => Math.abs(f.drift ?? 0))) : Number.NaN,
+    view: attempt.view,
+    storedIndex,
+  };
+}
+
+/**
+ * B24：上翻补载的补偿写与跳章的逐帧纠正抢同一只 scrollTop。
+ *
+ * 每一轮都从书架重新点开（重新载入才会得到"窗口不含第一章"的现场），所以一尝试一次开书。
+ * 两档时钟：正常 CPU，和 CDP 的 6 倍降速（模拟慢机）。
+ *
+ * 三条判据，2026-09-25 五轮台架读数（`降速×/点前延迟`）写在每条后面：
+ * - **落点**（终态）：1.8 秒后目标章顶部离容器顶部 ≤ 2px。未修时 1×/16 与 1×/40 是 0.2px，
+ *   6×/24 是 **4585px**——补偿写在纠正循环收工之后才落笔，把整个文档甩回"跳章之前"的位置，
+ *   再没有人拽回来。
+ * - **当前章**（同一条缺陷的用户口径）：store 里必须还是点的那一章。未修时 6×/24 那轮是
+ *   第 9 章，也就是"点第 24 章 → 界面停在第 9 章 → 进度记成第 9 章"。
+ * - **不许整屏走形**（过程量）：跳章之后任何一帧，目标章顶部都不许离开落点超过一屏
+ *   （一屏 523px）。没争用的轮次是 0px，未修时争用轮次是 4520px（1× 时下一帧被纠正拽回来了，
+ *   可用户已经看见页面飞走过一次）。阈值取"一屏"而不是 0，是因为 scroll anchoring 本身就有
+ *   亚屏级的瞬时漂移（B10 记过 119px 这一档），那一量级不该算这条红。
+ *
+ * 四刀逐条打过修好的产品，两半各被一条单独咬住（都在 6×/24ms 那轮现形）：
+ * - 刀1 把补偿换回"补载前抄的绝对值 + Δ" → 只有**不许整屏走形**红（4520px）。
+ * - 刀2 摘掉 `rearmSettleRef.current?.()` → 只有**落点**红（204px）。
+ * - 刀3 只重启循环、不续窗，刀4 只续窗、不重启循环 → 都是**落点**红（204px）：补偿那一笔
+ *   自己有 204px 残差（离屏章节按 500px 估算记账），叫循环和续窗缺一个都兜不住它。
+ * - 修完之后五轮：落点 0.2~0.3px，窗内最大偏 0 或 204px，当前章全是第 24 章。
+ *
+ * 最后那条 `interleaved > 0` 是台架自检：它红了不是产品坏了，而是这一轮两个写者根本没
+ * 碰上——那上面三条判据全是空转，绿灯不算数。
+ */
+test("B24 补载补偿与跳章纠正抢 scrollTop：点第 24 章不许落回别处", async ({ page }) => {
+  test.setTimeout(360_000); // 每轮都要重开一次书，慢机档还要降速
+  const CHAPTERS = 25;
+  const CLICK_CHAPTER = 24; // 已载窗口 10~25 里的深处一章：跳它，落点离scrollTop=30 越远越看得出
+  await importFiles(page, [txtFile("补载争用.txt", longNovel(CHAPTERS))]);
+  await openBook(page, "补载争用");
+  await page.waitForTimeout(900);
+
+  const cdp = await page.context().newCDPSession(page);
+  const bad: string[] = [];
+  const log: string[] = [];
+  let interleaved = 0;
+
+  for (const phase of [
+    { rate: 1, delays: [0, 16, 40] },
+    { rate: 6, delays: [0, 24] },
+  ]) {
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: phase.rate });
+    for (const delay of phase.delays) {
+      // 现场复位：进度必须在第 20 章，且必须"从书架重新点开"，这样载入窗口才是 10~25 章
+      await navEntry(page, 20).click();
+      await page.waitForTimeout(1_600);
+      await backToShelf(page);
+      await expect(shelfCard(page, "补载争用")).toBeVisible({ timeout: 30_000 });
+      await openBook(page, "补载争用");
+      await page.waitForTimeout(1_500); // 等恢复位置那 600ms 静默期走完
+      await installScrollProbe(page);
+
+      const chapterId = await navEntry(page, CLICK_CHAPTER).getAttribute("data-chapter-id");
+      if (!chapterId) throw new Error("B24 台架：目录里没有第 24 章");
+      const attempt = await provokePrependRace(page, chapterId, delay);
+      const n = readAttempt(attempt, await storedChapterIndex(page));
+      const label = `降速${phase.rate}×/延迟${delay}ms`;
+      interleaved += n.raced;
+
+      if (n.raced > 0) {
+        if (!(n.terminalPx >= 0 && n.terminalPx <= 2)) {
+          bad.push(`${label} → 补偿写在跳章之后落笔，1.8 秒后第${CLICK_CHAPTER}章顶部离落点 ${n.terminalPx.toFixed(0)}px`);
+        }
+        if (n.storedIndex !== CLICK_CHAPTER - 1) {
+          bad.push(`${label} → 界面当前章=第${n.storedIndex + 1}章，不是点的第${CLICK_CHAPTER}章`);
+        }
+        if (!(n.flashPx >= 0 && n.flashPx < n.view)) {
+          bad.push(`${label} → 跳章之后有帧把第${CLICK_CHAPTER}章甩开 ${n.flashPx.toFixed(0)}px（一屏 ${n.view}px）`);
+        }
+      }
+      log.push(
+        `${label} 补偿${n.prependWrites}/交错${n.raced}/这一笔挪${n.writtenPx.toFixed(0)}/纠正${n.settleWrites}` +
+          `/窗内最大偏${n.flashPx.toFixed(0)}/落点${n.terminalPx.toFixed(1)}/第${n.storedIndex + 1}章`
+      );
+    }
+  }
+  await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
+
+  console.log(`[B24] ${log.join("\n[B24] ")}`);
+  console.log(`[B24] ${interleaved}/5 轮出现"补偿写在跳章之后"，判据红 ${bad.length} 条：${bad.join("；") || "无"}`);
+
+  expect(interleaved, "台架没能让补偿落在跳章之后（这一轮两个写者根本没抢过同一只 scrollTop）").toBeGreaterThan(0);
+  expect(bad, `${bad.length} 轮的落点/当前章离开了刚点的那一章`).toEqual([]);
+});
