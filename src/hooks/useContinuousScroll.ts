@@ -43,6 +43,15 @@ export const SUPPRESS_RELEASE_MS = 500;
 const SETTLE_EPSILON_PX = 1;
 
 /**
+ * 跳章落点纠正的**硬顶**（毫秒），从"最后一次有人动文档"起算：跳章那一下，或上翻补载的
+ * 补偿落笔（`rearmSettleRef` 会把它重新起算）。平窗 `SUPPRESS_RELEASE_MS` 可以被"目标章上方
+ * 又长高了"一而再地往后推，但最多推到这道顶：没有顶的话，一本上方章节多、高度边读边塌的书
+ * 会让纠正一直抢着 `scrollTop`，读者的手感被永久收走——有顶才算"交还"。
+ * 平窗到期到这道顶之间，循环还在逐帧跑，但只读几何、不写入（见 `settle` 的布局哨兵）。
+ */
+export const SETTLE_MAX_MS = 1500;
+
+/**
  * 从章节 rect 列表中选出第一个与视口检测区相交的章节。
  * rects 按 DOM 顺序（章节 index 升序）；zoneTop/zoneBottom 为检测区上下界。
  * 用"相交"而非"顶部在区内"：用户读到章节中部时章节顶部在视口上方，
@@ -197,13 +206,22 @@ export function useContinuousScroll({
         // 代价是这 500ms 里用户自己滚会被拽回去：刚点完目录，这一跳就是意图本身。
         const want = chapterOffset ?? 0;
         const token = ++settleTokenRef.current;
-        let until = performance.now() + SUPPRESS_RELEASE_MS;
+        let startedAt = performance.now();
+        let until = startedAt + SUPPRESS_RELEASE_MS;
         let live = false;
         el.scrollIntoView({ behavior: "instant", block: "start" });
 
+        // 目标章"在滚动内容里的 y"（离容器顶的距离 + scrollTop）：读者自己滚不动它，
+        // 容器自己在页面里挪位也动不了它，只有目标章上方的布局又长高/塌矮才会。
+        // 所以它是那道布局哨兵。初始值取在跳章之前，之后每帧比对。
+        let lastContentY =
+          el.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop;
+
         // 纠正的判据是"目标章节在视口里的位置"，不是"它在文档里的坐标"：后者对滚动天生
         // 不变，而把落点搞错的正是浏览器改 scrollTop 这件事本身（scroll anchoring 为了
-        // "留住眼前内容"反向拉），拿它当哨兵一帧都不会触发——那样写过，B10 红。
+        // "留住眼前内容"反向拉），拿它当**纠正依据**一帧都不会触发——那样写过，B10 红。
+        // 下面那只哨兵问的是另一件事（"布局动过没有"，不是"该把视图放到哪"），所以它恰恰
+        // 要用那个对滚动不变量：只有上方布局动了它才动。
         // 循环要活到静默窗结束：漂移不是一帧到位的，只纠正头两帧的版本 B10 同样红。
         const settle = () => {
           // token 变了 = 后来的跳章接管；元素脱挂 = 书已切换
@@ -211,15 +229,33 @@ export function useContinuousScroll({
             live = false;
             return;
           }
-          if (performance.now() >= until) {
+          const now = performance.now();
+          // 硬顶：到点就把 scrollTop 交还给读者，此后一笔都不写。这是唯一的顶，
+          // 所以续窗（下面两处）只管"再来一个窗"，不必各自再钳一次。
+          if (now >= startedAt + SETTLE_MAX_MS) {
             live = false;
             return;
           }
-          const drift = el.getBoundingClientRect().top - container.getBoundingClientRect().top - want;
-          if (Math.abs(drift) > SETTLE_EPSILON_PX) {
-            // 显式 instant：容器带 .scroll-smooth，而 useAutoRead 也会临时改这只容器的
-            // 内联 scrollBehavior——改内联样式再抄回来会把别人的值当成原值存走。
-            container.scrollTo({ top: container.scrollTop + drift, behavior: "instant" });
+          // 一帧一次几何读取，两个用途共用（各读一次会让每帧强制两次布局）
+          const scrollTop = container.scrollTop;
+          const edge = el.getBoundingClientRect().top - container.getBoundingClientRect().top;
+          // 收窗只看时间有个洞：上方章节的塌缩可以在 500ms 之后才落地（B24 整跑里红的那一发
+          // 量到 203.7px 残差，纠正确实写过、写的是窗内那一次），落地点被顶下去而没人再核。
+          // 哨兵发现"内容里的 y"变了就往后续窗；往视口下方补载不挪这个坐标，
+          // 所以下方长高不会把读者的手感抢回来。
+          const contentY = edge + scrollTop;
+          if (contentY !== lastContentY) {
+            lastContentY = contentY;
+            until = Math.max(until, now + SUPPRESS_RELEASE_MS);
+          }
+          // 窗内才动手；窗外到硬顶之间只留这只便宜的读，等可能晚到的那一次塌缩。
+          if (now < until) {
+            const drift = edge - want;
+            if (Math.abs(drift) > SETTLE_EPSILON_PX) {
+              // 显式 instant：容器带 .scroll-smooth，而 useAutoRead 也会临时改这只容器的
+              // 内联 scrollBehavior——改内联样式再抄回来会把别人的值当成原值存走。
+              container.scrollTo({ top: scrollTop + drift, behavior: "instant" });
+            }
           }
           requestAnimationFrame(settle);
         };
@@ -230,9 +266,18 @@ export function useContinuousScroll({
         };
         // 上翻补载的补偿落笔后会叫这一句（见 loadMore 的 backward 分支）：那个写手自己有
         // 残差，落点的最终核对归本循环。已经在跑就只把窗口往后推，不叠第二条循环。
+        //
+        // **顶跟着这一句重新起算**：`SETTLE_MAX_MS` 管的是"没人动手之后它自己最多占多久"，
+        // 不是"这一次跳章从此不管了"。整跑里 B24 红的那一发读数是 `交错1/纠正0/落点203.7`——
+        // 6× 降速那档补偿要 1.5~1.6 秒才落笔（台架量到 1460 / 1576 / 1578 / 1640ms），窗口推了、
+        // 循环却在门口被顶挡回去，一次都没纠正，204px 就这么留在屏上（时间线：`prepend@1576(4230)`
+        // 之后再无一写，`偏-204` 从 1832ms 一直留到 2187ms）。补偿落笔是**程序**刚往
+        // 文档上方插了一批章节，落点当场又成了悬案，所有权必须从这一刻重新算起（读者的手没有被
+        // 抢：抢他的是他自己那次上翻之后本该看到的内容）。判据：B8。
         rearmSettleRef.current = () => {
           if (settleTokenRef.current !== token || !el.isConnected) return;
-          until = Math.max(until, performance.now() + SUPPRESS_RELEASE_MS);
+          startedAt = performance.now();
+          until = Math.max(until, startedAt + SUPPRESS_RELEASE_MS);
           start();
         };
         start();

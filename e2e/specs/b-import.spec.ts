@@ -453,8 +453,15 @@ interface Attempt {
 }
 
 /**
- * 顶到哨兵区 → 等 `delayMs` → 真点一下目录里的目标章 → 采样 1.8 秒。
+ * 顶到哨兵区 → 等 `delayMs` → 真点一下目录里的目标章 → 采样到"它自己收工"为止。
  * 整段都在页内跑：CDP 一次往返几十到几百毫秒，"滚完再点"在页外根本排不进那两个间隙里。
+ *
+ * 采样尾巴不是拍出来的一个数：**至少 2.4 秒，并且要等最后一次程序化写入之后安静 600ms**（封顶 4 秒）。
+ * 原来那发定长 1.8 秒会把"正在收敛"读成"没收敛"，2026-09-25 连着量到两种形状：
+ * `补偿 1623ms → 纠正写在 1800ms → 尾巴正好断在 1800ms`（报 203.7px），以及
+ * `补偿 823ms → 204px 那发位移落在 1705ms → 尾巴 1800ms`（同一轮还把当前章判成第 25 章）。
+ * 6× 降速下一次 rAF 就要上百毫秒，纠正写在"看到位移"的下一帧——判的是**它最终停在哪**，
+ * 所以窗口要跟着"还有没有人动手"收，而不是跟着一个常数收。
  */
 async function provokePrependRace(
   page: import("@playwright/test").Page,
@@ -484,7 +491,15 @@ async function provokePrependRace(
       const clickedAt = performance.now();
       await new Promise<void>((resolve) => setTimeout(resolve, delay));
       entry.click();
-      await new Promise<void>((resolve) => setTimeout(resolve, 1_800));
+      const MIN_MS = 2_400;
+      const MAX_MS = 4_000;
+      const QUIET_MS = 600;
+      for (;;) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+        const now = performance.now() - clickedAt;
+        const last = state.writes.length ? state.writes[state.writes.length - 1].t - clickedAt : 0;
+        if (now >= MIN_MS && (now - last >= QUIET_MS || now >= MAX_MS)) break;
+      }
       return { clickedAt, view: container.clientHeight, writes: state.writes.slice(), frames: state.frames.slice() };
     },
     { id: chapterId, delay: delayMs }
@@ -499,6 +514,19 @@ function readAttempt(attempt: Attempt, storedIndex: number) {
   const raced = prepends.filter((p) => jump && p.t > jump.t);
   const afterJump = attempt.frames.filter((f) => jump && f.t > jump.t + 32 && f.drift !== null);
   const tail = attempt.frames.filter((f) => f.drift !== null).slice(-5);
+  // 最后一发"还离开落点 >2px"的时刻（从跳章那一跳起算）。收窗那道顶（`SETTLE_MAX_MS`）够不够长，
+  // 看的是这个数——不是"最后有没有修好"，而是"最晚的一次位移落在什么时候"。
+  const off = jump
+    ? afterJump.filter((f) => Math.abs(f.drift ?? 0) > 2).map((f) => f.t - jump.t)
+    : [];
+  // 补偿那一笔距跳章多久落笔（顶之后才来的话，`rearm` 必须能把它接住——B8 钉的就是这一格）
+  const compAfter = jump ? raced.map((p) => p.t - jump.t) : [];
+  // 纠正分别写在什么时候、跳章那一下出现了几次：落点 204px 留在屏上而"纠正"只有 1 发时，
+  // 这两串数才能分清是"循环停了手"还是"又来了第二跳把所有权接管走"
+  const settles = jump
+    ? attempt.writes.filter((w) => w.kind === "settle").map((w) => Math.round(w.t - jump.t))
+    : [];
+  const jumps = attempt.writes.filter((w) => w.kind === "jump").length;
   return {
     raced: raced.length,
     prependWrites: prepends.length,
@@ -507,6 +535,10 @@ function readAttempt(attempt: Attempt, storedIndex: number) {
     writtenPx: Math.max(0, ...raced.map((p) => Math.abs(p.to - p.from))),
     flashPx: Math.max(0, ...afterJump.map((f) => Math.abs(f.drift ?? 0))),
     terminalPx: tail.length ? Math.max(...tail.map((f) => Math.abs(f.drift ?? 0))) : Number.NaN,
+    lastOffMs: off.length ? Math.max(...off) : 0,
+    compAfterMs: compAfter.length ? Math.max(...compAfter) : 0,
+    jumps,
+    settles,
     view: attempt.view,
     storedIndex,
   };
@@ -519,9 +551,9 @@ function readAttempt(attempt: Attempt, storedIndex: number) {
  * 两档时钟：正常 CPU，和 CDP 的 6 倍降速（模拟慢机）。
  *
  * 三条判据，2026-09-25 五轮台架读数（`降速×/点前延迟`）写在每条后面：
- * - **落点**（终态）：1.8 秒后目标章顶部离容器顶部 ≤ 2px。未修时 1×/16 与 1×/40 是 0.2px，
- *   6×/24 是 **4585px**——补偿写在纠正循环收工之后才落笔，把整个文档甩回"跳章之前"的位置，
- *   再没有人拽回来。
+ * - **落点**（终态）：等它自己收工之后（见 `provokePrependRace` 的采样窗），目标章顶部离容器
+ *   顶部 ≤ 2px。未修时 1×/16 与 1×/40 是 0.2px，6×/24 是 **4585px**——补偿写在纠正循环收工之后
+ *   才落笔，把整个文档甩回"跳章之前"的位置，再没有人拽回来。
  * - **当前章**（同一条缺陷的用户口径）：store 里必须还是点的那一章。未修时 6×/24 那轮是
  *   第 9 章，也就是"点第 24 章 → 界面停在第 9 章 → 进度记成第 9 章"。
  * - **不许整屏走形**（过程量）：跳章之后任何一帧，目标章顶部都不许离开落点超过一屏
@@ -535,6 +567,22 @@ function readAttempt(attempt: Attempt, storedIndex: number) {
  * - 刀3 只重启循环、不续窗，刀4 只续窗、不重启循环 → 都是**落点**红（204px）：补偿那一笔
  *   自己有 204px 残差（成因未归因——换一种 Δ 取法残差一个像素没变），叫循环和续窗缺一个都兜不住它。
  * - 修完之后五轮：落点 0.2~0.3px，窗内最大偏 0 或 204px，当前章全是第 24 章。
+ *
+ * 2026-09-25 这条整跑里红过两发，两发的成因不同，都记下来：
+ * 1) `交错1/纠正1/落点203.7`——收窗**只看时间**：500ms 一到就撒手，只有补偿落笔才把它再叫起来，
+ *    而"上方章节塌成真实高度"不保证落在窗内，晚到的那次位移没人核。
+ *    → 现在窗外留一只**布局哨兵**：盯目标章在**滚动内容里**的 y（`edge + scrollTop`，读者自己滚、
+ *    容器在页面里挪位都不动它），变了就往后续窗；顶是 `SETTLE_MAX_MS`（1500ms）。
+ * 2) `交错1/纠正0/落点203.7`——这道**顶开太狠**：6× 降速下补偿 1.5~1.6 秒才落笔，`rearm` 把窗口
+ *    推了、循环却在门口被顶挡回去，一次都没纠正。→ 顶改成跟着补偿落笔**重新起算**（它管的是
+ *    "没人动手时最多占多久"，不是"这次跳章从此不管"）。刀5 就是这一格：摘掉重新起算，两轮全红，
+ *    时间线是 `prepend@1576(4230)` 之后再无一写、`偏-204` 从 1832ms 一直留到 2187ms。
+ * 采样窗也因此从定长 1.8 秒改成"至少 2.4 秒，且最后一次程序化写入后安静 600ms（封顶 4 秒）"——
+ * 原来那发会在纠正落笔的同一帧收表，把**正在收敛**读成**没收敛**（实测两发：`补偿1623→纠正1800→尾巴1800`、
+ * `补偿823→位移1705→尾巴1800`）。常驻四发读数就是为了下次能这样直接读出来：
+ * `补偿距跳章 / 纠正写在什么时候 / 最晚离开落点 / 跳章几下`。
+ * 晚到位移这一格的**确定**判据在 jsdom 层：`src/hooks/__tests__/useContinuousScroll-settle.test.tsx`
+ * 的 B5（晚到的位移要收回）/ B6（有顶，到点交手）/ B7（下方补载不许续窗）/ B8（补偿能重新叫起顶）。
  *
  * 最后那条 `interleaved > 0` 是台架自检：它红了不是产品坏了，而是这一轮两个写者根本没
  * 碰上——那上面三条判据全是空转，绿灯不算数。
@@ -576,7 +624,7 @@ test("B24 补载补偿与跳章纠正抢 scrollTop：点第 24 章不许落回�
 
       if (n.raced > 0) {
         if (!(n.terminalPx >= 0 && n.terminalPx <= 2)) {
-          bad.push(`${label} → 补偿写在跳章之后落笔，1.8 秒后第${CLICK_CHAPTER}章顶部离落点 ${n.terminalPx.toFixed(0)}px`);
+          bad.push(`${label} → 补偿写在跳章之后落笔，收工之后第${CLICK_CHAPTER}章顶部离落点 ${n.terminalPx.toFixed(0)}px`);
         }
         if (n.storedIndex !== CLICK_CHAPTER - 1) {
           bad.push(`${label} → 界面当前章=第${n.storedIndex + 1}章，不是点的第${CLICK_CHAPTER}章`);
@@ -586,8 +634,8 @@ test("B24 补载补偿与跳章纠正抢 scrollTop：点第 24 章不许落回�
         }
       }
       log.push(
-        `${label} 补偿${n.prependWrites}/交错${n.raced}/这一笔挪${n.writtenPx.toFixed(0)}/纠正${n.settleWrites}` +
-          `/窗内最大偏${n.flashPx.toFixed(0)}/落点${n.terminalPx.toFixed(1)}/第${n.storedIndex + 1}章`
+        `${label} 补偿${n.prependWrites}/交错${n.raced}/补偿距跳章${n.compAfterMs.toFixed(0)}ms/这一笔挪${n.writtenPx.toFixed(0)}/纠正${n.settleWrites}[${n.settles.join(",")}]/跳章${n.jumps}` +
+          `/窗内最大偏${n.flashPx.toFixed(0)}/最晚离开落点${n.lastOffMs.toFixed(0)}ms/落点${n.terminalPx.toFixed(1)}/第${n.storedIndex + 1}章`
       );
     }
   }
