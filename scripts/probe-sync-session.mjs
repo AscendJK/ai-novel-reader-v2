@@ -5,7 +5,8 @@
  *   1. 跨用户写入——token 属于 A 却声称自己是 B，必须 403，不能落库；
  *   2. "被顶替"与"会话过期"的区分——判成 kicked 前端会强制登出（书架直接消失），
  *      判成 session_expired 前端才会无感重注册；两者不能混；
- *   3. 坏载荷过半要整次失败（422），否则客户端照样提交水位，被跳过的那一半就永久丢了。
+ *   3. 坏载荷过半要整次失败（422），否则客户端照样提交水位，被跳过的那一半就永久丢了；
+ *   4. API 配置这道闸门分两侧：push 不入库、回传不带——第 3 侧（回传）只能直接写临时库才造得出场景。
  * 这三条此前都没有任何东西看着：sync-handler 的单元测试不经过路由，probe:boot 只碰
  * /api/version 那一层。routes/sync.js 依赖 database.js（会开真库），也没法在 jsdom
  * 测试里 import，所以这里用真 HTTP 打真后端跑。
@@ -17,6 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import Database from "better-sqlite3";
 import { freePort } from "./lib/probe-ports.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -187,6 +189,52 @@ try {
     `status=${stillUsable.status}`);
   const tooLong = await api("GET", `/api/sync/check-user/${"很长的用户名".repeat(7)}`);
   check("check-user 用户名超长时 400", tooLong.status === 400, `status=${tooLong.status}`);
+
+  // ── API 配置这道闸门：进出两侧都得拦 ──
+  // 前端那道 `isSensitiveSettingKey`（sync-bridge）防的是"后端有问题或被换掉"；正常后端自己
+  // 也得有两道：push 不入库（sync-handler.js 的 isSensitiveKey 那一支）、回传不带
+  // （database.js gatherSyncData 里那支 SENSITIVE_PREFIXES）。回传那一道光靠 HTTP 造不出场景
+  // （push 那一关就进不去），所以直接往**临时库**插一行，模拟"旧版本写过 / 库被人动过"。
+  const evil = await push("bob", "c-bob-1", bobToken, {
+    settings: {
+      "theme:bob": "dark",
+      "api-providers:bob": [{ name: "外来", apiKey: "sk-evil", baseUrl: "https://attacker.invalid/v1" }],
+    },
+  });
+  check("push 里混着 API 配置时不整次失败（它只是不许进库，不是坏载荷）", evil.status === 200, `status=${evil.status}`);
+  // 直接查临时库，而不是只看回包：回传侧另有一道同职的过滤（database.js 那支
+  // SENSITIVE_PREFIXES），两道闸只摘一道照样全绿——这一刀实测过，33/33 一句都不红。
+  const rowsInDb = (like) => {
+    const s = new Database(path.join(workDir, "novels.db"), { readonly: true });
+    try {
+      return s.prepare("SELECT count(*) AS n FROM user_settings WHERE username = ? AND key LIKE ?").get("bob", like).n;
+    } finally { s.close(); }
+  };
+  check("push 里那把钥匙没落进服务端库（入库侧那道闸门单独判，不受回传侧遮蔽）",
+    rowsInDb("api-providers%") === 0 && rowsInDb("api-active-provider%") === 0,
+    `api-providers=${rowsInDb("api-providers%")} 行 / api-active-provider=${rowsInDb("api-active-provider%")} 行`);
+  check("同一包里正常的设置确实入了库（闸门不许写成「什么都不存」）",
+    rowsInDb("theme%") === 1, `theme=${rowsInDb("theme%")} 行`);
+  const pulled = await register("bob", "c-bob-pull");
+  const got = pulled.json?.data?.settings ?? {};
+  check("API 配置即使被硬推也不入库：回包里不许出现",
+    !Object.keys(got).some((k) => k.startsWith("api-providers") || k.startsWith("api-active-provider")),
+    `settings=${JSON.stringify(Object.keys(got))}`);
+  check("同一包里正常的设置照常入库并回传（闸门不许顺带吃掉用户数据）",
+    got["theme:bob"] === "dark", `theme=${JSON.stringify(got["theme:bob"])}`);
+
+  const legacyKey = "api-providers:legacy-bob";
+  const sqlite = new Database(path.join(workDir, "novels.db"));
+  sqlite.pragma("busy_timeout = 3000");
+  sqlite.prepare("INSERT OR REPLACE INTO user_settings (username, key, value) VALUES (?, ?, ?)")
+    .run("bob", legacyKey, JSON.stringify([{ name: "旧数据", apiKey: "sk-legacy" }]));
+  sqlite.close();
+  const pulled2 = await register("bob", "c-bob-pull2");
+  const got2 = pulled2.json?.data?.settings ?? {};
+  check("库里已经躺着 API 配置时回传侧要挡住（尾巴是别人的用户名也照样拦）",
+    !(legacyKey in got2), `settings=${JSON.stringify(Object.keys(got2))}`);
+  check("回传侧过滤之后其余设置仍照常下发（不许因为一行脏数据就整包空掉）",
+    got2["theme:bob"] === "dark", `settings=${JSON.stringify(Object.keys(got2))}`);
 } catch (e) {
   check("探针自身没有抛出", false, String(e && e.message ? e.message : e));
 } finally {
