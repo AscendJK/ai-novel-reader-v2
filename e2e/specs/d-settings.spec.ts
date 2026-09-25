@@ -519,6 +519,11 @@ test("D17 下拉选项超过一屏时：最后一条要滚得见、也选得中"
   await expectUnblocked(last);
 
   await page.keyboard.press("End");
+  // End 之后必须**先看到**高亮落在最后一项，才许按回车。Radix 把这个聚焦动作排在
+  // `setTimeout(() => focusFirst(...))` 里（`@radix-ui/react-select@2.2.6` dist 里那句
+  // `setTimeout`），两次 `keyboard.press` 之间不隔一个往返回程时，回车可能还打在
+  // 原先高亮的第一项上 —— 这条 2026-09-25 实测六次三红三绿，红的都是最后一句回显。
+  await expect(last, "End 没把高亮挪到最后一项，回车就选不到它").toHaveAttribute("data-highlighted", "");
   await page.keyboard.press("Enter");
   await expect(trigger, "选中之后的回显只可能来自 ItemText").toContainText("服务商12");
 });
