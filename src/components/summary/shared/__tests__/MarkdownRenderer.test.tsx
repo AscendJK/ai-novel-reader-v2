@@ -11,19 +11,25 @@
  * - **className 那道 truthy 门槛**：包一层 div 是给父级 grid/flex 用的；不包时必须真的不包
  *   （多一层 div 会把 `space-y-*` 之类的兄弟选择器隔断）。空字符串不算"要包"。
  *
- * **本档刻意没判的两格**：
+ * **本档刻意没判的一格**：
  * ① `content` 里出现原始 HTML（`<script>`、`<img onerror>`）时 react-markdown 默认**不渲染 HTML**，
  *    那是厂商那边的行为、不是这只组件的判断，且已有 `sanitize-svg` 那一档在管真入口；这里只钉
  *    "我们自己的三件事"，不给依赖的默认安全性写判据（哪天换渲染器，这些"绿"会一起骗人）。
- * ② **表格**：实测这台渲染器**画不出表格**——全仓没有 `remark-gfm`，`ReactMarkdown` 也没传任何
- *    `remarkPlugins`（grep 依赖与 src 都是零），而 CommonMark 本身不含表格。所以 AI 输出里的
- *    `| 甲 | 乙 |` 上屏是**竖线原文**，`markdown-config` 里那五支 `table/thead/tr/th/td`（含
- *    "窄屏给表格包一层横向滚动"那格）走不到。**这一格不写判据**：写"表格不成表格"等于把大概率
- *    不是本意的现状钉成契约，写"表格会成表格"则是假绿。已当成产品事实报给制作人
- *    （要么装 `remark-gfm` 让那五支活过来，要么把表格配置删掉别留着骗人）。同理受影响的是
- *    删除线 `~~x~~`、自动链接、任务清单——都是 GFM 扩展，现在一律按普通文本渲染。
  *
- * ## 变异台账见文件末尾：8 轮全部打在基线 `279f8554…`（产品代码一行没动）
+ * ## GFM 那一族：2026-09-26 起从"画不出"改成"必须画得出"
+ * 之前这台渲染器只吃 CommonMark（全仓没有 `remark-gfm`，也没传 `remarkPlugins`），所以表格、
+ * 删除线、任务清单、自动链接、脚注一律上屏成原文，而 `markdown-config` 里那五支
+ * `table/thead/tr/th/td`（含"窄屏给表格包一层横向滚动"）走不到。制作人点头装了 `remark-gfm@4.0.1`
+ * 并接上 `remarkPlugins`，于是这一族**升格成判据**（见文件末尾 `GFM 那一族` 那个 describe）：
+ * 摘掉 `remarkPlugins` 必须整族红，且**带 className 那条路也要红**——props 只组一次就是因为 M6
+ * 那记 0 红（带 wrapper 那支漏传过 components）。
+ *
+ * 一笔连带的产品账（不在本档判，写在这是免得下一个人以为是漏了）：
+ * `src/agents/analyzers.ts:167` 与 `:188` 两条提示词里仍写着「**不要使用表格**」——那是当年为了
+ * 迁就画不出表格而加的约束。今天渲染侧已经能画，提示词那两条要不要放开是**另一个决定**：
+ * 放开要重跑真厂商那五条判据（C 组 / K 批），且表格在朗读（TTS 逐字读）与窄屏下的体验还没量过。
+ *
+ * ## 变异台账见文件末尾
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -195,6 +201,90 @@ describe("className 那道门槛：要包就包，不包就别多一层", () => 
   });
 });
 
+describe("GFM 那一族：表格／删除线／任务清单／自动链接必须真上屏", () => {
+  const TABLE = ["| 甲 | 乙 |", "| --- | --- |", "| 一 | 二 |"].join("\n");
+
+  it("表格渲染成真表格，且走的是 summary 那五支（含窄屏横滚那一层 div）", () => {
+    const { container } = renderMd({ content: TABLE });
+    const table = container.querySelector("table");
+    expect(table, "表格没成表格：remarkPlugins 那一支没接上？").toBeTruthy();
+    expect(table!.className).toContain("w-full");
+    // 「窄屏给表格包一层横向滚动」这一格今天才算数：wrapper 必须是 table 的父级
+    const wrap = table!.parentElement as HTMLElement;
+    expect(wrap.tagName).toBe("DIV");
+    expect(wrap.className).toContain("overflow-x-auto");
+    expect(container.querySelector("thead")!.className).toContain("bg-muted");
+    expect(container.querySelector("th")!.className).toContain("text-left");
+    expect(container.querySelector("td")!.className).toContain("px-1.5");
+  });
+
+  it("表头是 th、表体是 td，两行两列各就各位（不许全塌成 td 或全成文本）", () => {
+    const { container } = renderMd({ content: TABLE });
+    expect(container.querySelectorAll("thead th")).toHaveLength(2);
+    expect(container.querySelectorAll("tbody td")).toHaveLength(2);
+    expect(container.querySelectorAll("tr")).toHaveLength(2);
+  });
+
+  it("竖线不再以原文上屏（读者看到的不是 `| 甲 | 乙 |` 那一串）", () => {
+    const { container } = renderMd({ content: TABLE });
+    expect(container.textContent).not.toContain("|");
+    expect(container.textContent).toContain("甲");
+    expect(container.textContent).toContain("二");
+  });
+
+  it("删除线 `~~x~~` 渲染成 del", () => {
+    const { container } = renderMd({ content: "这是~~废案~~那一版" });
+    const del = container.querySelector("del");
+    expect(del, "GFM 删除线没生效").toBeTruthy();
+    expect(del!.textContent).toBe("废案");
+  });
+
+  it("任务清单给出两枚 checkbox，勾上与没勾上各一头", () => {
+    const { container } = renderMd({ content: ["- [x] 已做", "- [ ] 未做"].join("\n") });
+    const boxes = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+    expect(boxes).toHaveLength(2);
+    expect(boxes[0].checked).toBe(true);
+    expect(boxes[1].checked).toBe(false);
+    // 有意不判 `disabled`：那是 react-markdown 对任务清单的自带形状，不是本档的判断，
+    // 文件头那条口径写着「不给依赖的默认行为写判据」。这里判的是我们这一层能坏的东西：
+    // `- [x]` 有没有被吃成排版（竖线/方括号不上屏）。
+    expect(container.textContent).not.toContain("[x]");
+  });
+
+  it("自动链接：裸 URL 变成能点的 a（CommonMark 不会自动链）", () => {
+    const { container } = renderMd({ content: "详见 https://example.com/jin 这一页" });
+    const a = container.querySelector("a");
+    expect(a, "GFM 自动链接没生效").toBeTruthy();
+    expect(a!.getAttribute("href")).toBe("https://example.com/jin");
+  });
+
+  it("脚注 `[^1]` 收成上标，注内容出现在文末", () => {
+    const { container } = renderMd({ content: ["正文一句[^1]", "", "[^1]: 注脚原文"].join("\n") });
+    expect(container.querySelector("sup"), "脚注上标没出来").toBeTruthy();
+    expect(container.textContent).toContain("注脚原文");
+    expect(container.textContent).not.toContain("[^1]");
+  });
+
+  it("带 className（包一层 wrapper）那条路也吃到 GFM——props 只组一次的牙", () => {
+    const { container } = renderMd({ content: TABLE, className: "prose-mini" });
+    const wrap = container.firstElementChild as HTMLElement;
+    expect(wrap.tagName).toBe("DIV");
+    expect(wrap.className).toBe("prose-mini");
+    const table = wrap.querySelector("table");
+    expect(table, "包一层那条路把 remarkPlugins 丢了").toBeTruthy();
+    expect(table!.className).toContain("w-full");
+  });
+
+  it("chat 变体也成表格，但没有 summary 那五支的类名（plugins 与 components 是两件事）", () => {
+    const { container } = renderMd({ content: TABLE, variant: "chat" });
+    const table = container.querySelector("table");
+    expect(table, "表格成不成跟 variant 无关：remarkPlugins 只有一处").toBeTruthy();
+    expect(table!.getAttribute("class")).toBeNull();
+    expect(container.querySelector("div.overflow-x-auto")).toBeNull();
+    expect(container.querySelector("th")!.getAttribute("class")).toBeNull();
+  });
+});
+
 /* ================================================================ 变异台账
  * 8 轮全部打在基线 `279f8554…`（MarkdownRenderer.tsx **未改动**那一版，15 条全绿）。
  * 每刀手改一处、跑完 `cp` 字节备份还原并核 SHA256；每轮固定读数
@@ -214,4 +304,24 @@ describe("className 那道门槛：要包就包，不包就别多一层", () => 
  *   `279f8554`），再打同一刀 **M6b＝1 红**。
  * 另一笔过程账：M6 中途我用一次性 python 脚本去改产品文件（图快），跑出来才发现它一次动了两处、
  *   `markers` 直接变 2 归不了因——按既定口径**变异必须手动一次一处**，已还原重下。这条记着。
+ */
+
+/* ================================================================ 2026-09-26 追加：GFM 那一族
+ * 这一批**改了产品**（装 remark-gfm@4.0.1、接 remarkPlugins、两条 return 合成一条），所以字节基线
+ * 当场重新抓：MarkdownRenderer.tsx `33c91581` / 1860 B，markdown-config.tsx `681dec80` / 3358 B。
+ * 6 刀全部咬红，**没有一记 0 红**；每轮固定读数 markers=1 / transform_failed=0 / markers_left=0 /
+ * 还原后 sha 回到基线（跑刀器自带还原）。跑法 %TEMP%\knife-gfm.sh <刀号> <A|B>，A=渲染器 B=配置。
+ * - K1 (A) `remarkPlugins` 摘成空数组            9 红：整个 GFM 那一族一起塌——这一格就是那一族的总开关
+ * - K2 (A) 退回「两条 return 各写一份 props」、带 wrapper 那支漏传   **1 红**，且只红
+ *   「带 className 那条路也吃到 GFM」那一条 —— M6 当年补的那格，今天有了自己的牙
+ * - K3 (B) 摘掉「窄屏给表格包一层横向滚动」        1 红（表格那第 1 条：wrapper 必须是 table 的父级）
+ * - K4 (B) 表头 `th` 画成 `td`                    2 红（同上一条 ＋「表头是 th、表体是 td」那条）
+ * - K5 (B) `thead` 的底色类名整格摘掉             1 红
+ * - K6 (B) 给 chat 也补上 table 那一支            1 红（两档差异那条）。**这刀是"加功能"形状的刀**：
+ *   它红不代表那种改动是坏的，记在这里是说明那条判据钉的是**现状差异**——真要给 chat 配表格，
+ *   判据得跟着改（同 button 那档「默认不设 type」的口径：钉现状，不钉永远）。
+ *
+ * 顺手摘掉一处断言（不是漏判）：任务清单 checkbox 的 `disabled` 归 react-markdown 自带的形状，
+ * 本文件头的口径是「不给依赖的默认行为写判据」，所以删。留下来判的是我们这层能坏的：
+ * `- [x]` 有没有被吃成排版（方括号不上屏）。
  */

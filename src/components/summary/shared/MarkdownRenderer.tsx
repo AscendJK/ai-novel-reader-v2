@@ -4,11 +4,19 @@
  */
 
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { Components } from "react-markdown";
 import {
   getMarkdownComponents,
   type MarkdownVariant,
 } from "./markdown-config";
+
+/**
+ * GFM 扩展：表格、删除线、任务清单、自动链接、脚注。
+ * CommonMark 本身不含这些，少了这一支，markdown-config 里那五支 table/thead/tr/th/td
+ * 与 `~~x~~`、`- [ ]` 全都走不到。
+ */
+const REMARK_PLUGINS = [remarkGfm];
 
 /**
  * Markdown 渲染器属性
@@ -47,19 +55,13 @@ export function MarkdownRenderer({
     ? { ...defaultComponents, ...customComponents }
     : defaultComponents;
 
-  if (className) {
-    return (
-      <div className={className}>
-        <ReactMarkdown components={mergedComponents}>
-          {content}
-        </ReactMarkdown>
-      </div>
-    );
-  }
-
-  return (
-    <ReactMarkdown components={mergedComponents}>
+  // 两条 return 各写一份 props 是 M6 那记 0 红的根因（带 wrapper 那支漏传过 components），
+  // 所以 props 只组一次，包不包 div 只决定外面那一层。
+  const markdown = (
+    <ReactMarkdown components={mergedComponents} remarkPlugins={REMARK_PLUGINS}>
       {content}
     </ReactMarkdown>
   );
+
+  return className ? <div className={className}>{markdown}</div> : markdown;
 }
