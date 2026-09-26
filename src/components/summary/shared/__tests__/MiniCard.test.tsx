@@ -9,9 +9,11 @@
  *   两个都传、`SubItem` 只传顶层、`QATab` 只传 metadata。任何一半被"简化"掉，都正好弄哑一只调用方。
  * - 数字要带千分位（`1,234 章`），日期要钉 `zh-CN`（跟着系统 locale 走就会变英文）。
  *
- * 未判 / 待议的三格（写清楚，别让"这只有测试了"盖住）：
- * - 「重新生成」那枚按钮**没有可访问名**（既无 `title` 也无 `aria-label`，只有一个图标）。
- *   下面的用例只能按 DOM 位置取它。这是可访问性缺陷，不是口径，本批不动产品——要补名字建议单独一笔。
+ * 未判 / 待议的两格（写清楚，别让"这只有测试了"盖住）：
+ * - ~~「重新生成」那枚按钮没有可访问名~~：2026-09-26 补上了（`aria-label="重新生成 {title}"`，
+ *   名字带卡片标题的口径沿用 09-24 搜索那一排按钮那笔）。判据与两刀在下面的「可访问名」一节。
+ *   **同排另两枚没跟着带卡片名**：`收藏到笔记` 只有 `title`、`删除` 只有 `aria-label="删除"`，
+ *   都有名字、都不是无名按钮，但一屏几十张卡片时读屏里仍是三枚同名的。要不要一起对齐等制作人一句话。
  * - `truncated` 单独出现时标题句写成「本分析使用了精简模式」——严格说截断≠精简，那是产品文案口径，
  *   本批按现状钉住（改文案要连带徽章那一格的口径一起谈）。
  * - `CardTitle` 的 `truncate` 与父级 `min-w-0` 是形状判据，jsdom 量不出后果（长标题真的把卡片撑破
@@ -40,6 +42,23 @@
  *      位置取按钮的用例跟着一起红——位置型定位器对按钮增减敏感，这正是想要的敏感度）
  * 刀13 `variant="summary"` 传成 `"note"` ⇒ 1 红；刀15 正文传成 `title` ⇒ 2 红
  * 刀14 `isTemp` 的虚线边框不画 ⇒ 1 红（「临时」徽章那条跟着红：一个 prop 管两处，两处都在判）
+ *
+ * 2026-09-26 补「重新生成」可访问名那一格的两刀（基线 `ec29e9b2d8ee8c8b50307abd65e742710cfcc6728fed12ed843569c3e9709369`，
+ * 5774 字节；每刀一处、跑完 `cp` 字节还原并核 SHA 回基线，markers_left=0；本文件 23 条）：
+ * 刀16 摘掉 `aria-label`、只留 hover 用的 `title="重新生成"` ⇒ **2 红**（两条名字判据全红：
+ *      可访问名退成"重新生成"四个字——`title` 确实也能给出名字，所以这一刀打的不是"有没有名字"，
+ *      打的是"名字里有没有带上是哪一张卡片"）。
+ * 刀17 名字取错来源（`重新生成 {content}` 而不是 `{title}`）⇒ **同样 2 红**。刀16 是"没上下文"、
+ *      刀17 是"上下文取错"，两半各咬一次；第二条用例特意让两张卡片的 `content` 相同、`title` 不同，
+ *      就是为了这一刀能红：正文当名字时两枚同名，`getByRole` 直接找不到那两句话。
+ * 同一笔里 ExportPanel 那只下拉的 `aria-label` 由那边文件的 **M26** 打（1 红）。
+ *
+ * **补名字连带收到的一只旧雷（不是判据没牙，是产品真的换了形状）**：`BookTab-internals` 里有
+ * 四处拿 `{ name: /剧情时间线/ }` 这种"名字含标题"的正则定位 SubItem 那一行的表头。卡片一旦把
+ * 标题写进可访问名，同一屏里就有了两枚名字含"剧情时间线"的按钮（表头 + 那张卡的重新生成），
+ * `getByRole` 当场报 multiple。改成精确名 `{ name: "剧情时间线" }` 之后 316 条全绿。
+ * 这正是这一格想要的效果（读屏里"重新生成 剧情时间线"就是能说清动的是哪一张卡），也是它对该文件
+ * 里所有宽松定位器的通用警告：**以后再加带标题的名字，先查一遍正则型 locator。**
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -236,5 +255,30 @@ describe("三枚按钮：没给回调就不画，loading 只该按住「重新�
     expect(titleNodes).toHaveLength(1);
     expect(titleNodes[0].textContent).toBe("只属于标题的那句");
     expect(screen.getByText("正文那句")).toBeTruthy();
+  });
+});
+
+describe("「重新生成」的可访问名：图标按钮要说得出动的是哪一张卡片", () => {
+  // 产品原来只画一只 RefreshCw 图标：既无 `aria-label` 也无 `title`，读屏里这一枚是**无名**的。
+  // 而一屏同时摆着几十张卡片（SubItem 的总结列表、QATab 的每条回答），全叫同一个东西等于没法用。
+  // 名字带标题是制作人 2026-09-24 定过的口径（同一类问题在搜索那一排按钮上先修过一次）。
+  it("按可访问名找得到，名字是「重新生成 + 这一张的标题」", () => {
+    card({ title: "令狐冲 vs 任我行：华山之争", onRegenerate: vi.fn() });
+    expect(screen.getByRole("button", { name: "重新生成 令狐冲 vs 任我行：华山之争" })).toBeTruthy();
+  });
+
+  it("两张卡片同时在场：两枚各有各的名字（名字跟着 title 走，不是写死的一句）", () => {
+    card({ title: "第一章的摘要", content: "同一句正文", onRegenerate: vi.fn() });
+    card({ title: "第二章的摘要", content: "同一句正文", onRegenerate: vi.fn() });
+    expect(screen.getByRole("button", { name: "重新生成 第一章的摘要" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重新生成 第二章的摘要" })).toBeTruthy();
+    // 名字取的是标题不是正文：正文跟着 content 变，读屏会念出半段总结
+    expect(screen.getAllByRole("button", { name: /^重新生成 / })).toHaveLength(2);
+  });
+
+  it("没给 onRegenerate 时仍不画这枚（补名字不许顺手把出口变成常驻按钮）", () => {
+    card({ title: "没有重生成的卡片", onBookmark: vi.fn(), onRemove: vi.fn() });
+    expect(screen.queryByRole("button", { name: /^重新生成 / })).toBeNull();
+    expect([...document.querySelectorAll("button")]).toHaveLength(2);
   });
 });

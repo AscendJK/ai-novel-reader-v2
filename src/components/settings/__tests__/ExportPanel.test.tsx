@@ -14,8 +14,8 @@
  *   改成 state（`{kind:"ok"|"error"}`）是更好的形状，属于产品改动，不在这一笔里做。
  * - 真正落盘/下载的动作在 `@/lib/export`（那边有自己的用例），本文件用桩，判的是**面板把哪几个
  *   数字、哪个 novelId 交出去**，不判文件内容。
- * - `SelectTrigger` 只有 `id/name`、没有 `aria-label`：可访问名下一次补（与 MiniCard 那枚
- *   「重新生成」按钮同一类，建议同一笔处理）。
+ * - ~~`SelectTrigger` 只有 `id/name`、没有 `aria-label`~~：2026-09-26 补上了名字（`M26` 打的就是这一格，
+ *   与 MiniCard 那枚「重新生成」同一笔）。
  *
  * 变异台账（每刀手动一次一处、跑完 `cp` 字节备份还原并核 SHA256 回基线；读数是实跑的，记在文件末尾）。
  */
@@ -275,6 +275,15 @@ describe("单本导出：没得选就不许画出可点的出口", () => {
     expect(screen.getByRole("option", { name: "紫钗记 (2 章)" })).toBeTruthy();
   });
 
+  it("那只下拉有可访问名（只挂 id/name 不算——这一处没有 <label for>）", async () => {
+    // 补之前实测的名字：`aria-label` 没有、`id="export-novel"` 上方无 `<label>`，于是可访问名
+    // 只剩渲染出来的占位文案「选择小说...」——读屏念得出占位符，却听不出这只控件是干什么的
+    // （而且选完一本书之后名字会跟着变成书名，同一只控件在页面上换名字）。
+    // 同一排两枚导出按钮本来就有名字（`title="JSON 格式"` / `"TXT 格式"`），缺的正是这一只。
+    await mountWithBooks([novel("b1", "长相思", 24)]);
+    expect(screen.getByRole("combobox", { name: "选择要导出的小说" })).toBeTruthy();
+  });
+
   it("没选书时两枚导出按钮都按住；选完之后各走各的出口、传的是 novelId", async () => {
     await mountWithBooks([novel("b1", "长相思", 24)]);
     const json = screen.getByRole("button", { name: "JSON 格式" });
@@ -348,6 +357,9 @@ describe("单本导出：没得选就不许画出可点的出口", () => {
  *  M23 JSON 那枚接到 `exportNovelAsTXT`                 各走各的出口（toHaveBeenCalledWith）1
  *  M24 去掉 `|| "未知作者"`                             没有作者时如实写未知作者        1
  *  M25「导出 JSON」接到 `exportNovelAsJSON("")`          全量导出不与单本混用            1
+ *  M26 摘掉 `SelectTrigger` 的 `aria-label`（2026-09-26 补名字那一格；基线换成
+ *      `63f34c38e4fd7af27a8bcddef241763e88b0180851d657fecdf18f29663ecdb7`，8144 字节）
+ *                                                      那只下拉有可访问名              1
  *
  * 打废的两处（记下来，别当成"这格没判"）：
  * - 第一次 M2 把 `<=` 加在了 MB 那一行——测试值上行为完全没变，是**等价变异**，跑之前自己看出来的，未跑即撤。

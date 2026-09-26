@@ -137,9 +137,9 @@ afterEach(() => {
 describe("BookTab · 一个展开槽管五枚入口", () => {
   it("五枚入口各开各的那一格：点谁就回谁的 key", () => {
     const { handlers } = setup();
-    fireEvent.click(screen.getByRole("button", { name: /剧情时间线/ }));
-    fireEvent.click(screen.getByRole("button", { name: /全书人物关系/ }));
-    fireEvent.click(screen.getByRole("button", { name: /全书总览/ }));
+    fireEvent.click(screen.getByRole("button", { name: "剧情时间线" }));
+    fireEvent.click(screen.getByRole("button", { name: "全书人物关系" }));
+    fireEvent.click(screen.getByRole("button", { name: "全书总览" }));
     fireEvent.click(screen.getByRole("button", { name: "开图谱" }));
     fireEvent.click(screen.getByRole("button", { name: "开地图" }));
     expect(handlers.setBookSub.mock.calls.map((c) => c[0])).toEqual([
@@ -149,12 +149,12 @@ describe("BookTab · 一个展开槽管五枚入口", () => {
 
   it("展开槽的值原样回传：开 → 那一格的 key，收 → null", () => {
     const a = setup({ bookSub: null });
-    fireEvent.click(screen.getByRole("button", { name: /剧情时间线/ }));
+    fireEvent.click(screen.getByRole("button", { name: "剧情时间线" }));
     expect(a.handlers.setBookSub).toHaveBeenLastCalledWith("timeline");
     a.unmount();
 
     const b = setup({ bookSub: "timeline" });
-    fireEvent.click(screen.getByRole("button", { name: /剧情时间线/ }));
+    fireEvent.click(screen.getByRole("button", { name: "剧情时间线" }));
     expect(b.handlers.setBookSub).toHaveBeenCalledWith(null);
   });
 
@@ -179,8 +179,7 @@ describe("BookTab · 谁在跑就谁转圈", () => {
     setup({ timelineLoading: true });
     const rows = ["剧情时间线", "全书人物关系", "全书总览"];
     const spinners = rows.map((label) => {
-      const btn = screen.getAllByRole("button", { name: new RegExp(label) })
-        .find((b) => b.querySelector("svg")) as HTMLElement;
+      const btn = screen.getByRole("button", { name: label }) as HTMLElement;
       return !!btn.querySelector("svg.lucide-loader-circle");
     });
     expect(spinners).toEqual([true, false, false]);
@@ -188,8 +187,7 @@ describe("BookTab · 谁在跑就谁转圈", () => {
 
   it("全书总览在跑：不许让时间线跟着转", () => {
     setup({ globalLoading: true });
-    const tl = screen.getAllByRole("button", { name: /剧情时间线/ })
-      .find((b) => b.querySelector("svg")) as HTMLElement;
+    const tl = screen.getByRole("button", { name: "剧情时间线" }) as HTMLElement;
     expect(tl.querySelector("svg.lucide-loader-circle")).toBeFalsy();
   });
 

@@ -133,7 +133,14 @@ export function ExportPanel() {
             <p className="text-sm font-medium">单本导出</p>
             <div className="flex gap-2">
               <Select value={selectedNovelId} onValueChange={setSelectedNovelId}>
-                <SelectTrigger id="export-novel" name="export-novel" className="flex-1 h-8 text-xs">
+                <SelectTrigger
+                  id="export-novel"
+                  name="export-novel"
+                  // 这只控件上方没有 <label for>，光挂 id/name 等于没有名字；而它的"值"会跟着
+                  // 选中的书名变，拿值当名字会让同一只控件在页面上换称呼。
+                  aria-label="选择要导出的小说"
+                  className="flex-1 h-8 text-xs"
+                >
                   <SelectValue placeholder="选择小说..." />
                 </SelectTrigger>
                 <SelectContent>

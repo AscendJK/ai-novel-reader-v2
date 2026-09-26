@@ -94,6 +94,10 @@ export function MiniCard({
                 className="h-5 w-5"
                 onClick={onRegenerate}
                 disabled={loading}
+                // 图标按钮得自己报名字，而且要带上是哪一张卡片：一屏同时摆着几十张卡片，
+                // 只说"重新生成"等于让读屏用户在几十枚同名按钮里挨个试。
+                aria-label={`重新生成 ${title}`}
+                title="重新生成"
               >
                 <RefreshCw className="h-2.5 w-2.5" />
               </Button>
