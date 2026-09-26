@@ -26,6 +26,9 @@ export const PROBE_FOR = {
   "server/routes/novels.js": ["probe:boot"],
   "server/routes/version.js": ["probe:boot"],
   "server/middleware/index.js": ["probe:boot"],
+  // 2026-09-26：`probe:boot` 现在**直接 import** 这一只并在进程内驱动假 req/res（27 条判据，
+  // 台账在 probe-server-boot.mjs 那段注释里），所以它已经不只是"映射可达"，是有直接判据了。
+  "server/middleware/auth.js": ["probe:boot"],
   "server/routes/sync.js": ["probe:sync"],
   "server/routes/proxy.js": ["probe:proxy"],
   "server/routes/rag.js": ["probe:rag"],

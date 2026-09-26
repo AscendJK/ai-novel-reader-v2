@@ -76,6 +76,160 @@ for (const sub of ["", "routes", "lib"]) {
 }
 check("server/ 里除 data-paths.mjs 外不再硬编码 data 目录", hardcoded.length === 0, hardcoded.join(", "));
 
+// ── middleware/auth.js 的本体判据（第 1 档补直接判据）──
+// 上面那些 HTTP 判据只量到"401 有没有回来"这一层；中间件那 75 行——Bearer 前缀怎么认、
+// 切掉几个字符、失败时 next() 绝不能被叫——在探针进程里没有任何名字直接指着它。
+// 这里 import 真模块、拿假 req/res 驱动。库单独指到一次性文件，绝不碰真实 server/data。
+//
+// 这一段刻意放在起服务之前：判据改坏时最先炸的往往是 HTTP 那一档（请求挂住 → 整轮探针崩掉，
+// 读不到"到底是哪条判据红"）。先跑单元段，红的是名字而不是超时。
+//
+// 变异台账（产品基线 server/middleware/auth.js 1805 字节，sha256 前缀 93e7a9fa；
+// 每轮一次手改一处带 MUT- 标记 → 跑 probe:boot → 按字节还原 → 当场核 SHA。
+// 19 轮 = 16 轮刀（13 把不同的刀 + A7/A10/A13 三把在判据段挪位后重打）+ 3 轮对照；
+// 每轮 markers=1（对照 0）、markers_left=0、diff_lines=0、sha=93e7a9fa。跑法 %TEMP%\knife-auth.sh）
+//   A1  不看 Bearer 前缀            1 红  小写 bearer 那一格
+//   A2  前缀少切一个字符            7 红  slice(6)：整条认不出人，放行/拒绝两半一起塌
+//   A3  摘掉 `?.`（没带头）         1 红 + 整段被 TypeError 打断（没带头就抛）
+//   A4  拒绝之前先 next()           2 红  没登录也照样跑路由
+//   A5  回了 401 但没 return        3 红  next 被叫 + req.username 被写成 null
+//   A6  认出来却不挂 username       1 红  下游全拿不到身份
+//   A7b 匿名请求被静默吞掉          3 红  optionalAuth 不 next()：公开端点再也回不了话
+//   A8  匿名时留成 null            2 红  undefined 与 null 这一格是真的
+//   A9  没登录也返回 true           1 红  authNovel 说"过了"
+//   A10b 登录了返回 false           1 红  15 个路由全部白屏（真实症状是请求挂住）
+//   A11 两道闸门文案分家            1 红  requireAuth 与 authNovel 的 401 文案不再同一句
+//   A12 有字就算登录（不查会话）   14 红  撤销的会话与陌生 token 全都认
+//   A13b 失败不回 401              1 红  路由 return 掉，客户端只能等超时
+//   三把重打的刀第一遍读不到数（red 段没跑到就整轮崩），所以判据段挪位后各重打一遍——
+//   台账上 A7/A10/A13 那三行是"崩在 HTTP 段"，A7b/A10b/A13b 才是判据读数。
+// 没有一记 0 红的刀，也没有等价变异。
+{
+  // 一次性**内存库**：这一支只需要 sync-handler 那张会话表，不落文件既没有清理问题
+  // （Windows 上 better-sqlite3 的句柄要活到进程退出才放），也从根上碰不到真实 server/data。
+  process.env.NOVEL_READER_DB_PATH = ":memory:";
+  const { getSessionUsername, requireAuth, optionalAuth, authNovel } = await import("../server/middleware/auth.js");
+  const { createSession, removeSession } = await import("../server/sync-handler.js");
+
+  /** 只给 authorization 头，别的都不假造 */
+  const reqWith = (header) => (header === undefined ? { headers: {} } : { headers: { authorization: header } });
+  function resFake() {
+    const res = {
+      calls: [],
+      status(code) { res.calls.push(["status", code]); return res; },
+      json(body) { res.calls.push(["json", body]); return res; },
+    };
+    return res;
+  }
+  const nextWith = () => {
+    const box = { calls: 0 };
+    box.fn = () => { box.calls += 1; };
+    return box;
+  };
+  const bodyOf = (res) => (res.calls.find((c) => c[0] === "json")?.[1] ?? null);
+  const codeOf = (res) => (res.calls.find((c) => c[0] === "status")?.[1] ?? null);
+
+  const alice = createSession("probe-alice");
+  const bob = createSession("probe bob 甲");
+
+  check("真模块能被探针进程 import（中间件与 sync-handler 接线没断）",
+    [getSessionUsername, requireAuth, optionalAuth, authNovel].every((f) => typeof f === "function"));
+
+  // ── getSessionUsername：认不认这一发 ──
+  check("有效 Bearer token 认得出用户名", getSessionUsername(reqWith(`Bearer ${alice}`)) === "probe-alice");
+  check("没有 authorization 头：null 而不是抛",
+    (() => { try { return getSessionUsername(reqWith()) === null; } catch { return false; } })());
+  check("空头（空字符串）：null", getSessionUsername(reqWith("")) === null);
+  check("非 Bearer 方案（Basic）不许被当成已登录",
+    getSessionUsername(reqWith("Basic YWxpY2U6")) === null);
+  check("只认逐字 'Bearer ' 前缀：小写 bearer 现在不认（改这一格要连带改这条判据）",
+    getSessionUsername(reqWith(`bearer ${alice}`)) === null);
+  check("'Bearer' 少了那个空格不算认证头", getSessionUsername(reqWith(`Bearer${alice}`)) === null);
+  check("'Bearer ' 后面空 token：null（不许拿 undefined 去查会话）",
+    getSessionUsername(reqWith("Bearer ")) === null);
+  check("未知 token：null", getSessionUsername(reqWith("Bearer not-a-session")) === null);
+  check("切的就是前 7 个字符：token 里带空格也原样认",
+    getSessionUsername(reqWith(`Bearer ${bob}`)) === "probe bob 甲");
+  check("多切/少切都会当场暴露：前缀后两个空格的那一发认不出",
+    getSessionUsername(reqWith(`Bearer  ${alice}`)) === null);
+  const revoked = createSession("probe-carol");
+  removeSession(revoked);
+  check("会话撤销之后立刻认不出（退出登录不是一张空头支票）",
+    getSessionUsername(reqWith(`Bearer ${revoked}`)) === null);
+
+  // ── requireAuth：这道闸门的两半 ──
+  const okReq = reqWith(`Bearer ${alice}`);
+  const okRes = resFake();
+  const okNext = nextWith();
+  requireAuth(okReq, okRes, okNext.fn);
+  check("requireAuth 放行时：next 叫一次", okNext.calls === 1, `next=${okNext.calls}`);
+  check("requireAuth 放行时：req.username 挂上用户名", okReq.username === "probe-alice", `username=${okReq.username}`);
+  check("requireAuth 放行时：一个字都不许回给客户端", okRes.calls.length === 0, JSON.stringify(okRes.calls));
+
+  const badReq = reqWith("Bearer nope");
+  const badRes = resFake();
+  const badNext = nextWith();
+  requireAuth(badReq, badRes, badNext.fn);
+  check("requireAuth 拒绝时：next 一次都不许叫（叫了就是没登录也往下走）",
+    badNext.calls === 0, `next=${badNext.calls}`);
+  check("requireAuth 拒绝时：401 + 可识别的文案",
+    codeOf(badRes) === 401 && bodyOf(badRes)?.error === "需要登录",
+    `${codeOf(badRes)} ${JSON.stringify(bodyOf(badRes))}`);
+  check("requireAuth 拒绝时：不许顺手给 req.username 赋任何值",
+    "username" in badReq === false, `username=${JSON.stringify(badReq.username)}`);
+  const noHdrRes = resFake();
+  const noHdrNext = nextWith();
+  requireAuth(reqWith(), noHdrRes, noHdrNext.fn);
+  check("没带头也一样被拒（同一道闸门的另一个入口）",
+    noHdrNext.calls === 0 && codeOf(noHdrRes) === 401, `next=${noHdrNext.calls} status=${codeOf(noHdrRes)}`);
+
+  // ── optionalAuth：不拦路，但要把身份挂上 ──
+  const optReq = reqWith(`Bearer ${alice}`);
+  const optNext1 = nextWith();
+  optionalAuth(optReq, resFake(), optNext1.fn);
+  check("optionalAuth 带有效 token：挂上用户名并放行",
+    optReq.username === "probe-alice" && optNext1.calls === 1, `username=${optReq.username} next=${optNext1.calls}`);
+  const anonReq = reqWith();
+  const optNext2 = nextWith();
+  optionalAuth(anonReq, resFake(), optNext2.fn);
+  check("optionalAuth 匿名：照样放行（公开端点不许被这道闸门挡住）", optNext2.calls === 1, `next=${optNext2.calls}`);
+  check("optionalAuth 匿名：req.username 是 undefined 而不是 null",
+    anonReq.username === undefined && "username" in anonReq,
+    `username=${JSON.stringify(anonReq.username)}`);
+  const badOptReq = reqWith("Bearer nope");
+  const badOptRes = resFake();
+  const badOptNext = nextWith();
+  optionalAuth(badOptReq, badOptRes, badOptNext.fn);
+  check("optionalAuth 拿坏 token：不回应答也不拦路，只是没有身份",
+    badOptNext.calls === 1 && badOptRes.calls.length === 0 && badOptReq.username === undefined,
+    `next=${badOptNext.calls} res=${JSON.stringify(badOptRes.calls)} username=${JSON.stringify(badOptReq.username)}`);
+
+  // ── authNovel：novels/rag 那 15 个路由实际走的还是这一支 ──
+  const legacyReq = reqWith(`Bearer ${alice}`);
+  const legacyRes = resFake();
+  check("authNovel 成功：返回 true、挂 req._username、不回应答",
+    authNovel(legacyReq, legacyRes) === true && legacyReq._username === "probe-alice" && legacyRes.calls.length === 0,
+    `_username=${legacyReq._username} res=${JSON.stringify(legacyRes.calls)}`);
+  const legacyBadReq = reqWith("Bearer nope");
+  const legacyBadRes = resFake();
+  check("authNovel 失败：返回 false，且 401 文案与 requireAuth 同一句",
+    authNovel(legacyBadReq, legacyBadRes) === false
+      && codeOf(legacyBadRes) === 401 && bodyOf(legacyBadRes)?.error === "需要登录",
+    `${codeOf(legacyBadRes)} ${JSON.stringify(bodyOf(legacyBadRes))}`);
+  check("authNovel 失败：不许把 req._username 留成任何值",
+    "_username" in legacyBadReq === false, `_username=${JSON.stringify(legacyBadReq._username)}`);
+
+  const afterAuth = snapshotRealDataDir();
+  const authChanged = WATCHED_IN_REAL_DIR.filter((n) => afterAuth[n] !== realDirBefore[n]);
+  check("auth 判据这一段没碰真实 server/data",
+    authChanged.length === 0,
+    authChanged.length ? `被改动：${authChanged.join(", ")}` : `观测 ${WATCHED_IN_REAL_DIR.length} 项`);
+}
+  // 子进程 env 是 {...process.env} 摊开的：不清掉这一只，
+  // 服务器会跑在内存库上，'库文件带进临时目录'那条判据就成了假红。
+  delete process.env.NOVEL_READER_DB_PATH;
+
+
 const child = spawn(process.execPath, [path.join(repoRoot, "server", "index.js")], {
   cwd: repoRoot,
   env: {
