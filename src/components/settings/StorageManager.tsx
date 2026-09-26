@@ -217,6 +217,7 @@ export function StorageManager() {
                   </div>
                   <Button
                     variant="ghost" size="sm"
+                    aria-label={`删除嵌入模型 ${key}`}
                     className="h-5 text-[10px] text-destructive hover:bg-destructive/10 shrink-0"
                     disabled={busyAction !== null}
                     onClick={() => removeEmbeddingModel(key)}

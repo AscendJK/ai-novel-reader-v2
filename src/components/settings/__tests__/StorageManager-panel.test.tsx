@@ -634,6 +634,26 @@ describe("已下载模型那一块：一只一行、缺文件要明说", () => {
     expect(H.calls).toEqual([]);
   });
 
+  it("每只模型的删除键都带自己的名字，且不与分类行那枚「清理」撞名", async () => {
+    // 现场：这枚按钮里只有一张 Trash2 图标，读屏念出来是"按钮"两个字，删的是哪只模型全靠猜。
+    // 判据排成三格，各自有刀：① 名字里带自己的 key ② 名字里不许出现"清理"这个子串
+    // （e2e 的 D9/D13 按 name 匹配，Playwright 默认子串，撞名会把它们指向错的按钮）
+    // ③ 这名字真能被读屏取到（getByRole name）。M1 摘掉 aria-label → ① 红；
+    // M2 换成「清理嵌入模型 X」→ 只有 ② 红；M3 写死不带 key → ① 红。
+    H.downloaded = ["bge-m3", "bge-small"];
+    await mount();
+    await settled();
+    const nameOf = (key: string) => {
+      const b = modelRow(key).getByRole("button"); // modelRow 本身已是 within(...)，别再套一层
+      return b.getAttribute("aria-label") ?? b.textContent?.trim() ?? "";
+    };
+    expect(nameOf("bge-m3")).toContain("bge-m3");
+    expect(nameOf("bge-small")).toContain("bge-small");
+    expect(nameOf("bge-m3")).not.toContain("清理");
+    expect(screen.getByRole("button", { name: "删除嵌入模型 bge-m3" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "删除嵌入模型 bge-small" })).toBeTruthy();
+  });
+
   it("只有正在删的那只出转圈，别只按住不转", async () => {
     H.downloaded = ["bge-m3", "bge-small"];
     let release = () => {};
@@ -715,6 +735,17 @@ describe("底部：统计耗时与那句「小说数据去书架删」", () => {
 | K34 | 摘掉 finally 里的 `setBusyAction(null)` | 6 条：失败后放开、三处转圈归属、在飞回执、按住与释放 |
 | K35 | 底部那句不再判 `breakdown` 是否存在 | 「没拿到数那一格是空的」 |
 | K36 | 初始加载的 `.catch` 不再 `setLoading(false)` | 「统计失败转圈也要停下」 |
+| K37 | 摘掉模型删除键的 `aria-label` | 「名字里带自己的 key」（名字是空串） |
+| K38 | `aria-label` 换成「清理嵌入模型 ${key}」 | 只有「名字里不许出现清理」这一格红 |
+| K39 | `aria-label` 写死成「删除嵌入模型」不带 key | 「带自己的 key」这一格红 |
+
+**K37~K39 那一轮先废了一次**：K38 第一跑红的是 `TypeError: Expected container to be an Element` ——
+我把 `modelRow(key)` 当元素又套了一层 `within(...)`（它本身已经是 `within(...)` 的返回值）。
+同一轮还改过一次判据顺序（原来 `getByRole(name)` 写在最前，K38 会被"找不到名字"抢先红掉，
+归因不到「撞名」那一格）；顺序定成"先算名字、后按名字找"之后 K37/K38/K39 各红 1 条、红名各不相同。
+基线 `3a71da12`/12987 B，产品改动只有一行 `aria-label`。
+**顺带一条实测**：那四格老判据用的是 `modelRow(key).getByRole("button")`（只按 role 不按名字），
+补名字不会打坏它们——加完 43 条全绿，这就是证据。
 
 **K12 那一轮不是等价变异，是我漏判**：`{formatBytes(usage)} / {formatBytes(quota)}` 互换后两个字符串都还在，
 `toContain` 两条各绿一次。把判据换成带顺序的正则重跑（K12b）才咬住。带斜杠的"A / B"式展示，判"在不在"等于没判。
