@@ -226,6 +226,23 @@ describe("NotesTab · 编辑态那一格", () => {
     expect(hook.setEditingContent).toHaveBeenCalledWith("改了一点");
   });
 
+  it("两格各有各的可访问名：编辑框与顶部输入框都不许是哑巴", () => {
+    const hook = makeHook({ editingNoteId: "n-a", editingContent: "草稿中" });
+    render(<NotesTab notesHook={hook} filteredNotes={[makeNote({ id: "n-a", content: "要改的正文" })]} />);
+    // 实测（jsdom + dom-accessibility-api）：**textarea 不吃 placeholder 当可访问名**，
+    // 所以顶部那格原本也是哑巴——上一批判据只能写成 `find((e) => e.id !== "note-input")`
+    // 这种排除法，那本身就是症状。两格现在各有各的 aria-label。
+    // 刀：A1 摘掉 `aria-label="编辑笔记内容"` → 1 红（找不到 name 编辑笔记内容）；
+    //     A2 摘掉 `aria-label="写笔记"` → 1 红（找不到 name 写笔记）。两次基线 `13c3f6ad…7960 B`。
+    expect(screen.getAllByRole("textbox")).toHaveLength(2);
+    const editor = screen.getByRole("textbox", { name: "编辑笔记内容" }) as HTMLTextAreaElement;
+    expect(editor.value).toBe("草稿中");
+    expect(editor.id).toBe(""); // 没顺手补一个假 id：这格要的是名字，不是又一个句柄
+    const top = screen.getByRole("textbox", { name: "写笔记" }) as HTMLTextAreaElement;
+    expect(top.id).toBe("note-input"); // id 与名字并存：老判据与 e2e 都还按 id 找
+    expect(top.placeholder).toBe("写笔记..."); // placeholder 只是提示，不是名字
+  });
+
   it("Ctrl+Enter 与 Meta+Enter 都算保存，单独 Enter 不许保存", () => {
     const hook = makeHook({ editingNoteId: "n-a", editingContent: "草稿" });
     render(<NotesTab notesHook={hook} filteredNotes={[NOTE]} />);

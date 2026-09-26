@@ -91,6 +91,7 @@ export function QATab({
         <Textarea
           id="qa-input"
           name="qa-input"
+          aria-label="提问"
           className="text-xs min-h-[40px]"
           placeholder="输入问题，支持追问..."
           value={qaHook.customQuestion}

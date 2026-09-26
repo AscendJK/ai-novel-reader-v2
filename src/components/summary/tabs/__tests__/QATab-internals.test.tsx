@@ -241,3 +241,15 @@ describe("QATab 的状态从哪儿来", () => {
     expect(screen.getByText("上一答还在")).toBeInTheDocument();
   });
 });
+
+describe("QATab 输入框的可访问名", () => {
+  it("提问那格有名字，不是靠 placeholder 撑着（placeholder 给不出可访问名）", () => {
+    // 实测：jsdom + dom-accessibility-api 下 textarea 的 placeholder 不进可访问名，
+    // 所以这格此前对读屏是哑巴。产品补了 aria-label="提问"，同时留着 placeholder。
+    renderTab(makeHook({ customQuestion: "这一卷的主线是什么" }));
+    const box = screen.getByRole("textbox", { name: "提问" }) as HTMLTextAreaElement;
+    expect(box.id).toBe("qa-input"); // id 与名字并存：老判据按 placeholder 找，e2e 按 id 找
+    expect(box).toHaveValue("这一卷的主线是什么");
+    expect(box.placeholder).toBe("输入问题，支持追问...");
+  });
+});

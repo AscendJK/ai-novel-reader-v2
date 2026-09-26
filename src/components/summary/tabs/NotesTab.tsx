@@ -51,6 +51,7 @@ export function NotesTab({ notesHook, filteredNotes }: NotesTabProps) {
           <Textarea
             id="note-input"
             name="note-input"
+            aria-label="写笔记"
             className="text-xs min-h-[50px]"
             placeholder="写笔记..."
             value={notesHook.noteContent}
@@ -179,6 +180,7 @@ export function NotesTab({ notesHook, filteredNotes }: NotesTabProps) {
               <CardContent className="p-2 pt-0">
                 {isEditing ? (
                   <Textarea
+                    aria-label="编辑笔记内容"
                     className="text-xs min-h-[60px]"
                     value={notesHook.editingContent}
                     onChange={(e) => notesHook.setEditingContent(e.target.value)}

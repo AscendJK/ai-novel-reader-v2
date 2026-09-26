@@ -3,23 +3,31 @@
  *
  * 23 行的壳，和 `ui/input` 同族但**少一个 `type` 格**，多一格今天真正要紧的东西：
  * **读者写进去的换行不许在这层被改动**。三处调用点全是长文本：笔记输入框、笔记的编辑框
- * （`NotesTab.tsx:51/181`）、问答的提问框（`QATab.tsx:91`）。这一层把 value 过一道手
+ * （`NotesTab.tsx:51/182`）、问答的提问框（`QATab.tsx:91`）。这一层把 value 过一道手
  * （trim、去 `\r`、`onChange={e => ...}` 里加工）都会变成"读者的笔记悄悄变了"。
  *
  * 判的三件事：
  * 1. `{...props}` 原样到 DOM：`id`/`name`、`placeholder`、受控的 `value`/`onChange`、
  *    `onKeyDown`（QATab 的"Enter 发问、Shift+Enter 换行"与 NotesTab 的"Ctrl/Cmd+Enter 保存"
- *    都挂在这上面）、`onClick`（`NotesTab.tsx:184` 那句 `stopPropagation` 就指望它穿下去）、
+ *    都挂在这上面）、`onClick`（`NotesTab.tsx:187` 那句 `stopPropagation` 就指望它穿下去）、
  *    `disabled`、`ref`；
  * 2. **换行与空格一字不动**（受控与非受控两条路各测一遍）；
  * 3. `className` 走 `cn`：三处调用点都在盖高度与字号（`min-h-[50px]`/`[60px]`/`[40px]` 与
  *    `text-xs`），冲突时调用方赢；不冲突的 `rounded-md`、`px-3`、`focus-visible:ring-2`、
  *    `disabled:opacity-50` 不许一起丢；不写 `className` 时壳给的 `min-h-[80px]` 要生效。
  *
- * 三条留在明处的产品事实（**都归调用点或归"删"的排序，不在这里钉死**）：
- * - `NotesTab.tsx:181` 那只编辑框**没有 `id`、没有 `placeholder`、没有 `aria-label`**——
- *   读屏念得出"多行编辑框"但念不出它是干什么的。另两只靠 `id` + `placeholder` 取得可访问名。
- *   这是调用点缺一个名字，不是这只壳坏了；补名字归调用点那一档。
+ * 四条留在明处的产品事实（**都归调用点或归"删"的排序，不在这里钉死**）：
+ * - 可访问名那一格**已修完，且修的方式和当初的判断不一样**：当初写的是"编辑框缺名字，另两只靠
+ *   `id` + `placeholder` 取得可访问名"。实测推翻了后半句——**textarea 的 `placeholder` 不进可访问名**
+ *   （jsdom + dom-accessibility-api；给顶格补上 `aria-label` 之前，按名字找它就是
+ *   `Unable to find an accessible element with the role "textbox" and name "写笔记..."`）。
+ *   所以三处原来都有名字问题，不只是那一只编辑框；现在三处各自带 `aria-label`
+ *   （「写笔记」「编辑笔记内容」「提问」）。牙写在调用点那两档里：`NotesTab-internals.test.tsx`
+ *   与 `QATab-internals.test.tsx`，摘掉任意一枚 `aria-label` 各红 1 条。壳这一层不钉：
+ *   名字是调用点给的属性，这层只管原样转发（U1 那一刀 11 红已经把"转发"判住了）。
+ * - `DebugPanel.tsx:328` 那只只读导出框**原本就有 `aria-label`**，`DebugPanel.test.tsx:114` 靠
+ *   `getByLabelText` 取它。补名字那一趟差点给它加第二枚 `aria-label`（JSX 重复属性，tsc 会拦），
+ *   留着这句是为了下次别再"照着清单补"——先 grep 这格有没有名字。
  * - `ref` 这一格**今天全仓零调用**（`useRef<HTMLTextAreaElement>` 搜不到）。留着判据是因为
  *   `forwardRef` 是这只壳的公开契约，摘掉它属于 API 变更；真要连 `forwardRef` 一起删，
  *   改这条用例是应有的一步，不是"测试坏了"。
@@ -187,7 +195,7 @@ describe("壳自己的署名", () => {
 // U3  base 少 `min-h-[80px]`         1 红：不写 className 时壳给的高度那条
 // U4  这层 `defaultValue.trim()`     1 红：非受控那条——**开头结尾的空格与换行就是读者的内容**
 // U5b 这层把 `value` 里的 `\n` 换成空格 1 红：受控那条。**与 U4 是两条路（受控／非受控），各下一刀**
-// U6  `onClick` 被顶成空函数         1 红：`NotesTab.tsx:184` 那句 stopPropagation 白写，
+// U6  `onClick` 被顶成空函数         1 红：`NotesTab.tsx:187` 那句 stopPropagation 白写，
 //     症状是"点编辑框整条笔记被收起"
 // U7  不转发 ref                    1 红：ref 那条（今天全仓没人用，但契约在）
 // U8  `cn` 参数顺序对调              1 红：合并那条（三处的 min-h-[50px]/[60px]/[40px] 全被顶回 80）
