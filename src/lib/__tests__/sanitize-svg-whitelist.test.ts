@@ -1,9 +1,9 @@
 /**
- * sanitize-svg — 那道白名单首次有直接判据
+ * sanitize-svg — 那道「profile + 减法」首次有直接判据（原判据建档时它还是三段白名单数组）
  *
  * `sanitizeSvg` 有两个使用点，两处都把结果直接塞进 DOM：`NovelMapSection.tsx:390/557` 的
  * `dangerouslySetInnerHTML`，与 `:191` 导出 PNG 前先过一道。也就是说它漏一条就是一次 XSS。
- * 之前它只在地图组件的用例里"被经过"，白名单本身没人看着——**加一个允许项、少一条禁止项，
+ * 之前它只在地图组件的用例里"被经过"，这道配置本身没人看着——**加一个允许项、少一条禁止项，
  * 界面上什么都不会变**。
  *
  * 判的两半同样重要：
@@ -18,14 +18,14 @@
  *   这个现状，不是认可它安全，而是因为"它能不能挡住 `@import`"这一问句的答案决定了上游
  *   `escapeXml` 那一道能不能被拿掉。哪天有人想给 `sanitizeSvg` 加 CSS 过滤，这条会红，
  *   那时应该顺便去核 `escapeXml` 还在不在。
- * - **这 34 行里承重的只有两处**：`USE_PROFILES: { svg: true }`，和 `FORBID_TAGS` 里的
- *   `"animateTransform"` 那一个词。三段 ALLOWED／FORBID 数组在 DOMPurify 3.4.7 上是装饰
- *   （见下面台账的 S25b／S26b／S27：整段删掉一条都不红）。所以"我把某项加进白名单了"
- *   不等于它生效，"我删掉了一行"也不等于放宽了——**要判断只能像第 16 条那样逐条实测**。
+ * - **承重的只有两处**：`USE_PROFILES: { svg: true }`，和 `FORBID_TAGS` 里的
+ *   `"animateTransform"` 一个词。三段 ALLOWED／FORBID 数组在 DOMPurify 3.4.7 上是装饰
+ *   （台账 S25b／S26b／S27：整段删掉一条都不红）——**这两段假白名单已于 2026-09-27 删掉**，
+ *   留下的只有 profile 与减法，口径由第 19 条钉在配置形状上，不再只写在注释里。
  *   最容易被这条骗到的改法是"顺手把 html 也放行"：那恰好是第 17 条唯一咬得住的一格。
  *
  * 有意不判：DOMPurify 自己的实现细节（它怎么删、删成什么形状）、注释与 `<?xml ?>` 声明的
- * 处理、属性顺序与空白规范化——这些是库的行为，不是这一层 34 行的决定。
+ * 处理、属性顺序与空白规范化——这些是库的行为，不是这一层二十几行的决定。
  *
  * ── 变异台账（基线 sha `6fe3a73b`／1475 B，每刀手动一次一处、跑完立刻按字节还原并核 SHA）──
  * 对照：S0 18 绿 → 加第 17 条后 S0b 19 绿 → 第 5 条拆成三族后 S0c 19 绿。
@@ -48,11 +48,27 @@
  * `S4` `style` 从 ALLOWED_TAGS 删掉；`S23` `d` 从 ALLOWED_ATTR 删掉；`S25b` ALLOWED_TAGS
  * 整段不给；`S26b` ALLOWED_ATTR 整段不给；`S27` FORBID_ATTR 整段不给。库里都拦着。
  *
+
+ * ── 2026-09-27 补：删掉两段假白名单（方案 A），新基线 sha `8d1e9d07`／1574 B ──────────
+ * 新第 19 条把口径钉在**配置形状**上（spy `DOMPurify.sanitize` 看第二参数），四刀重打读数：
+ * - `S28` 往配置里塞回 `ALLOWED_TAGS: ["svg","circle"]` → **1 红**，只有第 19 条。
+ *   这一记顺带又量了一遍老结论：19 条行为判据全绿，profile 在场时那段确实不接管。
+ * - `S17a`（重打）摘掉 `USE_PROFILES` → **2 红**：17 与 19。删数组之前这一刀红的是
+ *   7b／11／16 三条"良性必须留着"——**现在那三条反倒绿了**（库的默认集合恰好也拦着
+ *   `use` 与 `dominant-baseline`）。方向要说清：这不代表删数组变安全，只代表那一格真正的牙
+ *   落在第 17 条；"摘 profile 没有一条危险用例红"这件事在删之前删之后是同一个样。
+ * - `S13b`（重打）profile 顺手加 `html: true` → **2 红**：17（HTML 形状进得来）与 19
+ *   （profile 形状不等于 `{ svg: true }`）。第 17 条仍是唯一从行为上咬住它的那一条。
+ * - `S24c`（重打）`FORBID_TAGS` 里只删 `"animateTransform"` 一个词 → **2 红**：5 与 19，
+ *   第 5 条漏出来的还是整只活着的 `<path><animateTransform/></path>`。
+ * 对照：`S0d` 20 绿（收局）。删之前那 19 条一字未改地全绿——**这就是"两段数组不影响输出"**
+ * 的直接证据，而不是我读了一遍字面。
  * 作废的读数（原因写在明处）：`S2` 刀写成行中间的行注释，把数组剩下的部分整段吞进注释里
  * → `transform_failed=1 / reds=0 / sum[] 空`，是废读不是 0 红；`S3`/`S3b` 落刀没落上
  * （`markers=0`）；`S3c` 我的脚本把产品文件写成 0 字节（18 红全是"文件空了"），当场按基线还原。
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import DOMPurify from "dompurify";
 import { sanitizeSvg } from "../sanitize-svg";
 
 const has = (out: string, needle: string) => out.toLowerCase().includes(needle.toLowerCase());
@@ -129,10 +145,10 @@ describe("危险的东西必须消失", () => {
     expect(has(evil, "alert")).toBe(false);
   });
 
-  it("7b. `<use>` 整族现在就进不来（白名单里那一行 \"use\" 是死的）", () => {
+  it("7b. `<use>` 整族现在就进不来（当年白名单里那一行 \"use\" 是死的）", () => {
     // 实测三种写法（无属性／href="#片段"／xlink:href="#片段"）都拿不到元素本体。钉住它不是
-    // 因为今天要用——`renderMap.ts` 不产 `<use>`——而是那行白名单给人"内部片段引用是活的"
-    // 的错觉；谁哪天靠 `<use>` 画重复图形，会先在这里红一次。
+    // 因为今天要用——`renderMap.ts` 不产 `<use>`——而是那行已删的白名单曾给人"内部片段引用是
+    // 活的"的错觉；谁哪天靠 `<use>` 画重复图形，会先在这里红一次。
     for (const input of ["<svg><use/></svg>", '<svg><use href="#ar"/></svg>', '<svg><use xlink:href="#ar"/></svg>']) {
       expect(sanitizeSvg(input), input).toBe("<svg></svg>");
     }
@@ -196,7 +212,7 @@ describe("良性的必须留着", () => {
       'text-anchor="middle"', 'dy="8"',
       "clipPath", "mask", "pattern", "preserveAspectRatio", 'href="#none"',
     ];
-    // `dominant-baseline` 与 `<use>` 不在这一列里：它们**写在白名单上却活不下来**，
+    // `dominant-baseline` 与 `<use>` 不在这一列里：它们**曾写在白名单上却活不下来**，
     // 那两件事由第 16 与 7b 条单独钉住，不混进"良性必须留着"这一列。
     for (const bit of keep) expect(out, `吃掉了 ${bit}`).toContain(bit);
   });
@@ -225,9 +241,9 @@ describe("良性的必须留着", () => {
   });
 });
 
-describe("读那三段数组之前要知道的两件事", () => {
+describe("读这道配置之前要知道的三件事", () => {
   it("16. 数组不是最终集合：列了的不一定活，没列的不一定死", () => {
-    // `dominant-baseline` 写在 ALLOWED_ATTR 里，实测活不下来；`baseline-shift` 一个字都没列，
+    // `dominant-baseline` 曾写在 ALLOWED_ATTR 里，实测活不下来；`baseline-shift` 从没列过，
     // 反而活着（它在 DOMPurify 3.4.7 内置的 svg 属性集里）。所以"我把某项加进白名单了"
     // 不等于它生效，"没写进去"也不等于挡住——要判只能像这样一条一条实测。
     expect(sanitizeSvg(`<svg><text dominant-baseline="central">a</text></svg>`)).not.toContain("dominant-baseline");
@@ -253,5 +269,25 @@ describe("读那三段数组之前要知道的两件事", () => {
     // 对照：iframe 与 object 同位置就不吃后半张——这一条防止有人把"禁标签"当成同一类去推
     expect(sanitizeSvg(`<svg><circle r="1"/><iframe src="x"/><circle r="2"/></svg>`).match(/<circle/g))
       .toHaveLength(2);
+  });
+});
+
+describe("口径本身：profile + 减法，不是白名单", () => {
+  it("19. 交给库的配置里不许再出现 ALLOWED_TAGS／ALLOWED_ATTR", () => {
+    // 这两段在 `USE_PROFILES` 存在时被 DOMPurify 整体忽略（S25b／S26b：整段删掉 0 红），
+    // 而它们列过 `use` 与 `dominant-baseline`——列了却不活。删掉的代价只是少一层假安全感，
+    // 留下的代价是下次有人"往白名单加一行"时以为自己在放行。这一条把口径钉成配置形状，
+    // 而不是只写在注释里：重新塞回任意一段就红。
+    const spy = vi.spyOn(DOMPurify, "sanitize").mockReturnValue("");
+    sanitizeSvg("<svg><circle/></svg>");
+    expect(spy).toHaveBeenCalledTimes(1);
+    const cfg = spy.mock.calls[0][1] as Record<string, unknown>;
+    spy.mockRestore();
+    expect(cfg.USE_PROFILES, "profile 这一格是形状集合的唯一出处").toEqual({ svg: true });
+    expect(cfg).not.toHaveProperty("ALLOWED_TAGS");
+    expect(cfg).not.toHaveProperty("ALLOWED_ATTR");
+    // 减法那一半必须还在，且 animateTransform 是里面唯一承重的词（S24c）
+    expect(cfg.FORBID_TAGS as string[]).toContain("animateTransform");
+    expect((cfg.FORBID_ATTR as string[]).length).toBeGreaterThan(0);
   });
 });
