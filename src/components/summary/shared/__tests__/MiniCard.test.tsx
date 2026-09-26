@@ -64,6 +64,19 @@
  * 刀20 名字取错来源（`收藏到笔记 {content}` 而不是 `{title}`）⇒ **2 红**，与刀17 同一形状，
  *      同样靠"两张卡 content 相同、title 不同"的夹具才咬得住。
  *
+ * 2026-09-26 深夜「删除那枚画产品图标」两刀（基线换成 `78668cf2…`，5915 字节；本文件 28 条）：
+ * 刀21（I1）把图标换回产品原来的字母 `x` ⇒ **1 红**（只有「画 Trash2」那条）。
+ * 刀22（I2）把它换成 `X`（这仓里那支只表示「关闭」）⇒ **2 红**——第二条红才说明「不是 X」那条
+ *      有牙：**它补上前是绿的**（那时按钮里根本没有 svg，`querySelector("svg.lucide-x")` 自然是
+ *      null），单看"立红"会误判成没接线，所以这一格是"一条立红 + 一条成对反证"的形状，靠 I2 才配齐。
+ *      I2 是一刀两行（import 那行加 `X` + 用位换掉），两行都进盘之后才跑；中间态（只多一个没用的
+ *      import）渲染与基线逐字相同，归因不受影响。
+ *      为什么取 `Trash2` 而不是 `X`：同目录 `shared/Row.tsx:26` 那枚删除就是 `h-2.5 w-2.5` 的
+ *      Trash2，NovelCard／GlobalNotes／ApiSettings／StorageManager 的删除也都是它；`X` 在
+ *      Toast／PlaceDetail／ReadingPanel／NovelBuildWindow 里一律是「关闭」。卡片这枚删的是这条
+ *      总结，不是关掉卡片。图标名靠 `lucide-react@1.17.0` 吐出的 `lucide-<kebab>` 类名取，
+ *      没有去核 path 数据（那才是真会随版本漂的东西）。
+ *
  * **补名字连带收到的一只旧雷（不是判据没牙，是产品真的换了形状）**：`BookTab-internals` 里有
  * 四处拿 `{ name: /剧情时间线/ }` 这种"名字含标题"的正则定位 SubItem 那一行的表头。卡片一旦把
  * 标题写进可访问名，同一屏里就有了两枚名字含"剧情时间线"的按钮（表头 + 那张卡的重新生成），
@@ -317,5 +330,26 @@ describe("「重新生成」的可访问名：图标按钮要说得出动的是�
       expect(screen.getByRole("button", { name })).toBeTruthy();
     }
     expect(screen.getAllByRole("button")).toHaveLength(3);
+  });
+});
+
+describe("「删除」那一枚画的是产品图标，不是一个字母", () => {
+  // 产品原来在按钮体里直接写了个 `x`。这仓里图形是有分工的：**关闭**用 `X`
+  // （Toast／PlaceDetail／ReadingPanel／NovelBuildWindow 都是它），**删掉一条记录**用 `Trash2`
+  // （同目录 `shared/Row.tsx:26` 那枚删除就是 `h-2.5 w-2.5` 的 Trash2，还有 NovelCard／
+  // GlobalNotes／ApiSettings／StorageManager）。卡片这枚删的是这条总结，不是关掉一张卡，
+  // 所以按图形读的人会以为那是个收起按钮。制作人 2026-09-26 定：换成产品图标。
+  it("画 Trash2，按钮里不再有一个字母 x", () => {
+    card({ title: "令狐冲的性格分析", onRemove: vi.fn() });
+    const btn = screen.getByRole("button", { name: "删除 令狐冲的性格分析" });
+    expect(btn.querySelector("svg.lucide-trash-2")).toBeTruthy();
+    expect(btn.querySelectorAll("svg")).toHaveLength(1);
+    expect(btn.textContent).toBe("");
+  });
+
+  it("不是「关闭」那支 X（同屏另一排的 X 说的是关掉，图形不许混用语义）", () => {
+    card({ title: "令狐冲的性格分析", onRemove: vi.fn() });
+    const btn = screen.getByRole("button", { name: "删除 令狐冲的性格分析" });
+    expect(btn.querySelector("svg.lucide-x")).toBeNull();
   });
 });

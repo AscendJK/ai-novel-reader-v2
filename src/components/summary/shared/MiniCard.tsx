@@ -3,7 +3,7 @@
  * 用于显示单个总结或笔记
  */
 
-import { RefreshCw, Bookmark, AlertTriangle } from "lucide-react";
+import { RefreshCw, Bookmark, AlertTriangle, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -112,7 +112,7 @@ export function MiniCard({
                 aria-label={`删除 ${title}`}
                 title="删除"
               >
-                x
+                <Trash2 className="h-2.5 w-2.5" />
               </Button>
             )}
           </div>
