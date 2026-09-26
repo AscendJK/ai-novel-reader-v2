@@ -9,7 +9,7 @@
  * 讲输出"就不返回数字，所以本修的是判读，不是花钱。）
  */
 import { describe, it, expect } from "vitest";
-import { APIError, handleFetchError } from "../error-handler";
+import { APIError, handleFetchError, isEmptyResultError } from "../error-handler";
 
 async function classify(status: number, body: unknown): Promise<APIError> {
   const res = new Response(typeof body === "string" ? body : JSON.stringify(body), { status });
@@ -81,5 +81,50 @@ describe("既讲上下文又讲输出时，以上下文为准（少花钱优先�
       "context length exceeded: reduce the prompt or the max_tokens (context is 8192)",
     ));
     expect(e.apiCode).toBe("context_length");
+  });
+});
+
+/**
+ * 「这一发一个字正文都没回」这个形状要有一个唯一的判法。
+ *
+ * 为什么要有它：agent 的降级重发（空正文才关思考）靠它认失败，而失败有两种写法——provider 抛的那句
+ * 与 agent 自己判空白正文时写的那句。判据两头都要钉：**认得全**（两种写法都算），
+ * **不顺手扩大化**（超时、CORS、限流、解析失败都不算——那些情况下关掉思考是白关，
+ * 还会把"质量优先"的口径悄悄改掉）。
+ */
+describe("isEmptyResultError：只认「一个字正文都没回」这一种失败", () => {
+  it("provider 的新措辞（带 reasoning_tokens 那版）算", () => {
+    expect(isEmptyResultError(new Error(
+      "API 返回了空结果（流式响应无内容）。模型把 8192 token 花在思考上、一个字正文都没回。原始响应：{}"
+    ))).toBe(true);
+  });
+
+  it("provider 的旧措辞同样算：认的是前缀，不跟着文案改口", () => {
+    expect(isEmptyResultError(new Error(
+      "API 返回了空结果（流式响应无内容）。可能原因：模型名称不存在或无权访问、请求参数不被支持。"
+    ))).toBe(true);
+    expect(isEmptyResultError(new Error("API 返回了空结果（choices 为空），模型：x。"))).toBe(true);
+  });
+
+  it("agent 自己判出来的那句空白正文也算（provider 没抛错的那条腿）", () => {
+    expect(isEmptyResultError(new Error("API 返回了空响应"))).toBe(true);
+  });
+
+  it("超时 / CORS / 限流 / 解析失败都不算——那些时候关思考是白关", () => {
+    for (const msg of [
+      "上游 524 Bad Gateway",
+      "Failed to fetch: CORS 跨域请求被阻止",
+      "请求过于频繁（429 RateLimitExceeded）",
+      "未能从 AI 响应中解析有效的地图数据",
+      "API 返回错误：model not found",
+    ]) {
+      expect(isEmptyResultError(new Error(msg)), `不该认：${msg}`).toBe(false);
+    }
+  });
+
+  it("不是 Error 的东西一律不算（字符串与 undefined 都试）", () => {
+    expect(isEmptyResultError("API 返回了空结果")).toBe(false);
+    expect(isEmptyResultError(undefined)).toBe(false);
+    expect(isEmptyResultError(null)).toBe(false);
   });
 });

@@ -83,8 +83,9 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
       // 与直连超时预算共用 isStreaming：判成流式却发非流式，短超时就会咬错地方
       stream: isStreaming(req),
     };
-    // 思考模式开关：仅当显式关闭（thinking=false）时发送 disabled，避免影响不支持该参数的模型
-    if (config.thinking === false) {
+    // 思考模式开关：仅当显式关闭（thinking=false）时发送 disabled，避免影响不支持该参数的模型。
+    // 请求级优先于配置级——agent 的"空正文才降级重发"要靠这一格覆盖用户那枚勾。
+    if ((req.thinking ?? config.thinking) === false) {
       body.thinking = { type: "disabled" };
     }
     return body;

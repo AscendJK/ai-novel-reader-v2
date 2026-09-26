@@ -236,6 +236,55 @@ describe("图谱 JSON 的解析：必须失败的场景", () => {
   });
 });
 
+/**
+ * 空正文的降级重发（与 map-agent 同一口径，2026-09-27 真厂商实测之后加的）。
+ *
+ * 第一发照旧让模型思考；只有确认那一发"一个字正文都没回"，第二发才带 `thinking:false`。
+ * 图谱与地图是同一类任务：拿不到一份完整 JSON 就等于整张图没有。
+ * **变异台账（T10/T11/T12 三刀）记在 `map-agent.test.ts` 那一段末尾**，两边一起数。
+ */
+describe("空正文才降级：第二发带 thinking:false 重发", () => {
+  const EMPTY_BODY =
+    "API 返回了空结果（流式响应无内容）。模型把 8192 token 花在思考上、一个字正文都没回" +
+    "（思考与正文共用同一份输出预算）。可以在设置里关闭思考，或调大输出上限。原始响应：{}";
+  const OK = () => reply(graphJson([N("令狐冲"), N("岳不群")], []));
+
+  it("第一发照旧开思考：请求参数里不许出现 thinking", async () => {
+    chat.mockResolvedValue(OK());
+    await run();
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(chat.mock.calls[0][0].thinking).toBeUndefined();
+  });
+
+  it("第一发回空正文 → 第二发必须带 thinking:false，而第一发不许带", async () => {
+    chat.mockRejectedValueOnce(new Error(EMPTY_BODY)).mockResolvedValueOnce(OK());
+    const r = await run();
+    expect(r.success).toBe(true);
+    expect(chat.mock.calls[0][0].thinking).toBeUndefined();
+    expect(chat.mock.calls[1][0].thinking).toBe(false);
+  });
+
+  it("provider 没抛错、只回了空白正文，同样算空正文要降级", async () => {
+    chat.mockResolvedValueOnce(reply("   \n ")).mockResolvedValueOnce(OK());
+    const r = await run();
+    expect(r.success).toBe(true);
+    expect(chat.mock.calls[1][0].thinking).toBe(false);
+  });
+
+  it("回了字但解析不出 JSON 不算空正文：那是模型在瞎写，不是没字", async () => {
+    chat.mockResolvedValueOnce(reply("抱歉，我无法生成图谱")).mockResolvedValueOnce(OK());
+    await run();
+    expect(chat.mock.calls[1][0].thinking).toBeUndefined();
+  });
+
+  it("降级那一发仍然空正文就到此为止：总共两发，不无限重烧配额", async () => {
+    chat.mockRejectedValue(new Error(EMPTY_BODY));
+    const r = await run();
+    expect(r.success).toBe(false);
+    expect(chat).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("图谱的边兜底与引用过滤", () => {
   async function graphOf(json: string) {
     chat.mockResolvedValue(reply(json));

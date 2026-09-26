@@ -10,6 +10,7 @@ import { getRelevantContent, chatWithContextRetry, sampleChapterTitles } from ".
 import { extractJSON } from "./json-extractor";
 import { useUIStore } from "@/stores/ui-store";
 import { estimateTokens, computeAvailableInput, resolveOutputReserve, type TokenBudget } from "@/api/token-manager";
+import { isEmptyResultError } from "@/api/error-handler";
 
 interface GraphData {
   nodes: { id: string; group: string; description: string }[];
@@ -60,6 +61,8 @@ class CharacterGraphAgent extends BaseAgent {
 
     // 尝试两次：第一次正常生成，第二次带上错误反馈
     let lastError: string | undefined;
+    /** 上一发是不是"一个字正文都没回"——只有它是，第二发才关思考重发（口径同 `map-agent`） */
+    let sawEmptyBody = false;
 
     for (let attempt = 1; attempt <= 2; attempt++) {
       // 取消之后不再进第二次尝试。这道守卫在浏览器层量不出来——已 abort 的 fetch 到不了
@@ -91,13 +94,14 @@ class CharacterGraphAgent extends BaseAgent {
             // 用户在设置里填过上限时由它顶开 8192（`resolveOutputReserve`）。
             max_tokens: reserve,
             temperature: 0.3,
+            thinking: sawEmptyBody ? false : undefined,
             signal: context.signal,
           });
         });
 
         // 检查响应内容
         if (!response.content || response.content.trim().length === 0) {
-          if (attempt === 1) { lastError = "API 返回了空响应"; continue; }
+          if (attempt === 1) { sawEmptyBody = true; lastError = "API 返回了空响应"; continue; }
           return { success: false, error: "API 返回了空响应，请检查 API 配置或稍后重试。" };
         }
 
@@ -124,6 +128,7 @@ class CharacterGraphAgent extends BaseAgent {
 
         return { success: true, data: { graphData }, tokensUsed: response.tokensUsed?.output || response.content.length };
       } catch (err) {
+        if (isEmptyResultError(err)) sawEmptyBody = true;
         if (attempt === 1) { lastError = this.formatError(err); continue; }
         return { success: false, error: this.formatError(err) };
       }

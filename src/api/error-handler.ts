@@ -40,6 +40,22 @@ export class APIError extends AppError {
   }
 }
 
+/**
+ * 「这一发一个字正文都没回」的唯一判法。
+ *
+ * 认的是**前缀**而不是整句：空正文的措辞会随手上的证据变（见 `providers/openai.ts` 的
+ * `emptyResultNote`——有 `reasoning_tokens` 就说"思考吃满了预算"），锚不许跟着文案漂。
+ * provider 抛的那句与 agent 自己判空白正文时写的那句都算。
+ *
+ * 用途只有一个：agent 的降级重发要靠它决定"这一发要不要关掉模型思考再试"。
+ * 所以超时、CORS、限流、解析失败一律不算——那些时候关思考是白关。
+ */
+const EMPTY_RESULT_MESSAGE = /^API 返回了空(结果|响应)/;
+
+export function isEmptyResultError(err: unknown): boolean {
+  return err instanceof Error && EMPTY_RESULT_MESSAGE.test(err.message);
+}
+
 function classifyError(status: number, body: string): { code: APIErrorCode; message: string } {
   let parsed: Record<string, unknown> = {};
   try { parsed = JSON.parse(body); } catch { /* ignore */ }

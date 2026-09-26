@@ -435,6 +435,91 @@ describe("地图的重试与错误分类", () => {
   });
 });
 
+/**
+ * 空正文的降级重发（2026-09-27 真厂商实测之后加的）。
+ *
+ * `sensenova-6.8-flash-lite` 这类默认开思考的模型，会把整份输出预算花在思考上
+ * （实测 `completion_tokens=8192 / reasoning_tokens=8192 / 正文 0 字`），于是地图这种
+ * "必须回一大份 JSON 才成得了"的任务一个字都拿不到。制作人定的口径是**质量优先**：
+ * 第一发照旧让模型想（不许一上来就把思考关掉），只有确认这一发是"空正文"，第二发才带
+ * `thinking:false` 重发。所以两头都要钉：该关的时候必须关，不该关的时候不许关。
+ *
+ * ## 变异台账（12 刀全咬红；四只产品文件各自重抓基线，跑完 `cmp` 还原）
+ * 基线：`openai.ts 6cc4d805` / `error-handler.ts 2c101385` / `map-agent.ts 078478c3` /
+ * `graph-agent.ts eada7c70`。每轮固定读数 `markers=1 / markers_left=0 / sha 回到基线`，
+ * 对照轮（四只测试文件一起跑）135 条全绿、红=0。
+ * - provider 那一层（`providers.test.ts` 的「请求级 thinking 覆盖配置级」5 条）
+ *   T1 只认配置级、忽略请求级      2 红（false 没生效 + true 顶不开配置，两格各一条）
+ *   T2 反过来"没显式说开就发 disabled" 1 红（两边都没设那一格——多发的字段会砸在不支持它的模型上）
+ *   T2b 任何显式值都发 disabled     2 红（请求级 true 与配置级 true 各一条）
+ * - 判"是不是空正文"那一层（`error-handler-classify.test.ts` 的 5 条）
+ *   T3 判得太宽（凡 `^API ` 开头都算） 1 红（"超时/CORS/限流/解析失败都不算"那条）
+ *   T4 只认「空结果」漏掉「空响应」    1 红（agent 自己那句空白正文那条）
+ *   T5 不再要求它是 Error            1 红（裸字符串也算错那条）
+ * - agent 那一层（本文件 6 条 + `graph-agent.test.ts` 5 条）
+ *   T6 地图第一发就关思考   4 红（"照旧开思考"＋"第一发不许带"＋超时那条＋解析失败那条）
+ *   T7 记了 flag 却从不交出去 2 红（该降级的两条）
+ *   T8 空白正文那一支不记 flag 1 红（provider 没抛错那条）
+ *   T9 抛错那一支不记 flag     1 红（provider 抛空正文那条）——**T8/T9 是两条腿各一刀**：
+ *     空正文有两种写法（抛错 / 回空白），只接一支的另一支就会静默不降级。
+ *   T10 图谱第一发就关思考 3 红、T11 图谱抛错支不记 flag 1 红、T12 图谱空白正文支不记 flag 1 红
+ * 12 刀没有一记 0 红。
+ */
+describe("空正文才降级：第二发带 thinking:false 重发", () => {
+  const EMPTY_BODY =
+    "API 返回了空结果（流式响应无内容）。模型把 8192 token 花在思考上、一个字正文都没回" +
+    "（思考与正文共用同一份输出预算）。可以在设置里关闭思考，或调大输出上限。原始响应：{}";
+
+  it("第一发照旧开思考：请求参数里不许出现 thinking", async () => {
+    chat.mockResolvedValue(reply(validMap()));
+    await run();
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(chat.mock.calls[0][0].thinking).toBeUndefined();
+  });
+
+  it("第一发回空正文 → 第二发必须带 thinking:false，而第一发不许带", async () => {
+    chat
+      .mockRejectedValueOnce(new Error(EMPTY_BODY))
+      .mockResolvedValueOnce(reply(validMap()));
+    const r = await run();
+    expect(r.success).toBe(true);
+    expect(chat.mock.calls[0][0].thinking).toBeUndefined();
+    expect(chat.mock.calls[1][0].thinking).toBe(false);
+  });
+
+  it("provider 没抛错、只回了空白正文，同样算空正文要降级", async () => {
+    chat
+      .mockResolvedValueOnce(reply("   \n  "))
+      .mockResolvedValueOnce(reply(validMap()));
+    const r = await run();
+    expect(r.success).toBe(true);
+    expect(chat.mock.calls[1][0].thinking).toBe(false);
+  });
+
+  it("超时那种失败不是空正文，第二发不许顺手关思考", async () => {
+    chat
+      .mockRejectedValueOnce(new Error("上游 524 Bad Gateway"))
+      .mockResolvedValueOnce(reply(validMap()));
+    await run();
+    expect(chat.mock.calls[1][0].thinking).toBeUndefined();
+  });
+
+  it("回了字但解析不出 JSON 也不算空正文（那是模型在瞎写，不是没字）", async () => {
+    chat
+      .mockResolvedValueOnce(reply("我想了想，但没有输出 JSON"))
+      .mockResolvedValueOnce(reply(validMap()));
+    await run();
+    expect(chat.mock.calls[1][0].thinking).toBeUndefined();
+  });
+
+  it("降级那一发仍然空正文就到此为止：总共两发，不无限重烧配额", async () => {
+    chat.mockRejectedValue(new Error(EMPTY_BODY));
+    const r = await run();
+    expect(r.success).toBe(false);
+    expect(chat).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("父级对不上时的可见降级", () => {
   async function runWithMap(map: string) {
     chat.mockResolvedValue(reply(map));

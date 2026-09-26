@@ -10,6 +10,7 @@ import { BaseAgent } from "./base-agent";
 import { extractJSON } from "./json-extractor";
 import { prepareAgentContext, chatWithContextRetry, sampleChapterTitles } from "./utils";
 import { computeAvailableInput, resolveOutputReserve, type TokenBudget } from "@/api/token-manager";
+import { isEmptyResultError } from "@/api/error-handler";
 
 /**
  * 模型偶尔把坐标写成 `"620"` 这种数字字符串——今天它照样能渲染，所以收下并归一。
@@ -127,6 +128,13 @@ class MapAgent extends BaseAgent {
 
     // 尝试两次：第一次正常生成，第二次带上错误反馈
     let lastError: string | undefined;
+    /**
+     * 上一发是不是"一个字正文都没回"。只有它是，第二发才关掉模型思考重发——
+     * 默认开思考的模型（实测 sensenova-6.8-flash-lite）会把整份输出预算花在思考上，
+     * 地图这种"必须回一大份 JSON"的任务于是永远拿不到字。制作人定的口径是质量优先：
+     * 第一发照旧让模型想，降级只作为兜底。
+     */
+    let sawEmptyBody = false;
 
     for (let attempt = 1; attempt <= 2; attempt++) {
       // 取消之后不再进第二次尝试。这道守卫在浏览器层量不出来——已 abort 的 fetch 到不了
@@ -153,6 +161,7 @@ class MapAgent extends BaseAgent {
               // 与输入侧抽样同一个数，见 `reserve` 的说明。
               max_tokens: reserve,
               temperature: 0.3,
+              thinking: sawEmptyBody ? false : undefined,
               signal: context.signal,
             });
           });
@@ -167,6 +176,7 @@ class MapAgent extends BaseAgent {
                 continue;
               }
             }
+            if (isEmptyResultError(err)) sawEmptyBody = true;
             lastError = err instanceof Error ? err.message : "未知错误";
             continue;
           }
@@ -175,7 +185,7 @@ class MapAgent extends BaseAgent {
 
         // 检查响应内容
         if (!response.content || response.content.trim().length === 0) {
-          if (attempt === 1) { lastError = "API 返回了空响应"; continue; }
+          if (attempt === 1) { sawEmptyBody = true; lastError = "API 返回了空响应"; continue; }
           return { success: false, error: "API 返回了空响应，请检查 API 配置或稍后重试。" };
         }
 

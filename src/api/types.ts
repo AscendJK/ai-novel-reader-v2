@@ -27,6 +27,12 @@ export interface ChatCompletionRequest {
   max_tokens?: number;
   temperature?: number;
   stream?: boolean;
+  /**
+   * 请求级思考开关：false 时这一发显式关掉模型思考，优先级高于 `ProviderConfig.thinking`。
+   * 给"空正文才降级重发"用（`map-agent` / `graph-agent`）：第一发仍然让模型想，
+   * 只有确认那一发一个字正文都没回，第二发才关思考重发。
+   */
+  thinking?: boolean;
   signal?: AbortSignal;
 }
 

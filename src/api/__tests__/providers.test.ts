@@ -6,6 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createOpenAIProvider } from "../providers/openai";
 import { createAnthropicProvider } from "../providers/anthropic";
+import type { ProviderConfig } from "../types";
 import { APIError } from "../error-handler";
 
 const openaiConfig = {
@@ -368,6 +369,54 @@ describe("OpenAI provider 空正文的措辞：有证据才说思考吃满，说
     const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
     expect(err.message).toContain("模型名称不存在或无权访问");
     expect(err.message).not.toContain("花在思考上");
+  });
+});
+
+/**
+ * 请求级 thinking 覆盖。
+ *
+ * 设置页那枚「关闭思考」是**厂商级**的（`config.thinking`），而 agent 的降级重发需要的是
+ * **这一发**关一次思考（第一发仍然让模型想，质量优先）。所以 `ChatCompletionRequest` 也要能带，
+ * 且优先级是"请求级 > 配置级"。四格各给一个相反的值：只认一侧的实现都能被其中一格抓出来。
+ * 都没设时**一个字段都不许多发**——那是不支持这个参数的模型（ModelScope 等）的护身符。
+ */
+describe("OpenAI provider 请求级 thinking 覆盖配置级", () => {
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+    localStorage.clear();
+  });
+
+  const sentThinking = (config: ProviderConfig, reqThinking?: boolean) => {
+    const calls = mockFetchCapture();
+    const provider = createOpenAIProvider(config);
+    const req: { messages: { role: "user"; content: string }[]; thinking?: boolean } = {
+      messages: [{ role: "user", content: "hi" }],
+    };
+    if (reqThinking !== undefined) req.thinking = reqThinking;
+    return provider.chat(req).then(() => {
+      const body = JSON.parse(calls[0].init?.body as string);
+      return { has: "thinking" in body, value: body.thinking };
+    });
+  };
+
+  it("请求级 false 而配置没设 → 发 disabled（这是降级重发那一发的形状）", async () => {
+    expect(await sentThinking(openaiConfig, false)).toEqual({ has: true, value: { type: "disabled" } });
+  });
+
+  it("请求级 true 而配置是 false → 不许发 disabled（请求级说话算数）", async () => {
+    expect(await sentThinking({ ...openaiConfig, thinking: false }, true)).toEqual({ has: false, value: undefined });
+  });
+
+  it("请求没带、配置是 false → 照旧发 disabled（设置页那枚勾不许被这次改动弄坏）", async () => {
+    expect(await sentThinking({ ...openaiConfig, thinking: false })).toEqual({ has: true, value: { type: "disabled" } });
+  });
+
+  it("两边都没设 → 一个 thinking 字段都不许多发", async () => {
+    expect(await sentThinking(openaiConfig)).toEqual({ has: false, value: undefined });
+  });
+
+  it("配置是 true 而请求没带 → 也不发（只有显式 false 才发）", async () => {
+    expect(await sentThinking({ ...openaiConfig, thinking: true })).toEqual({ has: false, value: undefined });
   });
 });
 
