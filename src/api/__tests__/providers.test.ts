@@ -420,6 +420,88 @@ describe("OpenAI provider 请求级 thinking 覆盖配置级", () => {
   });
 });
 
+/**
+ * 同一条契约的 Anthropic 形状。
+ *
+ * 「空正文才降级重发」（`36c6294`）往请求上挂的是 `thinking: false`，而 anthropic.ts 当时
+ * **根本不读这个字段**——对这家厂商那发降级等于空转：第二发和第一发参数一模一样，钱花两遍、
+ * 正文照样空。这里钉的就是"这一发真的把思考关了"。
+ * 反过来也要钉住"不许多发"：Anthropic 的 `thinking:{type:"enabled"}` 会**改变输出质量与花费**，
+ * 产品从没要求过开启思考，实现里手滑写成 enabled 必须红。
+ */
+describe("Anthropic provider 请求级 thinking 覆盖配置级", () => {
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+    localStorage.clear();
+  });
+
+  const sentThinking = (config: ProviderConfig, reqThinking?: boolean) => {
+    const calls = mockFetchCapture({
+      content: [{ type: "text", text: "ok" }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+    const provider = createAnthropicProvider(config);
+    const req: { messages: { role: "user"; content: string }[]; thinking?: boolean } = {
+      messages: [{ role: "user", content: "hi" }],
+    };
+    if (reqThinking !== undefined) req.thinking = reqThinking;
+    return provider.chat(req).then(() => {
+      const body = JSON.parse(calls[0].init?.body as string);
+      return { has: "thinking" in body, value: body.thinking };
+    });
+  };
+
+  it("请求级 false → 发 {type:'disabled'}（降级重发那一发的形状）", async () => {
+    expect(await sentThinking(anthropicConfig, false)).toEqual({ has: true, value: { type: "disabled" } });
+  });
+
+  it("请求没带、配置是 false → 照旧发 disabled（设置页那枚勾不许被弄坏）", async () => {
+    expect(await sentThinking({ ...anthropicConfig, thinking: false })).toEqual({ has: true, value: { type: "disabled" } });
+  });
+
+  it("请求级 true 而配置是 false → 不许发 disabled（请求级说话算数）", async () => {
+    expect(await sentThinking({ ...anthropicConfig, thinking: false }, true)).toEqual({ has: false, value: undefined });
+  });
+
+  it("两边都没设 → 一个 thinking 字段都不许多发", async () => {
+    expect(await sentThinking(anthropicConfig)).toEqual({ has: false, value: undefined });
+  });
+
+  it("配置是 true 而请求没带 → 也不许发 enabled（开启思考会改质量与花费，产品从没要求过）", async () => {
+    expect(await sentThinking({ ...anthropicConfig, thinking: true })).toEqual({ has: false, value: undefined });
+  });
+
+  it("关思考不许顺手改 max_tokens（那一格由输出预算唯一出处管）", async () => {
+    const calls = mockFetchCapture({
+      content: [{ type: "text", text: "ok" }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+    await createAnthropicProvider(anthropicConfig).chat({
+      messages: [{ role: "user", content: "hi" }],
+      max_tokens: 4321,
+      thinking: false,
+    });
+    const body = JSON.parse(calls[0].init?.body as string) as Record<string, unknown>;
+    expect(body.max_tokens).toBe(4321);
+  });
+});
+
+/**
+ * 判别力台账（2026-09-27 本机，`npx vitest run src/api/__tests__/providers.test.ts`）。
+ * 基线：src/api/providers/anthropic.ts = sha256 dade7d05…，产品侧只有 4 行加、0 行删。
+ * 立红阶段：改产品之前"必须发 disabled"那两格就是红的（读到 `has:false`）；
+ * 四条"不许多发"当时是绿的——它们是这次改动的护栏，不是新增行为。
+ *
+ *  B1 摘掉 `if (...) body.thinking = ...` 那一行 → 2 红（正是立红那两格）
+ *  B2 优先级倒过来写成 `config.thinking ?? req.thinking` → 1 红：请求级 true 而配置 false 那一格
+ *  B3 `=== false` 换成 `!== undefined` → 2 红：请求级 true 那一格 + 配置 true 那一格
+ *  B4 值换成 `{ type: "enabled" }` → 2 红：两格"必须发 disabled"（读得到 has:true 但值不对）
+ *  B5 在那个分支里顺手 `body.max_tokens = 1024` → 1 红：关思考不许改预算那一格
+ *
+ * 没有一刀 0 红。两条腿（直连与代理）共用同一个 `buildBody`，所以只判直连那一腿的 body：
+ * "把 thinking 只塞进一条腿"的形状在这份实现里不存在，为它再下一刀是空刀。
+ */
+
 describe("Anthropic provider parseResponse", () => {
   beforeEach(() => {
     globalThis.fetch = vi.fn();

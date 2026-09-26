@@ -85,6 +85,10 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
       stream: isStreaming(req),
     };
     if (systemPrompt) body.system = systemPrompt;
+    // 与 openai.ts 同一格：只有显式 false 才发 disabled。这家厂商默认就不开思考，多塞一个
+    // enabled 反而改了质量与花费；而 agent 的「空正文才降级重发」挂的正是请求级 thinking:false，
+    // 不读它的话那一发就是原样重打（钱花两遍、正文照样空）。
+    if ((req.thinking ?? config.thinking) === false) body.thinking = { type: "disabled" };
     return body;
   }
 
