@@ -13,6 +13,7 @@ import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Writable, Readable } from "node:stream";
 
 // @ts-expect-error - 后端 JS 模块无类型声明
 const mod = await import("../../../server/lib/tts-assemble.mjs");
@@ -36,6 +37,8 @@ interface Env {
   heads: number[];
   /** 内核"验文件头"那一刻整包的内容——那是 finally 删掉它之前唯一能读到它的时机 */
   captured: Map<string, string>;
+  /** 传给内核的那一份依赖（换 fs 时整份复用，只替掉要看的那一格） */
+  common: Record<string, unknown>;
   assemble: (o?: Record<string, unknown>) => Promise<void>;
   tarExtract: (o?: Record<string, unknown>) => Promise<void>;
 }
@@ -123,7 +126,7 @@ function mkEnv(opts: {
       ...o,
     });
 
-  return { tempDir, targetDir, blobs, downloads, execs, steps, heads, captured, assemble, tarExtract };
+  return { tempDir, targetDir, blobs, downloads, execs, steps, heads, captured, common, assemble, tarExtract };
 }
 
 /** 临时目录里剩下的东西（清理判据看它）——只点名我们关心的那几个，别的目录不参与 */
@@ -308,6 +311,113 @@ describe("Gitee：7z 分卷拼装", () => {
   });
 });
 
+/**
+ * 拼卷这一格的**内存账**。
+ *
+ * 为什么要单独一档：这条链路上"下完 322MB"和"拼完 322MB"是两次内存尖峰，
+ * 前者在批次 H-1 已经判住（验文件头只许读 6 字节），后者当时漏了——
+ * `ws.write(fs.readFileSync(p))` 会把一整卷（实测一卷 ~50MB）一次性读进内存，
+ * 而且不看 `write()` 返回 false，低配设备上是真会当场趴下的。
+ * 这三条判据钉的就是这两格，跑的是同一份生产代码（依赖注入的 fs）。
+ */
+describe("拼卷：一次只许有一卷在内存里", () => {
+  /**
+   * 一个"会喊累"的落地口：水位 1 字节 + 异步 cb，所以任何一次 write 都会返回 false，
+   * 于是"没等到 drain 就又写"变成一件**量得出来**的事。
+   */
+  function slowSink(dest: string, failAt = 0, finalError: string | null = null) {
+    const stat = { writes: 0, bytes: 0, wroteWhileFull: 0 };
+    const ws = new Writable({
+      highWaterMark: 1,
+      write(chunk: Buffer, _enc, cb) {
+        stat.writes++;
+        stat.bytes += chunk.length;
+        if (failAt && stat.writes === failAt) {
+          cb(new Error("ENOSPC: no space left on device"));
+          return;
+        }
+        fs.appendFileSync(dest, chunk);
+        setTimeout(cb, 0);
+      },
+      // 全部 write 都成功了、最后 flush 那一下才炸——pipe 那一格量不到它
+      ...(finalError ? { final: (cb: (e?: Error) => void) => cb(new Error(finalError)) } : {}),
+    });
+    let full = false;
+    ws.on("drain", () => { full = false; });
+    const orig = ws.write.bind(ws) as (chunk: unknown) => boolean;
+    ws.write = ((chunk: unknown) => {
+      if (full) stat.wroteWhileFull++;
+      const ok = orig(chunk);
+      if (!ok) full = true;
+      return ok;
+    }) as typeof ws.write;
+    return { ws, stat };
+  }
+
+  const run = (env: Env, fsOverrides: Record<string, unknown>) =>
+    createGiteeAssembler({ ...env.common, fs: { ...fs, ...fsOverrides } })({
+      baseUrl: "https://example.test/repo",
+      partNames: PARTS,
+      archiveName: "book",
+      targetDir: env.targetDir,
+      requiredFiles: REQUIRED,
+      onProgress: (step: string) => env.steps.push(step),
+    });
+
+  it("拼接不许再为『把整卷读进内存』调用 readFileSync", async () => {
+    const env = mkEnv();
+    const reads: string[] = [];
+    const readFileSync = (p: unknown, ...rest: unknown[]) => {
+      reads.push(String(p));
+      return (fs.readFileSync as unknown as (...a: unknown[]) => unknown)(p, ...rest);
+    };
+    await run(env, { readFileSync });
+    expect(
+      reads.filter((p) => PARTS.some((n) => p.endsWith(n))),
+      "拼接又回到 ws.write(fs.readFileSync(卷))：一卷 ~50MB 整个进内存",
+    ).toEqual([]);
+  });
+
+  it("写满了要等 drain：一次 write 返回 false 之后，没 drain 就不许再写", async () => {
+    const env = mkEnv();
+    const sink = slowSink(path.join(env.tempDir, "book.7z"));
+    await run(env, { createWriteStream: () => sink.ws });
+    expect(sink.stat.wroteWhileFull, "无视背压：write() 已经返回 false 还接着往下写").toBe(0);
+    expect([...env.captured.values()], "流式串接之后拼接结果变了序/少了字节").toEqual(["卷0|卷1|卷2|卷3|"]);
+  });
+
+  it("写到一半落地失败：这个错要冒出来，临时卷照样清干净", async () => {
+    const env = mkEnv();
+    const sink = slowSink(path.join(env.tempDir, "book.7z"), 3);
+    await expect(run(env, { createWriteStream: () => sink.ws })).rejects.toThrow(/ENOSPC/);
+    expect(leftovers(env), "拼卷失败还留着分卷与半截包：每次失败往盘上堆几百 MB").toEqual([]);
+  });
+
+  it("全部 write 都成了、最后 flush 那一下才失败：同样不许当成拼好了，也不许去跑 7z", async () => {
+    const env = mkEnv();
+    const sink = slowSink(path.join(env.tempDir, "book.7z"), 0, "flush 失败: EIO");
+    await expect(run(env, { createWriteStream: () => sink.ws })).rejects.toThrow(/flush 失败/);
+    expect(env.execs, "包都没落地就去解压：用户看到的是 7z 的退出码，不是「写不进去」").toEqual([]);
+    expect(leftovers(env)).toEqual([]);
+  });
+
+  it("分卷读不出来：抛的是读的那条错，不是写盘那一侧的连带错", async () => {
+    // 两条错同时在（源读不到 + ws 最后 flush 也报错）时，用户该看到的是"哪一步没成"，
+    // 而不是被 flush 那条盖住。摘掉 `if (pipeErr) throw pipeErr` 这条会红。
+    const env = mkEnv();
+    const sink = slowSink(path.join(env.tempDir, "book.7z"), 0, "flush 失败: EIO");
+    const broken = () => {
+      const rs = new Readable({ read() {} });
+      rs.destroy(new Error("读不到分卷: ENOENT"));
+      return rs;
+    };
+    await expect(
+      run(env, { createWriteStream: () => sink.ws, createReadStream: broken }),
+    ).rejects.toThrow(/读不到分卷/);
+    expect(leftovers(env), "读失败之后分卷留在盘上").toEqual([]);
+  });
+});
+
 describe("GitHub：tar.bz2 直连 + 镜像", () => {
   it("官方直连失败时换镜像，成功就不再试第三个源", async () => {
     const tried: string[] = [];
@@ -417,3 +527,22 @@ describe("GitHub：tar.bz2 直连 + 镜像", () => {
     await expect(env.tarExtract()).rejects.toThrow(/tar 未安装/);
   });
 });
+
+/**
+ * 判别力台账（2026-09-27 本机，`npx vitest run src/tts/__tests__/tts-assemble.test.ts`）。
+ * 基线：server/lib/tts-assemble.mjs = sha256 02a34924…，每刀 sed 改一行、跑完 `cp` 回基线并 `cmp` 核过。
+ * 立红阶段：改产品之前 J1/J2 就是红的（readFileSync 4 次 / wroteWhileFull=3），J3~J5 是要保住的格子。
+ *
+ *  A1 把 `for (…) await pipeline(createReadStream(p), ws, {end:false})` 换回原来的
+ *     `for (…) ws.write(fs.readFileSync(p))` → 3 红：J1 整卷读内存、J2 无视背压、
+ *     J5「读的那条错优先」（源换成坏流之后没人读它了）
+ *  A2 只摘掉 `{ end: false }` → 14 红（第一卷就把 ws 关掉了，后面整条流水挂到超时）
+ *  A3 摘掉 `if (landed.box.error) throw landed.box.error` → 1 红：J4（flush 才失败那一格）
+ *  A4 把 `throw pipeErr` 换成 `throw new Error("拼接失败")` → 2 红：J3 + J5（原错必须原样出去）
+ *  A5 删掉整段 pipe 循环 → 4 红
+ *
+ * 没有一刀 0 红。另外记一笔**主动删掉的格子**：原本写过 `if (!pipeErr) await landed.done`
+ * （怕 pipeline 把 ws destroy 掉之后再等落地会挂死），摘掉它做对照时**0 红**——判不到，
+ * 所以那三行不写了，不是漏了。真要挂死的情形（写回调永不返回）发生在 pipeline 内部，
+ * 这一格管不着；A2 就是那种挂死，14 条一起红。
+ */

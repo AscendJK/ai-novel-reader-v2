@@ -11,13 +11,25 @@
  * `download(url, dest, chunkSize, onPercent, { signal })`。
  */
 import nodePath from "node:path";
+import { pipeline } from "node:stream/promises";
 
-/** 等 write stream 落地：原来的实现就地写这两行 on()，抽出来共用。 */
-function finishStream(ws) {
-  return new Promise((resolve, reject) => {
+/**
+ * 等 write stream 落地。
+ *
+ * `'error'` 走 resolve 而不是 reject：拼卷那段是"pipe 可能先抛、而写盘的错之后才到"的
+ * 形状，reject 出去没人接就是一次未处理拒绝（Node 默认会掀掉进程）。错误留在 `.error` 上，
+ * 由调用方决定哪一条才是用户该看到的原因。
+ */
+function settleStream(ws) {
+  const box = { error: null };
+  const done = new Promise((resolve) => {
     ws.on("finish", resolve);
-    ws.on("error", reject);
+    ws.on("error", (e) => {
+      box.error = e;
+      resolve();
+    });
   });
+  return { done, box };
 }
 
 /** 清理永远在 finally 里做，且单项失败不许顶掉真正的错误——所以每个都各自吞。 */
@@ -81,9 +93,21 @@ export function createGiteeAssembler(deps) {
 
       onProgress?.("拼接分卷", "合并为完整压缩包");
       const ws = fs.createWriteStream(archivePath);
-      for (const p of partPaths) ws.write(fs.readFileSync(p));
+      const landed = settleStream(ws);
+      let pipeErr = null;
+      try {
+        // 逐卷交给 stream 串起来：任意时刻内存里只有一卷的块，写满了由 pipeline 等 drain。
+        // 原来那两行是 `ws.write(fs.readFileSync(p))`——一整卷 ~50MB 一次进内存、四卷 322MB
+        // 逐卷累加，而且不看 write() 返回 false，等于把背压整格关掉。
+        for (const p of partPaths) await pipeline(fs.createReadStream(p), ws, { end: false });
+      } catch (e) {
+        pipeErr = e;
+      }
       ws.end();
-      await finishStream(ws);
+      await landed.done;
+      // 两条错可能同时到（pipe 抛了之后 ws 也会报错），以"为什么没拼上"那一条为准
+      if (pipeErr) throw pipeErr;
+      if (landed.box.error) throw landed.box.error;
 
       // 只读开头 6 字节：整包 readFileSync 会把 322MB 全塞进内存
       onProgress?.("校验压缩包", "检查文件格式");
