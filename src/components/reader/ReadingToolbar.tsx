@@ -40,8 +40,7 @@ export const ReadingToolbar = React.memo(function ReadingToolbar(props: ReadingT
   } = props;
 
   return (
-    <div className="absolute right-0 top-full mt-1 p-3 rounded-lg border bg-card shadow-lg z-20 flex flex-col gap-2 min-w-[220px]"
-      onClick={(e) => e.stopPropagation()}>
+    <div className="absolute right-0 top-full mt-1 p-3 rounded-lg border bg-card shadow-lg z-20 flex flex-col gap-2 min-w-[220px]">
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs text-muted-foreground">阅读</span>
         <div className="flex gap-1">
