@@ -28,7 +28,11 @@ export const PROBE_FOR = {
   "server/middleware/index.js": ["probe:boot"],
   // 2026-09-26：`probe:boot` 现在**直接 import** 这一只并在进程内驱动假 req/res（27 条判据，
   // 台账在 probe-server-boot.mjs 那段注释里），所以它已经不只是"映射可达"，是有直接判据了。
+  // 下面 rateLimit.js 同理：18 条进程内判据（假 req/res + 可控钟），13 刀台账在同一段注释里；
+  // 其中"清扫真的删掉了过期条目"那一格**判不到**（闭包私有，删与不删对客户端不可区分），
+  // 那一格留给仓库外长跑，别把这里读成"清扫逻辑全被看着"。
   "server/middleware/auth.js": ["probe:boot"],
+  "server/middleware/rateLimit.js": ["probe:boot"],
   "server/routes/sync.js": ["probe:sync"],
   "server/routes/proxy.js": ["probe:proxy"],
   "server/routes/rag.js": ["probe:rag"],

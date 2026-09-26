@@ -229,6 +229,162 @@ check("server/ 里除 data-paths.mjs 外不再硬编码 data 目录", hardcoded.
   // 服务器会跑在内存库上，'库文件带进临时目录'那条判据就成了假红。
   delete process.env.NOVEL_READER_DB_PATH;
 
+// ── middleware/rateLimit.js 的本体判据（第 1 档补直接判据）──
+// 路由上挂了 8 处 rateLimit，但过去只有一条 HTTP 判据间接碰到它。这一节 import 真模块、
+// 拿假 req/res 驱动，判：额度边界、按 ip 分桶、固定窗而不是滑动窗、清扫定时器与 unref。
+//
+// 时间是从外面给的：把 `Date.now` 临时换成一只可控钟，`setInterval` 换成一只
+// 只记账不真跑的假把式——60 秒的窗与 120 秒的清扫都等不起，而"进程不退"这一格恰恰要靠
+// unref 的记账看得见。整节没有 await，补丁关在自己的 try/finally 里，外面看到的是真钟。
+//
+// 变异台账（产品基线 server/middleware/rateLimit.js 1287 字节，sha256 前缀 83ae548c；
+// 一次手改一处带 MUT- 标记 → 跑 probe:boot → 按字节还原 → 当场核 SHA。
+// 13 刀 + 3 轮对照；每轮 markers=1（对照 0）、markers_left=0、diff_lines=0、sha=83ae548c。
+// 跑法 %TEMP%\knife-rl.sh。括号里是被打红的判据条数）
+//   R1  边界写成 >=            3 红  额度内那三发 / 边界那一格 / 新窗从 1 开始
+//   R2  不分桶（全站一桶）      1 红  换一个 ip 就是新的一桶
+//   R3  窗永不过（去掉过窗判断） 3 红  窗一到重新放行 / 新窗计数 / 不许顺延
+//   R4  每发都顺延成滑动窗      4 红  上面三条再加"过窗之后再扫一次"
+//   R5  429 换成 403            8 红  drained 谓词把状态码也算进去了，一处改全体塌
+//   R6  文案换成英文            1 红  429 配一句人话
+//   R7  回了 429 又 next()      8 红  同上（谓词还要求 next 一次都不叫）
+//   R8  ip 优先级颠倒          2 红  换一个 ip / 以 req.ip 为准
+//      （第一条也红是夹具给的：假 req 的 connection 一律默认 10.0.0.9，优先级一倒大家同桶）
+//   R9c 去掉 connection 退路    2 红  ——第一遍 R9 只红 1 条：那时"退路"那条判据只断言"第一发放行"，
+//      任何写法都绿。strengthen 成"两个不同的对端地址是两桶"之后重打才看得见（R9 与 R9b 是废读）
+//   R10 清扫周期写成窗的一半    1 红  周期都是 2×窗
+//   R11b 忘了 unref             1 红  unref 那条（第一遍 R11 红的是旧名字，改口径后重打）
+//   R12 清扫条件写反            2 红  没到点的桶不许被误删 / 连叫 5 轮幂等
+//   R13 扫帚掏空                0 红 ——这一记是**故意留下的判不到的格子**，见下
+// 判不到的一格（诚实记下）：清扫回调"真的把过期条目从 Map 里删掉了"在进程外不可观测
+//   ——`limits` 是闭包私有的，而过期条目本来就会被放行，删与不删读数一样。所以 R13 是 0 红。
+//   能判到的四面是：定时器有没有被安排、周期对不对、unref 叫没叫、以及"没到点的桶不许被误删"。
+//   真要盯内存增长，那是仓库外长跑那一档的活（与 rag-builder 的 [] 同一类处置）。
+{
+  const { rateLimit } = await import("../server/middleware/rateLimit.js");
+  check("rateLimit 真模块能被探针进程 import 且是函数", typeof rateLimit === "function");
+
+  const realNow = Date.now;
+  const realSetInterval = globalThis.setInterval;
+  const timers = [];
+  const CLOCK0 = 1_700_000_000_000;
+  let clock = CLOCK0;
+  globalThis.Date.now = () => clock;
+  globalThis.setInterval = (fn, ms) => {
+    const handle = { ms, unrefCalls: 0, fn };
+    handle.unref = () => { handle.unrefCalls += 1; return handle; };
+    timers.push(handle);
+    return handle;
+  };
+
+  try {
+    /** 打一发：只给 ip 与 connection 两个形状，别的都不假造 */
+    const hit = (mw, ip, conn = "10.0.0.9") => {
+      const req = { connection: { remoteAddress: conn } };
+      if (ip !== undefined) req.ip = ip;
+      const res = { code: null, body: null };
+      res.status = (c) => { res.code = c; return res; };
+      res.json = (b) => { res.body = b; return res; };
+      let nextCalls = 0;
+      mw(req, res, () => { nextCalls += 1; });
+      return { nextCalls, code: res.code, body: res.body };
+    };
+    const drained = (r) => r.code === 429 && r.nextCalls === 0;
+
+    // ── 额度与边界 ──
+    clock = CLOCK0;
+    const m3 = rateLimit(3);
+    const a1 = hit(m3, "1.1.1.1"), a2 = hit(m3, "1.1.1.1"), a3 = hit(m3, "1.1.1.1"), a4 = hit(m3, "1.1.1.1");
+    check("额度内的每一发都放行，且放行时一个字都不回给客户端",
+      [a1, a2, a3].every((r) => r.nextCalls === 1 && r.code === null && r.body === null),
+      JSON.stringify([a1, a2, a3]));
+    check("边界是第 N 发放行、第 N+1 发才拒（多切少切都看得见）",
+      a3.nextCalls === 1 && drained(a4), `第3发 next=${a3.nextCalls}，第4发 next=${a4.nextCalls} code=${a4.code}`);
+    check("被拒那一发：next 一次都不叫（叫了就是限流形同虚设）", a4.nextCalls === 0, `next=${a4.nextCalls}`);
+    check("被拒那一发：429 配一句人话",
+      a4.code === 429 && a4.body?.error === "请求过于频繁，请稍后再试",
+      `${a4.code} ${JSON.stringify(a4.body)}`);
+
+    // ── 按 ip 分桶、按实例分桶 ──
+    const other = hit(m3, "2.2.2.2");
+    check("换一个 ip 就是新的一桶：A 被打满不影响 B 的第一发",
+      other.nextCalls === 1 && other.code === null, JSON.stringify(other));
+    const m3b = rateLimit(3);
+    const fresh = hit(m3b, "1.1.1.1");
+    check("换一个限流实例就是新的一桶：m3 里 1.1.1.1 已经被打满，新实例的第一发照样放行",
+      drained(fresh) === false, `新实例第1发 next=${fresh.nextCalls} code=${fresh.code}`);
+
+    // ── ip 从哪来 ──
+    const byConn = rateLimit(1);
+    const c1 = hit(byConn, undefined, "7.7.7.7");
+    const c2 = hit(byConn, undefined, "8.8.8.8");
+    check("req.ip 缺失时按 connection.remoteAddress 分桶：两个不同的对端地址是两桶",
+      c1.nextCalls === 1 && c2.nextCalls === 1 && c2.code === null,
+      `${JSON.stringify(c1)} ${JSON.stringify(c2)}`);
+    const sameExplicit = (() => {
+      const mw = rateLimit(1);
+      hit(mw, "3.3.3.3", "9.9.9.9");
+      return hit(mw, undefined, "3.3.3.3");
+    })();
+    check("req.ip 在时以它为准：与显式写了同一个 ip 的请求共用一桶",
+      drained(sameExplicit), `第二发 next=${sameExplicit.nextCalls} code=${sameExplicit.code}`);
+
+    // ── 窗：固定窗，不是滑动窗 ──
+    clock = CLOCK0 + 59_000;
+    const stillShut = hit(m3, "1.1.1.1");
+    check("第 59 秒仍然被拒：窗没到点不许提前放行", drained(stillShut), `code=${stillShut.code}`);
+    clock = CLOCK0 + 60_001;
+    const reopened = hit(m3, "1.1.1.1");
+    const n2 = hit(m3, "1.1.1.1"), n3 = hit(m3, "1.1.1.1"), n4 = hit(m3, "1.1.1.1");
+    check("窗一到（60_001ms）同一个 ip 重新放行",
+      reopened.nextCalls === 1 && reopened.code === null, JSON.stringify(reopened));
+    check("新窗的计数是从 1 开始，不是接着上一窗累加",
+      n2.nextCalls === 1 && n3.nextCalls === 1 && drained(n4),
+      `第2/3/4发 next=${n2.nextCalls}/${n3.nextCalls}/${n4.nextCalls}`);
+    const SWIPE = rateLimit(1);
+    clock = CLOCK0 + 200_000;
+    hit(SWIPE, "4.4.4.4");                   // 第 1 发放行：窗从这一刻起算，到 260_000
+    clock = CLOCK0 + 230_000;
+    const swShut = hit(SWIPE, "4.4.4.4");    // 被拒的一发
+    clock = CLOCK0 + 260_001;                // 距第 1 发正好过窗
+    const afterRejectedHits = hit(SWIPE, "4.4.4.4");
+    check("被拒的那些发不许把窗往后顺延（滑动窗会让人永远出不去这个坑）",
+      drained(swShut) && afterRejectedHits.nextCalls === 1 && afterRejectedHits.code === null,
+      `被拒那一发 code=${swShut.code}，过窗那一发 next=${afterRejectedHits.nextCalls} code=${afterRejectedHits.code}`);
+
+    // ── 清扫 ──
+    const liveBuckets = rateLimit(1);
+    hit(liveBuckets, "5.5.5.5");             // 此刻 = 260_001，窗到 320_001
+    hit(liveBuckets, "5.5.5.5");             // 已被拒
+    clock = CLOCK0 + 300_000;
+    for (const t of timers) t.fn();
+    const afterSweep = hit(liveBuckets, "5.5.5.5");
+    check("手工触发清扫：没到点的桶不许被误删（删了就是限流悄悄归零）",
+      drained(afterSweep), `清扫后那一发 next=${afterSweep.nextCalls} code=${afterSweep.code}`);
+    let sweptAgain = true;
+    try { for (let i = 0; i < 5; i++) for (const t of timers) t.fn(); } catch { sweptAgain = false; }
+    check("清扫连叫 5 轮：幂等且不抛（同一把扫帚不该改变读数）",
+      sweptAgain && drained(hit(liveBuckets, "5.5.5.5")));
+    clock = CLOCK0 + 321_000;
+    for (const t of timers) t.fn();
+    const reopenedAfterSweep = hit(liveBuckets, "5.5.5.5");
+    check("过窗之后再扫一次：那一桶照常重来（清扫不许把正常的窗逻辑搅坏）",
+      reopenedAfterSweep.nextCalls === 1 && reopenedAfterSweep.code === null,
+      JSON.stringify(reopenedAfterSweep));
+
+    // 放在最后：这一条数的是"到这儿为止一共开了几只限流"，前面每造一只都得算上
+    check("每一次 rateLimit() 都安排了一只清扫定时器，周期都是 2×窗",
+      timers.length === 6 && timers.every((t) => t.ms === 120_000),
+      `定时器 ${timers.length} 只，周期 ${[...new Set(timers.map((t) => t.ms))].join("/")}`);
+    check("定时器都 unref 过（没别的活儿时不该由它把进程钉住；SIGTERM 那条判据抓不到这个）",
+      timers.every((t) => typeof t.fn === "function" && t.unrefCalls === 1),
+      `unref 次数 ${timers.map((t) => t.unrefCalls).join("/")}`);
+  } finally {
+    Date.now = realNow;
+    globalThis.setInterval = realSetInterval;
+  }
+}
+
 
 const child = spawn(process.execPath, [path.join(repoRoot, "server", "index.js")], {
   cwd: repoRoot,
