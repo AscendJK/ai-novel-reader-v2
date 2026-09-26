@@ -82,6 +82,7 @@ export function MiniCard({
                 size="icon"
                 className="h-5 w-5"
                 onClick={onBookmark}
+                aria-label={`收藏到笔记 ${title}`}
                 title="收藏到笔记"
               >
                 <Bookmark className="h-2.5 w-2.5" />
@@ -108,7 +109,8 @@ export function MiniCard({
                 size="icon"
                 className="h-5 w-5"
                 onClick={onRemove}
-                aria-label="删除"
+                aria-label={`删除 ${title}`}
+                title="删除"
               >
                 x
               </Button>

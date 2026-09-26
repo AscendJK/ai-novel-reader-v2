@@ -12,8 +12,8 @@
  * 未判 / 待议的两格（写清楚，别让"这只有测试了"盖住）：
  * - ~~「重新生成」那枚按钮没有可访问名~~：2026-09-26 补上了（`aria-label="重新生成 {title}"`，
  *   名字带卡片标题的口径沿用 09-24 搜索那一排按钮那笔）。判据与两刀在下面的「可访问名」一节。
- *   **同排另两枚没跟着带卡片名**：`收藏到笔记` 只有 `title`、`删除` 只有 `aria-label="删除"`，
- *   都有名字、都不是无名按钮，但一屏几十张卡片时读屏里仍是三枚同名的。要不要一起对齐等制作人一句话。
+ *   **同排另两枚 2026-09-26 一并补齐**（制作人口径：按「重新生成」那条同一格式来）：
+ *   `收藏到笔记 {title}` 与 `删除 {title}`，判据在下面「可访问名」一节的最后三条。
  * - `truncated` 单独出现时标题句写成「本分析使用了精简模式」——严格说截断≠精简，那是产品文案口径，
  *   本批按现状钉住（改文案要连带徽章那一格的口径一起谈）。
  * - `CardTitle` 的 `truncate` 与父级 `min-w-0` 是形状判据，jsdom 量不出后果（长标题真的把卡片撑破
@@ -53,12 +53,26 @@
  *      就是为了这一刀能红：正文当名字时两枚同名，`getByRole` 直接找不到那两句话。
  * 同一笔里 ExportPanel 那只下拉的 `aria-label` 由那边文件的 **M26** 打（1 红）。
  *
+ * 2026-09-26 同排另两枚（收藏／删除）补名字，三刀打在基线 `0d4c031115ac9eb1…`（5874 字节；本文件
+ * 26 条。这一族的每一轮都连跑三只文件共 94 条——「收藏／重新生成／删除」是同一排按钮的同一件事，
+ * 口径与判据形状沿用刀16/刀17）：
+ * 刀18 摘掉 `收藏到笔记` 的 `aria-label`、只留 `title="收藏到笔记"` ⇒ **2 红**（带标题那条 + 三枚
+ *      名字同源那条。同刀16：`title` 也发得出名字，所以咬的是"有没有带是哪一张卡"）。
+ * 刀19 摘掉 `删除` 的 `aria-label`、只留 `title="删除"` ⇒ **3 红**（前两条同上，第三条是
+ *      「给了就各画一枚，点击各调自己的那一个，不串线」——它已经改用 `getByLabelText(/^删除 /)`
+ *      取那枚，名字被别的用例当 locator 用上了。名字一坏，连带那半行为判据也拿不到东西）。
+ * 刀20 名字取错来源（`收藏到笔记 {content}` 而不是 `{title}`）⇒ **2 红**，与刀17 同一形状，
+ *      同样靠"两张卡 content 相同、title 不同"的夹具才咬得住。
+ *
  * **补名字连带收到的一只旧雷（不是判据没牙，是产品真的换了形状）**：`BookTab-internals` 里有
  * 四处拿 `{ name: /剧情时间线/ }` 这种"名字含标题"的正则定位 SubItem 那一行的表头。卡片一旦把
  * 标题写进可访问名，同一屏里就有了两枚名字含"剧情时间线"的按钮（表头 + 那张卡的重新生成），
  * `getByRole` 当场报 multiple。改成精确名 `{ name: "剧情时间线" }` 之后 316 条全绿。
  * 这正是这一格想要的效果（读屏里"重新生成 剧情时间线"就是能说清动的是哪一张卡），也是它对该文件
  * 里所有宽松定位器的通用警告：**以后再加带标题的名字，先查一遍正则型 locator。**
+ * 刀19 那一笔又收了一只同形的雷：`QATab-internals` 里「移除一条范围总结只按那一条的 id」按
+ * `{ name: "删除" }` 精确取那枚，卡片名一旦带上标题就取空。改成按名字取「删除 范围甲」之后全绿——
+ * 顺带把那条用例从"按屏幕顺序取第一枚"变成"点的就是要删的那条"，判得比原来狠一点。
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -223,7 +237,7 @@ describe("三枚按钮：没给回调就不画，loading 只该按住「重新�
     expect(buttons(c)).toHaveLength(3);
     fireEvent.click(screen.getByTitle("收藏到笔记"));
     fireEvent.click(buttons(c)[1]); // 重新生成
-    fireEvent.click(screen.getByLabelText("删除"));
+    fireEvent.click(screen.getByLabelText(/^删除 /));
     expect(onBookmark).toHaveBeenCalledTimes(1);
     expect(onRegenerate).toHaveBeenCalledTimes(1);
     expect(onRemove).toHaveBeenCalledTimes(1);
@@ -280,5 +294,28 @@ describe("「重新生成」的可访问名：图标按钮要说得出动的是�
     card({ title: "没有重生成的卡片", onBookmark: vi.fn(), onRemove: vi.fn() });
     expect(screen.queryByRole("button", { name: /^重新生成 / })).toBeNull();
     expect([...document.querySelectorAll("button")]).toHaveLength(2);
+  });
+
+  // 2026-09-26 制作人点头：同一排另两枚也按这条口径补齐（收藏／删除各自带上是哪一张卡）。
+  it("「收藏到笔记」带卡片标题，两张卡同时在场各叫各的", () => {
+    card({ title: "第一章的摘要", content: "同一句正文", onBookmark: vi.fn() });
+    card({ title: "第二章的摘要", content: "同一句正文", onBookmark: vi.fn() });
+    expect(screen.getByRole("button", { name: "收藏到笔记 第一章的摘要" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "收藏到笔记 第二章的摘要" })).toBeTruthy();
+  });
+
+  it("「删除」带卡片标题，两张卡同时在场各叫各的", () => {
+    card({ title: "第一章的摘要", content: "同一句正文", onRemove: vi.fn() });
+    card({ title: "第二章的摘要", content: "同一句正文", onRemove: vi.fn() });
+    expect(screen.getByRole("button", { name: "删除 第一章的摘要" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "删除 第二章的摘要" })).toBeTruthy();
+  });
+
+  it("三枚按钮的名字都带同一个标题（同排的上下文要一致，不能只有中间那枚报得出卡片）", () => {
+    card({ title: "全书总览", onBookmark: vi.fn(), onRegenerate: vi.fn(), onRemove: vi.fn() });
+    for (const name of ["收藏到笔记 全书总览", "重新生成 全书总览", "删除 全书总览"]) {
+      expect(screen.getByRole("button", { name })).toBeTruthy();
+    }
+    expect(screen.getAllByRole("button")).toHaveLength(3);
   });
 });

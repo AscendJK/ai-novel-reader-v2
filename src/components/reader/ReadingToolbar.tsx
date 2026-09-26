@@ -70,18 +70,18 @@ export const ReadingToolbar = React.memo(function ReadingToolbar(props: ReadingT
           {readingMode === "scroll" ? (
             <>
               <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={autoReadSpeed <= 0.5}
-                onClick={() => setAutoReadSpeed(Math.max(0.5, autoReadSpeed - 0.5))} title="滚动模式：正文持续滑动的速度（行/秒）"><Minus className="h-3 w-3" /></Button>
+                onClick={() => setAutoReadSpeed(Math.max(0.5, autoReadSpeed - 0.5))} aria-label="减小滚动速度" title="滚动模式：正文持续滑动的速度（行/秒）"><Minus className="h-3 w-3" /></Button>
               <span className="text-xs w-14 text-center tabular-nums">{autoReadSpeed} 行/秒</span>
               <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={autoReadSpeed >= 5}
-                onClick={() => setAutoReadSpeed(Math.min(5, autoReadSpeed + 0.5))} title="滚动模式：正文持续滑动的速度（行/秒）"><Plus className="h-3 w-3" /></Button>
+                onClick={() => setAutoReadSpeed(Math.min(5, autoReadSpeed + 0.5))} aria-label="增大滚动速度" title="滚动模式：正文持续滑动的速度（行/秒）"><Plus className="h-3 w-3" /></Button>
             </>
           ) : (
             <>
               <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={autoReadInterval <= 3}
-                onClick={() => setAutoReadInterval(Math.max(3, autoReadInterval - 1))} title="分页模式：每 X 秒自动翻一页"><Minus className="h-3 w-3" /></Button>
+                onClick={() => setAutoReadInterval(Math.max(3, autoReadInterval - 1))} aria-label="减小翻页间隔" title="分页模式：每 X 秒自动翻一页"><Minus className="h-3 w-3" /></Button>
               <span className="text-xs w-14 text-center tabular-nums">{autoReadInterval}s/页</span>
               <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={autoReadInterval >= 60}
-                onClick={() => setAutoReadInterval(Math.min(60, autoReadInterval + 1))} title="分页模式：每 X 秒自动翻一页"><Plus className="h-3 w-3" /></Button>
+                onClick={() => setAutoReadInterval(Math.min(60, autoReadInterval + 1))} aria-label="增大翻页间隔" title="分页模式：每 X 秒自动翻一页"><Plus className="h-3 w-3" /></Button>
             </>
           )}
         </div>
@@ -91,10 +91,10 @@ export const ReadingToolbar = React.memo(function ReadingToolbar(props: ReadingT
         <span className="text-xs text-muted-foreground">字号</span>
         <div className="flex items-center gap-1">
           <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={fontSize <= 12}
-            onClick={() => setFontSize(Math.max(12, fontSize - 1))}><Minus className="h-3 w-3" /></Button>
+            onClick={() => setFontSize(Math.max(12, fontSize - 1))} aria-label="减小字号"><Minus className="h-3 w-3" /></Button>
           <span className="text-xs w-7 text-center tabular-nums">{fontSize}</span>
           <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={fontSize >= 24}
-            onClick={() => setFontSize(Math.min(24, fontSize + 1))}><Plus className="h-3 w-3" /></Button>
+            onClick={() => setFontSize(Math.min(24, fontSize + 1))} aria-label="增大字号"><Plus className="h-3 w-3" /></Button>
         </div>
       </div>
       <div className="flex items-center justify-between gap-2">
@@ -106,20 +106,20 @@ export const ReadingToolbar = React.memo(function ReadingToolbar(props: ReadingT
         <span className="text-xs text-muted-foreground">行距</span>
         <div className="flex items-center gap-1">
           <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={lineHeight <= 1.2}
-            onClick={() => setLineHeight(lineHeight - 0.1)}><Minus className="h-3 w-3" /></Button>
+            onClick={() => setLineHeight(lineHeight - 0.1)} aria-label="减小行距"><Minus className="h-3 w-3" /></Button>
           <span className="text-xs w-7 text-center tabular-nums">{lineHeight.toFixed(1)}</span>
           <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={lineHeight >= 2.4}
-            onClick={() => setLineHeight(lineHeight + 0.1)}><Plus className="h-3 w-3" /></Button>
+            onClick={() => setLineHeight(lineHeight + 0.1)} aria-label="增大行距"><Plus className="h-3 w-3" /></Button>
         </div>
       </div>
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs text-muted-foreground">段距</span>
         <div className="flex items-center gap-1">
           <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={paragraphSpacing <= 0}
-            onClick={() => setParagraphSpacing(paragraphSpacing - 2)}><Minus className="h-3 w-3" /></Button>
+            onClick={() => setParagraphSpacing(paragraphSpacing - 2)} aria-label="减小段距"><Minus className="h-3 w-3" /></Button>
           <span className="text-xs w-7 text-center tabular-nums">{paragraphSpacing}</span>
           <Button variant="outline" size="icon" className="h-8 w-8 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-6 md:w-6" disabled={paragraphSpacing >= 20}
-            onClick={() => setParagraphSpacing(paragraphSpacing + 2)}><Plus className="h-3 w-3" /></Button>
+            onClick={() => setParagraphSpacing(paragraphSpacing + 2)} aria-label="增大段距"><Plus className="h-3 w-3" /></Button>
         </div>
       </div>
       <div className="flex items-center justify-between gap-2">

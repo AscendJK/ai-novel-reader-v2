@@ -133,7 +133,8 @@ describe("QATab 的折叠与移除", () => {
     renderTab(hook);
     expect(screen.getByText("范围甲")).toBeInTheDocument();
 
-    fireEvent.click(screen.getAllByRole("button", { name: "删除" })[0]);
+    // 卡片补上可访问名之后，这里按名字取「范围甲」那一枚：点的就是要删的那条，不再靠屏幕顺序
+    fireEvent.click(screen.getByRole("button", { name: "删除 范围甲" }));
 
     const calls = vi.mocked(hook.setRangeResults).mock.calls;
     expect(calls.length).toBe(1);

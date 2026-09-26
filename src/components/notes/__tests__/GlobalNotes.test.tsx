@@ -18,11 +18,12 @@
  * **这一档判不到的两格**（写在前面，免得被"这只有测试了"盖住）：
  * ① `zh-CN` 这个 locale 字面量在本机是**等价变异**（这台机器默认就是 zh-CN，摘掉它输出一样），
  *    所以只钉了"年在最前 + 带冒号"的形状，真正防漂移要靠非中文机器／CI；
- * ② 删除按钮只有 `title="删除"`、没带是**哪一条**的上下文（与 MiniCard 同一类问题，口径未定、
- *    这里只钉"它有可访问名"这一半，不替产品决定要不要写「删除 第十二章 雪线」）。
+ * ② 删除按钮的可访问名（原只有 `title="删除"`、没带是**哪一条**的上下文，与 MiniCard 同一类问题）。
+ *    2026-09-26 已按制作人定的口径补上并判住：`删除笔记 {书名} {章名}`（屏上同一行那两层上下文），
+ *    判据与两刀见「删除这一条链」一节与下面台账的 G29/G30 —— 这一格不再挂着。
  * 另：`loadAllNotes` 自己吞错返回 `[]`（`repositories.ts:374`），所以"加载失败"这一格在这层不可达。
  *
- * ## 变异台账：28 刀全部打在基线 `a853c66f…`（7135 字节 / 34 条全绿，**产品代码一行没动**）
+ * ## 变异台账：28 刀打在基线 `a853c66f…`（7135 字节 / 34 条全绿，**产品代码一行没动**），另 2 刀打在 `1e2e2b58…`（补可访问名之后）
  *
  * 每刀手改一处、跑完立刻按基线还原并核 SHA256；每轮固定读 `markers / reds / transform_failed /
  * skipped / markers_left / diff_lines / restored_sha`，28 轮全是 `markers=1 / transform_failed=0 /
@@ -41,6 +42,13 @@
  *   G27 书名兜底丢了＝1 红、G22 下拉拿标题当值＝4 红。
  * - **别处**：G25 徽章说反＝1 红、G21 日期两个来源取反＝2 红、G28 返回不接外壳＝1 红、
  *   G26b 小说下拉丢可访问名＝5 红（红在定位器上——这一条判的是"它得有名"，不是行为）。
+ * - **删除按钮的可访问名（G29/G30，基线换成补名之后的 `1e2e2b58…`；这一族每轮连跑三只文件共 94 条，
+ *   因为「收藏／删除／重新生成／十枚 ±」是同一件事，红名全部落在本文件的 34 条里）**：
+ *   G29 摘掉 `aria-label`、只留 `title="删除"`＝**8 红**（名字那条 + 七条把名字当 locator 用的删除链
+ *   用例：确认框、取消、删的是点的那条、删完 push、筛选下删、删到空、展开按 id 认）。**红 8 不等于
+ *   八条各有牙**——这八条共用同一个取法，一处名字坏就一起拿不到按钮；真正的"名字本身"判据只有一条。
+ *   G30 名字里丢掉章名（只留书名）＝**1 红**，红的正是名字那一条（它逐枚核到"书名 + 章名"两层，
+ *   少了后半截就对不上）——G29 打"有没有上下文"、G30 打"上下文全不全"，两半各咬一次。
  *
  * **两笔要交代的处置**：① G26 首打跑出来 `markers=2`＝同一盘落了两刀（我连发两次编辑，第二次没把
  * 第一次的标记盖掉），按口径那一轮作废，重打成单标记的 G26b；两轮的红名一致，但只有 G26b 算数。
@@ -176,8 +184,8 @@ const body = (text: string) => screen.getByText(text).closest("p") as HTMLElemen
 /** 一张卡片的左半（徽章 / 书名 / 章名 / 正文 / 展开都在这只容器里） */
 const cardOf = (text: string) => body(text).closest("div.min-w-0") as HTMLElement;
 const expandBtnOf = (text: string) => cardOf(text).querySelector("button.mt-1") as HTMLButtonElement;
-const cards = () => screen.getAllByRole("button", { name: "删除" });
-const cardCount = () => screen.queryAllByRole("button", { name: "删除" }).length;
+const cards = () => screen.getAllByRole("button", { name: /^删除笔记 / });
+const cardCount = () => screen.queryAllByRole("button", { name: /^删除笔记 / }).length;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -456,9 +464,14 @@ describe("GlobalNotes · 展开状态存在按 id 的集合里", () => {
 });
 
 describe("GlobalNotes · 删除这一条链", () => {
-  it("每枚删除按钮都有可访问名「删除」，一条一枚", async () => {
+  it("一枚删除按钮一条笔记，名字带「书名 + 章名」这两层上下文", async () => {
     await setup();
-    expect(cards()).toHaveLength(5);
+    expect(cardCount()).toBe(5);
+    expect(screen.getByRole("button", { name: "删除笔记 剑歌行 第十二章 雪线" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "删除笔记 沧海云帆 第一章 出航" })).toBeTruthy();
+    // 书已被删的那条兜底成「未知小说」，名字跟着屏上那行走，不露 novelId
+    expect(screen.getByRole("button", { name: "删除笔记 未知小说 第七章 归途" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /nv-zz/ })).toBeNull();
   });
 
   it("确认框问的是那句写死的话", async () => {
@@ -514,7 +527,7 @@ describe("GlobalNotes · 删除这一条链", () => {
     expect(cardCount()).toBe(5);
     // 循环带上限：万一"删完列表不动"，这条用例该红在该红的断言上，而不是把跑刀的人吊死在循环里
     for (let i = 0; i < 5 && cardCount() > 0; i++) {
-      fireEvent.click(screen.getAllByRole("button", { name: "删除" })[0]);
+      fireEvent.click(screen.getAllByRole("button", { name: /^删除笔记 / })[0]);
       await flush();
     }
     expect(h.deleteNote).toHaveBeenCalledTimes(5);

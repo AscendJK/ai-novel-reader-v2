@@ -28,12 +28,12 @@
  *    `closest("[data-font-panel]")` 做了包含判断；全仓再没有 document 级 click 监听（grep 三条
  *    全是 mousedown）。按"死代码不写判据"的口径没给它立红，制作人点头后单独一笔删掉了。
  * ② `md:opacity-0`／`min-h-[44px]` 这类只在真实布局里成立的触控尺寸与悬停显形，jsdom 量不到。
- *    （原来这里还挂着第二格：字号／行距／段距那**六枚 ± 缺可访问名**，只能按行标签取兄弟节点——
- *    制作人 2026-09-26 已定"要补"，补的那一笔会连判据一起换掉这段说明。）
  *
- * ## 变异台账：33 刀全部打在基线 `496889c9…`（8410 字节 / 31 条全绿，**产品代码一行没动**）
+ * ## 变异台账：33 刀打在基线 `496889c9…`（8410 字节 / 31 条全绿），另 4 刀打在 `0215543b…`（补可访问名之后）
  *
- * 每刀手改一处、跑完立刻按基线还原并核 SHA256；33 轮固定读数都是
+ * 前 33 刀的基线是"产品代码一行没动"的那一版；R-N 那四刀打在补可访问名之后的新基线上
+ * （`0215543b…`，见下面「可访问名」那一族）。每刀手改一处、跑完立刻按基线还原并核 SHA256；
+ * 33 轮固定读数都是
  * `markers=1 / transform_failed=0 / skipped=0 / markers_left=0 / diff_lines=0 / restored_sha=496889c9`。
  * - **窄屏与两半门槛**：R1 摘掉「双页」那道 filter＝2 红、R2 宽度门槛从 ≥768 挪成 >768＝1 红、
  *   R3 自动双页行丢掉「滚动不摆」＝1 红、R4 丢掉宽度那半＝1 红（两半各一刀，摘一边只咬一边）。
@@ -52,6 +52,17 @@
  * - **R18 字号步长 1→2＝1 红；两行数值显示各一刀：R32 字号显示多加一格＝2 红（第二条红是搭上了
  *   "props 真变了必须重画"里那句按屏上数字取的断言，属顺带咬到，不是那条用例的本职）、
  *   R33 段距显示多加一格＝1 红。**
+ * - **可访问名那一族（4 刀，基线换过：`0215543b…`＝补名字之后的 34 条全绿版；这一族每轮都连跑
+ *   三只文件共 94 条，因为名字是跨文件同一件事）**：N6 字号两枚方向对调＝1 红（两枚名字仍各自
+ *   唯一，所以这刀证的是**名字锚住了方向**，不是只判"有没有名字"）、N7 摘掉段距「减」那一枚＝2 红
+ *   （名册少一枚 + 同行不得同名那道）、N8 分页那枚套用滚动的说法＝1 红（名字跟着当前档走，判到了）、
+ *   N9 名字里塞进当前值＝2 红（**这一刀刻意要红**：口径是"名字不带值、值由旁边那格数字报"，
+ *   将来谁把 `16` 写进名字，这条先响）。
+ *   N9 第一遍编辑没带上 `MUT-` 标记，读数是 `markers=0` → 按"markers≠1 那轮不作数"重切为 N9b，
+ *   重切后才是上面那个 2 红。
+ *   还有一格要说明白：**补名字没顺手改掉行为那半的定位方式**——步长／界／显示那二十来条仍按行标签
+ *   取兄弟节点（`rowOf`／`minusOf`）。理由是它们要成对取"界上"与"界内"两枚，改走名字等于在一次
+ *   只补名字的改动里同时换掉二十条用例的取法，出问题时分不清是哪半。
  *
  * **三笔要交代的（甲／乙／丙，避免和上面 ①②③ 混）**：
  * 甲 **R4 与 R5 一度同盘**（`markers=2`）：我给 R4 打完标记后没有立刻跑，接着又打了 R5 的标记，
@@ -404,6 +415,44 @@ describe("ReadingToolbar · 粗细与字体", () => {
   it("当前字体那一档才是选中标态", () => {
     setup({ fontFamily: "SimSun, serif" });
     expect(rowButtons("字体").map((b) => isSelected(b))).toEqual([false, true, false, false]);
+  });
+});
+
+describe("ReadingToolbar · 十枚 ± 按钮的可访问名", () => {
+  // 图标按钮只画一个 Minus/Plus，读屏里本来什么都念不出来（自动阅读那两枚只有 `title`，
+  // 说的还是"这一档是干什么的"，不含方向）。制作人口径（2026-09-26）：按「方向 + 行名」补，
+  // 名字里不带当前值——旁边那格数值已经在播报，重复一遍反而啰嗦。
+  const namesOf = () =>
+    [...document.querySelectorAll("button")].map((b) => b.getAttribute("aria-label")).filter(Boolean);
+
+  it("字号／行距／段距各两枚，名字是「减小/增大 + 行名」", () => {
+    setup();
+    for (const n of ["减小字号", "增大字号", "减小行距", "增大行距", "减小段距", "增大段距"]) {
+      expect(screen.getByRole("button", { name: n })).toBeTruthy();
+    }
+  });
+
+  it("自动阅读那两枚跟着当前档报名字：滚动说速度、翻页说间隔", () => {
+    const view = setup({ readingMode: "scroll" });
+    expect(screen.getByRole("button", { name: "减小滚动速度" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "增大滚动速度" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /翻页间隔/ })).toBeNull();
+    view.rerender({ readingMode: "single" });
+    expect(screen.getByRole("button", { name: "减小翻页间隔" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "增大翻页间隔" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /滚动速度/ })).toBeNull();
+  });
+
+  it("同一行的两枚方向不许写反，也不许同名", () => {
+    setup({ readingMode: "scroll" });
+    expect(minusOf("滚动速度")).toHaveAccessibleName("减小滚动速度");
+    expect(plusOf("滚动速度")).toHaveAccessibleName("增大滚动速度");
+    expect(minusOf("字号")).toHaveAccessibleName("减小字号");
+    expect(plusOf("字号")).toHaveAccessibleName("增大字号");
+    // 十个名字互不相同：同名按钮在窄面板里靠位置猜，等于没补
+    const labelled = namesOf().filter((n) => /^(减小|增大)/.test(n ?? ""));
+    expect(new Set(labelled).size).toBe(labelled.length);
+    expect(labelled).toHaveLength(8);
   });
 });
 
