@@ -21,15 +21,6 @@ export function safeSet(key: string, value: string): void {
   }
 }
 
-/** 安全删除 localStorage */
-export function safeRemove(key: string): void {
-  try {
-    localStorage.removeItem(key);
-  } catch {
-    // ignore
-  }
-}
-
 /** 安全读取并解析为 boolean */
 export function safeGetBool(key: string, defaultVal = false): boolean {
   try {
