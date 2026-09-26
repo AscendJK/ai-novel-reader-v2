@@ -126,7 +126,7 @@ export function RAGSettings() {
                     <span className="text-sm font-medium">{m.name}</span>
                     <Badge variant="outline" className="text-xs">{m.size}</Badge>
                     {isDefault && <Star className="h-3 w-3 text-amber-500" aria-label="默认" />}
-                    {isActive && <Badge className="text-xs bg-primary">当前</Badge>}
+                    {isActive && <Badge className="text-xs">当前</Badge>}
                     {m.key === "tfidf" && <span title="始终可用"><CheckCircle2 className="h-3.5 w-3.5 text-green-500" /></span>}
                     {m.downloaded && m.key !== "tfidf" && <span title="已下载"><CheckCircle2 className="h-3.5 w-3.5 text-green-500" /></span>}
                   </div>

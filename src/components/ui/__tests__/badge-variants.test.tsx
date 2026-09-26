@@ -22,9 +22,16 @@
  *   **不可聚焦的 `<div>`** 上是装饰——除非调用点补 `tabIndex`（全仓没有一处）。**这一格 jsdom 判不到**：
  *   jsdom 允许对任意元素 `focus()` 并把它放进 `document.activeElement`，真浏览器只对可聚焦元素这么做，
  *   所以在单测层写"焦点环在不在"必然假绿。留给浏览器层，或者哪天真要交互时把那四条一起删。
- * - 调用点有两枚写着 `variant` 默认值同时又手动 `bg-primary`（`ApiSettings.tsx:121`、
- *   `RAGSettings.tsx:129`），是**同值覆盖**：合并完看不出差别。它读起来像"特意挑了主色"，
- *   实际什么都没做——下次读那两处别以为它们在盖色。
+ * - 调用点曾有两条"写着 default 又手动补一份 `bg-primary`"（`ApiSettings.tsx:121`、
+ *   `RAGSettings.tsx:129`），已删。**当初那句"同值覆盖，实际什么都没做"说软了**：它做了一件事——
+ *   把 base 里那份盖成看不见的那一刀（同一记 D13 在删之前只红 2 条、删之后红 4 条，见下方台账）。
+ *   读起来像"特意挑了主色"，界面上又确实还是主色，所以这种副本除了掩护 base 没有别的用途。
+ * - **这一档原来有三条"存在性"判据是假的宽松**：`toContain("bg-primary")` 在
+ *   `hover:bg-primary/80` 面前必然绿（子串就含它），`toContain("border")` 在
+ *   `border-transparent` 面前同理。三条已改成按空格切 token 比（`hasBare` 与 `split` 到空白）。
+ *   实测对照：D13（把 base 的 `bg-primary` 摘掉）**改之前 11 条全绿，改之后红 2 条**。
+ *   D9（base 少 `border`）两版都红 1 条、红名相同，但弱版是靠 outline 那一型顺带绊倒的，
+ *   严版直接点名 `default 少了 base 的 border`——**"数量没变"不等于"判的是同一格"**。
  * - `badgeVariants` 没有导出（shadcn 原版导），所以这套类外部无法复用。没有调用者，不判。
  */
 import { describe, it, expect } from "vitest";
@@ -61,14 +68,16 @@ describe("四个变体各给什么类", () => {
     );
     for (const v of VARIANTS) {
       const cls = classOf(`型-${v}`);
-      for (const bit of BASE) expect(cls, `${v} 少了 base 的 ${bit}`).toContain(bit);
+      // 逐 token 比，不用 toContain：`border` 是 `border-transparent` 的子串，
+      // base 那枚光秃秃的 `border` 丢了也念得出"在"（与下面三条 bg-* 同一格病）
+      for (const bit of BASE) expect(cls.split(/\s+/), `${v} 少了 base 的 ${bit}`).toContain(bit);
     }
   });
 
   it("不写 variant 就是 default（`defaultVariants` 那一格：删掉它这枚会变白底）", () => {
     render(<Badge>没写变体</Badge>);
     const cls = classOf("没写变体");
-    expect(cls).toContain("bg-primary");
+    expect(hasBare(cls, "bg-primary"), cls).toBe(true); // 不能写 toContain：hover:bg-primary/80 里就含它
     expect(cls).toContain("text-primary-foreground");
     // 与显式 default 完全同一串——这一格判的是"两种写法必须一致"
     render(<Badge variant="default">显式 default</Badge>);
@@ -96,9 +105,10 @@ describe("四个变体各给什么类", () => {
         <Badge variant="outline">底-outline</Badge>
       </>,
     );
-    expect(classOf("底-default")).toContain("bg-primary");
-    expect(classOf("底-secondary")).toContain("bg-secondary");
-    expect(classOf("底-destructive")).toContain("bg-destructive");
+    // 三型实底逐条按 token 取（写成 toContain 会被各自的 `hover:bg-*/80` 混过去）
+    expect(hasBare(classOf("底-default"), "bg-primary"), "底-default").toBe(true);
+    expect(hasBare(classOf("底-secondary"), "bg-secondary"), "底-secondary").toBe(true);
+    expect(hasBare(classOf("底-destructive"), "bg-destructive"), "底-destructive").toBe(true);
     for (const t of ["底-default", "底-secondary", "底-destructive"]) {
       expect(classOf(t), t).toContain("border-transparent");
     }
@@ -183,7 +193,8 @@ describe("props 与元素形状", () => {
 // ── 变异台账（基线 sha256=c47f85ba… / 1072 B；一刀一跑一还原，每轮核 markers=1、
 //    transform_failed=0、markers_left=0、diff_lines=0、sha 回到基线）────────────────────
 //
-// 12 刀：11 刀咬红，1 刀 0 红且**原因写在明处**（D10）。11 条用例都被指名打红过——
+// 12 刀（建档那一轮）：11 刀咬红，1 刀 0 红且**原因写在明处**（D10）。11 条用例都被指名打红过——
+// （2026-09-27 又下了第 13 刀 D13，并顺手把三条存在性判据改严，见文件末尾的补充块。）
 // 但要看清是哪一记打的：**「children 原样到 DOM」与「onClick 挂得上」这两条只有 D5 打得到**
 // （它们判的就是 `{...props}` 这一格，别的手法碰不到）。D1／D2 两刀因终端未落红名重跑过一遍
 // （D1r／D2r），红名与下表一致。
@@ -205,6 +216,17 @@ describe("props 与元素形状", () => {
 //     "焦点环在不在"必然假绿。所以这一格的正确处置是记下来（文件头同一条），不是补断言。
 // D11 `defaultVariants` 换成 "outline"    2 红：不写 variant 那条（D2 是删，D11 是换错——两刀不同格）
 // D12 secondary 串换成 default 的         2 红：四型互不相同 ／ 三型实底与 outline
+//
+// ── 2026-09-27 补：三格"存在性"判据从 toContain 改成按 token 比，另加 D13 ──────────────
+// D13 base 的 default 少 `bg-primary`      改判据之前 **0 红（假绿：`hover:bg-primary/80` 里就含这个
+//     子串）**；改成 `hasBare` 之后本文件 2 红（不写 variant 那条 ／ 三型实底那条）。
+//     同一刀跨文件读：调用点还留着手写 `bg-primary` 的两处（ApiSettings 与 RAGSettings 的「当前」
+//     徽章）**不红**——那两份副本把 base 盖住了；删掉副本之后同一刀变 4 红。这就是"冗余副本"唯一
+//     真实的作用，也是它该删的理由。新立的两条判据在 `ApiSettings.test.tsx` / `RAGSettings.test.tsx`。
+// D9 重打（base 少 `border`）             两版都 1 红、红名同一句，但弱版是 outline 那一型绊倒的
+//     （default／secondary／destructive 有 `border-transparent` 顶着，`toContain("border")` 念不出缺）；
+//     严版点名 `default 少了 base 的 border`。**读数没变，判的那一格变了**——这条留在这儿是因为
+//     "重跑数量一样"不等于"没差别"。
 //
 // 一记方法账：**"写死成 default"这一刀不会红"不写 variant"那条**（D7 的红名里没有它）——那条判据
 // 只在"没写"这一侧取样，写死恰好满足它。真正咬住 D7 的是另外三条。这条和 button 那档

@@ -118,7 +118,7 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
                     <Badge variant="outline" className="text-[10px] shrink-0">
                       {p.format === "anthropic" ? "Anthropic" : "OpenAI"}
                     </Badge>
-                    {activeProviderId === p.id && <Badge className="text-[10px] bg-primary shrink-0">当前</Badge>}
+                    {activeProviderId === p.id && <Badge className="text-[10px] shrink-0">当前</Badge>}
                   </div>
                   <p className="text-xs text-muted-foreground truncate">
                     {p.apiKey ? `${p.model || "未设模型"} · ${p.baseUrl || "默认地址"}` : "未配置"}

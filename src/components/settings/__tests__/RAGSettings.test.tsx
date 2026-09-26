@@ -92,3 +92,15 @@ describe("RAGSettings 的调试模式入口", () => {
     expect([...after]).toEqual([...before]);
   });
 });
+
+describe("「当前」那枚徽章的主色从哪儿来", () => {
+  it("引擎列表里那枚「当前」：主色来自 Badge 的 default 底，不靠调用点再手写一份", () => {
+    // 与 ApiSettings 同一格冗余（`RAGSettings.tsx` 的 `<Badge className="text-xs bg-primary">`）。
+    // 删掉之前先记下：base 的 bg-primary 被这一份盖着，摘 base 那一刀在这两处 0 红。
+    useRAGStore.setState({ engine: "tfidf" });
+    render(<RAGSettings />);
+    const cls = (screen.getByText("当前") as HTMLElement).className.split(/\s+/);
+    expect(cls).toContain("bg-primary");
+    expect(cls).toContain("text-xs");
+  });
+});

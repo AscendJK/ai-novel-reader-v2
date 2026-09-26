@@ -434,3 +434,22 @@ describe("这一屏的整块出口", () => {
     expect(m.panes).toEqual({ rag: 1, tts: 1, storage: 1, export: 1, provider: 0 });
   });
 });
+
+describe("「当前」那枚徽章的主色从哪儿来", () => {
+  it("主色只来自 Badge 的 default 底，调用点那一份手写 bg-primary 已删", () => {
+    // `ApiSettings.tsx` 过去写的是 `<Badge className="text-[10px] bg-primary shrink-0">`——
+    // variant 留空即 default，而 default 底就是 "border-transparent bg-primary text-primary-foreground…"。
+    // 同值覆盖看着像"特意挑了主色"，实际在做一件事：**把 base 那份盖成看不见的冗余**，
+    // 于是"摘掉 base 的 bg-primary"这一刀在本文件里 0 红（基线实测，见 ui/badge 台账）。
+    useAPIStore.setState({
+      providers: [provider({ id: "p1", name: "甲", apiKey: "sk-1" })],
+      activeProviderId: "p1",
+      loaded: true,
+    });
+    render(<ApiSettings />);
+    const cls = (screen.getByText("当前") as HTMLElement).className.split(/\s+/);
+    expect(cls).toContain("bg-primary"); // 裸 token：hover:bg-primary/80 是另一格
+    expect(cls).toContain("text-[10px]"); // 调用点给的两条不冲突的还在
+    expect(cls).toContain("shrink-0");
+  });
+});
