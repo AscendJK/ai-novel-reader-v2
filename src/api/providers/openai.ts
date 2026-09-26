@@ -6,6 +6,22 @@ import { readSSEData } from "./stream";
 import { normalizeBaseUrl } from "./base-url";
 import { proxyWithSessionRetry } from "./proxy-session";
 
+/**
+ * 空正文那句报错该怎么说。
+ *
+ * 有 `reasoning_tokens` 才说"思考吃满了预算"——2026-09-27 真厂商实测到
+ * `completion_tokens=8192 / reasoning_tokens=8192 / 正文 0 字`，思考与正文共用同一份输出预算，
+ * 这时候旧文案猜的那三种原因（模型名不存在、无权访问、参数不支持）全是假话：名对、参对、密钥对。
+ * 没这个字段或它是 0，就照旧说那三种猜测，**不替厂商编一个原因**。
+ */
+function emptyResultNote(reasoningTokens: unknown): string {
+  if (typeof reasoningTokens === "number" && reasoningTokens > 0) {
+    return `模型把 ${reasoningTokens} token 花在思考上、一个字正文都没回（思考与正文共用同一份输出预算）。` +
+      `可以在设置里关闭思考，或调大输出上限。`;
+  }
+  return "可能原因：模型名称不存在或无权访问、请求参数不被支持。";
+}
+
 export function createOpenAIProvider(config: ProviderConfig): AIProvider {
   const baseUrl = normalizeBaseUrl(config.baseUrl, "/chat/completions") || "https://api.openai.com/v1";
 
@@ -113,6 +129,7 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
     let content = "";
     let inputTokens = 0;
     let outputTokens = 0;
+    let reasoningTokens: unknown;
 
     for (const evt of events) {
       const e = evt as Record<string, unknown>;
@@ -132,17 +149,22 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
         const msgContent = choices[0].message?.content;
         if (typeof msgContent === "string" && !content) content = msgContent;
       }
-      const usage = e.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined;
+      const usage = e.usage as
+        | { prompt_tokens?: number; completion_tokens?: number; completion_tokens_details?: { reasoning_tokens?: number } }
+        | undefined;
       if (usage) {
         inputTokens = usage.prompt_tokens || 0;
         outputTokens = usage.completion_tokens || 0;
+        if (typeof usage.completion_tokens_details?.reasoning_tokens === "number") {
+          reasoningTokens = usage.completion_tokens_details.reasoning_tokens;
+        }
       }
     }
 
     // 流式结束后内容为空 → 抛错（避免静默返回空白结果）
     if (!content.trim()) {
       throw new APIError(
-        `API 返回了空结果（流式响应无内容）。可能原因：模型名称不存在或无权访问、请求参数不被支持。原始响应：${raw.slice(0, 300)}`,
+        `API 返回了空结果（流式响应无内容）。${emptyResultNote(reasoningTokens)}原始响应：${raw.slice(0, 300)}`,
         "server",
         200,
         raw
@@ -184,9 +206,12 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
       const errBody = typeof data.error === "string" ? data.error
         : data.error ? JSON.stringify(data.error)
         : raw.slice(0, 300);
+      const reasoning = (data.usage as
+        | { completion_tokens_details?: { reasoning_tokens?: number } }
+        | undefined)?.completion_tokens_details?.reasoning_tokens;
       throw new APIError(
         `API 返回了空结果（choices 为空）${model ? `，模型：${model}` : ""}。` +
-        `可能原因：模型名称不存在或无权访问、请求参数不被支持。原始响应：${errBody}`,
+        `${emptyResultNote(reasoning)}原始响应：${errBody}`,
         "server",
         response.status,
         raw

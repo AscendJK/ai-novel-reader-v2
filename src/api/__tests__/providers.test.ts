@@ -272,6 +272,105 @@ describe("OpenAI provider parseResponse", () => {
   });
 });
 
+/**
+ * 空正文那句报错到底该说什么。
+ *
+ * 2026-09-27 真厂商实测到的形状：`sensenova-6.8-flash-lite` 在 8192 的输出预算上回
+ * `completion_tokens=8192 / reasoning_tokens=8192 / 正文 0 字 / finish_reason=length`——
+ * 思考与正文共用同一份预算，想满了就没字。而旧文案猜的是「模型名称不存在或无权访问、请求参数不被支持」，
+ * 对这种形状是**假话**：模型名是对的、参数也是对的，用户照着去查密钥只会查不到。
+ * 真原因就在同一个响应的 `usage.completion_tokens_details.reasoning_tokens` 里，我们一直只读
+ * `prompt_tokens` / `completion_tokens`，那个字段白拿不读。
+ *
+ * 两头都要钉：**有证据才说思考吃满**（没 reasoning_tokens 或为 0 时保留原来那三种猜测，不许编），
+ * 说了还得给出出口（关思考 / 调大上限），只报一个数不算把话说完。
+ * 前缀「API 返回了空结果」是 agent 那侧认这种失败、进而降级重发的锚，一起钉住。
+ *
+ * ## 变异台账（基线 openai.ts `5a83f0c4` / 11736 B，实现之后重抓；5 刀全咬红）
+ * 每轮固定读数 `markers=1 / markers_left=0 / sha 回到 5a83f0c4`，对照轮 34 条全绿。
+ * - N1 门槛从 `> 0` 挪成 `>= 0`（有字段就当思考吃满）  1 红：只有「reasoning_tokens 明确为 0」那条
+ * - N2 整段判断摘掉（恒说三种猜测）                  3 红：流式两条 + 非流式那条一起塌
+ * - N3 只接流式那一腿（非流式恒传 undefined）        1 红：非流式那条——**两腿各有一格，单摘一条腿只红一条**
+ * - N4 只报数、把出口那半句摘掉                      1 红：「说了就得给出口」那条（"含思考"那条照样绿，
+ *   说明那两条判的是两件事：有没有说原因 / 有没有给出口）
+ * - N5 改前缀（`API 空响应`）                        1 红：锚那条
+ * 立红阶段的过程账：这七条刚写下时 **3 红 4 绿**——4 条绿的是"钉现状"那半（没证据不许编、前缀不许动），
+ * 它们的牙由 N5 与 N2 证明，不是由"实现前就红"证明。
+ */
+describe("OpenAI provider 空正文的措辞：有证据才说思考吃满，说了要给出口", () => {
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+    localStorage.clear();
+  });
+
+  const REASONING_USAGE = {
+    prompt_tokens: 9900,
+    completion_tokens: 8192,
+    total_tokens: 18092,
+    completion_tokens_details: { reasoning_tokens: 8192 },
+  };
+
+  it("流式：只有 reasoning 帧 + usage 带 reasoning_tokens → 说清是思考吃满，不再猜模型名", async () => {
+    mockOpenAIStream([{ reasoning: "第一步" }, { reasoning: "第二步" }], REASONING_USAGE);
+    const provider = createOpenAIProvider(openaiConfig);
+    const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+    expect(err).toBeInstanceOf(APIError);
+    expect(err.message).toContain("8192");
+    expect(err.message).toContain("思考");
+    expect(err.message).not.toContain("模型名称不存在");
+  });
+
+  it("那条锚不许动：前缀仍是「API 返回了空结果」（agent 靠它认这种失败才降级重发）", async () => {
+    mockOpenAIStream([{ reasoning: "想" }], REASONING_USAGE);
+    const provider = createOpenAIProvider(openaiConfig);
+    const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+    expect(err.message.startsWith("API 返回了空结果")).toBe(true);
+  });
+
+  it("说了思考吃满就得给出口：关思考与调大上限两条都在话里", async () => {
+    mockOpenAIStream([{ reasoning: "想" }], REASONING_USAGE);
+    const provider = createOpenAIProvider(openaiConfig);
+    const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+    expect(err.message).toContain("关闭思考");
+    expect(err.message).toContain("上限");
+  });
+
+  it("流式：usage 里没有 reasoning_tokens → 保留原来那三种猜测，不许编一个原因", async () => {
+    mockOpenAIStream([{ reasoning: "想" }], { prompt_tokens: 5, completion_tokens: 0, total_tokens: 5 });
+    const provider = createOpenAIProvider(openaiConfig);
+    const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+    expect(err.message).toContain("模型名称不存在或无权访问");
+    expect(err.message).not.toContain("花在思考上");
+  });
+
+  it("流式：reasoning_tokens 明确为 0（真·空流）同样不许说成思考吃满", async () => {
+    mockOpenAIStream([{ content: "" }], {
+      prompt_tokens: 5, completion_tokens: 0, total_tokens: 5,
+      completion_tokens_details: { reasoning_tokens: 0 },
+    });
+    const provider = createOpenAIProvider(openaiConfig);
+    const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+    expect(err.message).toContain("模型名称不存在或无权访问");
+    expect(err.message).not.toContain("花在思考上");
+  });
+
+  it("非流式空壳：reasoning_tokens 在 JSON 的 usage 里，一样要说出来", async () => {
+    mockFetchResponse({ choices: null, usage: REASONING_USAGE });
+    const provider = createOpenAIProvider(openaiConfig);
+    const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+    expect(err.message).toContain("8192");
+    expect(err.message).not.toContain("模型名称不存在");
+  });
+
+  it("非流式空壳没有那个字段时照旧说三种猜测", async () => {
+    mockFetchResponse({ choices: null, usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } });
+    const provider = createOpenAIProvider(openaiConfig);
+    const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+    expect(err.message).toContain("模型名称不存在或无权访问");
+    expect(err.message).not.toContain("花在思考上");
+  });
+});
+
 describe("Anthropic provider parseResponse", () => {
   beforeEach(() => {
     globalThis.fetch = vi.fn();
