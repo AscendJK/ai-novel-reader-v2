@@ -9,7 +9,3 @@ export function getProvider(config: ProviderConfig): AIProvider {
   }
   return createOpenAIProvider(config);
 }
-
-export function clearProviderCache(): void {
-  // 保留接口兼容，不再需要清理
-}
