@@ -13,17 +13,24 @@
  *    不许画一枚点了没反应的。关闭按 `novelId + engine` 两个参数走（`:38`）——只交引擎会关错窗口。
  *
  * ## 刻意没判的两格
- * ① `:50-57` 标题那条三元链的兜底是「索引构建失败」，于是 `status === "idle"` 且 `open` 时
- *    会顶着"失败"的标题、却没有失败详情也没有重试按钮。**这是可疑行为，没锁进判据**
- *    （锁了就等于给这个症状发钱），已在本轮汇报里单独列出等制作人定口径。
+ * ## 刻意没判的一格
  * ② `:84` 的 `message` 内容归 store 侧那档判，这里只判"message 有就摆出来"。
+ *
+ * ## 2026-09-26：原先"刻意没判 ①"那一格已经修完并锁进判据
+ * 之前 `:50-57` 那条三元链的兜底是「索引构建失败」，于是没被四档认出的状态一律顶着"失败"。
+ * 当时以为 `idle` 是无人生产的死枚举——**查错了**：`SummaryPanel.tsx:175` 会把第一次轮询回来的
+ * rag 侧 `"none"` 映射成 `"idle"`，而窗口早在 `startBuild` 就 `open: true`，所以"点完构建 → 窗口
+ * 从『正在构建检索索引』翻成『索引构建失败』、既没有失败详情也没有重试按钮"是**今天就走得到的假话**；
+ * 同一行那个 `as BuildStatusType` 还会把 rag 侧更宽的 `"downloading"` 偷渡进来，也掉进"失败"。
+ * 修法是给三元链一个中性兜底（「正在准备构建」）＋ 未覆盖态照样转圈，**不**删 `"idle"`、
+ * **不**逐值补分支。判据按"穷尽 + 未知值"写，见 `兜底不许说「失败」` 那个 describe。
  *
  * ## 变异台账见文件末尾
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, cleanup } from "@testing-library/react";
-import type { NovelBuildStatus } from "@/stores/build-store";
+import type { NovelBuildStatus, BuildStatusType } from "@/stores/build-store";
 
 const H = vi.hoisted(() => ({
   dismiss: null as null | ((...a: unknown[]) => void),
@@ -251,6 +258,43 @@ describe("失败那一屏的出口按调用方给不给", () => {
   });
 });
 
+// ================================================================ 状态兜底不许撒谎
+describe("兜底不许说「失败」：状态这一格要穷尽，将来加一档必须在这里红", () => {
+  /** store 联合里的全部取值（`downloading` 不在里面，但它会从调用方被 `as` 偷渡进来） */
+  const ALL: BuildStatusType[] = ["idle", "queued", "loading", "building", "encoding", "ready", "done"];
+
+  it.each(ALL.filter((s) => s !== "error"))("%s 顶着窗口时不许出现「失败」二字", (status) => {
+    mount({ status });
+    expect(screen.queryByText(/失败/)).toBeNull();
+    cleanup();
+  });
+
+  it("调用方偷渡进来的态（`downloading`／将来任何未知值）也不许说失败", () => {
+    // SummaryPanel.tsx:175 是 `progress.status as BuildStatusType`——rag 那一侧的联合比 store 的宽
+    // （多一个 "downloading"），所以这里判的是"未知值进来时窗口说什么"，不是"枚举里有它"。
+    // 要绕两层才进得来，正是因为调用方那句 as 把类型系统骗过去了。
+    for (const status of ["downloading", "wat-不知道"] as unknown as BuildStatusType[]) {
+      mount({ status });
+      expect(screen.queryByText(/失败/), status).toBeNull();
+      cleanup();
+    }
+  });
+
+  it("没被排队／构建／完成三档认出的态要有转圈，不许看着像卡死在那儿", () => {
+    // 只数「正在转的那只」：右上角关闭那枚 X 也是 svg，拿 icons().length 判会永远绿。
+    const spinning = () => document.querySelectorAll("svg[class*='animate-spin']").length;
+    mount({ status: "idle" });
+    expect(spinning(), "idle 态连只转圈都没有，配上「正在准备」才不像死机").toBeGreaterThan(0);
+    cleanup();
+    mount({ status: "downloading" as unknown as BuildStatusType });
+    expect(spinning()).toBeGreaterThan(0);
+    cleanup();
+    // 反向一头：完成与失败不许还在转
+    mount({ status: "done" });
+    expect(spinning()).toBe(0);
+  });
+});
+
 /* ================================================================ 变异台账
 
 产品代码基线：src/components/common/NovelBuildWindow.tsx，sha256 前 8 位 `4fa8025a`（4103 字节），全程一行未改。
@@ -284,3 +328,21 @@ describe("失败那一屏的出口按调用方给不给", () => {
 **W7b 这一轮是等价变异**：`!isQueued &&` 在 status 互斥的前提下恒真，摘掉没有任何可观察后果——
 所以这一只真正判住的是"进度条只在构建中画"（W7a），不是那半句防御。
 */
+
+/* ================================================================ 2026-09-26 追加：兜底那一格
+ * 这批**改了产品**（标题链加中性兜底 + 未覆盖态给转圈），字节基线当场重抓：
+ * `4fa8025a`(4103 B) → **`29242199`(4646 B)**。判据 24 → 33 条（穷举七档 + 偷渡值 + 转圈两头）。
+ * 跑法 %TEMP%\knife-nbw.sh <刀号>（跑完自动按基线还原并核 SHA）。
+ * - **N1／N1b 两记作废，而且是一记新坑**：`MUT-` 注释写在 JSX 表达式收尾的 `}` **之后**，
+ *   esbuild 不报错、`markers` 也照样是 1，但那行注释被当成 children **渲染进了 DOM**；
+ *   又因为我给注释起的名字里带着「失败」二字，12 条判"不许出现失败"的用例全被**刀自己**污染。
+ *   两条规则：① 标记要么放进表达式内部（收尾那个右花括号**之前**），要么写进组件体的行注释；
+ *   ② **刀上别写判据要判的那个词**。
+ * - N1c 只把兜底那一格换成「索引构建失败」 → **2 红**：`idle` 那条 + 「调用方偷渡进来的态」那条。
+ *   其余 31 条不动，说明这一改只挪了兜底、没碰四档本来的文案。
+ * - N2 未覆盖态不给转圈 → **1 红**（转圈那条）。
+ * - N3 `isPending` 写成只认 `status === "idle"` → **1 红**（还是转圈那条；**标题那条不红**，
+ *   因为兜底分支本来就穷尽）。这一刀读出来的是：修法要的是"兜底形状"，不是逐值列举——
+ *   只认 idle 那种改法转圈会塌、标题却看不出来，所以两头都得判。
+ * - D0 = D0b = 33 条全绿，每轮 markers=1 / transform_failed=0 / markers_left=0 / 还原 SHA 回 `29242199`。
+ */

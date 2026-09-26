@@ -28,6 +28,12 @@ export function NovelBuildWindow({ build, onRetry, onFallbackToTFIDF }: NovelBui
   const isBuilding = status === "building" || status === "loading" || status === "encoding";
   const isDone = status === "done" || status === "ready";
   const isError = status === "error";
+  /**
+   * 剩下的一律按「还没轮到我看结果」画：`idle` 是真会出现（点完构建后第一次轮询回来的是 rag 侧的
+   * "none"，SummaryPanel.tsx:175 把它映射成 idle），而 `downloading` 那一档比 store 的联合宽、
+   * 会被 `as` 偷渡进来。未知值宁可转圈说"正在准备"，也不许掉到「索引构建失败」——那是撒谎。
+   */
+  const isPending = !isQueued && !isBuilding && !isDone && !isError;
   const pct = total ? Math.round(((current || 0) / total) * 100) : 0;
 
   return (
@@ -43,7 +49,7 @@ export function NovelBuildWindow({ build, onRetry, onFallbackToTFIDF }: NovelBui
 
         <CardHeader className="text-center">
           {isQueued && <Loader2 className="h-8 w-8 animate-spin text-blue-400 mx-auto mb-2" />}
-          {isBuilding && <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-2" />}
+          {(isBuilding || isPending) && <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-2" />}
           {isDone && <CheckCircle2 className="h-8 w-8 text-green-500 mx-auto mb-2" />}
           {isError && <AlertTriangle className="h-8 w-8 text-destructive mx-auto mb-2" />}
 
@@ -54,7 +60,9 @@ export function NovelBuildWindow({ build, onRetry, onFallbackToTFIDF }: NovelBui
               ? "正在构建检索索引"
               : isDone
               ? "索引构建完成"
-              : "索引构建失败"}
+              : isError
+              ? "索引构建失败"
+              : "正在准备构建"}
           </CardTitle>
         </CardHeader>
 
