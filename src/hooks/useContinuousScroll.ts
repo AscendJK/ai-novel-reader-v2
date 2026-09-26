@@ -51,6 +51,9 @@ const SETTLE_EPSILON_PX = 1;
  */
 export const SETTLE_MAX_MS = 1500;
 
+/** 会让正文滚起来的那几枚键（读者的手的一种）。空格也在内：本应用把它绑成了翻页。 */
+const READER_SCROLL_KEYS = new Set([" ", "PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"]);
+
 /**
  * 从章节 rect 列表中选出第一个与视口检测区相交的章节。
  * rects 按 DOM 顺序（章节 index 升序）；zoneTop/zoneBottom 为检测区上下界。
@@ -107,8 +110,46 @@ export function useContinuousScroll({
   // ── 跳章落点的所有权（loadMore 与 scrollToChapter 共享）──────
   // token：每次跳章作废上一轮的逐帧纠正，否则两次跳章的纠正循环会互相抢 scrollTop。
   // rearm：上翻补载那一笔也动这只 scrollTop，它落笔之后要把纠正再叫起来一个窗核落点。
+  // 让位：硬顶到期把 scrollTop 交还之后，读者自己动手滚过 → 这一跳就不再要落点，
+  //       此后补偿落笔不许再 rearm（判据 B9；不越界的另一头由 B8/B10 钉着）。
   const settleTokenRef = useRef(0);
   const rearmSettleRef = useRef<(() => void) | null>(null);
+  // 读者的手最后一次动手的时刻：只有真输入（滚轮／触屏／翻页键）才算，见下面那只 effect。
+  const userScrollAtRef = useRef(0);
+
+  // 为什么不拿 `scroll` 事件当"读者的手"：那只事件分不清是谁写的——scroll anchoring 自己就会改
+  // `scrollTop`，而它恰恰是逐帧纠正要打的靶子（B1/B4）；拿它当信号等于让纠正随时被自己要做的事掐掉。
+  //
+  // 监听挂在 **window 的捕获阶段**，再按"命中点落没落在阅读容器里"过滤，而不是直接挂在容器上：
+  // `ChapterContent.tsx:591` 在没有当前章时提前 return，容器那只 div 首帧根本不存在，而这只 effect
+  // 的依赖只有 `enabled`——挂容器就一次都接不上。是 B26 第一次跑量出来的（读数 `滚轮后纠正 9 发`，
+  // 读者确实被拽了回去），而 jsdom 那一档当时全绿：那里是我自己往容器上 dispatch 的。
+  // 翻页键不要求命中容器（读者按键盘时焦点通常在 body 上）。
+  // 覆盖不到的：拖动原生滚动条滑块（Chrome 那条路径只给 scroll 事件，没有输入事件可用）。
+  useEffect(() => {
+    if (!enabled) return;
+    const mark = () => { userScrollAtRef.current = performance.now(); };
+    const onPointing = (e: Event) => {
+      const container = containerRef.current;
+      if (!container || !container.contains(e.target as Node | null)) return;
+      mark();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      // 在输入框里打字不算读者的手：搜索框/笔记框收到空格也会 keydown，而正文一格没动
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+      if (READER_SCROLL_KEYS.has(e.key)) mark();
+    };
+    const opts = { passive: true, capture: true } as const;
+    window.addEventListener("wheel", onPointing, opts);
+    window.addEventListener("touchmove", onPointing, opts);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("wheel", onPointing, opts);
+      window.removeEventListener("touchmove", onPointing, opts);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [enabled]);
 
   // ── 加载更多章节（使用 ref 读取最新数据，避免 stale closure）──
   const loadMore = useCallback(
@@ -209,6 +250,8 @@ export function useContinuousScroll({
         let startedAt = performance.now();
         let until = startedAt + SUPPRESS_RELEASE_MS;
         let live = false;
+        // 硬顶到期把 scrollTop 交还给读者的那一刻（0＝还没交过手）
+        let handedBackAt = 0;
         el.scrollIntoView({ behavior: "instant", block: "start" });
 
         // 目标章"在滚动内容里的 y"（离容器顶的距离 + scrollTop）：读者自己滚不动它，
@@ -233,6 +276,8 @@ export function useContinuousScroll({
           // 硬顶：到点就把 scrollTop 交还给读者，此后一笔都不写。这是唯一的顶，
           // 所以续窗（下面两处）只管"再来一个窗"，不必各自再钳一次。
           if (now >= startedAt + SETTLE_MAX_MS) {
+            // 记下交还的时刻：从这一刻起，读者自己的输入才算这一轮的最后一次意见
+            handedBackAt = now;
             live = false;
             return;
           }
@@ -276,6 +321,13 @@ export function useContinuousScroll({
         // 抢：抢他的是他自己那次上翻之后本该看到的内容）。判据：B8。
         rearmSettleRef.current = () => {
           if (settleTokenRef.current !== token || !el.isConnected) return;
+          // **让位**：顶已经到期（`scrollTop` 交还给读者了），而他在交还之后自己动手滚过，
+          // 这一跳的落点就不再是要案——此后再落一笔补偿也不许把窗叫回来，否则视图会被拽回
+          // 他刚才点过的那一章（`8379cc5` 起就是这个形状，2026-09-26 制作人定的口径：只在顶
+          // 到期之后让步，窗内照旧跟到落点）。判据 B9；另外两头钉着它不过头也不放松：
+          // B8（没人动手就要能重新叫起）、B10（光一只 scroll 事件不算输入）、B11（窗内动过手
+          // 不算，时刻必须在交还之后）。比较用 `>=`：同一毫秒分不出先后，那一刻宁可不抢。
+          if (handedBackAt > 0 && userScrollAtRef.current >= handedBackAt) return;
           startedAt = performance.now();
           until = Math.max(until, startedAt + SUPPRESS_RELEASE_MS);
           start();

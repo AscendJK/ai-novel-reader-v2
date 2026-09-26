@@ -239,6 +239,15 @@ async function settlesTo(page: import("@playwright/test").Page, index: number, m
 /** 产品侧的静默窗长度，见 `useContinuousScroll.ts` 的 `SUPPRESS_RELEASE_MS`。 */
 const SUPPRESS_WINDOW_MS = 500;
 
+/**
+ * 产品侧跳章落点纠正的硬顶，见 `useContinuousScroll.ts` 的 `SETTLE_MAX_MS`。
+ * 这里是一份副本（e2e 的 tsconfig 只 include `e2e/`，不把产品源码拉进这个编译单元）。
+ * 漂了会怎么样：这一档睡的是 `SETTLE_CAP_MS + 400`，产品把顶抬高的话这里就睡不够——
+ * B26 会红在"滚轮之后还有纠正"上，而不是悄悄放行。真实读数由 jsdom 那档直接 import
+ * 产品的导出推步数（B6/B8/B9/B11），那里先量到。
+ */
+const SETTLE_CAP_MS = 1_500;
+
 /** 页内一次采样：t 用页面时钟（performance.now），i 是那一刻 store 里的当前章 */
 interface Sample {
   t: number;
@@ -647,3 +656,120 @@ test("B24 补载补偿与跳章纠正抢 scrollTop：点第 24 章不许落回�
   expect(interleaved, "台架没能让补偿落在跳章之后（这一轮两个写者根本没抢过同一只 scrollTop）").toBeGreaterThan(0);
   expect(bad, `${bad.length} 轮的落点/当前章离开了刚点的那一章`).toEqual([]);
 });
+
+/**
+ * B26：硬顶到期、`scrollTop` 交还之后读者自己动手滚走——此后再落一笔补载补偿，不许把他
+ * 拽回刚才点过的那一章（口径 2026-09-26 制作人拍：**只在顶到期之后让步**；窗内照旧跟到
+ * 落点，那是 jsdom 的 B1/B4/B11）。
+ *
+ * 与 B24 的分工不是重复：B24 量"两个写者抢同一只 scrollTop"（补偿与逐帧纠正交错），
+ * 这一条量"交还之后谁说了算"。浏览器层非有不可的理由只有一条——**jsdom 里那发滚轮是我
+ * 自己 dispatch 的**，只有真浏览器能回答"读者的滚轮事件收不收得到、收在哪只元素上"。
+ * 监听挂错元素（比如挂到外层页面包裹上，指针落在正文里时事件根本不经过它）在 jsdom 照样全绿。
+ *
+ * 现场怎么定住顺序：跳章、睡过 `SETTLE_MAX_MS` 都在页内做（CDP 一次往返几十到几百毫秒，
+ * 拿它决定"顶到期了"会飘）；随后从测试侧发真滚轮（`Input.dispatchMouseEvent` 那一路），
+ * 一路往上顶到已载窗口的上沿——顶到上沿这件事本身就撞开顶部哨兵，于是补载自然发生、
+ * 补偿自然落笔，顺序是"交还 → 读者的手 → 补偿"，不用抢那 76ms 的窗口。
+ *
+ * 三条读数（常驻日志）：滚轮之后补偿几发、纠正几发、滚轮之后目标章离落点最近到多少。
+ * 两条判据：
+ * - **不许有纠正**（过程量）：滚轮之后 `settle` 写必须为 0。摘掉产品里那条让位判据就红在这里。
+ * - **视图不许回去**（用户看得见的终态）：滚轮之后目标章顶部离容器顶始终超过一屏。
+ * 一条台架自检：滚轮之后必须真有一发补载补偿落地，否则前两条是空转。
+ *
+ * 变异读数（2026-09-26，产品基线 `664cab9c…`，摘掉 `rearmSettleRef` 里那条让位判据跑一次再还原）：
+ * - 产品形状：`滚轮后补偿 1 发、纠正 0 发/补偿之后目标章离落点最近 7196px（一屏 523px，采样 97 帧）`
+ *   → 绿（12.3s）。
+ * - 摘掉判据：`滚轮后补偿 1 发、纠正 9 发/…最近 0px`，时间线 `jump@-1966 prepend@268 settle@290 …
+ *   settle@1058` → 红在第一条判据上（`读者的手接过之后还有 9 发纠正写 scrollTop`）。
+ * 这一条还揪出过一处 jsdom 全绿而产品是坏的：监听最初挂在阅读容器上，而 `ChapterContent.tsx:591`
+ * 在没有当前章时提前 return，容器首帧不存在，effect 依赖又只有 `[enabled]`——一次都接不上。
+ * 那时摘掉判据与不摘都是 `纠正 9 发`（B26 第一次跑就是这个读数），改成挂 window 捕获 + 按包含
+ * 关系过滤之后才有上面这组成对的数。
+ */
+test("B26 顶到期之后读者自己滚走：补载不许把他拽回刚点过的那一章", async ({ page }) => {
+  test.setTimeout(180_000);
+  const CHAPTERS = 25;
+  const CLICK_CHAPTER = 24; // 已载窗口 10~25 里的深处一章：往上顶到窗口上沿才够远，补偿才会来
+  await importFiles(page, [txtFile("交班.txt", longNovel(CHAPTERS))]);
+  await openBook(page, "交班");
+  await page.waitForTimeout(900);
+  // 与 B24 同款现场：进度推到第 20 章、从书架重新点开，载入窗口才是 10~25（不含第一章才会补载）
+  await navEntry(page, 20).click();
+  await page.waitForTimeout(1_600);
+  await backToShelf(page);
+  await expect(shelfCard(page, "交班")).toBeVisible({ timeout: 30_000 });
+  await openBook(page, "交班");
+  await page.waitForTimeout(1_500);
+  await installScrollProbe(page);
+
+  const chapterId = await navEntry(page, CLICK_CHAPTER).getAttribute("data-chapter-id");
+  if (!chapterId) throw new Error("B26 台架：目录里没有第 24 章");
+
+  const jumpedAt = await page.evaluate(
+    async ({ id, cap }) => {
+      const entry = document.querySelector<HTMLButtonElement>(
+        `[data-sidebar="chapter-nav"] button[data-chapter-id="${id}"]`
+      );
+      if (!entry) throw new Error("B26 台架：侧栏目录里找不到这一章的按钮");
+      const state = (window as unknown as { __b24: ProbeWindow }).__b24;
+      state.want = document.querySelector(`.chapter-scroll-container .chapter-section[data-chapter-id="${id}"]`);
+      state.writes.length = 0;
+      state.frames.length = 0;
+      const t = performance.now();
+      entry.click();
+      await new Promise((r) => setTimeout(r, cap + 400)); // 睡过顶：所有权交还
+      return t;
+    },
+    { id: chapterId, cap: SETTLE_CAP_MS }
+  );
+
+  const box = await page.locator(".chapter-scroll-container").boundingBox();
+  if (!box) throw new Error("B26 台架：找不到阅读容器");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const wheelAt = await page.evaluate(() => performance.now());
+  for (let i = 0; i < 12; i++) {
+    await page.mouse.wheel(0, -3_000); // 真滚轮：读者的手，不是 scrollTop 赋值
+    await page.waitForTimeout(50);
+  }
+
+  const attempt = await page.evaluate(async () => {
+    const state = (window as unknown as { __b24: ProbeWindow }).__b24;
+    const container = document.querySelector(".chapter-scroll-container") as HTMLElement;
+    const started = performance.now();
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 50));
+      const last = state.writes.length ? state.writes[state.writes.length - 1].t : started;
+      if (performance.now() - Math.max(started, last) > 900) break;
+      if (performance.now() - started > 5_000) break;
+    }
+    return { writes: state.writes.slice(), frames: state.frames.slice(), view: container.clientHeight };
+  });
+
+  const post = attempt.writes.filter((w) => w.t >= wheelAt);
+  const prepends = post.filter((w) => w.kind === "prepend");
+  const settles = post.filter((w) => w.kind === "settle");
+  const lastPrepend = prepends.length ? prepends[prepends.length - 1] : null;
+  // 终态只看**补偿落笔之后**的帧：滚轮那一刻视图正好还钉在落点上（`drift≈0`），
+  // 把那段算进来这条就成了必红——量的是"他被拽回去没有"，不是"他原来就在哪"。
+  const afterComp = attempt.frames.filter((f) => lastPrepend && f.t > lastPrepend.t + 120 && f.drift !== null);
+  const minDrift = afterComp.length
+    ? Math.min(...afterComp.map((f) => Math.abs(f.drift ?? 0)))
+    : Number.NaN;
+  const rel = (t: number) => Math.round(t - wheelAt);
+  console.log(
+    `[B26] 滚轮发生在跳章后 ${Math.round(wheelAt - jumpedAt)}ms（顶=${SETTLE_CAP_MS}ms）/` +
+      `滚轮后补偿 ${prepends.length} 发、纠正 ${settles.length} 发/` +
+      `补偿之后目标章离落点最近 ${Number.isNaN(minDrift) ? "量不到" : `${minDrift.toFixed(0)}px`}（一屏 ${attempt.view}px，采样 ${afterComp.length} 帧）`
+  );
+  console.log(
+    `[B26] 滚轮后写入时间线（ms 相对滚轮那一刻）：` +
+      attempt.writes.filter((w) => w.t >= wheelAt - 2_000).map((w) => `${w.kind}@${rel(w.t)}`).join(" ")
+  );
+
+  expect(prepends.length, "台架没让补载的补偿落在滚轮之后（那前两条判据全是空转，绿灯不算数）").toBeGreaterThan(0);
+  expect(settles.length, `读者的手接过之后还有 ${settles.length} 发纠正写 scrollTop`).toBe(0);
+  expect(minDrift, "视图被拽回了刚点过的那一章（目标章又回到了容器顶部）").toBeGreaterThan(attempt.view);
+});
+

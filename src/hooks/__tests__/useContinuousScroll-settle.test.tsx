@@ -23,10 +23,17 @@
  * 会跟着跳一次章，于是 A 的写入紧接着被 B 覆盖——两条判据量到的都是"谁后写"，不是"补得对不对"。
  * 想判它得有真滚动台架（e2e 层：往上翻的同时点目录），B24 台架就是那一档。
  *
- * 还有一格**这次没判、也没改**（写在这里免得下批人以为它被顶管住了）：顶到期之后读者自己滚开了，
- * 此时上翻补载又落一笔补偿 → `rearm` 会把窗重开一轮、把视图**拽回刚点过的那一章**。这是 `8379cc5`
- * 就有的口径（补偿自己有残差，落点归纠正管），B8 只是在它上面加了一句"顶跟着重新起算"。要不要让
- * "读者的手"压过"补偿后的落点核对"，是一个**产品口径**问题（判据得先有口径才写得出来），已记账。
+ * 还有一格**2026-09-26 改掉了口径**（原来是"顶到期之后读者自己滚开了，补偿再落一笔仍会把他拽回
+ * 刚点过的那一章"，`8379cc5` 起就这样）：制作人拍的口径是**只在硬顶到期之后让步**——交还之后读者
+ * 自己动手滚过（滚轮／触屏／翻页键），这一跳就不再要落点，此后补偿落笔也不许再 `rearm`。
+ * 判据是 B9（让位）、B10（光一只 scroll 事件不算输入——anchoring 也发这个）、B11（时刻必须在交还
+ * 之后，窗内动过手不算）、B12（在输入框里敲空格不算）、B13（滚轮落在容器之外不算）。
+ *
+ * 这一格**两层都判**，因为这里先绿过一次而产品其实是坏的：监听最初挂在阅读容器上，jsdom 的 B9
+ * 三条当场全绿——那里是我自己往容器 dispatch 的，接没接上监听量不出差别。真凶只有浏览器层的
+ * B26（`e2e/specs/b-import.spec.ts`）量得到：读数 `滚轮后纠正 9 发`，读者确实被拽了回去。
+ * 改成挂 window 捕获 + 按包含关系过滤之后两层才都绿。所以浏览器层两只各管一头：**B24 五轮**里没有
+ * 任何人输入，管"没让过头"（落点仍须 ≤2px）；**B26** 真输入，管"该让位时真让了"。
  *
  * jsdom 里 `scrollHeight` 恒 0、`getBoundingClientRect` 恒全零、`scrollIntoView`/`scrollTo`
  * 是空函数——三样真值一个都取不到，所以几何由本文件按一张「章顶坐标表」现搭：章顶 =
@@ -34,18 +41,46 @@
  * （`below` 旋钮：往视口下方补进来的一截），`scrollTop` 存本地变量。
  * rAF 也攥在手里（否则做不到"A 等待期间插一脚跳章"），时钟走假定时器 + `performance.now` 桩。
  *
- * 五刀逐条打过最后这一版实现（2026-09-25，每刀逐字替换 → 跑 → `cp` 字节还原 → 核 SHA256 回到
- * `6d70fc5b…`；红出来的条数与要证的格子一一对上）：
- * - 刀1 摘掉续窗（`contentY !== lastContentY` 那一段只留赋值）→ **B5 红**（1000 ≠ 1204，正是
- *   B24 的 204px）**且 B6 红**（1200 ≠ 1600，一路跟不住）。
- * - 刀2 把硬顶抬到十倍（`startedAt + SETTLE_MAX_MS` → `… * 10`）→ **只有 B6 红**（顶之后
- *   `writes` 1 ≠ 0）。B3 照样绿：没有布局位移时平窗到期就收手，那条不靠顶。
- * - 刀3 哨兵换成文档高（`lastContentY` 初值与每帧取值**一起**换成 `container.scrollHeight`）→
- *   **只有 B7 红**（下方补一章，`writes` 1 ≠ 0）。⚠ 只换每帧那一处（初值仍按内容里 y 取）会得到
- *   B3+B7 双红，量到的是"每帧都以为布局在动"——那是变异自己造的形状，不是设计判别器。
- * - 刀4 摘掉窗内闸（`if (now < until)` 换成恒真）→ **B3 红**（读者滚回 0 被拽回 1000）**且 B7 红**。
- * - 刀5 让顶不跟着补偿重新起算（`rearm` 里删掉 `startedAt = performance.now()`）→ **只有 B8 红**
- *   （3000 ≠ 3204）。这一刀就是整跑里 B24 又红那一发的形状：`交错1/纠正0/落点203.7`。
+ * ## 变异台账：14 刀全部打在基线 `664cab9c…`（33363 字节 / 16 条全绿）上
+ *
+ * 2026-09-26 一次性重跑：刀1–刀5 是 09-25 那五刀，当时打在 `6d70fc5b…` 上；这一版加了"让位"之后
+ * 有**两刀的读数变了**（刀2、刀5，下面标出来），其余三条一模一样。逐字替换 → 跑 → `cp` 字节还原 →
+ * 核 `restored_sha` 回到基线；每轮 `markers_left=0 transform_failed=0 skipped=0`。红了哪几条按本文件的号。
+ *
+ * - **刀1** 摘掉续窗（`contentY !== lastContentY` 那一段只留赋值）→ **2 红：B5**（1000 ≠ 1204，
+ *   正是 B24 那 204px）**+ B6**（1200 ≠ 1600，一路跟不住）。
+ * - **刀2** 把硬顶抬到十倍（`startedAt + SETTLE_MAX_MS` → `… * 10`）→ **4 红：B6 + B9 三条**。
+ *   ⚠ 读数变了（09-25 是"只有 B6 红"）：顶既然不到期，`handedBackAt` 就永远不落下，让位那条
+ *   判据根本没有可让的时机，循环一路纠正到静默窗外——B9 三条被拽回目标章。**这一把顺带证出了
+ *   两格是一根绳上的**：顶不只管"最多占多久"，它还管"什么时候开始算读者的意见作数"。
+ * - **刀3** 哨兵换成文档高（`lastContentY` 的**初值与每帧取值一起**换成 `container.scrollHeight`）
+ *   → **只有 B7 红**（下方补一章，`writes` 1 ≠ 0）。⚠ 这一把两处同动，`markers=2` 是它的形状，
+ *   不是两刀同盘。只换每帧那一处（初值仍按内容里 y 取）会得到 B3+B7 双红，量到的是"每帧都以为
+ *   布局在动"——那是变异自己造的形状，不是设计判别器。
+ * - **刀4** 摘掉窗内闸（`if (now < until)` 换成恒真）→ **2 红：B3**（读者滚回 0 被拽回 1000）**+ B7**。
+ * - **刀5** 让顶不跟着补偿重新起算（`rearm` 里删掉 `startedAt = performance.now()`）
+ *   → **5 红：B8 + B10 + B11 + B12 + B13**。⚠ 读数变了（09-25 是"只有 B8 红"，那时后四条还没生出来）。
+ *   **B9 三条反而全绿**——它们只判"让位之后不许有写入"，而这一刀让循环压根起不来，不写当然不拽。
+ *   这就是"让位"不能单独判的原因：一头绿得越彻底，越可能只是另一头坏了。B8/B10–B13 是那另一头。
+ * - **T1** 摘掉整条让位判据（当作没写过那一行）→ **3 红：B9 三条**。
+ * - **T8** 只摘掉"记下交还时刻"那一行（gate 留着，但它永远等不到那一刻）→ **同样 3 红：B9 三条**。
+ *   T1/T8 咬同一组用例不是重复：这一格两半缺一不可，少一半也照样错。
+ * - **T2** 让位不看时刻（`userScrollAt > 0` 就 return）→ **只有 B11 红**（窗内动过一次手之后，
+ *   补偿留下的 204px 就没人收了）。
+ * - **T3** 把 `scroll` 事件也算读者的手 → **只有 B10 红**。
+ * - **T4/T5/T6** 分别摘掉滚轮／触屏／翻页键那一路监听 → **各只红对应的 B9 一条**：三条不重复，
+ *   少接哪一路产品就在哪种设备上被拽回去。
+ * - **T7** 摘掉"可编辑目标"守卫 → **只有 B12 红**。
+ * - **T9** 去掉"命中点在不在阅读容器里"那层过滤 → **只有 B13 红**。
+ *
+ * **没打到的**：`>=` 与 `>` 那一毫秒的边界（B9 里特意隔了 60ms，所以两种写法都绿——同一毫秒分不出
+ * 先后，那一刻宁可不抢，不值得为它造一条假判据）；`enabled` 关掉时监听该不该撤（撤了＝分页模式下
+ * 这条不再工作，而产品里分页模式根本没有这只容器）。
+ *
+ * **这里判不到、只能靠浏览器层的一条**：监听"挂在容器上"在 jsdom 里照样 16 条全绿（B9 三条是这里
+ * 自己往容器 dispatch 的，接没接上监听量不出差别），而产品里 `ChapterContent.tsx:591` 在没有当前章时
+ * 提前 return，容器那只 div 首帧根本不存在。这一格只有 B26 第一跑量得到（`滚轮后纠正 9 发`）。
+ * 它是这一批里唯一一处"jsdom 全绿而产品是坏的"。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen, cleanup } from "@testing-library/react";
@@ -342,5 +377,109 @@ describe("B｜跳章后的逐帧纠正", () => {
     grow = 204; // 紧接着上方章节塌一次——B24 量到的就是这一发
     await stepFrames(3);
     expect(scrollTopValue, "过顶之后补偿又叫不起纠正，这 204px 没人收").toBe(topOf("ch-6"));
+  });
+
+  /**
+   * 交班现场的公共部分：跳章 → 顶到期（`scrollTop` 交还）→ **交还之后**发一发 `send()` →
+   * 上翻补载落一笔补偿（它自己会叫 `rearm`）→ 上方章节再塌 204px（B8 里正是要收掉的那一发）。
+   * 读数走模块级的 `writes` / `scrollTopValue`，目标章章顶按返回值的 `target` 比。
+   */
+  async function afterHandover(send: () => void): Promise<{ target: number }> {
+    await mount([5, 6]); // 刻意不从第 0 章起：不然 `loadMore` 会因"前面没章了"提前返回，rearm 根本不叫
+    await act(async () => { apiRef.scrollToChapter("ch-6"); });
+    await advance(SETTLE_MAX_MS + 50); // 顶过掉
+    await stepFrames(1);               // 这一帧发现到过顶：所有权交还（`handedBackAt` 落下）
+    await advance(60);                 // 读者是在交还**之后**才动的手，不是同一毫秒
+    scrollTopValue = 500;              // 视图挪到别处（离第 7 章章顶 2700px）
+    await act(async () => { send(); });
+    const { resolve } = deferredLoad();
+    await fireTopEdge();
+    await act(async () => { resolve([mk(3), mk(4)]); await Promise.resolve(); });
+    await stepFrames(3); // 补偿落笔
+    writes = 0;
+    grow = 204;
+    await stepFrames(4);
+    return { target: topOf("ch-6") };
+  }
+
+  // `8379cc5` 起的老口径：顶到期之后读者自己滚开了，此时上翻补载再落一笔补偿，`rearm` 会把窗
+  // 重开一轮、按"目标章离容器顶差多少"把视图**拽回他刚才点过的那一章**。2026-09-26 制作人改成
+  // **只在硬顶到期之后让步**（窗内照旧跟到落点，那是 B1/B4/B11 的形状）。
+  // "读者的手"三种输入各判一条：摘掉任一只监听，只有对应那一条会红——它们不是同一条路的三个名字
+  //（滚轮在桌面、触屏在手机、翻页键在键盘，产品里三者都可能真的把正文滚走）。
+  const READERS_HAND: Array<[string, () => void]> = [
+    ["滚轮", () => host().dispatchEvent(new WheelEvent("wheel", { deltaY: -300, bubbles: true }))],
+    ["触屏划", () => host().dispatchEvent(new Event("touchmove", { bubbles: true }))],
+    ["翻页键", () => host().dispatchEvent(new KeyboardEvent("keydown", { key: "PageDown", bubbles: true }))],
+  ];
+  for (const [name, send] of READERS_HAND) {
+    it(`B9 顶过掉之后读者用${name}自己动手滚过：此后补偿再落笔也不许把窗叫回来`, async () => {
+      const { target } = await afterHandover(send);
+      expect(writes, "读者的手接过之后，这一跳的落点核对不许再写 scrollTop").toBe(0);
+      expect(scrollTopValue, "视图被拽回了刚点过的那一章").not.toBe(target);
+    });
+  }
+
+  it("B10 只有 scroll 事件不算读者的手（anchoring 也发这个）", async () => {
+    // 这一条钉的是 B9 那个判据**过头**的形状：要是拿"顶到期之后又发过一次 scroll"当读者的手，
+    // 那 scroll anchoring／别的程序化写入会把纠正永久缴械，B8 那一格（补偿后 204px 要收回）
+    // 就没人管了。同一只场景，只把输入事件换成一只光秃秃的 scroll——落点核对还得照常接手。
+    const { target } = await afterHandover(() => {
+      host().dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    expect(writes, "没有人的输入就不算交班，补偿之后落点核对还得继续").toBeGreaterThan(0);
+    expect(scrollTopValue).toBe(target);
+  });
+
+  it("B12 在输入框里敲空格不算读者的手（正文一格没动）", async () => {
+    // `keydown` 听在 window 上，搜索框/笔记框收到的空格一样会冒泡过来。没有那只"可编辑目标"
+    // 守卫，用户在补载前后打个字就把落点核对缴械了——症状还是"页面自己飞回刚点过的那一章"。
+    const { target } = await afterHandover(() => {
+      const input = document.createElement("input");
+      document.body.appendChild(input);
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+      input.remove();
+    });
+    expect(writes, "敲字不是滚正文，落点核对不许因此交班").toBeGreaterThan(0);
+    expect(scrollTopValue).toBe(target);
+  });
+
+  it("B11 只在顶到期之后让步：窗内动过手、交还之后再没动手，补偿仍要能接手", async () => {
+    // 这一条钉的是 B9 那个判据**放宽**的形状：要是写成"读者这一轮动过手就不管了"（不看时刻），
+    // B8/B9/B10/B12 全是绿的——而产品会在读者只是跳章后随手滚了一下、之后一直停在目标章时，
+    // 把补偿留下的 204px 整头发空。制作人定的口径是**只在交还之后**才让位。
+    await mount([5, 6]);
+    await act(async () => { apiRef.scrollToChapter("ch-6"); });
+    await advance(SUPPRESS_RELEASE_MS - 100); // 还在静默窗内
+    scrollTopValue = 500;
+    await act(async () => {
+      host().dispatchEvent(new WheelEvent("wheel", { deltaY: -300, bubbles: true }));
+    });
+    await stepFrames(2); // 窗内：照旧拽回来（B1/B4 的口径）
+    expect(scrollTopValue, "窗内读者的手不让位，这一跳就是意图").toBe(topOf("ch-6"));
+    await advance(SETTLE_MAX_MS + 200); // 顶到期，所有权交还；此后不再动手
+    await stepFrames(1);
+    writes = 0;
+    const { resolve } = deferredLoad();
+    await fireTopEdge();
+    await act(async () => { resolve([mk(3), mk(4)]); await Promise.resolve(); });
+    await stepFrames(3);
+    grow = 204;
+    await stepFrames(4);
+    expect(writes, "交还之后没再动手，补偿落笔仍要把落点接手").toBeGreaterThan(0);
+    expect(scrollTopValue).toBe(topOf("ch-6"));
+  });
+
+  it("B13 滚轮落在阅读容器之外不算读者的手（监听挂 window，靠包含关系过滤）", async () => {
+    // 监听为什么挂 window 而不是挂容器：`ChapterContent.tsx:591` 在没有当前章时提前 return，
+    // 容器那只 div 首帧根本不存在，而这只 effect 的依赖只有 `[enabled]`——挂容器就一次都接不上。
+    // 是 B26 第一次跑量出来的（读数 `滚轮后纠正 9 发`，读者确实被拽了回去），而这一档当时全绿：
+    // 那里是我自己往容器上 dispatch 的。挂到 window 之后，"谁的滚轮"就变成一格要判的：
+    // 在侧栏目录里滚滚轮，不该把正文的落点核对缴械。
+    const { target } = await afterHandover(() => {
+      document.body.dispatchEvent(new WheelEvent("wheel", { deltaY: -300, bubbles: true }));
+    });
+    expect(writes, "正文之外的滚轮不算读者接过了这一跳").toBeGreaterThan(0);
+    expect(scrollTopValue).toBe(target);
   });
 });
