@@ -412,10 +412,26 @@ test.describe(`真后端：批量生成三条打在真厂商上（厂商${WHICH}
    *
    * 只在"完全没有正文"时触发：回了几个字又被截断的那种，界面上是真有字的，
    * 那是可比对长度不够（见 `expectModelWordsShown` 的 skip），不该拿"界面没说话"红它。
+   *
+   * **先等任务落定，再判界面说没说**（2026-09-27 实测到的中间态）：第一发回空正文时，
+   * `map-agent.ts:138` / `graph-agent.ts:71` 会**自愈重发**，面板此刻挂的是
+   * 「AI 正在执行：AI 正在重新分析......」。拿那一刻判"界面一个字都没说"是把自愈读成静默——
+   * 那一跑的红就是这个形状（`sensenova-6.8-flash-lite` 在 8192 上地图那发 `reasoning=8192 / 正文 0 字`）。
+   * 等到面板不再有「正在」为止：重发带回正文就交回各条主判据，仍然一个字都没有才轮到这条。
    */
   async function skipIfVendorGaveNoBody(page: Page, v: Replies, label: string): Promise<void> {
     if (v.texts.some((t) => t.trim())) return;
+    await expect
+      .poll(async () => (await panel.root(page).innerText()).includes("正在"), {
+        timeout: 4 * 60_000,
+        message: `${label}：自愈重发一直没落定（面板还挂着「正在…」）`,
+      })
+      .toBe(false);
+    if (v.texts.some((t) => t.trim())) return;
     const lastRaw = v.raw[v.raw.length - 1] ?? "";
+    if (THROTTLED.test(lastRaw)) {
+      test.skip(true, `${label}：重发撞上配额（最后一发回的是：${lastRaw.slice(0, 160)}）：这一条测不了，与产品无关`);
+    }
     const think = lastRaw.match(/"reasoning_tokens"\s*:\s*(\d+)/)?.[1] ?? "?";
     const finish = lastRaw.match(/"finish_reason"\s*:\s*"?([a-z_]+)"?/g)?.slice(-1)[0] ?? "没有 finish_reason";
     const said = await panel.root(page).innerText();
