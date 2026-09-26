@@ -53,24 +53,20 @@ const ScrollArea = React.forwardRef<
 })
 ScrollArea.displayName = ScrollAreaPrimitive.Root.displayName
 
-const ScrollBar = React.forwardRef<
-  React.ElementRef<typeof ScrollAreaPrimitive.ScrollAreaScrollbar>,
-  React.ComponentPropsWithoutRef<typeof ScrollAreaPrimitive.ScrollAreaScrollbar>
->(({ className, orientation = "vertical", ...props }, ref) => (
-  <ScrollAreaPrimitive.ScrollAreaScrollbar
-    ref={ref}
-    orientation={orientation}
-    className={cn(
-      "flex touch-none select-none transition-colors",
-      orientation === "vertical" && "h-full w-2.5 border-l border-l-transparent p-[1px]",
-      orientation === "horizontal" && "h-2.5 flex-col border-t border-t-transparent p-[1px]",
-      className
-    )}
-    {...props}
-  >
-    <ScrollAreaPrimitive.ScrollAreaThumb className="relative flex-1 rounded-full bg-border" />
-  </ScrollAreaPrimitive.ScrollAreaScrollbar>
-))
-ScrollBar.displayName = ScrollAreaPrimitive.ScrollAreaScrollbar.displayName
+/**
+ * 自带的那只滚动条：只画竖排。
+ *
+ * 原来它是一只导出组件，接 `orientation`/`className`/`ref`/`...props`，横排那一组类是给外部调用点
+ * 准备的——实测全仓除本文件自己的 `<ScrollBar />` 之外零调用者（两只调用点 `ChapterNav.tsx:119`、
+ * `SummaryPanel.tsx:352` 都只塞 `ScrollArea`）。留着就得一直判一条产品走不到的分支，所以 2026-09-26
+ * 收回来当成本文件的内部件：横向那一组类、`orientation` 那两道条件、外部 `className` 合并一起去掉。
+ */
+function ScrollBar() {
+  return (
+    <ScrollAreaPrimitive.ScrollAreaScrollbar className="flex touch-none select-none transition-colors h-full w-2.5 border-l border-l-transparent p-[1px]">
+      <ScrollAreaPrimitive.ScrollAreaThumb className="relative flex-1 rounded-full bg-border" />
+    </ScrollAreaPrimitive.ScrollAreaScrollbar>
+  )
+}
 
-export { ScrollArea, ScrollBar }
+export { ScrollArea }

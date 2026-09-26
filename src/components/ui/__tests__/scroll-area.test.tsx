@@ -19,8 +19,8 @@
  * 3) **`className` 与其余 props 是合并/透传，不是顶掉**：两处都挂 `flex-1`，
  *    `ChapterNav` 还挂 `style={{minHeight:0}}`（flex 列里不写 minHeight:0 就不肯收缩）。
  *    写成 `className ?? 默认` 的症状是 `overflow-hidden` 一起丢掉，而界面看着还是那只列表。
- * 4) **`forwardRef` 与自带滚动条的方向**：外部 ref（对象式与函数式）都要拿得到 Root，
- *    且拿到之后覆盖照样生效；`ScrollBar` 的竖/横两套类不许串。
+ * 4) **`forwardRef` 与自带那一只滚动条**：外部 ref（对象式与函数式）都要拿得到 Root，
+ *    且拿到之后覆盖照样生效；自带那一只只有竖排（横排那一支跟着导出口一起删了，见下面第 3 条）。
  *
  * 三格量不到/量到别处，写在明处（都是实测，不是"没想到"）：
  * - **"会不会真撑破"jsdom 判不了**：它没有表格自动布局，`clientWidth`/`scrollWidth` 恒 0。
@@ -32,9 +32,13 @@
  *   都不挂载（实测 `querySelectorAll('[data-orientation]')` 为 0），`type="always"` 之下滚动条
  *   元素有了、里面却是空的（Thumb 要 `hasThumb`），Corner 要"横竖两只都在"才出现。
  *   所以这一档只判方向那一组类——拿一条永远为假的"元素不存在"去判是假判据。
- * - **`ScrollBar` 这个导出口在本仓零调用**（实测 grep：除本测试文件外无人 import），
- *   单独 render 还会抛 `ScrollAreaScrollbar must be used within ScrollArea`。
- *   方向那两条都放在"塞进 ScrollArea 里"的真实形状下判。
+ * - ~~**`ScrollBar` 这个导出口在本仓零调用**~~：**2026-09-26 删了**（`chore` 见本笔提交）。
+ *   删的理由不是"它没人用所以碍事"，是**留着就得一直判一条产品走不到的分支**：`orientation` 那两道
+ *   条件里横排那一支、以及外部 `className` 合并，全仓没有任何调用点能触发（实测 grep：除本测试文件
+ *   外无人 import，而本文件自己也只是拿它造现场）。与 `de9203e` 删 `createSimpleAgent` 同一个理由。
+ *   现在它是本文件的内部件、只画竖排；原来短号 11（显式横排）与 12（滚动条类追加）那两条判据随之
+ *   作废，换成一条"整只壳里只有竖排这一条"——**它反过来把这次删除钉住**：谁把横排那一支接回来就红
+ *   （S3 实测 2 红）。
  *
  * **14 刀逐条读数**（2026-09-25，`src/components/ui/scroll-area.tsx` 一行一处、跑完立刻还原，
  * 还原后 SHA256 全部回到 `d608742f…4da0`；"红了哪几条"用下面的短号，1=内层 2=外层 3=两只不同节点
@@ -52,15 +56,24 @@
  *   红里多数是连带。**6（style 透传）没有自己独立的刀**——它与 7 共用 `{...props}` 那一条路，
  *   "只丢 style 不丢别的"只能在调用点侧造出来，这句写在明处、不当已验收。
  * - `composedRef` 里函数式 ref 不转交（`ref(node)` → `void ref`）→ 只有 8 红。
- * - ScrollBar 默认方向 `vertical` → `horizontal` → 10/11/12 全红；横排分支的条件写反 → 10/11 红；
- *   横排分支带上默认类 → 只有 11 红；ScrollBar 的 `className` 参数整个丢掉 → 只有 12 红。
+ * - ~~ScrollBar 默认方向 `vertical` → `horizontal` → 10/11/12 全红；横排分支的条件写反 → 10/11 红；
+ *   横排分支带上默认类 → 只有 11 红；ScrollBar 的 `className` 参数整个丢掉 → 只有 12 红~~
+ *   ——这四把是 09-25 打在旧形状（`d608742f…`）上的读数，**09-26 随导出口一起作废**，见上面第 3 条。
+ *   替换成下面 S1/S2/S3 三把，打在删除后的新基线 `e1de4eee…`（2932 字节 / 11 条全绿）上：
+ * - **S1** 不画自带那只滚动条 → **3 红**（竖排类那条、"只有竖排这一条"那条，外加"其余 props 透传"
+ *   那条数 `[data-orientation]` 个数的）。
+ * - **S2** 竖排那一组类换成横排那一组（`h-full w-2.5 border-l` → `h-2.5 flex-col border-t`）
+ *   → **只有竖排类那条红**：`data-orientation` 由 Radix 自己写，跟我们的类无关，所以"只有竖排"
+ *   那条抓的是**只有一只**，类有没有串由前一条管——两半各管一件事，缺一半就有一种坏法没人看。
+ * - **S3** 把删掉的横排那一支原样接回来（内部再造一只 `orientation="horizontal"`）
+ *   → **2 红**（"只有竖排这一条" + props 透传那条的个数）。这一把就是这次删除的守门刀。
  */
 
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import * as React from "react";
 
-import { ScrollArea, ScrollBar } from "../scroll-area";
+import { ScrollArea } from "../scroll-area";
 
 const VIEWPORT = "[data-radix-scroll-area-viewport]";
 
@@ -187,44 +200,23 @@ describe("ScrollArea：调用点传进来的东西要照原样穿过去", () => 
   });
 });
 
-describe("ScrollArea：自带那只滚动条的方向", () => {
-  it("默认竖排：h-full w-2.5 这一组，不是横向那一组", () => {
+describe("ScrollArea：自带那只滚动条只有竖排这一条", () => {
+  it("竖排那一组类（h-full w-2.5 border-l），且横排那组类一个字都不许串进来", () => {
     const { getByTestId } = shell({ type: "always" });
     const bar = getByTestId("area").querySelector<HTMLElement>('[data-orientation="vertical"]')!;
     expect(bar.className).toContain("h-full");
     expect(bar.className).toContain("w-2.5");
     expect(bar.className).toContain("border-l");
+    expect(bar.className).toContain("touch-none");
     expect(bar.className).not.toContain("flex-col");
     expect(bar.className).not.toContain("border-t");
   });
 
-  it("显式横排拿的是横那一组类，且不顶掉自带那只竖排", () => {
-    const { getByTestId } = render(
-      <ScrollArea data-testid="area" type="always">
-        <div>甲</div>
-        <ScrollBar orientation="horizontal" />
-      </ScrollArea>
-    );
+  it("整只壳里只有这一条滚动条：横排那一支在产品里走不到（2026-09-26 删掉了导出口）", () => {
+    const { getByTestId } = shell({ type: "always" });
     const area = getByTestId("area");
-    const h = area.querySelector<HTMLElement>('[data-orientation="horizontal"]')!;
-    expect(h.className).toContain("h-2.5");
-    expect(h.className).toContain("flex-col");
-    expect(h.className).toContain("border-t");
-    expect(h.className).not.toContain("w-2.5");
-    expect(h.className).not.toContain("h-full");
-    expect(area.querySelector<HTMLElement>('[data-orientation="vertical"]')!.className).toContain("w-2.5");
-  });
-
-  it("单独一只 ScrollBar 上的 className 也是追加不是顶掉", () => {
-    const { getByTestId } = render(
-      <ScrollArea data-testid="area" type="always">
-        <div>甲</div>
-        <ScrollBar className="bg-muted" />
-      </ScrollArea>
-    );
-    const bar = getByTestId("area").querySelector<HTMLElement>('[data-orientation="vertical"]')!;
-    expect(bar.className).toContain("bg-muted");
-    expect(bar.className).toContain("w-2.5");
-    expect(bar.className).toContain("touch-none");
+    expect([...area.querySelectorAll("[data-orientation]")].map((n) => n.getAttribute("data-orientation")))
+      .toEqual(["vertical"]);
+    expect(area.querySelector('[data-orientation="horizontal"]')).toBeNull();
   });
 });
