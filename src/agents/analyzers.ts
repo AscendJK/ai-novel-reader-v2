@@ -164,7 +164,7 @@ ${relevantContent}
 2. **【事件名称】**（第X章 · 类型）发生了什么。→ 因果关系。
 3. ...
 
-以此类推，不要使用表格，不要在编号列表内添加子列表。
+以此类推，不要在编号列表内添加子列表。
 
 ### 二、剧情结构分析
 分析开端/发展/转折/高潮/结局分别在哪些章节、叙事手法、主线与支线分布。
@@ -185,7 +185,7 @@ ${relevantContent}
         const useFb = est >= computeAvailableInput(b, reserve);
         effectiveFallback = useFb;
         const useP = useFb
-          ? `请根据《${novel.title}》的章节目录推断剧情时间线。\n章节目录：\n${chapterList}\n\n请按时间顺序逐条列出关键事件（不要用表格，不要在列表项内使用子列表），每个事件格式：\n1. **【事件名称】**（第X章 · 类型）发生了什么。→ 因果关系。\n\n标注"基于目录推断"。`
+          ? `请根据《${novel.title}》的章节目录推断剧情时间线。\n章节目录：\n${chapterList}\n\n请按时间顺序逐条列出关键事件（不要在列表项内使用子列表），每个事件格式：\n1. **【事件名称】**（第X章 · 类型）发生了什么。→ 因果关系。\n\n标注"基于目录推断"。`
           : prompt;
         return provider.chat({
           model: "",
