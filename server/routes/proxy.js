@@ -58,6 +58,33 @@ export function isPrivateHost(rawHostname) {
   return false;
 }
 
+/**
+ * 限流取证：把厂商给的"还要等多久"那几枚头挑出来。
+ *
+ * 为什么要这一步：产品从没读过 Retry-After，而代理在 `!ok` 时只转 status+body，
+ * 上游头当场丢掉（`server/routes/proxy.js` 的原 !ok 分支）——于是撞上 429 只能瞎等。
+ * 要不要改成"按厂商说的秒数等"，取决于这几家到底给不给这些头，所以先只记证据、不改行为。
+ * 只读下面这一小撮头名：不打请求体、不打任何鉴权头，日志里不会出现密钥。
+ */
+const RATE_LIMIT_HINT_HEADERS = [
+  "retry-after",
+  "retry-after-ms",
+  "x-ratelimit-limit",
+  "x-ratelimit-remaining",
+  "x-ratelimit-reset",
+  "x-ratelimit-reset-requests",
+  "x-ratelimit-reset-tokens",
+];
+
+function rateLimitHints(headers) {
+  const parts = [];
+  for (const name of RATE_LIMIT_HINT_HEADERS) {
+    const value = headers.get(name);
+    if (value) parts.push(`${name}=${value}`);
+  }
+  return parts;
+}
+
 // POST /api/proxy/chat — proxy LLM API requests
 router.post("/chat", rateLimit(60), async (req, res) => {
   // 本地鉴权失败必须与"上游厂商原样转达的 401"可区分：客户端只在带 X-Proxy-Auth 标记时
@@ -162,6 +189,12 @@ router.post("/chat", rateLimit(60), async (req, res) => {
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`[proxy] API 错误: ${response.status} ${response.statusText}`, errorText);
+      const hints = rateLimitHints(response.headers);
+      // 429 一定要留一行，哪怕厂商什么都没给——"没给"本身就是我们要的读数，
+      // 空日志分不清"没给"和"这段代码没跑到"。其它状态只在真带了限流头时才记。
+      if (response.status === 429 || hints.length > 0) {
+        console.log(`[proxy] 限流取证 status=${response.status} ${hints.join(" ") || "(厂商没给任何一个)"}`);
+      }
       return res.status(response.status).json({
         error: `API 返回错误: ${response.status} ${response.statusText}`,
         details: errorText

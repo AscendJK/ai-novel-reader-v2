@@ -53,8 +53,13 @@ const upstream = http.createServer((req, res) => {
       return;
     }
     if (req.url === "/echo") {
-      // 把代理真正转发过来的鉴权头回显出来：用来盯"头白名单是否区分大小写"这类问题
-      res.writeHead(200, { "Content-Type": "application/json" });
+      // 把代理真正转发过来的鉴权头回显出来：用来盯"头白名单是否区分大小写"这类问题。
+      // 顺手带一枚 x-ratelimit-*：真厂商（OpenAI 格式这几家）**每次成功响应都带**这类头，
+      // 所以"只在出错时才记限流取证"这一格有东西可咬——写歪成"有头就记"就会每发都刷一行。
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        "x-ratelimit-remaining": "97",
+      });
       res.end(JSON.stringify({
         choices: [{ message: { content: "echo" } }],
         gotAuthorization: req.headers.authorization ?? null,
@@ -66,6 +71,30 @@ const upstream = http.createServer((req, res) => {
       // 模仿 sensenova 这类网关：用 401 表达"密钥/模型无权访问"，且错误体不是 OpenAI 格式
       res.writeHead(401, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: { code: 16, message: "Forbidden" } }));
+      return;
+    }
+    if (req.url === "/limited") {
+      // 厂商给了"等多久"：这两枚头是决定「值不值得按秒等」的唯一证据，先记下来
+      res.writeHead(429, {
+        "Content-Type": "application/json",
+        "Retry-After": "42",
+        "x-ratelimit-reset-requests": "7",
+      });
+      res.end(JSON.stringify({ error: { message: "Too Many Requests" } }));
+      return;
+    }
+    if (req.url === "/limited-bare") {
+      // 厂商只回 429、什么都不肯说（deepseek 这类就常见）——空日志与"没跑到"是两回事，
+      // 所以这一格必须让代理自己讲明"厂商没给任何一个"
+      res.writeHead(429, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "Too Many Requests" } }));
+      return;
+    }
+    if (req.url === "/slow-503") {
+      // Retry-After 不只出现在 429 上（503 也常见）。判据条件里"只看 429"那一半要有牙，
+      // 就得给一枚 429 之外的样本
+      res.writeHead(503, { "Content-Type": "application/json", "Retry-After": "7" });
+      res.end(JSON.stringify({ error: { message: "Service Unavailable" } }));
       return;
     }
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -196,6 +225,41 @@ try {
     lookalike.status === 400 && String(lookalikeJson?.error || "").includes("HTTPS"),
     `status=${lookalike.status} error=${JSON.stringify(lookalikeJson?.error)}`
   );
+
+  // ── 0d. 限流取证：厂商给的"等多久"必须落到后端日志里 ─────────
+  // 现状（09-28 查明）：全仓从没读过 Retry-After，代理在 !ok 时只转 status+body，
+  // 上游头当场丢掉 → 用户撞上 429 只能瞎等。要不要改成"按秒等"得先看厂商到底给不给，
+  // 所以这一步只负责把证据记下来。断言一律按"这一发之前的日志长度"切窗口：
+  // 四发都往同一份日志里写，不切窗口就归不了因（哪一发说了话看不出来）。
+  const hitUpstream = async (path) => {
+    const from = logs.length;
+    const r = await fetch(`${base}/api/proxy/chat`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        url: `http://127.0.0.1:${upstreamPort}${path}`,
+        headers: {},
+        body: { model: "m", messages: [{ role: "user", content: "hi" }] },
+      }),
+    });
+    await r.text();
+    return logs.slice(from);
+  };
+
+  const limitedLog = await hitUpstream("/limited");
+  check("限流取证 429：Retry-After 的秒数进了日志", /retry-after=42\b/.test(limitedLog),
+    `日志=${JSON.stringify(limitedLog.trim().slice(-160))}`);
+  const bareLog = await hitUpstream("/limited-bare");
+  check("限流取证 429：厂商一个头都没给时，日志要说明是「没给」而不是「没记」",
+    /限流取证 status=429/.test(bareLog) && /没给任何一个/.test(bareLog) && !/retry-after=/.test(bareLog),
+    `日志=${JSON.stringify(bareLog.trim().slice(-160))}`);
+  const slowLog = await hitUpstream("/slow-503");
+  check("限流取证 503：带 Retry-After 的非 429 也记（判据不只盯 429 那一格）",
+    /status=503/.test(slowLog) && /retry-after=7\b/.test(slowLog),
+    `日志=${JSON.stringify(slowLog.trim().slice(-160))}`);
+  const okLog = await hitUpstream("/echo");
+  check("限流取证：成功透传那一腿不许写这行（挪到 !ok 之外要能看见）",
+    !/限流取证/.test(okLog), `日志=${JSON.stringify(okLog.trim().slice(-160))}`);
 
   let sse = null;
   const sseStartedAt = Date.now();
