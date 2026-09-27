@@ -199,10 +199,14 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
       );
     }
 
-    // 检测 200 状态下的空壳响应（如 ModelScope 在模型不可用/参数错误时返回 choices:null）
+    // 检测 200 状态下的空壳响应。**空字符串与只有空白符也算空壳**：这一腿以前对它们是原样返回空串，
+    // 于是"这一发一个字正文都没回"在两腿之间口径不一致（流式那一腿是抛错的）。代价不只是界面空白：
+    // agent 的「空正文才关掉思考重发」认的是错误前缀（`isEmptyResultError`），静默返回让那条链在
+    // 这条腿上整条不起作用。本仓没有把空正文当合法答复的调用点（不解析 tool_calls / function_call）。
     const choices = data.choices as Array<{ message?: { content?: unknown } }> | null | undefined;
     const content = typeof choices?.[0]?.message?.content === "string" ? choices[0].message.content : null;
-    if (content === null) {
+    if (content === null || content.trim() === "") {
+      const shape = content === null ? "choices 为空" : "正文是空白";
       const model = typeof data.model === "string" ? data.model : "";
       const errBody = typeof data.error === "string" ? data.error
         : data.error ? JSON.stringify(data.error)
@@ -211,7 +215,7 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
         | { completion_tokens_details?: { reasoning_tokens?: number } }
         | undefined)?.completion_tokens_details?.reasoning_tokens;
       throw new APIError(
-        `API 返回了空结果（choices 为空）${model ? `，模型：${model}` : ""}。` +
+        `API 返回了空结果（${shape}）${model ? `，模型：${model}` : ""}。` +
         `${emptyResultNote(reasoning)}原始响应：${errBody}`,
         "server",
         response.status,

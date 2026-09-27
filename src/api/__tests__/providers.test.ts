@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createOpenAIProvider } from "../providers/openai";
 import { createAnthropicProvider } from "../providers/anthropic";
 import type { ProviderConfig } from "../types";
-import { APIError } from "../error-handler";
+import { APIError, isEmptyResultError } from "../error-handler";
 
 const openaiConfig = {
   id: "test-openai",
@@ -163,6 +163,65 @@ describe("OpenAI provider parseResponse", () => {
     });
     const provider = createOpenAIProvider(openaiConfig);
     await expect(provider.chat({ messages: [{ role: "user", content: "hi" }] })).rejects.toThrow(APIError);
+  });
+
+  // ↓↓↓ 2026-09-27 补：非流式那一腿以前对"一个字都没有"是**静默返回空串**，而流式那一腿
+  // （上面的"空流"）是抛错。两腿口径不一致的代价不只是界面空白——agent 的「空正文才降级重发」
+  // 认的是错误前缀（`isEmptyResultError`），静默返回让那条链在这条腿上整条不起作用。
+
+  it("非流式正文是空字符串也要抛，并且降级链认得它（锚是前缀，不是整句文案）", async () => {
+    mockFetchResponse({
+      choices: [{ message: { role: "assistant", content: "" } }],
+      usage: { prompt_tokens: 900, completion_tokens: 8192, total_tokens: 9092 },
+    });
+    const provider = createOpenAIProvider(openaiConfig);
+    const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+    expect(err).toBeInstanceOf(APIError);
+    expect(isEmptyResultError(err), `抛的不是"空正文"那一类，降级那一发就不会关思考：${err?.message}`).toBe(true);
+  });
+
+  it("只有空白符的正文算空（另一格：厂商回一串空格同样是没回话）", async () => {
+    mockFetchResponse({
+      choices: [{ message: { role: "assistant", content: "   \n " } }],
+      usage: {},
+    });
+    const provider = createOpenAIProvider(openaiConfig);
+    await expect(provider.chat({ messages: [{ role: "user", content: "hi" }] })).rejects.toThrow(APIError);
+  });
+
+  it("空字符串这一路也要说准原因：usage 里有 reasoning_tokens 就点名思考吃满", async () => {
+    mockFetchResponse({
+      choices: [{ message: { role: "assistant", content: "" } }],
+      usage: { completion_tokens: 8192, completion_tokens_details: { reasoning_tokens: 8192 } },
+    });
+    const provider = createOpenAIProvider(openaiConfig);
+    const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+    expect(err.message).toContain("8192");
+    expect(err.message).toContain("思考");
+  });
+
+  it("反向那一格：正文哪怕只有一个字也不许当空壳抛掉", async () => {
+    mockFetchResponse({
+      choices: [{ message: { role: "assistant", content: "好" } }],
+      usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
+    });
+    const provider = createOpenAIProvider(openaiConfig);
+    const result = await provider.chat({ messages: [{ role: "user", content: "hi" }] });
+    expect(result.content).toBe("好");
+  });
+
+  it("那句要说清是「哪一种空」：choices 没了 ≠ 有 choices 但正文空白", async () => {
+    const provider = createOpenAIProvider(openaiConfig);
+    const ask = () => provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+
+    mockFetchResponse({ choices: null, usage: {} });
+    expect((await ask()).message).toContain("choices 为空");
+
+    mockFetchResponse({ choices: [{ message: { role: "assistant", content: "" } }], usage: {} });
+    const blank = (await ask()).message;
+    // 把"正文空白"报成"choices 为空"会把读者的排查方向整个带偏（那像是网关吞了响应）
+    expect(blank, "两种空写成同一句话就没法分辨了").not.toContain("choices 为空");
+    expect(blank).toContain("正文是空白");
   });
 
   it("响应包含 error 字段时，错误信息包含原始响应内容", async () => {
@@ -500,6 +559,30 @@ describe("Anthropic provider 请求级 thinking 覆盖配置级", () => {
  *
  * 没有一刀 0 红。两条腿（直连与代理）共用同一个 `buildBody`，所以只判直连那一腿的 body：
  * "把 thinking 只塞进一条腿"的形状在这份实现里不存在，为它再下一刀是空刀。
+ */
+
+/**
+ * 判别力台账·第二笔（2026-09-27 同日，制作人点头"OpenAI 那条腿按你的建议来"）。
+ * 判据在上面 `describe("OpenAI provider parseResponse")` 里那五条新条目（O1..O5）；
+ * 基线：`src/api/providers/openai.ts` = sha256 `622ffd9a…`（改完之后那一份），
+ * 改前那一份是 `6cc4d805…`。每刀之后 `cp` 回基线 + `cmp` + 重核 sha；0 刀对照 **50 passed**。
+ *
+ *  产品这一笔改了同一个 `if`：`content === null` → `content === null || content.trim() === ""`，
+ *  并把那句文案分成"choices 为空"与"正文是空白"两种。
+ *  O1 空字符串要抛且 `isEmptyResultError` 认得（降级那一发的锚）
+ *  O2 只有空白符也算空（另一格）      O3 这一路也要说准原因（usage 里有 reasoning_tokens）
+ *  O4 反向：只有一个字不许误抛        O5 那句要说清是"哪一种空"
+ *
+ *  W1 把 `|| content.trim() === ""` 摘掉（＝退回改前那半）→ **4 红**（O1 O2 O3 O5）
+ *  W2 只去掉 `trim()`（`content === ""`）        → **1 红**（O2）＝空白符那一格独立有牙
+ *  W3 `shape` 固定成 "choices 为空"              → **1 红**（O5）
+ *  W4 `emptyResultNote(reasoning)` 传 undefined   → **2 红**（O3 + 早先那条"非流式空壳要说出
+ *      reasoning_tokens"——两格共用同一只函数，一刀红两条，不是判据混了格）
+ *  W5 判据放宽成 `content.trim().length < 2`      → **1 红**（O4）＝反向取样那一格有牙
+ *
+ * 为什么这一笔值得单独记：**它修的不是"界面少一行字"，是一条链的开关**。agent 的
+ * 「确认这一发空正文 → 第二发带 `thinking:false` 重发」认的是错误前缀（`error-handler.ts:53`），
+ * 静默返回空串时那条链在 OpenAI 这条腿上根本不触发——而测试全绿、看不出来。
  */
 
 describe("Anthropic provider parseResponse", () => {
