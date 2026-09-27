@@ -48,11 +48,17 @@ export async function leaveSettings(page: Page): Promise<void> {
 /** 走完"添加 API → 填表 → 保存"。不填的字段留产品默认（格式默认 OpenAI，流式默认开）。 */
 export async function addProvider(
   page: Page,
-  f: { name: string; key?: string; baseUrl?: string; model?: string; maxTokens?: number; contextWindow?: number },
+  f: {
+    name: string; key?: string; baseUrl?: string; model?: string; maxTokens?: number; contextWindow?: number;
+    /** 「接口格式」那枚下拉。不填就是表单默认值 OpenAI——**Anthropic 那条腿只有这一处入口**，
+     *  想让它进浏览器层就必须从这里选，别在测试里绕过界面直接写库（那就判不到"选了就真接上"） */
+    format?: "openai" | "anthropic";
+  },
 ): Promise<void> {
   const s = settings(page);
   await s.add.click();
   await s.name.fill(f.name);
+  if (f.format !== undefined) await page.locator("#api-format").selectOption(f.format);
   if (f.key !== undefined) await s.key.fill(f.key);
   if (f.baseUrl !== undefined) await s.baseUrl.fill(f.baseUrl);
   if (f.model !== undefined) await s.model.fill(f.model);

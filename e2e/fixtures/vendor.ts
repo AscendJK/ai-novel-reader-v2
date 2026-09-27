@@ -19,6 +19,12 @@ import type { Backend, Reply, StubTable } from "./backend";
 
 export const VENDOR_BASE_PATH = "/api/e2e-llm/v1";
 export const VENDOR_CHAT_PATH = `${VENDOR_BASE_PATH}/chat/completions`;
+/**
+ * Anthropic Messages 那条腿的端点（`providers/anthropic.ts` 拼的是 `{baseUrl}/messages`）。
+ * 单独列一只是因为这一腿的形状与 OpenAI 完全不是一回事：头上是 `x-api-key` + `anthropic-version`、
+ * 正文是 `content` **块数组**（思考与正文是两种块，思考块排在前面）、流式是 `content_block_delta`。
+ */
+export const VENDOR_MESSAGES_PATH = `${VENDOR_BASE_PATH}/messages`;
 /** 直连失败之后的第二条腿（`openai.ts:94-108`） */
 export const PROXY_CHAT_PATH = "/api/proxy/chat";
 
@@ -154,4 +160,100 @@ export function chatRequests(backend: Backend, path: string = VENDOR_CHAT_PATH):
 /** 代理腿的请求体是 `{url, headers, body}` 的包壳，这里把内层取出来 */
 export function proxiedChats(backend: Backend): Record<string, unknown>[] {
   return chatRequests(backend, PROXY_CHAT_PATH).map((wrap) => (wrap.body as Record<string, unknown>) ?? wrap);
+}
+
+/* ── Anthropic Messages 那条腿（`src/api/providers/anthropic.ts`）───────────── */
+
+export interface AnthropicReply extends VendorReply {
+  /**
+   * 发一段"思考"。它在两种形状里都出现在正文**前面**：非流式是 `content[0]` 那个
+   * `{type:"thinking"}` 块（没有 `text` 字段），流式是 `thinking_delta` 帧。
+   * 这一腿"读正文"最容易错的两格——只取首块、把草稿当正文——都靠它演出来。
+   */
+  thinking?: string;
+}
+
+/** 剧本可以按请求体决定回什么（"第一发只想不答、第二发才给正文"那类降级判据要它） */
+export type AnthropicLegScript =
+  | AnthropicReply
+  | ((messagesBody: Record<string, unknown> | null, req: Request) => AnthropicReply | Promise<AnthropicReply>);
+
+function anthropicBlocks(text: string, thinking: string | undefined): unknown[] {
+  const blocks: unknown[] = [];
+  if (thinking !== undefined) blocks.push({ type: "thinking", thinking, signature: "sig-e2e" });
+  if (text !== "") blocks.push({ type: "text", text });
+  return blocks;
+}
+
+function anthropicSse(text: string, thinking: string | undefined, usage?: { input: number; output: number }): string {
+  const frames: string[] = [];
+  const send = (o: unknown) => frames.push(`data: ${JSON.stringify(o)}\n\n`);
+  send({ type: "message_start", message: { id: "msg-e2e", role: "assistant", usage: { input_tokens: usage?.input ?? 0, output_tokens: 0 } } });
+  let index = 0;
+  if (thinking !== undefined) {
+    send({ type: "content_block_start", index, content_block: { type: "thinking", thinking: "" } });
+    for (const piece of splitForFrames(thinking)) send({ type: "content_block_delta", index, delta: { type: "thinking_delta", thinking: piece } });
+    send({ type: "content_block_stop", index });
+    index += 1;
+  }
+  if (text !== "") {
+    send({ type: "content_block_start", index, content_block: { type: "text", text: "" } });
+    for (const piece of splitForFrames(text)) send({ type: "content_block_delta", index, delta: { type: "text_delta", text: piece } });
+    send({ type: "content_block_stop", index });
+  }
+  send({ type: "message_delta", usage: { output_tokens: usage?.output ?? 0 } });
+  send({ type: "message_stop" });
+  return frames.join("");
+}
+
+function anthropicToReply(script: AnthropicReply): Reply {
+  const text = asText(script.content);
+  if (script.status && script.status >= 400) {
+    return {
+      status: script.status,
+      body: { type: "error", error: { type: "invalid_request_error", message: `e2e 厂商 ${script.status}` } },
+      headers: script.headers,
+    };
+  }
+  const inOut = { input: script.usage?.input ?? 0, output: script.usage?.output ?? 0 };
+  return {
+    status: script.status ?? 200,
+    abort: script.abort,
+    contentType: script.nonStreaming ? "application/json" : "text/event-stream",
+    body: script.nonStreaming
+      ? JSON.stringify({
+          id: "msg-e2e", type: "message", role: "assistant",
+          content: anthropicBlocks(text, script.thinking),
+          usage: { input_tokens: inOut.input, output_tokens: inOut.output },
+        })
+      : anthropicSse(text, script.thinking, inOut),
+    headers: script.headers,
+  };
+}
+
+function anthropicResponder(script: AnthropicLegScript) {
+  return async (req: Request): Promise<Reply> => {
+    if (typeof script !== "function") {
+      if (script.delayMs) await wait(script.delayMs);
+      return anthropicToReply(script);
+    }
+    let body: Record<string, unknown> | null = null;
+    try {
+      body = JSON.parse(req.postData() || "{}") as Record<string, unknown>;
+    } catch { /* 不是 JSON 就原样给 null，让剧本自己决定 */ }
+    const s = await script(body, req);
+    if (s.delayMs) await wait(s.delayMs);
+    return anthropicToReply(s);
+  };
+}
+
+/** 这一腿也只有直连/代理两条腿（`anthropic.ts` 的 `doDirect`/`doProxy`，代理仍打 `/api/proxy/chat`） */
+export function anthropicVendorTable(
+  script: AnthropicLegScript,
+  legs: { direct?: AnthropicLegScript; proxy?: AnthropicLegScript } = {},
+): StubTable {
+  return {
+    [`POST ${VENDOR_MESSAGES_PATH}`]: anthropicResponder(legs.direct ?? script),
+    [`POST ${PROXY_CHAT_PATH}`]: anthropicResponder(legs.proxy ?? script),
+  };
 }
