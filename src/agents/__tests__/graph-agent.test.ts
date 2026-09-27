@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Novel } from "@/parsers/types";
 import { characterGraphAgent } from "../graph-agent";
+import { APIError, handleFetchError } from "@/api/error-handler";
 import { useUIStore } from "@/stores/ui-store";
 
 const repo = vi.hoisted(() => ({ loadNovel: vi.fn() }));
@@ -418,5 +419,46 @@ describe("图谱的请求参数", () => {
     expect(r.success).toBe(false);
     // 取消不是失败：必须是 cancelled，否则上层会打出一条红色错误提示
     expect(r.cancelled).toBe(true);
+  });
+});
+
+/**
+ * 图谱与地图是同一套两趟循环（`graph-agent.ts:67`、`map-agent.ts:139`），
+ * 所以"厂商答了『这一场不接』"那一格两边都要钉——只钉地图，图谱就会继续白撞第二发。
+ * 与地图那只的区别：这里判的是**图谱自己那条出口**（`catch` 走 `formatError`），
+ * 所以这一条是"两处各接一个落点"的另一处，不是重复。
+ * 刀账在 `error-handler-classify.test.ts` 顶部：**Q2** 把图谱这一行摘掉 → 本文件红 2
+ * （429／401），而地图那 3 条全绿——"只修了地图"的半修形状就是这样被咬住的。
+ */
+describe("厂商这一场不接（401/402/429）：一发就收手", () => {
+  async function vendorError(status: number, message: string): Promise<APIError> {
+    const res = new Response(JSON.stringify({ error: { message } }), { status });
+    return await handleFetchError(res).then(() => null, (e) => e) as APIError;
+  }
+
+  it("429 限流：不许撞第二发，界面拿厂商那句（含 429）", async () => {
+    chat.mockRejectedValue(await vendorError(429, "Too Many Requests"));
+    const r = await run();
+    expect(r.success).toBe(false);
+    expect(chat, "限流时候发＝再撞一次同一个答案，还把窗口往后推").toHaveBeenCalledTimes(1);
+    expect(r.error).toContain("429");
+  });
+
+  it("401 认证失败：同样一发就收手", async () => {
+    chat.mockRejectedValue(await vendorError(401, "Invalid API key"));
+    const r = await run();
+    expect(r.success).toBe(false);
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(r.error).toContain("认证失败");
+  });
+
+  /** 反向保护：不许把"厂商答过的一切"都归成不重试，500 那种瞬时故障仍该再撞一发 */
+  it("500 服务器错误仍然撞第二发", async () => {
+    chat
+      .mockRejectedValueOnce(await vendorError(500, "internal server error"))
+      .mockResolvedValueOnce(reply(graphJson([N("令狐冲"), N("岳不群")], [])));
+    const r = await run();
+    expect(r.success).toBe(true);
+    expect(chat).toHaveBeenCalledTimes(2);
   });
 });

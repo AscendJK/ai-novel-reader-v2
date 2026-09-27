@@ -9,7 +9,7 @@
  * 讲输出"就不返回数字，所以本修的是判读，不是花钱。）
  */
 import { describe, it, expect } from "vitest";
-import { APIError, handleFetchError, isEmptyResultError, emptyResultNote, classifyTransportFailure } from "../error-handler";
+import { APIError, handleFetchError, isEmptyResultError, emptyResultNote, classifyTransportFailure, classifyVendorRefusal } from "../error-handler";
 
 async function classify(status: number, body: unknown): Promise<APIError> {
   const res = new Response(typeof body === "string" ? body : JSON.stringify(body), { status });
@@ -251,5 +251,62 @@ describe("classifyTransportFailure：路的问题分两样，认不到就算认�
     for (const v of [new Error("Unexpected token } in JSON at position 42"), "Failed to fetch", undefined, null, 42]) {
       expect(classifyTransportFailure(v), `${JSON.stringify(v) ?? String(v)} 被猜成了路的问题`).toBeNull();
     }
+  });
+});
+
+/**
+ * 「厂商答了、答的是这一场不接」（401/403 认证、402 额度、429 限流）——地图与图谱的两趟循环
+ * 靠它决定"别再撞第二发"。与上面那一位分得开：路的问题里"到期"是值得再撞的，
+ * 而这一位再撞一次只是把同一个答案再收一遍、还把限流窗口往后推。
+ *
+ * ## 刀账 Q1..Q6（0 刀对照：本文件 32 + `map-agent.test.ts` 55 + `graph-agent.test.ts` 36 = 123 全绿）
+ * 基线 sha256 前 16 位：`error-handler.ts` = `a677bf41980f6dfe`、`map-agent.ts` = `cd3de35bc06a8f30`、
+ * `graph-agent.ts` = `12583488800f1992`。每刀 markers=1，跑完 `cp` 还原并当场核 sha，盘上 `MUT-` 残留 0。
+ * - **Q1** 地图那一行不接（`refusal = null`）→ 红 3：地图的 429／401／402。
+ * - **Q2** 图谱那一行不接 → 红 2：图谱的 429／401，**地图 3 条全 ✓**。
+ *   Q1/Q2 各下一刀才分辨得出"只修了地图"那种半修——那正是这一格昨天的状态。
+ * - **Q3** 判得太宽（凡 `APIError` 都算不接）→ 红 6：「500/504/超限 400 都不算」＋「空正文不许抢」
+ *   ＋地图的 504 超时判据＋两条 500 反向保护。这一刀最贵：它把"瞬时故障不再重试"那条路红出来了。
+ * - **Q4** 只摘 `rate_limit` 那一栏 → 红 3：三层的 429 各一条（名字全带 429，归属干净）。
+ * - **Q5** 只摘 `quota_exceeded` 那一栏 → 红 2：分类层与地图层的 402。
+ *   Q4/Q5 各一刀的前提是 **402 与 429 拆成两条 `it`**——合在一条里就是 P2 那个坑，两刀红同一个名字。
+ * - **Q6** 改回认 message 字面（`/429|认证失败|额度/`）→ 红 3：「只认 apiCode」＋ 401/403 ＋ 402。
+ *   **这一刀读数最要记**：地图与图谱那五条**全绿**——字面版在真形状上"看起来一样能用"，
+ *   只有分类层咬得住。字面判法的坑就是这样藏着的（笔 C 那一坑的正面复现）。
+ */
+describe("classifyVendorRefusal：认证/额度/限流三种，重发不会变成另一个答案", () => {
+  it("401 与 403 都算 auth（两个状态码各钉一次，别只认一个）", async () => {
+    expect(classifyVendorRefusal(await classify(401, withMessage("Invalid API key")))).toBe("auth");
+    expect(classifyVendorRefusal(await classify(403, withMessage("Model access denied")))).toBe("auth");
+  });
+
+  // 402 与 429 各一条：合在一条里时，"只摘掉限流那一栏"与"只摘掉额度那一栏"会红同一个名字
+  it("402 算额度用尽", async () => {
+    expect(classifyVendorRefusal(await classify(402, withMessage("Insufficient balance")))).toBe("quota_exceeded");
+  });
+
+  it("429 算限流", async () => {
+    expect(classifyVendorRefusal(await classify(429, withMessage("Too Many Requests")))).toBe("rate_limit");
+  });
+
+  /** 反向：不许为了省事把"厂商答过的一切"都归进来——那些时候再撞一发或改参数是真解 */
+  it("500／504／超限 400 都不算拒绝", async () => {
+    const server = await classify(500, withMessage("internal server error"));
+    const gateway = await classify(504, withMessage("gateway timeout"));
+    const tooLong = await classify(400, withMessage("max_tokens is too large"));
+    for (const e of [server, gateway, tooLong]) {
+      expect(classifyVendorRefusal(e), `${e.apiCode} 被当成了"这一场不接"`).toBeNull();
+    }
+  });
+
+  it("「一个字正文都没回」仍然归 isEmptyResultError，这一位不许顺手抢", async () => {
+    const empty = new APIError("API 返回了空结果（流式响应无内容）。", "server", 200, "data: [DONE]");
+    expect(isEmptyResultError(empty), "夹具得先是空正文").toBe(true);
+    expect(classifyVendorRefusal(empty)).toBeNull();
+  });
+
+  it("只认 apiCode，不认 message 字面：同一段中文话挂在普通 Error 上不算", () => {
+    // 笔 C 那一坑的反面——厂商原话会改口、会出现在任何别的错误里，字面一认就又会走到不到
+    expect(classifyVendorRefusal(new Error("API 请求频率过高 (429)：Too Many Requests"))).toBeNull();
   });
 });

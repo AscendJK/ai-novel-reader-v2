@@ -10,7 +10,7 @@ import { getRelevantContent, chatWithContextRetry, sampleChapterTitles } from ".
 import { extractJSON } from "./json-extractor";
 import { useUIStore } from "@/stores/ui-store";
 import { estimateTokens, computeAvailableInput, resolveOutputReserve, type TokenBudget } from "@/api/token-manager";
-import { isEmptyResultError } from "@/api/error-handler";
+import { isEmptyResultError, classifyVendorRefusal } from "@/api/error-handler";
 
 interface GraphData {
   nodes: { id: string; group: string; description: string }[];
@@ -128,6 +128,8 @@ class CharacterGraphAgent extends BaseAgent {
 
         return { success: true, data: { graphData }, tokensUsed: response.tokensUsed?.output || response.content.length };
       } catch (err) {
+        // 厂商明确拒了这一场（401/402/429）：第二发只会再撞一次同一个答案
+        if (classifyVendorRefusal(err)) return { success: false, error: this.formatError(err) };
         if (isEmptyResultError(err)) sawEmptyBody = true;
         if (attempt === 1) { lastError = this.formatError(err); continue; }
         return { success: false, error: this.formatError(err) };

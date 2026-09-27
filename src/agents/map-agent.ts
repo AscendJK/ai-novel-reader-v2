@@ -10,7 +10,7 @@ import { BaseAgent } from "./base-agent";
 import { extractJSON } from "./json-extractor";
 import { prepareAgentContext, chatWithContextRetry, sampleChapterTitles } from "./utils";
 import { computeAvailableInput, resolveOutputReserve, type TokenBudget } from "@/api/token-manager";
-import { isEmptyResultError, classifyTransportFailure } from "@/api/error-handler";
+import { isEmptyResultError, classifyTransportFailure, classifyVendorRefusal } from "@/api/error-handler";
 
 /**
  * 模型偶尔把坐标写成 `"620"` 这种数字字符串——今天它照样能渲染，所以收下并归一。
@@ -167,6 +167,9 @@ class MapAgent extends BaseAgent {
           });
         } catch (err) {
           if (attempt === 1) {
+            // 厂商明确拒了（401/402/429）：第二发只会再撞一次同一个答案，直接把原话交回界面
+            const refusal = classifyVendorRefusal(err);
+            if (refusal) return { success: false, error: err instanceof Error ? err.message : "厂商拒绝了这次请求" };
             const transport = classifyTransportFailure(err);
             // 请求没出浏览器：地址写错 / CORS 被拦 / 已断网，再撞一发只是白等，把话一次说完
             if (transport === "unreachable") {

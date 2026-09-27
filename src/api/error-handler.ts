@@ -116,6 +116,25 @@ export function classifyTransportFailure(err: unknown): TransportFailure | null 
   return UNREACHABLE_MESSAGE.test(err.message) ? "unreachable" : null;
 }
 
+/**
+ * 「厂商答了，答的是**这一场不接**」：认证不过（401/403）、额度用尽（402）、限流（429）。
+ * 这三种重发第二发只会再撞一次同一个答案——Key 不会自己变对、余额不会自己回来、
+ * 而限流窗口最坏被自己往后推。所以拿到它们**别再打**，直接把厂商那句交回界面。
+ *
+ * 与 `classifyTransportFailure` 是两回事，不许并成一栏：那一位判的是"路的问题"
+ * （到期值得再撞、请求没出浏览器别白撞），这一位判的是"厂商明确拒了"。
+ * 500/504 也**不在这里**——那是服务瞬时不可用，再撞一发是划算的。
+ *
+ * 只认 `apiCode`，不认 message 字面：`map-agent.ts` 上一版手抄字面判错过一次
+ * （判据用假夹具绿着、产品那一支永远走不到）。认不到一律 `null`。
+ */
+export function classifyVendorRefusal(err: unknown): APIErrorCode | null {
+  return err instanceof APIError
+    && (err.apiCode === "auth" || err.apiCode === "quota_exceeded" || err.apiCode === "rate_limit")
+    ? err.apiCode
+    : null;
+}
+
 function classifyError(status: number, body: string): { code: APIErrorCode; message: string } {
   let parsed: Record<string, unknown> = {};
   try { parsed = JSON.parse(body); } catch { /* ignore */ }

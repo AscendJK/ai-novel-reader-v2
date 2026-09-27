@@ -11,7 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Novel } from "@/parsers/types";
 import { mapAgent } from "../map-agent";
-import { APIError } from "@/api/error-handler";
+import { APIError, handleFetchError } from "@/api/error-handler";
 import { estimateTokens } from "@/api/token-manager";
 
 const repo = vi.hoisted(() => ({ loadNovel: vi.fn() }));
@@ -418,6 +418,10 @@ describe("地图结构校验", () => {
  *   分类层那 27 条全 ✓ —— 递进去的判法真在用它，不是自证。
  * - **P6** 摘掉「不是 Error 就直接 null」那道闸 → 红 1：正是「认不到的一律 null」那条
  *   （拿 `undefined` 去取 `.message` 会抛，而不是悄悄返回 null）。那一行有牙，不是防崩的装饰。
+ *
+ * 「厂商这一场不接」（401/402/429 别白撞第二发）那四条判据的刀在 `error-handler-classify.test.ts`
+ * 顶部记着（**Q1 地图不接 → 红 3；Q4 只摘限流栏 → 三层各红一条 429；Q6 改认字面 → 本文件全绿、
+ * 只有分类层咬得住**）。刀账总表在那边，这里不重复一份，免得两边改口不同步。
  */
 describe("地图的重试与错误分类", () => {
   it("第一次解析失败后，第二次把错误原文塞回 prompt 并成功", async () => {
@@ -482,6 +486,52 @@ describe("地图的重试与错误分类", () => {
     const r = await run();
     expect(r.success).toBe(true);
     expect(promptOf(1)).toContain("API 请求超时");
+  });
+
+  /**
+   * 厂商"答了、但答的是这一场不接"的三种：401 认证、402 额度、429 限流。
+   * 今天它们掉进 `map-agent.ts` 最后那行「未知错误」→ **立刻白撞第二发**：
+   * Key 不会自己变对、额度不会自己回来，而限流最坏是第二发把窗口继续往后推。
+   * 夹具一律走 `handleFetchError`——那样拿到的是产品真会抛的那枚 `APIError`，
+   * 而不是手搓一句厂商根本不会那样说的话（笔 C 就是被假夹具骗过去的那格）。
+   */
+  async function vendorError(status: number, message: string): Promise<APIError> {
+    const res = new Response(JSON.stringify({ error: { message } }), { status });
+    return await handleFetchError(res).then(() => null, (e) => e) as APIError;
+  }
+
+  it("429 限流：立即失败、不许撞第二发，界面拿厂商那句（含 429）", async () => {
+    chat.mockRejectedValue(await vendorError(429, "Too Many Requests"));
+    const r = await run();
+    expect(r.success).toBe(false);
+    expect(chat, "限流时候发＝再撞一次同一个答案，还把窗口往后推").toHaveBeenCalledTimes(1);
+    expect(r.error).toContain("429");
+  });
+
+  it("401 认证失败：同样一发就收手（Key 不会自己变对，重发是把 token 再花一遍）", async () => {
+    chat.mockRejectedValue(await vendorError(401, "Invalid API key"));
+    const r = await run();
+    expect(r.success).toBe(false);
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(r.error).toContain("认证失败");
+  });
+
+  it("402 额度用尽：一发就收手，说的是额度不是『服务暂时不可用』", async () => {
+    chat.mockRejectedValue(await vendorError(402, "Insufficient balance"));
+    const r = await run();
+    expect(r.success).toBe(false);
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(r.error).toContain("额度");
+  });
+
+  /** 反向保护：不许为了省事把"厂商答过的一切错误"都归成不重试——500 那种真值得再撞一发 */
+  it("500 服务器错误仍然撞第二发（那一类是瞬时故障，不是『这一场不接』）", async () => {
+    chat
+      .mockRejectedValueOnce(await vendorError(500, "internal server error"))
+      .mockResolvedValueOnce(reply(validMap()));
+    const r = await run();
+    expect(r.success).toBe(true);
+    expect(chat).toHaveBeenCalledTimes(2);
   });
 });
 
