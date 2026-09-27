@@ -28,7 +28,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { panel } from "../pages/panel";
 import { openSettings, openSummaryPanel, addProvider, leaveSettings } from "../pages/settings";
 import { importFiles, openBook, shelfCard, txtFile } from "../pages/shelf";
-import { ORIGIN, RUN, realNovel, signIn, vendorReach } from "./fixtures";
+import { ORIGIN, RUN, benchUsername, realNovel, signIn, vendorReach } from "./fixtures";
 import { authHeaders, chatBody, chatEndpoint, loadVendors, tryVendorKey, vendorTag, probeReply, type VendorSpec } from "./vendors";
 
 /**
@@ -50,9 +50,22 @@ interface Leg {
 const LEGS: Leg[] = loadVendors().map((v) => ({
   v,
   ...tryVendorKey(v),
-  user: `r组${v.id}-${RUN}`,
+  user: benchUsername(v.id, RUN),
   providerName: `R-E ${v.id}-${RUN}`,
 }));
+
+/**
+ * 开跑那一刻就把"租户名装得进服务端那 2-30 字符"钉死，别等登录红。
+ *
+ * 服务端超长直接 400（`server/routes/sync.js:31`），而那 400 是 `window.alert` 出来的、被
+ * `signIn` 的自动 accept 吃掉，报出来的形状是"30 秒没登录上"——2026-09-27 就是照着这个形状
+ * 白跑了两轮。id 最长 24 字符，戳再长一点谁都可能撞上，所以这里当场抛（名字的唯一性由
+ * `benchUsername` 的构造保证：摘要打进的是"标签+戳"，两家同前缀也不会撞，不再重复查一遍）。
+ */
+{
+  const tooLong = LEGS.filter((l) => l.user.length > 30);
+  if (tooLong.length) throw new Error(`租户名超过服务端 30 字符上限：${tooLong.map((l) => `${l.user}(${l.user.length})`).join("、")}`);
+}
 
 const BOOK = `R-E真厂商书-${RUN}`;
 /** 第一章正文里独有的词（`fixtures.ts` 的 `realNovel()`）。摘要里一个都没有 = 不是真读过这章 */
@@ -159,8 +172,22 @@ for (const l of LEGS) {
       const s = legs(page, v.base);
       await openSummaryPanel(page);
       await panel.button(page, "总结本章").click();
-      // 真上游：首字之外还要等整段生成完，给 4 分钟
-      await expect(panel.text(page, CHAPTER_TOKENS).first()).toBeVisible({ timeout: 4 * 60_000 });
+      // 真上游：首字之外还要等整段生成完，给 4 分钟。
+      // 等不到就把"这两分钟里腿形如何、面板说了什么"一起写进红：2026-09-27 在 modelscope 上
+      // 只有一句 `toBeVisible 失败`，判不出是"请求没发出去"还是"发出去了但回的是思考不是正文"。
+      const shown = await panel
+        .text(page, CHAPTER_TOKENS)
+        .first()
+        .waitFor({ state: "visible", timeout: 4 * 60_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!shown) {
+        const panelNow = await panel.root(page).innerText().catch(() => "（读不到面板）");
+        expect(
+          false,
+          `4 分钟没等到本章摘要正文。腿形：直连 ${s.direct} 次／代理 ${s.proxy} 次。面板现在写的是：${panelNow.replace(/\s+/g, " ").slice(0, 300)}`,
+        ).toBe(true);
+      }
       await expect(panel.text(page, "暂无总结，点击上方按钮生成")).toHaveCount(0);
 
       // 浏览器真的朝厂商发过请求（被 CORS 拦下也算发过）——不试直连就说明配置没被用上

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { expect, type Page } from "@playwright/test";
 import { sel } from "../pages/app";
 import { CHAPTER_TITLES } from "../pages/shelf";
@@ -90,18 +91,48 @@ export async function waitIsolated(page: Page): Promise<void> {
  * 换 context 不是坏事：这一档本来就要看"空浏览器从真服务端能拉回什么"。
  *
  * 先等隔离再填表：首启那一刷落在开机后约 1.8 秒，等它过去再动手，登录这步才是确定的。
- * 对话框一律 accept —— `handleLogin` 里那两只 confirm（踢掉其他设备 / 覆盖本地数据）默认被
+ * 对话框仍然一律 accept —— `handleLogin` 里那两只 confirm（踢掉其他设备 / 覆盖本地数据）默认被
  * Playwright 当成"取消"，症状是点了进入什么也没发生。
+ *
+ * 但 **accept 之前要把弹层说的话留下来**：登录失败走的是 `window.alert("登录失败：…")`
+ * （`src/hooks/useSyncOrchestration.ts:589`），accept 掉之后界面还停在登录页，判据只看得到
+ * "登录闸还在"，红的形状跟"卡住了"一模一样。2026-09-27 就是这么绕了一圈：用户名超 30 字符被
+ * 服务端 400（`server/routes/sync.js:31`），而报出来的是一句 30 秒超时。
  */
 export async function signIn(page: Page, baseURL: string, username: string): Promise<void> {
-  page.on("dialog", (d) => d.accept());
+  const said: string[] = [];
+  page.on("dialog", (d) => {
+    said.push(d.message().replace(/\s+/g, " ").slice(0, 160));
+    void d.accept();
+  });
   await page.goto(baseURL);
   await waitIsolated(page);
   if (!(await sel.loginGate(page).isVisible().catch(() => false))) return;
   await page.selectOption("#user-select", "__new__");
   await page.fill("#new-username", username);
   await page.getByTestId("login-submit").click();
-  await expect(sel.loginGate(page)).toHaveCount(0, { timeout: 30_000 });
+  const gone = await sel.loginGate(page).waitFor({ state: "detached", timeout: 30_000 }).then(() => true).catch(() => false);
+  if (gone) return;
+  const onScreen = await sel.loginGate(page).innerText().catch(() => "（读不到界面文字）");
+  expect(
+    false,
+    `登录 30 秒没过去。用户名 "${username}"（${username.length} 字符，服务端只收 2-30）。` +
+      `弹层说过：${said.length ? said.join(" ｜ ") : "（一次都没弹）"}。还挂着的界面：${onScreen.replace(/\s+/g, " ").slice(0, 200)}`,
+  ).toBe(true);
+}
+
+/**
+ * 一次性租户名，**保证落在服务端那 2-30 字符的窗口里**。
+ *
+ * 为什么不直接拼 `r组${标签}-${RUN}`：厂商 id 最长 24 字符（`vendors.ts` 的 `ID`），加上本轮的戳就超
+ * 30 —— 超了不是"名字被截短"而是登录整个红掉（400 走 alert，见 `signIn`）。装不下时留标签前 12 字符，
+ * 尾巴换成"标签+戳"的 8 位摘要：既进窗口，又仍是一轮一个（同戳不会跟别的厂商撞车）。
+ */
+export function benchUsername(label: string, run: string): string {
+  const full = `r组${label}-${run}`;
+  if (full.length <= 30) return full;
+  const digest = createHash("sha1").update(`${label}-${run}`).digest("hex").slice(0, 8);
+  return `r组${label.slice(0, 12)}-${digest}`;
 }
 
 export type Reach = { reachable: true } | { reachable: false; skip: boolean; why: string };

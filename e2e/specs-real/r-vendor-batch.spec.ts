@@ -31,7 +31,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { panel } from "../pages/panel";
 import { openSummaryPanel, addProvider, openSettings, leaveSettings } from "../pages/settings";
 import { importFiles, longNovel, navChapter, openBook, shelfCard, txtFile } from "../pages/shelf";
-import { RUN, realNovel, signIn, vendorReach } from "./fixtures";
+import { RUN, benchUsername, realNovel, signIn, vendorReach } from "./fixtures";
 import { loadVendors, tryVendorKey, vendorTag, wireText, type VendorSpec } from "./vendors";
 
 /**
@@ -75,7 +75,7 @@ const VENDOR = PICKED.v;
 const key = PICKED.key;
 const BASE = VENDOR?.base ?? "";
 const MODEL = VENDOR?.model ?? "（没选到厂商）";
-const USER = `r组批量-${RUN}`;
+const USER = benchUsername("批量", RUN);
 const BOOK = `批量长书-${RUN}`;
 /**
  * 给厂商配的输出上限（`ANR_VENDOR_MAX_OUTPUT` 可覆盖）。
