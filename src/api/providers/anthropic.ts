@@ -1,5 +1,5 @@
 import type { AIProvider, ChatCompletionRequest, ChatCompletionResponse, ProviderConfig } from "../types";
-import { APIError, handleFetchError } from "../error-handler";
+import { APIError, handleFetchError, emptyResultNote } from "../error-handler";
 import { apiFetch } from "@/lib/api-client";
 import { useUIStore } from "@/stores/ui-store";
 import { readSSEData } from "./stream";
@@ -135,6 +135,9 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
     let content = "";
     let inputTokens = 0;
     let outputTokens = 0;
+    // 这一发到底有没有在思考：Anthropic 格式没有 OpenAI 那个 `reasoning_tokens` 字段，
+    // 思考是以 `thinking_delta` 帧的形式出现的，所以证据只能一边读一边记。
+    let sawThinking = false;
 
     for (const evt of events) {
       const e = evt as Record<string, unknown>;
@@ -148,6 +151,8 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
       if (e.type === "content_block_delta") {
         const delta = e.delta as Record<string, unknown> | undefined;
         if (typeof delta?.text === "string") content += delta.text;
+        // 只有 text 进答案（thinking 帧带的是 `delta.thinking`，别把它当草稿串进正文）
+        else if (typeof delta?.thinking === "string" && delta.thinking.trim() !== "") sawThinking = true;
       }
       // 用量统计
       if (e.type === "message_start") {
@@ -164,7 +169,7 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
     // 流式结束后内容为空 → 抛错（避免静默返回空白结果）
     if (!content.trim()) {
       throw new APIError(
-        `API 返回了空结果（流式响应无内容）。可能原因：模型名称不存在或无权访问、请求参数不被支持。原始响应：${raw.slice(0, 300)}`,
+        `API 返回了空结果（流式响应无内容）。${emptyResultNote(sawThinking ? outputTokens : undefined)}原始响应：${raw.slice(0, 300)}`,
         "server",
         200,
         raw
@@ -198,17 +203,29 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
       );
     }
 
-    // 检测 200 状态下的空壳响应（content 缺失/为空时抛错，避免静默返回空内容）
-    const contentArr = data.content as Array<{ text?: unknown }> | null | undefined;
-    const content = typeof contentArr?.[0]?.text === "string" ? contentArr[0].text : null;
-    if (content === null) {
+    // 检测 200 状态下的空壳响应。正文要按块拼：**思考型厂商回的是 `[{thinking…},{text…}]`**，
+    // 只读 `content[0].text` 时首块没有 `text` 字段，于是后面那块真答案整个被扔掉，报出来的还是
+    // "模型名称不存在或无权访问"（假话）。反过来，首块 text 是空串时旧写法会**静默返回空串**——
+    // agent 的「空正文才关思考重发」认的是错误前缀，静默返回让那条链在这条腿上整条不起作用。
+    // 本仓没有把空正文当合法答复的调用点（不解析 tool_calls / function_call）。
+    const blocks = Array.isArray(data.content)
+      ? data.content as Array<{ type?: unknown; text?: unknown; thinking?: unknown }>
+      : null;
+    const content = blocks === null ? null : blocks.map((b) => (typeof b?.text === "string" ? b.text : "")).join("");
+    // 这一腿手上有哪门子证据：OpenAI 那个 `reasoning_tokens` 在这里不存在，思考记在
+    // `usage.output_tokens` 里；正文一个字都没有时，那一发输出的就是思考花掉的数。
+    // 没有非空 thinking 块就不许拿它当证据——那三种猜测照旧。
+    const sawThinking = blocks?.some((b) => b?.type === "thinking" && typeof b.thinking === "string" && b.thinking.trim() !== "") ?? false;
+    if (content === null || content.trim() === "") {
+      const shape = content === null ? "content 缺失" : "正文是空白";
       const model = typeof data.model === "string" ? data.model : "";
       const errBody = typeof data.error === "string" ? data.error
         : data.error ? JSON.stringify(data.error)
         : raw.slice(0, 300);
+      const outputTokens = (data.usage as { output_tokens?: number } | undefined)?.output_tokens;
       throw new APIError(
-        `API 返回了空结果（content 为空）${model ? `，模型：${model}` : ""}。` +
-        `可能原因：模型名称不存在或无权访问、请求参数不被支持。原始响应：${errBody}`,
+        `API 返回了空结果（${shape}）${model ? `，模型：${model}` : ""}。` +
+        `${emptyResultNote(sawThinking ? outputTokens : undefined)}原始响应：${errBody}`,
         "server",
         response.status,
         raw

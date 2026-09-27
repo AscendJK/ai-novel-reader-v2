@@ -103,6 +103,14 @@ function mockAnthropicStream(textChunks: string[], usage?: unknown) {
   );
 }
 
+/** 构造 Anthropic 原始 SSE：事件自己给，好演 thinking_delta / signature_delta 这些真厂商发的东西 */
+function mockAnthropicRawStream(events: unknown[]) {
+  const body = events.map((e) => `data: ${JSON.stringify(e)}\n`).join("");
+  (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+    new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream; charset=utf-8" } })
+  );
+}
+
 describe("OpenAI provider parseResponse", () => {
   beforeEach(() => {
     globalThis.fetch = vi.fn();
@@ -609,6 +617,49 @@ describe("Anthropic provider 请求级 thinking 覆盖配置级", () => {
  * **W4 那格（内核不报原因）已由上面台账的 N6/N7 在新基线上重打**，读数换成 4 红 / 7 红。
  */
 
+/**
+ * 判别力台账·第三笔（2026-09-27，制作人点头「继续啃」）。
+ * 对象：`src/api/providers/anthropic.ts`，基线 sha256 `9d048367…` / 12625 B（改前那一份是 `dade7d05…`）。
+ * 判据 13 条（A1..A13），刀 10 把（K1..K10）。每轮一把、跑完 `cp` + `cmp` 回到 9d048367；
+ * 0 刀对照：**63 passed**（本文件）。
+ *
+ * 这一腿原先的读法是 `contentArr?.[0]?.text`——只看第一块。两个后果，一真一假：
+ *  - **真答案被扔掉**：思考型厂商回 `[{thinking…},{text…}]`，首块没有 `text` 字段，于是那一发
+ *    被判成"空结果"，界面报的是"模型名称不存在或无权访问"——名对、钥对、参数对，纯假话；
+ *  - **假空被放过去**：首块 `text` 是空串时 `content === null` 不成立，那一发**静默返回空串**，
+ *    agent 的「空正文才关思考重发」（认的是错误前缀）在这条腿上整条不起作用。
+ * 改法与 openai.ts 同一口径：所有 `text` 块拼起来当正文，拼完是空白就算空壳；证据从
+ * `reasoning_tokens` 换成"有没有非空 thinking 块"（这家没那个字段），数字取 `usage.output_tokens`
+ * ——正文一个字都没有时，那一发输出的就是思考花掉的数。
+ *
+ *  立红读数（产品未动，13 条里 10 条已写下）：**7 failed / 53 passed**。三条当时就绿的是护栏：
+ *  「只有思考块要抛错」（改动前也抛，只是话说不准）、「流式反向空流」、「思考不混进正文」——
+ *  它们的牙分别由 K2、K8、K7 证明，不是由"实现前就红"证明。后又补 3 条护栏（空壳 thinking 两腿各一、
+ *  content 不是数组），实现已就位、当场绿，配 K5/K8/K9。
+ *
+ *  K1 正文退回只读首块（`blocks[0].text`）        2 红：思考块在前 + 分几块拼全
+ *  K2 摘掉 `|| content.trim() === ""`             8 红：新写的 6 条**连同两条老用例**（空数组、
+ *     `content[0].text 缺失`）一起塌——那两条本来就在判同一格静默返回，改动前它们是绿的假象
+ *  K3 `shape` 固定成 "content 缺失"               1 红：「哪一种空」那条（两种空混成一句就没法分辨）
+ *  K4 证据门槛摘掉（恒传 `outputTokens`）          2 红：「没思考块不许说思考吃满」+「空壳 thinking 不算证据」
+ *  K5 非流式"非空 thinking"那半摘掉                1 红：空壳 thinking 那条
+ *  K6 流式的 `thinking_delta` 记录整行摘掉         1 红：流式点名思考那条
+ *  K7 把草稿当正文（thinking 也 `content +=`）      2 红：「思考不许混进正文」+「只有 thinking 增量要报数」
+ *     ——后一条红得比预期有意思：草稿一混进正文，`content` 就非空，"这一发没回话"那一格整个消失
+ *  K8 流式"非空 thinking"那半摘掉                  1 红：流式空壳 thinking 那条
+ *  K9 摘掉 `Array.isArray` 守卫                    1 红：content 是字符串时抛的是 TypeError，
+ *     没有前缀 → 降级那条链断（这一格是补判据之后才咬得住的）
+ *  K10 **改的是 `error-handler.ts` 那只内核**（`${reasoningTokens}` → `${0}`）
+ *     6 红：内核 1 + OpenAI 3 + **Anthropic 2** —— 这一刀是"两条腿真共用同一份措辞"的证据；
+ *     搬家那一笔（N6）当时只红 4 条，anthropic 这两条是这次接上来的。
+ * 没有一刀 0 红。
+ *
+ * 记一笔欠账（不是这次要修的）：**整条 anthropic 腿在浏览器层 0 判据**——实测 `grep -i anthropic e2e/`
+ * 0 命中，假厂商端点只做了 OpenAI 格式。也就是说这一腿"接没接上真挂载"（agent 选到 anthropic 时
+ * 整条生成链走不走得通）jsdom 这一档给不了答案，与本轮同一形状的坑（"我自己往容器 dispatch 的判据
+ * 量不到监听其实没接上"）同源。要么给 e2e 的假厂商加一个 anthropic 格式端点，要么这条腿永远只有单测。
+ */
+
 describe("Anthropic provider parseResponse", () => {
   beforeEach(() => {
     globalThis.fetch = vi.fn();
@@ -660,6 +711,131 @@ describe("Anthropic provider parseResponse", () => {
     await expect(provider.chat({ messages: [{ role: "user", content: "hi" }] })).rejects.toThrow(APIError);
   });
 
+  // ↓↓↓ 2026-09-27 批次 B：这一腿读正文只读 `content[0].text`，而思考型厂商回的是
+  // `[{thinking…},{text…}]`——首块没有 `text`，于是**后面那块真答案整个被扔掉**，报的还是
+  // "可能原因：模型名称不存在或无权访问"（假话：名对、钥对、参数对）。首块 text 是空串时更糟：
+  // 那一发被原样当成合法答复返回，静默空串，降级那一发根本不触发。
+  // 这一簇先立红。
+
+  const THINKING_FIRST = {
+    id: "msg-1",
+    content: [
+      { type: "thinking", thinking: "先想一段很长的", signature: "sig-1" },
+      { type: "text", text: "真正的总结" },
+    ],
+    // 320 与下面任何一段数字都不重，"那句里的数从哪来的"才分得出来
+    usage: { input_tokens: 10, output_tokens: 320 },
+  };
+
+  it("思考块排在正文前面：正文必须照样交出来，不许当成空壳扔掉", async () => {
+    mockFetchResponse(THINKING_FIRST);
+    const provider = createAnthropicProvider(anthropicConfig);
+    const result = await provider.chat({ messages: [{ role: "user", content: "hi" }] });
+    expect(result.content).toBe("真正的总结");
+    // 思考本身不许混进正文（那是给用户看的答案，不是模型的草稿）
+    expect(result.content).not.toContain("先想一段很长的");
+  });
+
+  it("正文分在几个 text 块里要拼全，首块是空串也不算没回话", async () => {
+    mockFetchResponse({
+      id: "msg-1",
+      content: [
+        { type: "text", text: "" },
+        { type: "text", text: "前半 " },
+        { type: "text", text: "后半" },
+      ],
+      usage: { input_tokens: 1, output_tokens: 2 },
+    });
+    const provider = createAnthropicProvider(anthropicConfig);
+    const result = await provider.chat({ messages: [{ role: "user", content: "hi" }] });
+    expect(result.content).toBe("前半 后半");
+  });
+
+  it("只有思考块、一个字正文都没回 → 要抛错，而且降级那条链认得这个错", async () => {
+    mockFetchResponse({
+      id: "msg-1",
+      content: [{ type: "thinking", thinking: "想满了", signature: "sig-2" }],
+      usage: { input_tokens: 10, output_tokens: 2048 },
+    });
+    const provider = createAnthropicProvider(anthropicConfig);
+    const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+    expect(err).toBeInstanceOf(APIError);
+    expect(isEmptyResultError(err), "抛的不是「空正文」那一类，第二发就不会关思考").toBe(true);
+  });
+
+  it("那一发要把证据说出来：思考块的预算记在 output_tokens，就得报那个数", async () => {
+    mockFetchResponse({
+      id: "msg-1",
+      content: [{ type: "thinking", thinking: "想满了", signature: "sig-3" }],
+      usage: { input_tokens: 10, output_tokens: 3072 },
+    });
+    const provider = createAnthropicProvider(anthropicConfig);
+    const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+    // 整句一起比：句尾「原始响应」里躺着 3072，只断"含这个数字"糊得过去
+    expect(err.message).toContain("3072 token 花在思考上");
+    expect(err.message).not.toContain("模型名称不存在");
+  });
+
+  it("反向那一格：没有思考块时，output_tokens 再大也不许说成思考吃满", async () => {
+    mockFetchResponse({
+      id: "msg-1",
+      content: [{ type: "text", text: "" }],
+      usage: { input_tokens: 10, output_tokens: 3072 },
+    });
+    const provider = createAnthropicProvider(anthropicConfig);
+    const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+    expect(err.message).toContain("模型名称不存在");
+    expect(err.message).not.toContain("花在思考上");
+  });
+
+  it("只有一个空壳 thinking 块（没内容）→ 不算证据，照旧说那三种猜测", async () => {
+    mockFetchResponse({
+      id: "msg-1",
+      content: [
+        { type: "thinking", thinking: "   ", signature: "sig-4" },
+        { type: "text", text: "" },
+      ],
+      usage: { input_tokens: 10, output_tokens: 3072 },
+    });
+    const provider = createAnthropicProvider(anthropicConfig);
+    const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+    expect(err.message).toContain("模型名称不存在");
+    expect(err.message).not.toContain("花在思考上");
+  });
+
+  it("正文只有空白符要抛错，不许静默返回那一串空格", async () => {
+    mockFetchResponse({
+      id: "msg-1",
+      content: [{ type: "text", text: " \n " }],
+      usage: { input_tokens: 10, output_tokens: 4 },
+    });
+    const provider = createAnthropicProvider(anthropicConfig);
+    await expect(provider.chat({ messages: [{ role: "user", content: "hi" }] })).rejects.toThrow(APIError);
+  });
+
+  it("content 不是数组（网关回个字符串）→ 按空壳抛错，不许崩在数组操作上", async () => {
+    // 崩在 `blocks.map` 上抛的是 TypeError：没有「API 返回了空结果」那个前缀，
+    // agent 那条「空正文才关思考重发」的链就此断开，界面收到的也是一句没头没尾的堆栈。
+    mockFetchResponse({ id: "msg-1", content: "upstream returned a string", usage: {} });
+    const provider = createAnthropicProvider(anthropicConfig);
+    const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+    expect(err, `抛的不是 APIError：${err?.name}`).toBeInstanceOf(APIError);
+    expect(isEmptyResultError(err)).toBe(true);
+  });
+
+  it("那一句要说清是「哪一种空」：content 没了 ≠ 有块但一个字都没有", async () => {
+    const provider = createAnthropicProvider(anthropicConfig);
+    const ask = () => provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+
+    mockFetchResponse({ id: "msg-1", content: null, usage: {} });
+    expect((await ask()).message).toContain("content 缺失");
+
+    mockFetchResponse({ id: "msg-1", content: [{ type: "text", text: "  " }], usage: {} });
+    const blank = (await ask()).message;
+    expect(blank, "两种空写成同一句话就没法分辨了").not.toContain("content 缺失");
+    expect(blank).toContain("正文是空白");
+  });
+
   it("流式响应（SSE）时聚合 content_block_delta 的 text", async () => {
     mockAnthropicStream(["你好", "，我是", "Claude"], { input_tokens: 100, output_tokens: 30 });
     const provider = createAnthropicProvider(anthropicConfig);
@@ -703,6 +879,65 @@ describe("Anthropic provider parseResponse", () => {
       name: "APIError",
       apiCode: "server",
     });
+  });
+
+  const thinkingEvents = (out: number) => [
+    { type: "message_start", message: { id: "msg-1", usage: { input_tokens: 5, output_tokens: 0 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "想了一大段" } },
+    { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", usage: { output_tokens: out } },
+    { type: "message_stop" },
+  ];
+
+  it("流式那一腿同样要说准原因：只有 thinking 增量 + output_tokens 有数 → 点名思考吃满", async () => {
+    mockAnthropicRawStream(thinkingEvents(3072));
+    const provider = createAnthropicProvider(anthropicConfig);
+    const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+    expect(err).toBeInstanceOf(APIError);
+    // 整句比对：raw 里也印着 3072（这一档的教训是从 OpenAI 那条腿抄来的）
+    expect(err.message).toContain("3072 token 花在思考上");
+    expect(err.message).not.toContain("模型名称不存在");
+    expect(isEmptyResultError(err)).toBe(true);
+  });
+
+  it("流式反向：一帧思考都没有的空流，照旧说那三种猜测", async () => {
+    mockAnthropicStream([], { input_tokens: 5, output_tokens: 999 });
+    const provider = createAnthropicProvider(anthropicConfig);
+    const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+    expect(err.message).toContain("模型名称不存在");
+    expect(err.message).not.toContain("花在思考上");
+  });
+
+  it("流式那一腿同样只认「真的想过」：thinking 帧是空白就不算证据", async () => {
+    mockAnthropicRawStream([
+      { type: "message_start", message: { id: "msg-1", usage: { input_tokens: 5, output_tokens: 0 } } },
+      { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "   " } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", usage: { output_tokens: 3072 } },
+      { type: "message_stop" },
+    ]);
+    const provider = createAnthropicProvider(anthropicConfig);
+    const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+    expect(err.message).toContain("模型名称不存在");
+    expect(err.message).not.toContain("花在思考上");
+  });
+
+  it("思考增量不许混进正文：thinking 与 text 一起来时只交正文那一半", async () => {
+    mockAnthropicRawStream([
+      ...thinkingEvents(200).slice(0, 5),
+      { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "答案是" } },
+      { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "这样" } },
+      { type: "content_block_stop", index: 1 },
+      { type: "message_delta", usage: { output_tokens: 200 } },
+      { type: "message_stop" },
+    ]);
+    const provider = createAnthropicProvider(anthropicConfig);
+    const result = await provider.chat({ messages: [{ role: "user", content: "hi" }] });
+    expect(result.content).toBe("答案是这样");
   });
 
   it("默认请求体包含 stream: true", async () => {
