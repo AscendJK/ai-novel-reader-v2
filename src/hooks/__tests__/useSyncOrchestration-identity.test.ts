@@ -250,7 +250,35 @@ describe("登录失败的两种待遇", () => {
     expect(setCurrentUser).toHaveBeenLastCalledWith(USER_OLD);
     expect(broadcastSend).toHaveBeenLastCalledWith("user-switched", USER_OLD);
     expect(alerts.some((a) => a.includes("用户不存在"))).toBe(true);
+    expect(result.current.loginError, "这条路径上登录界面已经撤了（下面立刻 onSyncReady），"
+      + "红字递不到用户眼前，所以这一格仍走弹窗——把它改成红字＝用户什么都不知道").toBeNull();
     expect(useNovelStore.getState().novels).toEqual([]);
+  });
+
+  it("之前没有登录身份：人被留在登录界面，原因要交给界面那根红字，不再弹窗", async () => {
+    // 真后端实测过的形状：租户名 43 字符 → 服务端只收 2-30 → 400 {error:"用户名需 2-30 个字符"}。
+    // 旧写法这里只有 window.alert，而 AppLayout.tsx:42 那句现成的红字永远渲染不出来。
+    syncClient.login.mockResolvedValue({ success: false, error: "用户名需 2-30 个字符" });
+
+    const { result } = hook();
+    await act(async () => { await result.current.handleLogin(USER_NEW); });
+
+    expect(localStorage.getItem("sync-username"), "回到未登录态，人还在登录界面").toBeNull();
+    expect(result.current.loginError, "界面上那句红字读的就是这个值").toBe("用户名需 2-30 个字符");
+    expect(alerts, "人就在现场，弹窗只会挡住输入框与提交按钮").toHaveLength(0);
+  });
+
+  it("重试成功之后要把上一次的原因收回去（挂着旧话＝告诉用户还在失败）", async () => {
+    syncClient.login.mockResolvedValueOnce({ success: false, error: "用户名需 2-30 个字符" });
+    const { result } = hook();
+    await act(async () => { await result.current.handleLogin(USER_NEW); });
+    expect(result.current.loginError).toBe("用户名需 2-30 个字符");
+
+    syncClient.login.mockResolvedValue({ success: true });
+    await act(async () => { await result.current.handleLogin(USER_NEW); });
+
+    expect(result.current.loginError, "这一发已经登进去了，红字不许还留着上一次的原因").toBeNull();
+    expect(alerts).toHaveLength(0);
   });
 
   it("网络错误（没有 error）：保留名字按离线登录，不许当成被拒回滚", async () => {
@@ -263,6 +291,7 @@ describe("登录失败的两种待遇", () => {
     expect(localStorage.getItem("sync-username"), "外网抖一下就把用户踢回旧名字，是拿错当失败").toBe(USER_NEW);
     expect(setCurrentUser).toHaveBeenLastCalledWith(USER_NEW);
     expect(alerts).toHaveLength(0);
+    expect(result.current.loginError, "离线登录按设计是成功的，红字写出来就是假失败").toBeNull();
   });
 
   it("不管走哪条退出路径，登录门控都要解除（残留=定时器永久停摆）", async () => {
@@ -275,3 +304,26 @@ describe("登录失败的两种待遇", () => {
     expect(calls[calls.length - 1], "最后一步必须是放开").toBe(false);
   });
 });
+
+/**
+ * 变异台账：登录失败的原因搬到界面上（2026-09-27 深夜，六刀逐条实跑）
+ *
+ * 判据先立红的读数：三处新增/加强之前是 6 红 23 绿（`useSyncOrchestration-identity` 4 红、
+ * `AppLayout-shell` 2 红）。新增的 `UsernameLogin-error.test.tsx` 两条一上来就是绿的——
+ * 那行红字本来就在产品里，死的是上游，上游已经用 L1~L5 立过红了，这里不假称"立红"。
+ *
+ * 三份基线快照都在台架目录（还原一律 `cp` 快照，不许 `git restore`——同一批文件里带着未提交的
+ * 改动）：`useSyncOrchestration.ts` sha `7f16fd2c`、`AppLayout.tsx` sha `c5f175a9`、
+ * `UsernameLogin.tsx` sha `cc62e069`。每刀跑完都是 markers=0、sha 回到上面那个值。
+ *
+ * - L1 摘掉 `handleLogin` 入口的 `setLoginError(null)` → 红 1：重试收回那条。
+ * - L2 被拒分支回到旧写法（只 `window.alert`，不递红字）→ 红 2：无身份那条 + 重试收回那条。
+ * - L3 回滚分支也写红字（＝两条退出路径都当红字能用）→ 红 1：只有"之前有身份"那条，
+ *   它判的是 `loginError` 必须为 null——登录界面下一行就被 `onSyncReady()` 撤了，递过去没人看见。
+ * - L4 外壳写死 `error={null}`（回到那次死通道）→ 红 2：`AppLayout-shell` 的"收到同一句"+"收回去"。
+ * - L5 外壳自己造句 `error={loginError ?? "登录失败"}` → 红 2："收回去" + "不许凭空递一句话"；
+ *   "收到同一句"照样绿，因为原因非空时 `??` 不生效——这一刀证明第三条判据盯的是那句空话。
+ * - L6 `UsernameLogin.tsx` 那行 `{error && …}` 摘掉渲染 → 红 1：`UsernameLogin-error` 第一条。
+ *
+ * 没有一刀 0 红。三段链路（hook 报原因 / 外壳递 prop / 组件画出来）各有自己的哨兵。
+ */

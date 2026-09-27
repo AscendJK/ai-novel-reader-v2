@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useNovelStore } from "@/stores/novel-store";
 import { useSummaryStore } from "@/stores/summary-store";
 import { useAPIStore } from "@/stores/api-store";
@@ -30,6 +30,13 @@ export function useSyncOrchestration({ onSyncReady, setLocalUsers }: SyncOrchest
   const setSummaries = useSummaryStore((s) => s.setSummaries);
   const syncStarted = useRef(false);
   const kickedRef = useRef(false);
+  /**
+   * 服务器明确拒绝时的原因，交给登录界面那行红字（`UsernameLogin.tsx` 的 `error` prop）。
+   * 放在这里而不是 AppLayout 自己 setState：知道"为什么被拒"的是本文件的登录流程，而红字
+   * 只在登录界面还挂着的时候有用——另一条退出路径（回滚到上一个身份）会立刻关掉登录门，
+   * 那句话递过去没人看见，所以那条仍走弹窗。
+   */
+  const [loginError, setLoginError] = useState<string | null>(null);
 
   const handleKicked = useCallback(async (kickedUser: string) => {
     if (kickedRef.current) return;
@@ -421,6 +428,8 @@ const applySyncData = useCallback(async (data: SyncData) => {
   }, [prepareSync, syncJoinedNovels]);
 
   const handleLogin = useCallback(async (username: string) => {
+    // 每一次尝试开头先收回上一次的原因：这一发还在路上就挂着旧红字，等于告诉用户"还在失败"
+    setLoginError(null);
     const onlineStatus = await syncClient.checkUserOnline(username);
     if (onlineStatus && onlineStatus.online) {
       const kick = window.confirm(
@@ -586,6 +595,8 @@ const applySyncData = useCallback(async (data: SyncData) => {
           setCurrentUser(prevUsername);
           useNovelStore.getState().reloadReadingPositions();
           broadcast.send("user-switched", prevUsername);
+          // 这一条仍走弹窗：下一行就 onSyncReady() 关掉登录门，人回到书架，界面那根红字
+          // 所在的组件已经撤了——递过去只会变成"看不见的一句话"，比弹窗更糟。
           window.alert(`登录失败：${loginResult.error}`);
           // prepareSync 已打开登录门控，不解除就会永远不再周期同步（R-51 的门侧）
           startSync();
@@ -595,7 +606,9 @@ const applySyncData = useCallback(async (data: SyncData) => {
           localStorage.removeItem("sync-username");
           syncClient.logout();
           syncStarted.current = false;
-          window.alert(`登录失败：${loginResult.error}`);
+          // 人就坐在这块界面前面：原因交给它自己那行红字，不再弹窗（弹窗会盖住输入框和
+          // 提交按钮，而用户要做的正是改一下名字重来）
+          setLoginError(loginResult.error);
         }
         return;
       }
@@ -652,5 +665,6 @@ const applySyncData = useCallback(async (data: SyncData) => {
     handleKicked,
     startSync,
     syncJoinedNovels,
+    loginError,
   };
 }

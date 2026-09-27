@@ -20,10 +20,13 @@ import { useUIStore } from "@/stores/ui-store";
 
 type Binding = { key: string; shift?: boolean; action: () => void; description?: string };
 type HeaderProps = { inBook: boolean; onSettings: () => void; onNotes: () => void; onBack: () => void };
+type LoginProps = { localUsers: string[]; onLogin: (u: string) => Promise<void>; onDelete: (u: string) => void; error?: string | null };
 
 const m = vi.hoisted(() => ({
   mounts: [] as string[],
   header: [] as HeaderProps[],
+  login: [] as LoginProps[],
+  loginError: null as string | null,
   registered: [] as Binding[],
   helpLists: [] as Binding[],
   helpClose: [] as Array<() => void>,
@@ -33,6 +36,8 @@ const m = vi.hoisted(() => ({
 })) as unknown as {
   mounts: string[];
   header: HeaderProps[];
+  login: LoginProps[];
+  loginError: string | null;
   registered: Binding[];
   helpLists: Binding[];
   helpClose: Array<() => void>;
@@ -70,7 +75,15 @@ vi.mock("../BookSelect", () => ({ BookSelect: panel("BookSelect")() }));
 vi.mock("@/components/reader/ReadingPanel", () => ({ ReadingPanel: panel("ReadingPanel")() }));
 vi.mock("@/components/settings/ApiSettings", () => ({ ApiSettings: panel("ApiSettings")() }));
 vi.mock("@/components/notes/GlobalNotes", () => ({ GlobalNotes: panel("GlobalNotes")() }));
-vi.mock("@/components/login/UsernameLogin", () => ({ UsernameLogin: panel("UsernameLogin")() }));
+// 登录这块要判"外壳递出去的那句失败原因"，所以 props 每次渲染都记（同 Header 的取法）
+vi.mock("@/components/login/UsernameLogin", () => ({
+  UsernameLogin: (props: LoginProps) => {
+    useEffect(() => {
+      m.login.push(props);
+    });
+    return <div data-testid="UsernameLogin" />;
+  },
+}));
 vi.mock("@/components/common/DebugPanel", () => ({ DebugPanel: panel("DebugPanel")() }));
 vi.mock("@/components/common/LocalErrorBoundary", () => ({
   LocalErrorBoundary: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -110,7 +123,8 @@ vi.mock("@/hooks/useKeyboardShortcuts", () => ({
 vi.mock("@/hooks/useSyncOrchestration", () => ({
   useSyncOrchestration: (o: { onSyncReady: () => void }) => {
     m.syncReadyCbs.push(o.onSyncReady);
-    return { handleLogin: vi.fn(), handleDeleteUser: vi.fn(), startSync: vi.fn() };
+    // loginError 每次渲染现取：外壳如果把它记在第一次，第二次就看不见"收回去"
+    return { handleLogin: vi.fn(), handleDeleteUser: vi.fn(), startSync: vi.fn(), loginError: m.loginError };
   },
 }));
 vi.mock("@/rag/model-loader", () => ({
@@ -169,9 +183,18 @@ function count(name: string): number {
   return m.mounts.filter((x) => x === name).length;
 }
 
+/** 登录界面最后一次收到的 props（外壳每次渲染都重记，取最后一格） */
+function loginProps(): LoginProps {
+  const last = m.login[m.login.length - 1];
+  expect(last, "这块没挂上就谈不上递了什么").toBeDefined();
+  return last as LoginProps;
+}
+
 beforeEach(() => {
   m.mounts.length = 0;
   m.header.length = 0;
+  m.login.length = 0;
+  m.loginError = null;
   m.registered.length = 0;
   m.helpLists.length = 0;
   m.helpClose.length = 0;
@@ -267,6 +290,40 @@ describe("四块主视图谁在屏上", () => {
       useUIStore.setState({ debugMode: true });
     });
     expect(count("DebugPanel")).toBe(1);
+  });
+});
+
+/**
+ * 登录失败的那句话怎么到屏上：`useSyncOrchestration` 报原因 → 外壳递成 `error` prop →
+ * `UsernameLogin.tsx:313` 那句现成的红字。这一段以前是**死的**：外壳自己 `useState(null)`
+ * 却没有 setter（AppLayout.tsx:42），所以登录失败只剩系统弹窗。
+ * 判"接线"而不是判"红字长什么样"——后者是 UsernameLogin 自己的事。
+ */
+describe("登录失败的原因要递到登录界面那根红字上", () => {
+  it("hook 报了原因 → 登录界面收到同一句（外壳自己不造话）", () => {
+    localStorage.removeItem("sync-username");
+    m.loginError = "用户名需 2-30 个字符";
+    render(<AppLayout />);
+    expect(loginProps().error, "这句就是屏上那行红字的内容").toBe("用户名需 2-30 个字符");
+  });
+
+  it("原因收回去之后红字跟着没有：外壳每次渲染现取，不是记住第一次", () => {
+    localStorage.removeItem("sync-username");
+    m.loginError = "用户不存在";
+    render(<AppLayout />);
+    expect(loginProps().error).toBe("用户不存在");
+
+    m.loginError = null;
+    act(() => {
+      useUIStore.getState().setOfflineMode(true);
+    });
+    expect(loginProps().error, "已经重试成功了还挂着上一次的原因＝告诉用户仍在失败").toBeNull();
+  });
+
+  it("没失败过的时候不许凭空递一句话", () => {
+    localStorage.removeItem("sync-username");
+    render(<AppLayout />);
+    expect(loginProps().error ?? null, "凭空一句红字比没有更糟").toBeNull();
   });
 });
 

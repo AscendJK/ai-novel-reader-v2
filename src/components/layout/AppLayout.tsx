@@ -39,7 +39,6 @@ export function AppLayout() {
   const [showSettings, setShowSettings] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const [syncReady, setSyncReady] = useState(() => !!localStorage.getItem("sync-username"));
-  const [loginError] = useState<string | null>(null);
   const [localUsers, setLocalUsers] = useState<string[]>(getLocalUsers);
   const [showShortcutHelp, setShowShortcutHelp] = useState(false);
   const [versionMismatch, setVersionMismatch] = useState<{ frontend: string; backend: string } | null>(null);
@@ -48,7 +47,7 @@ export function AppLayout() {
 
   const onSyncReady = useCallback(() => setSyncReady(true), []);
 
-  const { handleLogin, handleDeleteUser, startSync } = useSyncOrchestration({
+  const { handleLogin, handleDeleteUser, startSync, loginError } = useSyncOrchestration({
     onSyncReady,
     setLocalUsers,
   });
