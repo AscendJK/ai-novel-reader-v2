@@ -264,14 +264,15 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
             <div className="space-y-1">
               <Label htmlFor="api-max-output" className="text-xs">最大输出 token（可选）</Label>
               <Input id="api-max-output" name="api-max-output" type="number" min={128} step={128}
-                placeholder={modelInfo ? String(modelInfo.budget.maxOutputTokens) : "4096"}
+                placeholder="留空＝按任务该要多少要多少"
                 value={editing.maxTokens || ""}
                 onChange={(e) => setEditing((d) => d ? { ...d, maxTokens: e.target.value ? parseInt(e.target.value) : undefined } : d)}
                 className="h-7 text-xs" />
               <p className="text-[10px] text-muted-foreground">
-                模型单次调用的最大输出 token 数。留空则使用上方匹配到的默认值{modelInfo ? `（${modelInfo.budget.maxOutputTokens.toLocaleString()}）` : "（4,096）"}，填写后优先使用。
-                填大它能避免回答被截断（推理模型会先把这段预算花在"思考"上，太小就一个字都拿不到）。
-                但它是所有任务共用的天花板：填得比某个任务想要的少，那个任务就跟着少要（小说地图原本要 16,384，你填 8,192 它就只要 8,192，地图可能画到一半停住）。
+                模型单次调用的最大输出 token 数，「一般不用填」。留空时每个任务按自己该要的量去要（一章摘要 4,096，人物关系分析与剧情时间线 16,384，小说地图 16,384）；
+                厂商嫌多会回一句"最多只能给 N"，程序照它给的数缩一档重发，不用你试。
+                填了就一律照你的：填大能避免回答被截断（推理模型会先把这段预算花在"思考"上，太小就一个字都拿不到），
+                但它也是所有任务共用的天花板——填得比某个任务想要的少，那个任务就跟着少要（小说地图原本要 16,384，你填 8,192 它就只要 8,192，地图可能画到一半停住）。
                 代价在同一只窗口里：输出留得越多，喂给模型的原文就越少，送不进去的部分会在分析卡片上写明（如「另有 N 章原文没送出去」）。
               </p>
             </div>

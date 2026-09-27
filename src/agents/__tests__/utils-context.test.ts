@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Novel } from "@/parsers/types";
 import type { AgentContext } from "../types";
 import { APIError } from "@/api/error-handler";
-import { getTokenBudget } from "@/api/token-manager";
+import { getTokenBudget, resolveOutputReserve } from "@/api/token-manager";
 import {
   sampleChaptersContent,
   getRelevantContent,
@@ -237,8 +237,13 @@ describe("getProviderBudget", () => {
       model: "gpt-4o",
     });
     const r = getProviderBudget();
-    expect(r.budget.maxOutputTokens).toBe(16384); // 表值
+    // **这条的名字一直说的是"不许凭空造"，而老期望造的正是反话**：它写的是 `16384 // 表值`，
+    // 因为那时预算表里有一列按模型名写死的"最大输出"。2026-09-27 那一列删了（它是在猜，猜小了的
+    // 代价实测过：推理型厂商把整份预算花在思考上、正文一个字都不回），现在标题才是真被守住的：
+    // 用户没填、也没从 400 学到 → `undefined`，任务默认预算不必让路。
+    expect(r.budget.maxOutputTokens).toBeUndefined();
     expect(r.budget.userMaxOutputTokens).toBeUndefined();
+    expect(r.budget.contextWindow).toBe(128000); // 窗口那一列留着
   });
 
   it("未配置 API 时不抛异常：config 为空、model 为空串（调用方据此走失败分支）", () => {
@@ -246,7 +251,9 @@ describe("getProviderBudget", () => {
     const r = getProviderBudget();
     expect(r.model).toBe("");
     expect(r.config).toBeFalsy();
-    expect(r.budget).toEqual({ contextWindow: 128000, maxOutputTokens: 4096 });
+    // 老期望是 `{ contextWindow: 128000, maxOutputTokens: 4096 }`——那个 4096 就是被删掉的
+    // "未匹配一律按 4096 猜"。空模型名现在只有窗口可给，输出侧留空由任务预设决定。
+    expect(r.budget).toEqual({ contextWindow: 128000, maxOutputTokens: undefined, userMaxOutputTokens: undefined });
   });
 });
 
@@ -281,16 +288,23 @@ describe("chatWithContextRetry — context_length 自愈", () => {
     expect(attempt).toHaveBeenCalledTimes(1);
   });
 
-  it("输出超限（output_limit）不许走自愈：那条消息里的数字是输出上限", async () => {
-    // 消息故意写成"限制 4096"——`extractContextLength` 读得出来。所以这一条只可能靠
-    // apiCode 判定拦住：一旦有人把重试条件放宽到"任何 400"，模型窗口就被 4096 污染，
-    // 之后整场会话都按小窗口喂原文，界面上却一次异常都没有。
-    const attempt = vi.fn(async () => {
-      throw new APIError("输出长度超过模型限制 4096，请求的 max_tokens 是 16000", "output_limit");
+  it("输出超限（output_limit）走的自愈只许缩输出，一毫都不许动窗口", async () => {
+    // **这条的口径 2026-09-27 改过一次**：老的那条叫「不许走自愈」，它防的是真坑——厂商那句
+    // 「限制 4096」会被 `extractContextLength` 读成一个窗口，写进发现缓存之后整场会话都按小窗口
+    // 喂原文，界面上一次异常都没有。制作人拍的修法（删掉预算表的输出上限那一列 + 认 400 学上限）
+    // 不撤销这个恐惧，只是把它挪个位置：现在这一支**要**重试，但改的只有输出侧。
+    // 所以两头各钉一句：第二发的 `maxOutputTokens` 必须按厂商给的数字变小，而 `contextWindow` 必须一个字没变。
+    const seen: Array<{ contextWindow: number; maxOutputTokens?: number }> = [];
+    const attempt = vi.fn(async (b: { contextWindow: number; maxOutputTokens?: number }) => {
+      seen.push({ contextWindow: b.contextWindow, maxOutputTokens: b.maxOutputTokens });
+      throw new APIError("请求的输出长度超过模型单次允许的上限 (400)。厂商原话：field MaxTokens invalid, should be in [1, 2048]", "output_limit");
     });
-    await expect(chatWithContextRetry(env("selfheal-model-7", 128000), attempt as never)).rejects.toThrow("输出长度");
-    expect(attempt).toHaveBeenCalledTimes(1);
-    expect(getTokenBudget("selfheal-model-7").contextWindow).toBe(128000);
+    await expect(chatWithContextRetry(env("selfheal-out-7", 128000), attempt as never)).rejects.toThrow("输出长度");
+    expect(seen[0].maxOutputTokens).toBe(4096); // 起手是 env 给的那个数
+    expect(seen).toHaveLength(2); // 走重试，但不许超过一次
+    for (const s of seen) expect(s.contextWindow, "窗口被厂商那句输出上限污染了").toBe(128000);
+    expect(seen[1].maxOutputTokens).toBe(2048);
+    expect(getTokenBudget("selfheal-out-7").contextWindow).toBe(128000);
   });
 
   it("错误信息里读不到真实窗口时抛出，而不是拿旧预算再撞一次", async () => {
@@ -301,13 +315,13 @@ describe("chatWithContextRetry — context_length 自愈", () => {
     expect(attempt).toHaveBeenCalledTimes(1);
   });
 
-  it("自愈重试不许把表里的默认上限冒充成用户亲手填的", async () => {
-    // 用户没填上限时 `maxOutputTokens` 来自预算表。回灌时若把它当作 getTokenBudget 的
-    // 第三参，重试那一发就凭空多出"用户显式要过这个数"这条事实，任务默认预算得给它让路：
-    // 表值 4096 会把人物关系分析要的 16384 压回去，表值更大时（`gpt-4o` 的 16384 对章节总结的
-    // 4096）又比第一次要得更多。两个方向都不是用户的意思——正好是这次改动要修的反面。
-    const seen: Array<{ maxOutputTokens: number; userMaxOutputTokens?: number }> = [];
-    const attempt = vi.fn(async (b: { maxOutputTokens: number; userMaxOutputTokens?: number }) => {
+  it("自愈重试不许把已有的输出上限冒充成用户亲手填的", async () => {
+    // `env.budget.maxOutputTokens` 可能是用户填的，也可能是上一次 400 学到的。回灌时若把它当作
+    // `getTokenBudget` 的第三参，重试那一发就凭空多出"用户显式要过这个数"这条事实，任务默认预算
+    // 得给它让路：小上限（4096）会把人物关系分析要的 16384 压回去，大上限（16384）对章节总结
+    // 又比第一次要得更多。两个方向都不是用户的意思——正好是这次改动要修的反面。
+    const seen: Array<{ maxOutputTokens?: number; userMaxOutputTokens?: number }> = [];
+    const attempt = vi.fn(async (b: { maxOutputTokens?: number; userMaxOutputTokens?: number }) => {
       seen.push({ maxOutputTokens: b.maxOutputTokens, userMaxOutputTokens: b.userMaxOutputTokens });
       if (seen.length === 1) throw new APIError("This model's maximum context length is 8192 tokens", "context_length");
       return { content: "ok", tokensUsed: { input: 1, output: 1, total: 2 } } as never;
@@ -316,12 +330,12 @@ describe("chatWithContextRetry — context_length 自愈", () => {
     expect(seen).toHaveLength(2);
     expect(seen[0].userMaxOutputTokens).toBeUndefined();
     expect(seen[1].userMaxOutputTokens).toBeUndefined();
-    expect(seen[1].maxOutputTokens).toBe(4096); // 表值原样带走，没被改小也没被冒充成用户值
+    expect(seen[1].maxOutputTokens).toBe(4096); // env 给的那个数原样带走，没被改小也没被冒充成用户值
   });
 
-  it("自愈只换上下文窗口，不许顺手把用户的输出上限换成表里的默认值", async () => {
+  it("自愈只换上下文窗口，不许顺手把 env 里的输出上限换成\"没有上限\"", async () => {
     // 用户在设置里把输出上限调到 16384（预算不足时的官方建议动作就是这个）。
-    // 旧实现在重试处调 getTokenBudget(env.modelName) 不带参数，输出上限被抹回 4096。
+    // 旧实现在重试处调 getTokenBudget(env.modelName) 不带参数，输出上限被抹回表里的 4096。
     const seen: Array<{ contextWindow: number; maxOutputTokens: number }> = [];
     const attempt = vi.fn(async (b: { contextWindow: number; maxOutputTokens: number }) => {
       seen.push({ contextWindow: b.contextWindow, maxOutputTokens: b.maxOutputTokens });
@@ -338,6 +352,139 @@ describe("chatWithContextRetry — context_length 自愈", () => {
     expect(seen).toHaveLength(2);
     expect(seen[1].contextWindow).toBe(8192);
     expect(seen[1].maxOutputTokens).toBe(16384);
+  });
+});
+
+/**
+ * `output_limit` 自愈——「抬预算」的另一半（制作人 2026-09-27 拍的口径 1：删掉预算表的输出上限那一列，
+ * 改成"预设要多少就要多少，厂商嫌多会自己退一步"）。没有这一半，删表就是把厂商从"回空正文"
+ * 推到"直接 400 红在 `[输出超限]`"。
+ *
+ * 认的三种措辞是当天直连量到的原话（`anr-e2e-real/probe-deepseek-budget.mjs reject`）：
+ *  - deepseek：`Invalid max_tokens value, the valid range of max_tokens is [1, 393216]`（65536／200000 都收）
+ *  - sensenova：`field MaxTokens invalid, should be in [1, 65536]`
+ *  - longcat：`参数校验失败: /max_tokens: 1000000 is not less or equal to 262144`
+ * 另两家量不出东西：modelscope 对 1000000 回的是 **HTTP 200 + 空壳**（`choices:null`，没数字可抠），
+ * 411 三档全撞在 429 配额墙上。所以"认不到数字就不许猜"不是偷懒，是那两家根本没有数字。
+ */
+describe("chatWithContextRetry — output_limit 自愈（学到上限就缩一档重发）", () => {
+  /** 预算一律由 `getTokenBudget` 造：手搓 `{maxOutputTokens: 16384, userMaxOutputTokens: 1024}` 是产品永远产不出的形状 */
+  const e = (modelName: string, userCap?: number) =>
+    ({
+      novel: makeNovel("n", "书"),
+      provider: { format: "openai", chat: vi.fn() },
+      budget: getTokenBudget(modelName, 128000, userCap),
+      modelName,
+    }) as never;
+
+  /** 每一发实际要了多少（任务预设取 16384，与调用点同一算法） */
+  const asks = (log: Array<{ maxOutputTokens?: number }>) =>
+    log.map((b) => resolveOutputReserve({ contextWindow: 128000, ...b } as never, 16384));
+
+  it("厂商说 [1, 3072] 而我们要 16384：按它给的 3072 重发一发，并缓存进这一家的上限", async () => {
+    const log: Array<{ maxOutputTokens?: number }> = [];
+    const attempt = vi.fn(async (b: { maxOutputTokens?: number }) => {
+      log.push({ maxOutputTokens: b.maxOutputTokens });
+      if (log.length === 1) {
+        throw new APIError("输出超限 (400)。厂商原话：Invalid max_tokens value, the valid range of max_tokens is [1, 3072]", "output_limit");
+      }
+      return { content: "带回正文了", tokensUsed: { input: 1, output: 1, total: 2 } } as never;
+    });
+    const r = await chatWithContextRetry(e("learn-range-model"), attempt as never);
+    expect(r.content).toBe("带回正文了");
+    expect(asks(log)).toEqual([16384, 3072]);
+    // 学到的上限进了预算：同一家下一发不再撞同一堵墙。
+    // 数字故意取 3072——不是 4096：未匹配的模型过去正落在 4096 那个默认上，取同值会"因为错的理由通过"。
+    expect(getTokenBudget("learn-range-model").maxOutputTokens).toBe(3072);
+  });
+
+  it("`is not less or equal to N` 那种措辞也认（longcat 实测形状）", async () => {
+    const log: Array<{ maxOutputTokens?: number }> = [];
+    const attempt = vi.fn(async (b: { maxOutputTokens?: number }) => {
+      log.push({ maxOutputTokens: b.maxOutputTokens });
+      if (log.length === 1) {
+        throw new APIError("输出超限 (400)。厂商原话：参数校验失败: /max_tokens: 300000 is not less or equal to 8192", "output_limit");
+      }
+      return { content: "ok", tokensUsed: { input: 1, output: 1, total: 2 } } as never;
+    });
+    await chatWithContextRetry(e("learn-lte-model"), attempt as never);
+    expect(asks(log)).toEqual([16384, 8192]);
+    // 学到的进了预算，且**下一发的预设让位给它**：这正是删掉表里那一列之后唯一的天花板来源。
+    expect(getTokenBudget("learn-lte-model").maxOutputTokens).toBe(8192);
+    expect(getTokenBudget("learn-lte-model").userMaxOutputTokens).toBeUndefined();
+  });
+
+  it("厂商给的数字不比我们要的小 → 那句 400 不是\"要得太多\"，一次都不许多发", async () => {
+    // deepseek 真回过 `[1, 393216]`：若我们只发了 16384 还被拒，问题在别处（配额、参数、模型名）。
+    // 拿它当"学到 393216"去重发，等于把一次失败变成两次，还把一个我们没用过的数写进缓存。
+    const log: Array<{ maxOutputTokens?: number }> = [];
+    const attempt = vi.fn(async (b: { maxOutputTokens?: number }) => {
+      log.push({ maxOutputTokens: b.maxOutputTokens });
+      throw new APIError("输出超限 (400)。厂商原话：the valid range of max_tokens is [1, 393216]", "output_limit");
+    });
+    await expect(chatWithContextRetry(e("learn-bigger-model"), attempt as never)).rejects.toThrow("输出超限");
+    expect(log).toHaveLength(1);
+    expect(getTokenBudget("learn-bigger-model").maxOutputTokens).toBeUndefined();
+  });
+
+  it("认不到数字就不许猜：只发一发，错误原样抛（modelscope 那家回的是 200 空壳，压根没有数字）", async () => {
+    const log: Array<{ maxOutputTokens?: number }> = [];
+    const attempt = vi.fn(async (b: { maxOutputTokens?: number }) => {
+      log.push({ maxOutputTokens: b.maxOutputTokens });
+      throw new APIError("输出超限 (400)。厂商原话：参数不合法", "output_limit");
+    });
+    await expect(chatWithContextRetry(e("learn-nnn-model"), attempt as never)).rejects.toThrow("参数不合法");
+    expect(log).toHaveLength(1);
+    expect(getTokenBudget("learn-nnn-model").maxOutputTokens).toBeUndefined();
+  });
+
+  it("用户亲手填了 1024，厂商却说它能写 8192：那不是超发，一次都不许多发", async () => {
+    const log: Array<{ maxOutputTokens?: number }> = [];
+    const attempt = vi.fn(async (b: { maxOutputTokens?: number }) => {
+      log.push({ maxOutputTokens: b.maxOutputTokens });
+      throw new APIError("输出超限。厂商原话：should be in [1, 8192]", "output_limit");
+    });
+    // 用户那一档比厂商给的还小 → 我们实际要的（1024）远在厂商天花板以下，那句 400 另有原因
+    // （配额、参数、模型名）。拿"学到 8192"去重发等于白烧一发，还可能把 8192 当成新上限写进缓存。
+    await expect(chatWithContextRetry(e("learn-usersmall-model", 1024), attempt as never)).rejects.toThrow("输出超限");
+    expect(log).toHaveLength(1);
+    // 那一家的缓存里**不许**因此留下 8192：学到的数只在"确实比我们的小"时才进缓存，
+    // 否则同一家厂商在别的任务上会被这个从没见过我们ask过的数压住。
+    expect(getTokenBudget("learn-usersmall-model").maxOutputTokens).toBeUndefined();
+  });
+
+  it("用户填 16384、厂商说 [1, 4096]：重发取更小的那个，而学到的绝不冒充\"用户显式要过\"", async () => {
+    const log: Array<{ maxOutputTokens?: number; userMaxOutputTokens?: number }> = [];
+    const attempt = vi.fn(async (b: { maxOutputTokens?: number; userMaxOutputTokens?: number }) => {
+      log.push({ maxOutputTokens: b.maxOutputTokens, userMaxOutputTokens: b.userMaxOutputTokens });
+      if (log.length === 1) {
+        throw new APIError("输出超限。厂商原话：should be in [1, 4096]", "output_limit");
+      }
+      return { content: "ok", tokensUsed: { input: 1, output: 1, total: 2 } } as never;
+    });
+    await chatWithContextRetry(e("learn-bothcaps-model", 16384), attempt as never);
+    // 两个来源都是天花板，取更小的：学到 4096 之后第二发就该要 4096，而不是仍按用户填的 16384 撞第二回
+    expect(asks(log)).toEqual([16384, 4096]);
+    // 而"用户填过"这条事实必须原样留着：它是任务默认预算让不让路的唯一依据（`resolveOutputReserve`）。
+    // 一旦学到的数被写成 `userMaxOutputTokens`，同一家厂商的其他任务会误以为"用户要过 4096"，
+    // 连本来该要 16384 的地图也跟着缩——这正是批次 F 修过的那个反面。
+    expect(log.map((b) => b.userMaxOutputTokens)).toEqual([16384, 16384]);
+  });
+
+  it("用户压根没填时，学到的数不许变成\"用户填过\"（任务默认预算该照要 16384）", async () => {
+    const log: Array<{ userMaxOutputTokens?: number; maxOutputTokens?: number }> = [];
+    const attempt = vi.fn(async (b: { userMaxOutputTokens?: number; maxOutputTokens?: number }) => {
+      log.push({ userMaxOutputTokens: b.userMaxOutputTokens, maxOutputTokens: b.maxOutputTokens });
+      if (log.length === 1) {
+        throw new APIError("输出超限。厂商原话：should be in [1, 2048]", "output_limit");
+      }
+      return { content: "ok", tokensUsed: { input: 1, output: 1, total: 2 } } as never;
+    });
+    await chatWithContextRetry(e("learn-notuser-model"), attempt as never);
+    expect(log).toEqual([
+      { userMaxOutputTokens: undefined, maxOutputTokens: undefined },
+      { userMaxOutputTokens: undefined, maxOutputTokens: 2048 },
+    ]);
   });
 });
 

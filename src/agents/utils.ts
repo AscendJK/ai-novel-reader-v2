@@ -9,7 +9,7 @@ import { getProvider } from "@/api/registry";
 import { useAPIStore } from "@/stores/api-store";
 import { loadNovel } from "@/db/repositories";
 import type { Novel } from "@/parsers/types";
-import { getTokenBudget, estimateTokens, extractContextLength, setDiscoveredContextWindow, type TokenBudget } from "@/api/token-manager";
+import { getTokenBudget, estimateTokens, extractContextLength, setDiscoveredContextWindow, extractMaxOutputTokens, setDiscoveredMaxOutput, resolveOutputReserve, type TokenBudget } from "@/api/token-manager";
 import { APIError } from "@/api/error-handler";
 import type { AgentEnvironment } from "./base-agent";
 import type { ChatCompletionResponse } from "@/api/types";
@@ -280,6 +280,24 @@ export async function chatWithContextRetry(
           maxOutputTokens: env.budget.maxOutputTokens,
         };
         // 用新预算重试一次（重新裁剪 + 重建 prompt）
+        return await attempt(budget);
+      }
+    }
+    // 第二种会自愈的 400：厂商说"你一次要的输出太多了"。删掉预算表里那列"按模型名猜的最大输出"
+    // 之后，这是唯一的兜底——预设要多少就要多少，超了由厂商自己报它的天花板，我们学到再缩一档。
+    // 只认**带数字**的那句（三种措辞见 `extractMaxOutputTokens`），而且只重试一次：
+    // modelscope 对离谱的 `max_tokens` 回的是 200 空壳、压根没数字；没数字就不猜，错误照原样抛。
+    if (err instanceof APIError && err.apiCode === "output_limit") {
+      const raw = err.originalBody || err.message || "";
+      const learned = extractMaxOutputTokens(raw);
+      // 这一发实际要了多少：与 `resolveOutputReserve` 同一算法，只是把"任务预设"换成"无穷大"，
+      // 于是取到的就是"用户填的/学到的"与"窗口允许"里更小的那个。
+      const asked = resolveOutputReserve(budget, Number.MAX_SAFE_INTEGER);
+      if (learned && learned < asked) {
+        setDiscoveredMaxOutput(env.modelName, learned);
+        // 重算而不是手改：`用户填的 与 刚学到的 取更小` 这一折只有 `getTokenBudget` 一个出处，
+        // 在这里再 `Math.min` 一遍是重复计算（N8 那把刀摘掉它 0 红）。
+        budget = getTokenBudget(env.modelName, budget.contextWindow, budget.userMaxOutputTokens);
         return await attempt(budget);
       }
     }

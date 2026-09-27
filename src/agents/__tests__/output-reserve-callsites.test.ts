@@ -22,25 +22,32 @@
  *  1. 没填 → 逐任务等于**当前**常数（改动只在常数上，别处不许漂移）；
  *  2. 填了 → 发出去的就是他填的那个数（所以这里故意填一个不等于任何常数的 12000）；
  *  3. 填得窗口装不下 → 按窗口钳，宁可少给输出也不许把喂给模型的原文挤穿（1:1 兑换）；
- *  4. **表里的输出上限低于任务常数时按表值发**：常数抬到 16384 之后，这一档才真的判得出"有没有超发"
- *     ——输出超限的 400 没有自愈（只有 `context_length` 那一类会重试），超发等于直接落一句 `[输出超限]`。
+ *  4. **预算表里"最大输出"那一列已经删掉**：命中表条目的模型也照任务预设发。输出侧只剩两个来源
+ *     ——用户填的、厂商在那句 400 里自己报的。这一条以前钉的是反方向（"表值低于常数时按表值发"），
+ *     而表值本身是猜的：猜小了的代价就是上面 `deepseek-flash` 那句"正文 0 字"。
+ *     真超了厂商的天花板会撞 400，那一支由 `chatWithContextRetry` 认数字缩一档重发
+ *     （判据在 `utils-context.test.ts` 的 output_limit 那一档，不在本文件）。
  *
  * 图谱与地图各自的文件里已经钉了同样的三条（`graph-agent.test.ts`、`map-agent.test.ts`），
  * 范围总结与问答在 e2e C 组按真请求体判（`e2e/specs/c-ai-generate.spec.ts`）。
  *
- * 变异台账（2026-09-27，基线 sha：`token-manager.ts` f93ba831、`analyzers.ts` bbec5a9f、
- * `summarizer.ts` 674dab26；每刀 markers=1、跑完 `cp` 还原后 sha 逐字对上）：
+ * 变异台账（2026-09-27 上午，基线 sha：`token-manager.ts` f93ba831、`analyzers.ts` bbec5a9f、
+ * `summarizer.ts` 674dab26；每刀 markers=1、跑完 `cp` 还原后 sha 逐字对上）。
+ * 这批刀打的是**「抬常数」那一笔（`b69e3c7`）**，当时表里还有"最大输出"那一列：
  *  - **K1** 把 `deepseek-flash` 的表值改回 4096（等价于"条目不存在"）→ 红 1：`token-manager.test.ts`
  *    那条"命中自己的条目"。（那一格的红名在本文件之外，故记在这里。）
  *  - **K2** `ANALYZER_OUTPUT_TOKENS` 退回 8192 → 红 2：人物关系分析／剧情时间线"发 16384"两条。
  *  - **K3** 章节总结的 `OUTPUT_TOKENS` 退回 1024 → 红 1："章节总结 发 4096"。
  *  - **K4** `resolveOutputReserve` 里摘掉 `budget.maxOutputTokens` 那一项（只留窗口钳）
- *    → 红 3：下面"按模型上限发"那两条 **加上** `token-manager-reserve.test.ts` 里"逐档等于旧的
+ *    → 红 3：当时"按模型上限发"那两条 **加上** `token-manager-reserve.test.ts` 里"逐档等于旧的
  *      Math.min(上限, 常数)"。**如实记**：新加的那两条在立红阶段是绿的（当时常数 8192 ≤ 表值 8192、
  *      常数 4096 ≤ 表值 4096，撞不出差别），牙是常数抬上去之后才长出来的——所以 K4 这一刀
  *      同时是"这两条现在到底有没有牙"的证据。
- *  - BASE 模型从 `gpt-4o`（表值 16384）换成 `o1`（100000）本身也是量过的：留在 gpt-4o 时
+ *  - BASE 模型从 `gpt-4o`（旧表值 16384）换成 `o1`（旧表值 100000）本身也是量过的：留在 gpt-4o 时
  *    分析类常数与表值同数，"把常数整个换成表值"那把刀取不出读数。
+ *  - **删列之后 K4 打的那条路径不存在了**（"按表值发"随列一起没了），上面的读数只算历史。
+ *    「删表列 + output_limit 自愈」这一笔的刀（N1..N12）另记在
+ *    `src/api/__tests__/token-manager.test.ts` 顶部；本文件被 N10 打红 6 条、被 N12 打红 3 条。
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Novel } from "@/parsers/types";
@@ -58,12 +65,13 @@ vi.mock("@/stores/api-store", () => ({
 }));
 
 /**
- * `o1`：表内 200k 窗口 / 100000 输出上限——表值必须**高于**所有文字任务的常数，才好判"谁在挡"。
- * 以前这里是 `gpt-4o`（上限 16384）：分析类常数抬到 16384 之后两者相等，于是"把常数整个换成模型上限"
- * 那把刀在这一档上量不出来（发出去的还是 16384）。换一只更高的模型才有牙。
+ * `o1`：表内 200k 窗口——窗口必须**高于**所有文字任务的常数，钳制那一档才判得出来。
+ * 历史上这里换过一次模型（`gpt-4o` → `o1`），因为当时表里还有一列"最大输出"：留在 gpt-4o
+ * 时分析类常数（16384）与表值同数，"把常数整个换成表值"那把刀取不出读数。列删了之后
+ * 表值不再是变量，这里只需要一只窗口够大的。
  */
 const BASE = { id: "p1", format: "openai" as const, name: "t", apiKey: "k", baseUrl: "u", model: "o1" };
-/** 用户没填：只有表值 */
+/** 用户没填：输出侧两个来源全空，只剩任务预设 */
 const NO_USER_CAP = { ...BASE, maxTokens: undefined };
 /** 用户填了一个高于所有任务常数的数（12000：不撞任何常数，才判得出"谁在挡"） */
 const USER_12000 = { ...BASE, maxTokens: 12000 };
@@ -134,22 +142,30 @@ describe("用户填得窗口装不下时按窗口钳制", () => {
 });
 
 /**
- * 常数抬到 16384 之后新增的这一档：厂商自己说"我最多写 8192"时不许超发。
- * 输出超限的 400 没有自愈（`chatWithContextRetry` 只认 `context_length` 那一类），
- * 超发等于让整条任务落一句 `[输出超限]` ——那是"抬预算"这个修法自己的反证，必须钉住。
- * 取两个不同的键各打一遍：`deepseek-chat`（表值 8192）挡时间线，`claude-3-opus`（表值 4096）挡人物关系分析，
- * 这样"只在某一支漏掉表值钳"和"两支都漏"红的是不同的名字。
+ * 删掉"最大输出"那一列之后新增的一档：命中预算表的模型也不许被表代言。
+ * 这一档正反两个方向都有牙——
+ *  · 把列加回来并按它钳（旧行为）→ 前两条红；
+ *  · 用户填的那个数也不认了（`wanted` 只取 `taskDefault`）→ 第三条红。
+ * 仍然取两个不同的键各打一遍（`deepseek-chat` 旧表值 8192 挡时间线，`claude-3-opus` 旧表值 4096
+ * 挡人物关系分析）：这样"只在某一支漏掉钳制"和"两支都漏"红的是不同的名字。
  */
-describe("模型上限低于任务常数时按模型上限发（不许超发撞 400）", () => {
-  it("时间线在 `deepseek-chat`（上限 8192）上发 8192，不是常数 16384", async () => {
+describe("表里不再有输出上限：预设照发，只有用户填的才让路", () => {
+  it("时间线在 `deepseek-chat`（窗口 128k，旧表值 8192）上发满预设 16384", async () => {
     store.config = { ...BASE, model: "deepseek-chat", maxTokens: undefined };
     const r = await runTask(timelineAgent);
     expect(r.success, r.error).toBe(true);
-    expect(sentMaxTokens()).toBe(8192);
+    expect(sentMaxTokens()).toBe(16384);
   });
 
-  it("人物关系分析在 `claude-3-opus`（上限 4096）上发 4096", async () => {
+  it("人物关系分析在 `claude-3-opus`（窗口 200k，旧表值 4096）上发满预设 16384", async () => {
     store.config = { ...BASE, model: "claude-3-opus", maxTokens: undefined };
+    const r = await runTask(characterAnalysisAgent);
+    expect(r.success, r.error).toBe(true);
+    expect(sentMaxTokens()).toBe(16384);
+  });
+
+  it("同一只 `deepseek-chat`，用户填了 4096 就发 4096：让路的只有他亲手填的", async () => {
+    store.config = { ...BASE, model: "deepseek-chat", maxTokens: 4096 };
     const r = await runTask(characterAnalysisAgent);
     expect(r.success, r.error).toBe(true);
     expect(sentMaxTokens()).toBe(4096);

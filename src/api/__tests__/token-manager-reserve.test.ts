@@ -26,10 +26,13 @@ const budget = (contextWindow: number, userCap?: number): TokenBudget =>
   getTokenBudget("reserve-probe-model", contextWindow, userCap);
 
 describe("用户没填输出上限时：行为与今天一字不差", () => {
-  it("逐档等于旧的 Math.min(上限, 常数)（表默认 4096）", () => {
+  it("逐档等于任务预设本身：没有任何别的数再压它一层", () => {
+    // 老的那条叫「逐档等于旧的 Math.min(上限, 常数)（表默认 4096）」——那个"上限"是预算表按模型名
+    // 猜出来的，猜小了就把分析类要的 8192 压成 4096（真厂商实测：思考吃满、正文 0 字）。
+    // 那一列 2026-09-27 删了，所以这里逐档断言"要多少拿多少"，窗口 128k 时它不该成为阻力。
     const b = budget(128000);
     for (const taskDefault of [1024, 2048, 4096, 8192, 16384]) {
-      expect(resolveOutputReserve(b, taskDefault, "任务")).toBe(Math.min(b.maxOutputTokens, taskDefault));
+      expect(resolveOutputReserve(b, taskDefault, "任务")).toBe(taskDefault);
     }
   });
 

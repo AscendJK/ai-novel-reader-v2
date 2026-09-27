@@ -352,11 +352,10 @@ describe("表单默认值与提示要跟着真表走", () => {
     expect(state().providers[0].stream).toBe(false);
   });
 
-  it("匹配到模型时：两个 placeholder 与两行说明里的数都来自表", () => {
+  it("匹配到模型时：只有窗口那一格跟表走", () => {
     const info = getMatchedModelInfo("gemini-pro");
-    expect(info, "前提：gemini-pro 在表里，且它的两个数都不等于兜底值").toBeTruthy();
+    expect(info, "前提：gemini-pro 在表里，且它的窗口不等于兜底值").toBeTruthy();
     expect(info!.budget.contextWindow).not.toBe(128000);
-    expect(info!.budget.maxOutputTokens).not.toBe(4096);
 
     render(<ApiSettings />);
     openAddForm();
@@ -364,25 +363,36 @@ describe("表单默认值与提示要跟着真表走", () => {
 
     expect(screen.getByLabelText("上下文窗口（可选）")).toHaveAttribute(
       "placeholder", String(info!.budget.contextWindow));
-    expect(screen.getByLabelText("最大输出 token（可选）")).toHaveAttribute(
-      "placeholder", String(info!.budget.maxOutputTokens));
     expect(screen.getByText(/✅ 匹配到 gemini-pro/)).toBeInTheDocument();
     expect(screen.getByText(/模型的最大输入 token 数/).textContent).toContain(
       info!.budget.contextWindow.toLocaleString());
-    expect(screen.getByText(/模型单次调用的最大输出/).textContent).toContain(
-      info!.budget.maxOutputTokens.toLocaleString());
   });
 
-  it("没匹配到模型时：placeholder 与括号数一起落到兜底值，且黄字要说明", () => {
+  it("输出那一格与表无关：换个模型名，placeholder 与说明逐字不变（表里那一列已删）", () => {
+    render(<ApiSettings />);
+    openAddForm();
+    const output = screen.getByLabelText("最大输出 token（可选）") as HTMLInputElement;
+    const helpText = () => screen.getByText(/模型单次调用的最大输出/).textContent;
+    fireEvent.change(screen.getByLabelText("模型名称"), { target: { value: "gemini-pro" } });
+    const onTable = { ph: output.placeholder, help: helpText() };
+    // 说明里给的是**任务预设**那几个数，不是按模型名猜出来的天花板
+    expect(onTable.help, "要说清留空时每个任务要多少").toContain("16,384");
+    fireEvent.change(screen.getByLabelText("模型名称"), { target: { value: "不存在的模型xyz" } });
+    expect(output.placeholder).toBe(onTable.ph);
+    expect(helpText()).toBe(onTable.help);
+  });
+
+  it("没匹配到模型时：窗口落到兜底值并黄字说明，输出那一格的说法不变", () => {
     render(<ApiSettings />);
     openAddForm();
     fireEvent.change(screen.getByLabelText("模型名称"), { target: { value: "不存在的模型xyz" } });
 
     expect(screen.getByLabelText("上下文窗口（可选）")).toHaveAttribute("placeholder", "128000");
-    expect(screen.getByLabelText("最大输出 token（可选）")).toHaveAttribute("placeholder", "4096");
     expect(screen.getByText(/⚠️ 未匹配到已知模型/)).toBeInTheDocument();
     expect(screen.getByText(/模型的最大输入 token 数/).textContent).toContain("128,000");
-    expect(screen.getByText(/模型单次调用的最大输出/).textContent).toContain("4,096");
+    // 过去这里跟着掉到"默认 4,096"——那是表里猜的输出上限，删列之后未匹配不再有"默认小上限"
+    expect(screen.getByLabelText("最大输出 token（可选）")).toHaveAttribute(
+      "placeholder", "留空＝按任务该要多少要多少");
   });
 
   it("填过的预算值不许被 placeholder 顶掉，清空则回到未填", () => {
