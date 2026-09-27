@@ -23,6 +23,8 @@ const { createGiteeAssembler, createGitHubTarExtractor } = mod as {
 };
 
 const PARTS = ["book.7z.001", "book.7z.002", "book.7z.003", "book.7z.004"];
+/** 拼接产物在临时目录里的名字。假落地口拿它当 append 目标，产品改名字时只改这一处。 */
+const ARCHIVE_FILE = "book.combined.7z";
 const REQUIRED = ["config.json", "model.onnx"];
 
 interface Env {
@@ -131,7 +133,7 @@ function mkEnv(opts: {
 
 /** 临时目录里剩下的东西（清理判据看它）——只点名我们关心的那几个，别的目录不参与 */
 function leftovers(env: Env): string[] {
-  const names = [...PARTS, "book.7z", "book", "book-extract", "book.tar.bz2"];
+  const names = [...PARTS, "book.7z", ARCHIVE_FILE, "book", "book-extract", "book.tar.bz2"];
   return names.filter((n) => fs.existsSync(path.join(env.tempDir, n)));
 }
 
@@ -149,6 +151,20 @@ describe("Gitee：7z 分卷拼装", () => {
     await env.assemble();
     // 拼接产物在 finally 里就被删了，所以验"验文件头那一刻读到的整包内容"
     expect([...env.captured.values()], "拼接结果不是按数组顺序串起来的").toEqual(["卷0|卷1|卷2|卷3|"]);
+  });
+
+  it("只有一卷、卷名又与拼接产物同名：这一卷不许在被抄进产物之前先被清空", async () => {
+    // 生产里真有这一格：WASM 运行时的 `GITEE_WASM_PARTS` 就是单卷 `<archiveName>.7z`，
+    // 而拼接产物过去也叫同一个名字。`createWriteStream` 打开即截零，于是"同一个文件
+    // 边读边被自己掏空"——7z 拿到的是半截包。真后端 R-D1 实测到的正是它：
+    // 下载完整（已下载 8.6 MB）、文件头校验过、`7z x` 报 Unexpected end of archive。
+    const env = mkEnv();
+    // 跨过 createReadStream 的 64KB 分块：半截才量得出来
+    const body = Buffer.from("卷体内容|".repeat(30000));
+    env.blobs["book.7z"] = body;
+    await env.assemble({ partNames: ["book.7z"] });
+    expect([...env.captured.values()], "送进 7z 的那一包不是完整的这一卷").toEqual([body.toString("utf8")]);
+    expect(leftovers(env), "单卷这一路失败了还要在 tts-temp 里留东西").toEqual([]);
   });
 
   it("压缩包文件头不对：报文件头校验失败，且临时卷不留在盘上", async () => {
@@ -380,7 +396,7 @@ describe("拼卷：一次只许有一卷在内存里", () => {
 
   it("写满了要等 drain：一次 write 返回 false 之后，没 drain 就不许再写", async () => {
     const env = mkEnv();
-    const sink = slowSink(path.join(env.tempDir, "book.7z"));
+    const sink = slowSink(path.join(env.tempDir, ARCHIVE_FILE));
     await run(env, { createWriteStream: () => sink.ws });
     expect(sink.stat.wroteWhileFull, "无视背压：write() 已经返回 false 还接着往下写").toBe(0);
     expect([...env.captured.values()], "流式串接之后拼接结果变了序/少了字节").toEqual(["卷0|卷1|卷2|卷3|"]);
@@ -388,14 +404,14 @@ describe("拼卷：一次只许有一卷在内存里", () => {
 
   it("写到一半落地失败：这个错要冒出来，临时卷照样清干净", async () => {
     const env = mkEnv();
-    const sink = slowSink(path.join(env.tempDir, "book.7z"), 3);
+    const sink = slowSink(path.join(env.tempDir, ARCHIVE_FILE), 3);
     await expect(run(env, { createWriteStream: () => sink.ws })).rejects.toThrow(/ENOSPC/);
     expect(leftovers(env), "拼卷失败还留着分卷与半截包：每次失败往盘上堆几百 MB").toEqual([]);
   });
 
   it("全部 write 都成了、最后 flush 那一下才失败：同样不许当成拼好了，也不许去跑 7z", async () => {
     const env = mkEnv();
-    const sink = slowSink(path.join(env.tempDir, "book.7z"), 0, "flush 失败: EIO");
+    const sink = slowSink(path.join(env.tempDir, ARCHIVE_FILE), 0, "flush 失败: EIO");
     await expect(run(env, { createWriteStream: () => sink.ws })).rejects.toThrow(/flush 失败/);
     expect(env.execs, "包都没落地就去解压：用户看到的是 7z 的退出码，不是「写不进去」").toEqual([]);
     expect(leftovers(env)).toEqual([]);
@@ -405,7 +421,7 @@ describe("拼卷：一次只许有一卷在内存里", () => {
     // 两条错同时在（源读不到 + ws 最后 flush 也报错）时，用户该看到的是"哪一步没成"，
     // 而不是被 flush 那条盖住。摘掉 `if (pipeErr) throw pipeErr` 这条会红。
     const env = mkEnv();
-    const sink = slowSink(path.join(env.tempDir, "book.7z"), 0, "flush 失败: EIO");
+    const sink = slowSink(path.join(env.tempDir, ARCHIVE_FILE), 0, "flush 失败: EIO");
     const broken = () => {
       const rs = new Readable({ read() {} });
       rs.destroy(new Error("读不到分卷: ENOENT"));
@@ -545,4 +561,26 @@ describe("GitHub：tar.bz2 直连 + 镜像", () => {
  * （怕 pipeline 把 ws destroy 掉之后再等落地会挂死），摘掉它做对照时**0 红**——判不到，
  * 所以那三行不写了，不是漏了。真要挂死的情形（写回调永不返回）发生在 pipeline 内部，
  * 这一格管不着；A2 就是那种挂死，14 条一起红。
+ */
+
+/**
+ * 判别力台账·补一笔（同一天晚些，真后端 R-D1 复跑抓出来的那一格）
+ *
+ * 基线：server/lib/tts-assemble.mjs = sha256 9987cf1f…（拼接产物改名成 `.combined.7z` 之后
+ * 的那一版），每刀改一行、跑完 `cp` 回基线并 `cmp` + sha256 核过。
+ *
+ * 立红：改产品之前新那条「单卷与拼接产物同名」就是红的——
+ * `送进 7z 的那一包不是完整的这一卷: expected [''] to deeply equal [Array(1)]`，
+ * 也就是 7z 拿到的是 0 字节的包。**这一格不是编出来的**：真后端 R-D1 今天就红在这里
+ * （下载完整 8.6 MB、文件头校验过、`7z x` 报 Unexpected end of archive）。成因是两次改动
+ * 撞出来的：`GITEE_WASM_PARTS` 是单卷、卷名恰好等于拼接产物名，而拼卷从
+ * `ws.write(fs.readFileSync(卷))` 换成流式串接之后，"读这一卷"与"写同一个文件"第一次
+ * 真的同时发生——`createWriteStream` 打开即截零。旧的整卷读法把数据先捞进内存，同名反而无害。
+ *
+ *  T1 把 archivePath 换回 `archiveName + ".7z"`（等于还原这次修复）→ 4 红：
+ *     新判据（0 字节包）+ 借同名当 append 目标的三条内存/清理判据
+ *  T2 把 archivePath 从 finally 的清理清单里摘掉 → 7 红（新判据里那半条 leftovers 在内）
+ *
+ * 没有一刀 0 红。假落地口那四条原先把文件名抄了一遍遍，这次收成常量 ARCHIVE_FILE，
+ * 免得下次产品改名时要跟着改四处判据。
  */

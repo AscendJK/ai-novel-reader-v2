@@ -71,7 +71,10 @@ export function createGiteeAssembler(deps) {
     if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
 
     const partPaths = partNames.map((n) => path.join(tempDir, n));
-    const archivePath = path.join(tempDir, `${archiveName}.7z`);
+    // 拼接产物绝不能与任何一卷同名：WASM 运行时那格就是单卷 `<archiveName>.7z`，
+    // 撞上之后 `createWriteStream` 打开即截零，同一个文件"边读边被自己掏空"——
+    // 下载完整、文件头还在、7z 却报 Unexpected end of archive（真后端 R-D1 实测到）。
+    const archivePath = path.join(tempDir, `${archiveName}.combined.7z`);
     // 下面这几个必须在 try 之外声明：finally 要清它们，而 try 块内的 const 在 finally
     // 作用域不可见——引用它会抛 ReferenceError 并顶掉 try 里真正的错误
     const extractRoot = path.join(tempDir, `${archiveName}-extract`);
