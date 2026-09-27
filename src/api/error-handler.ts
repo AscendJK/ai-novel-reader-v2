@@ -84,6 +84,38 @@ export function emptyResultNote(reasoningTokens: unknown, reasoningChars?: unkno
   return "可能原因：模型名称不存在或无权访问、请求参数不被支持。";
 }
 
+/**
+ * 「这一发没拿到答案，而且是路的问题」的唯一判法。分两样，待遇正好相反，所以必须分得开：
+ *  · `"timeout"`：到期了 —— 再撞一发划算（provider 两条腿各自到期的那句原话、代理回过来的 504/524）。
+ *  · `"unreachable"`：请求根本没出浏览器（CORS 被拦、地址写错、断网）—— 再撞一发只是白等。
+ * 认不到一律 `null`，交回调用方按普通错误处理。**不许猜**：猜成 timeout 会把 401 也重发一发。
+ *
+ * 为什么要单独立一处：`map-agent.ts` 过去自己抄了一遍，拿 `message.includes("CORS"|"blocked"|"524")`
+ * 去认，而全仓没有任何代码会产出带 "CORS" 的错误（浏览器 fetch 出不了门只说 `Failed to fetch`，
+ * `blocked` 只有 IndexedDB 那只在用）——那一支因此永远走不到；真到期的是代理那句
+ * HTTP 504（`server/routes/proxy.js:211`），它不带 "524" 字样，于是也判不成超时。
+ *
+ * `APIError` 那一支只看状态码：`classifyError` 从不产出 apiCode `"network"`（浏览器 fetch 失败
+ * 压根没有 HTTP 响应可分类），5xx 一律归 `"server"`，所以 504/524 只能按 statusCode 认。
+ * 用户取消（AbortError）两句原话都不沾，自然落到 `null`。
+ */
+export type TransportFailure = "timeout" | "unreachable";
+
+/** provider 腿到期的原话（`openai.ts:52`、`anthropic.ts:41`：`${leg}超时（N 秒无响应）…`） */
+const LEG_TIMEOUT_MESSAGE = /超时|timeout/i;
+/** 三个引擎对"请求出不了门"各自给的原话（实现给的，不是我们造的） */
+const UNREACHABLE_MESSAGE = /^(Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.?|XHR error)/i;
+
+export function classifyTransportFailure(err: unknown): TransportFailure | null {
+  if (err instanceof APIError) {
+    const s = err.statusCode;
+    return s === 504 || s === 524 ? "timeout" : null;
+  }
+  if (!(err instanceof Error)) return null;
+  if (LEG_TIMEOUT_MESSAGE.test(err.message)) return "timeout";
+  return UNREACHABLE_MESSAGE.test(err.message) ? "unreachable" : null;
+}
+
 function classifyError(status: number, body: string): { code: APIErrorCode; message: string } {
   let parsed: Record<string, unknown> = {};
   try { parsed = JSON.parse(body); } catch { /* ignore */ }

@@ -10,7 +10,7 @@ import { BaseAgent } from "./base-agent";
 import { extractJSON } from "./json-extractor";
 import { prepareAgentContext, chatWithContextRetry, sampleChapterTitles } from "./utils";
 import { computeAvailableInput, resolveOutputReserve, type TokenBudget } from "@/api/token-manager";
-import { isEmptyResultError } from "@/api/error-handler";
+import { isEmptyResultError, classifyTransportFailure } from "@/api/error-handler";
 
 /**
  * 模型偶尔把坐标写成 `"620"` 这种数字字符串——今天它照样能渲染，所以收下并归一。
@@ -167,14 +167,15 @@ class MapAgent extends BaseAgent {
           });
         } catch (err) {
           if (attempt === 1) {
-            if (err instanceof Error) {
-              if (err.message.includes("CORS") || err.message.includes("blocked")) {
-                return { success: false, error: "API 请求被 CORS 策略阻止，请检查 API 地址是否正确，或尝试使用支持代理的 API。" };
-              }
-              if (err.message.includes("524") || err.message.includes("timeout") || err.message.includes("超时")) {
-                lastError = "API 请求超时";
-                continue;
-              }
+            const transport = classifyTransportFailure(err);
+            // 请求没出浏览器：地址写错 / CORS 被拦 / 已断网，再撞一发只是白等，把话一次说完
+            if (transport === "unreachable") {
+              return { success: false, error: "API 请求没能出得去：浏览器直连被 CORS 拦下、API 地址写错或已经断网。请检查 API 地址，或改用支持服务器代理的服务商。" };
+            }
+            // 到期（provider 两条腿的原话，或代理回过来的 504/524）：值得再撞一发，且不算空正文
+            if (transport === "timeout") {
+              lastError = "API 请求超时";
+              continue;
             }
             if (isEmptyResultError(err)) sawEmptyBody = true;
             lastError = err instanceof Error ? err.message : "未知错误";

@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Novel } from "@/parsers/types";
 import { mapAgent } from "../map-agent";
+import { APIError } from "@/api/error-handler";
 import { estimateTokens } from "@/api/token-manager";
 
 const repo = vi.hoisted(() => ({ loadNovel: vi.fn() }));
@@ -395,6 +396,29 @@ describe("地图结构校验", () => {
   });
 });
 
+/**
+ * 「路的问题」两样分得开（收口笔 C，2026-09-28）
+ *
+ * `map-agent.ts` 过去自己抄了一遍错误分类：`err.message.includes("CORS" | "blocked" | "524" | "超时")`。
+ * 抄出来的那三串里 **没有一串是真会出现的形状**：全仓没有任何代码会产生带 "CORS"/"blocked" 的错误
+ * （浏览器 fetch 出不了门只给 `TypeError: Failed to fetch`；"blocked" 只有 IndexedDB 那只在用），
+ * 真到期的是代理回过来的 HTTP 504（`server/routes/proxy.js:211`），它不带 "524" 字样。
+ * 于是那一支"立即失败、别再撞"永远走不到，而该按超时重试的那一发掉进了"未知错误"。
+ * 现在判法只有一处：`error-handler.ts` 的 `classifyTransportFailure`。
+ *
+ * ## 刀账 P1..P5（对照 = 0 刀时 78 条全绿：本文件 51 + `error-handler-classify.test.ts` 27）
+ * 基线 sha256 前 16 位：`error-handler.ts` = `d32b38132903d323`、`map-agent.ts` = `10d72ae121cf77db`；
+ * 每刀 markers=1，跑完 `cp` 还原并当场核 sha，盘上 `MUT-` 残留 0。
+ * - **P1** 摘掉 `APIError` 那一支（只看 message）→ 红 3：504、524 各一条，加本文件那条真·504。
+ * - **P2** 只把 524 摘掉 → 红 1：正是 524 那条。**524 必须单独一条 `it`**：跟 504 合在一条里时
+ *   P1 与 P2 会红同一个名字，掉了一个数字这种事就没归属了（这一版一开始就踩到，拆开重打的）。
+ * - **P3** 摘掉 "unreachable" 那一支 → 红 2：分类层与地图层各一条（真·fetch 失败会白撞第二发）。
+ * - **P4** 反向："凡 APIError 都算超时" → 红 2：「厂商答过了不算路的问题」＋「空正文不许抢」。
+ * - **P5** 搬家证据、刀在**另一只文件**：`map-agent.ts` 退回老那版手抄 → 红 2（都在本文件），
+ *   分类层那 27 条全 ✓ —— 递进去的判法真在用它，不是自证。
+ * - **P6** 摘掉「不是 Error 就直接 null」那道闸 → 红 1：正是「认不到的一律 null」那条
+ *   （拿 `undefined` 去取 `.message` 会抛，而不是悄悄返回 null）。那一行有牙，不是防崩的装饰。
+ */
 describe("地图的重试与错误分类", () => {
   it("第一次解析失败后，第二次把错误原文塞回 prompt 并成功", async () => {
     chat
@@ -409,11 +433,19 @@ describe("地图的重试与错误分类", () => {
     expect(promptOf(0)).not.toContain("【上次生成的输出有误】");
   });
 
-  it("CORS 被拦时立即失败，不再撞第二次", async () => {
-    chat.mockRejectedValue(new Error("Failed to fetch: CORS 跨域请求被阻止"));
+  /**
+   * 夹具换成**真会出现的原话**（2026-09-28，收口笔 C）。
+   *
+   * 老夹具是 `new Error("Failed to fetch: CORS 跨域请求被阻止")` —— 后面那半句是编的：
+   * 浏览器 fetch 出不了门只给 `TypeError: Failed to fetch`，全仓没有任何代码会带上"CORS"字样。
+   * 于是那一版判据绿着，而产品上真被 CORS 拦下时**走不到**"立即失败"那一支：地图会白撞第二发。
+   * 老那条编码的意思（被拦→不重试→说人话）两头都还钉着，只是钉在真形状上。
+   */
+  it("请求出不了浏览器（真·fetch 失败）：立即失败，不再白撞第二发", async () => {
+    chat.mockRejectedValue(new TypeError("Failed to fetch"));
     const r = await run();
     expect(r.success).toBe(false);
-    expect(r.error).toContain("CORS 策略阻止");
+    expect(r.error).toContain("CORS");
     expect(chat).toHaveBeenCalledTimes(1);
   });
 
@@ -425,9 +457,27 @@ describe("地图的重试与错误分类", () => {
     expect(promptOf(1)).toContain("API 返回了空响应");
   });
 
-  it("超时后重试一次并带上超时提示", async () => {
+  /**
+   * 老夹具 `new Error("上游 524 Bad Gateway")` 同样是编的：代理到期真实回的是
+   * **HTTP 504**（`server/routes/proxy.js:211`），过 `classifyError` 之后是一枚
+   * `apiCode:"server"` 的 `APIError`。按字面认 "524" 的那版判不到它——那一格今天会红。
+   */
+  it("代理到期（真·HTTP 504）算超时：重试一次，并把超时提示带回 prompt", async () => {
     chat
-      .mockRejectedValueOnce(new Error("上游 524 Bad Gateway"))
+      .mockRejectedValueOnce(new APIError(
+        "API 服务器错误 (504)：服务暂时不可用，请稍后重试。如果持续出现，可能是模型厂商服务中断。",
+        "server", 504, '{"error":"代理请求超时（3分钟），API 服务器响应过慢"}',
+      ))
+      .mockResolvedValueOnce(reply(validMap()));
+    const r = await run();
+    expect(r.success).toBe(true);
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(promptOf(1)).toContain("API 请求超时");
+  });
+
+  it("provider 那条腿自己到期（原话带「超时」字样）也算超时，不许掉进「未知错误」", async () => {
+    chat
+      .mockRejectedValueOnce(new Error("直连超时（30 秒无响应），请检查网络或 API 地址"))
       .mockResolvedValueOnce(reply(validMap()));
     const r = await run();
     expect(r.success).toBe(true);
@@ -497,8 +547,12 @@ describe("空正文才降级：第二发带 thinking:false 重发", () => {
   });
 
   it("超时那种失败不是空正文，第二发不许顺手关思考", async () => {
+    // 夹具用真形状（HTTP 504 过 classifyError 的那枚 APIError），理由见上面那条超时判据
     chat
-      .mockRejectedValueOnce(new Error("上游 524 Bad Gateway"))
+      .mockRejectedValueOnce(new APIError(
+        "API 服务器错误 (504)：服务暂时不可用，请稍后重试。如果持续出现，可能是模型厂商服务中断。",
+        "server", 504, "",
+      ))
       .mockResolvedValueOnce(reply(validMap()));
     await run();
     expect(chat.mock.calls[1][0].thinking).toBeUndefined();

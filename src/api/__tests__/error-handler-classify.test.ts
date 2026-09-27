@@ -9,7 +9,7 @@
  * 讲输出"就不返回数字，所以本修的是判读，不是花钱。）
  */
 import { describe, it, expect } from "vitest";
-import { APIError, handleFetchError, isEmptyResultError, emptyResultNote } from "../error-handler";
+import { APIError, handleFetchError, isEmptyResultError, emptyResultNote, classifyTransportFailure } from "../error-handler";
 
 async function classify(status: number, body: unknown): Promise<APIError> {
   const res = new Response(typeof body === "string" ? body : JSON.stringify(body), { status });
@@ -182,6 +182,74 @@ describe("emptyResultNote：有证据才说思考吃满，说了就要给出口"
       const s = emptyResultNote(v);
       expect(s, `坏证据 ${JSON.stringify(v) ?? String(v)} 被说成了思考吃满`).toContain("模型名称不存在");
       expect(s).not.toContain("token 花在思考上");
+    }
+  });
+});
+
+/**
+ * 「这一发没拿到答案，而且是路的问题」——两样，待遇正好相反，所以必须分得开：
+ *  · `timeout`：到期了。厂商/代理可能只是慢，再撞一发是划算的（地图就是这么做的）。
+ *  · `unreachable`：请求根本没出浏览器（CORS 被拦、地址写错、断网）。再撞一发只是白等。
+ *
+ * 为什么要单独立一处：`map-agent.ts` 过去自己抄了一遍判法，
+ * 拿 `err.message.includes("CORS" | "blocked" | "524")` 去认——**全仓没有任何一条代码会
+ * 产生带 "CORS" 或 "blocked" 的错误**（浏览器 fetch 出不了门抛的是 `TypeError: Failed to fetch`；
+ * `blocked` 只有 IndexedDB 那只在用），那一支于是从来走不到，真被 CORS 拦下时地图会白撞第二发。
+ * 524 也不该按字面认：代理到期回的是 HTTP 504，`classifyError` 给它的是 `apiCode: "server"`。
+ *
+ * 夹具只准用**真会出现的原话**：每条都注着它是谁、在哪一行抛的。
+ * 编一句产不出来的话，判据就会绿而产品坏（这一格上一版就是这么踩的）。
+ */
+describe("classifyTransportFailure：路的问题分两样，认不到就算认不到", () => {
+  it("provider 两条腿各自到期的原话算 timeout（openai.ts:52、anthropic.ts:41 抛的就是这句）", () => {
+    expect(classifyTransportFailure(new Error("直连超时（30 秒无响应），请检查网络或 API 地址"))).toBe("timeout");
+    expect(classifyTransportFailure(new Error("代理超时（120 秒无响应），请检查网络或 API 地址"))).toBe("timeout");
+  });
+
+  it("服务端代理到期回的是 HTTP 504（server/routes/proxy.js:211），那也算 timeout", async () => {
+    const e = await classify(504, { error: "代理请求超时（3分钟），API 服务器响应过慢" });
+    expect(e.apiCode, "504 在 classifyError 里归 server，所以只认 apiCode=network 的那版判不到这一格").toBe("server");
+    expect(classifyTransportFailure(e)).toBe("timeout");
+  });
+
+  // 524 单独一条：厂商挂在 Cloudflare 上的源站超时。跟 504 合在一条里时，
+  // "只摘掉 524" 与 "整个状态码那一支没了" 会红同一个名字，归不了因。
+  it("厂商挂在 Cloudflare 上的源站超时（524）同样算 timeout", () => {
+    expect(classifyTransportFailure(new APIError("API 服务器错误 (524)：服务暂时不可用。", "server", 524, ""))).toBe("timeout");
+  });
+
+  it("请求出不了浏览器算 unreachable：三家引擎的原话各一条", () => {
+    // Chromium / Edge
+    expect(classifyTransportFailure(new TypeError("Failed to fetch"))).toBe("unreachable");
+    // Safari
+    expect(classifyTransportFailure(new TypeError("Load failed"))).toBe("unreachable");
+    // Firefox
+    expect(classifyTransportFailure(new TypeError("NetworkError when attempting to fetch resource."))).toBe("unreachable");
+  });
+
+  it("厂商答过了就不算路的问题：认证、限流、输出超限一律 null（白重头发是把同一份 token 花两遍）", async () => {
+    const auth = await classify(401, { error: { message: "Invalid API key" } });
+    const rate = await classify(429, { error: { message: "Too Many Requests" } });
+    const out = await classify(400, withMessage("max_tokens is not less or equal to 262144"));
+    for (const e of [auth, rate, out]) {
+      expect(classifyTransportFailure(e), `${e.apiCode} 被当成了路的问题`).toBeNull();
+    }
+  });
+
+  it("「一个字正文都没回」归 isEmptyResultError 管，这一把不许抢（抢了就分不出该关思考还是该重试）", () => {
+    const empty = new APIError("API 返回了空结果（流式响应无内容）。", "server", 200, "data: [DONE]");
+    expect(isEmptyResultError(empty), "夹具得先是空正文").toBe(true);
+    expect(classifyTransportFailure(empty)).toBeNull();
+  });
+
+  it("用户取消两样都不是（否则点停止会被当成一次网络失败再撞一发）", () => {
+    const aborted = new DOMException("The user aborted a request.", "AbortError");
+    expect(classifyTransportFailure(aborted)).toBeNull();
+  });
+
+  it("认不到的一律 null：解析失败、裸字符串、undefined 都不许猜成 timeout 或 unreachable", () => {
+    for (const v of [new Error("Unexpected token } in JSON at position 42"), "Failed to fetch", undefined, null, 42]) {
+      expect(classifyTransportFailure(v), `${JSON.stringify(v) ?? String(v)} 被猜成了路的问题`).toBeNull();
     }
   });
 });
