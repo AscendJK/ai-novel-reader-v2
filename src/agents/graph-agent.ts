@@ -10,7 +10,7 @@ import { getRelevantContent, chatWithContextRetry, sampleChapterTitles } from ".
 import { extractJSON } from "./json-extractor";
 import { useUIStore } from "@/stores/ui-store";
 import { estimateTokens, computeAvailableInput, resolveOutputReserve, type TokenBudget } from "@/api/token-manager";
-import { isEmptyResultError, classifyVendorRefusal } from "@/api/error-handler";
+import { isEmptyResultError, classifyVendorRefusal, classifyTransportFailure, UNREACHABLE_HINT } from "@/api/error-handler";
 
 interface GraphData {
   nodes: { id: string; group: string; description: string }[];
@@ -134,8 +134,17 @@ class CharacterGraphAgent extends BaseAgent {
       } catch (err) {
         // 厂商明确拒了这一场（401/402/429）：第二发只会再撞一次同一个答案
         if (classifyVendorRefusal(err)) return { success: false, error: this.formatError(err) };
-        if (isEmptyResultError(err)) sawEmptyBody = true;
-        if (attempt === 1) { lastError = this.formatError(err); continue; }
+        if (attempt === 1) {
+          // 「路的问题」两样分得开，口径与判法同 `map-agent`（那边 `classifyTransportFailure`
+          // 手抄会漏掉真会出现的形状，笔 C 已收进一处）。不接上就是：后端没在跑时
+          // 浏览器抛 `Failed to fetch`，图谱把它当一次普通失败 → 再装配一遍、白烧一发。
+          const transport = classifyTransportFailure(err);
+          if (transport === "unreachable") return { success: false, error: UNREACHABLE_HINT };
+          if (transport === "timeout") { lastError = "API 请求超时"; continue; }
+          if (isEmptyResultError(err)) sawEmptyBody = true;
+          lastError = this.formatError(err);
+          continue;
+        }
         return { success: false, error: this.formatError(err) };
       }
     }

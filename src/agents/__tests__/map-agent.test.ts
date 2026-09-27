@@ -450,6 +450,9 @@ describe("地图的重试与错误分类", () => {
     const r = await run();
     expect(r.success).toBe(false);
     expect(r.error).toContain("CORS");
+    // 盯这句里只有**唯一出处**才有的那半句（刀账 TF3/TF4 在 `graph-agent.test.ts`）：
+    // 只认 "CORS" 的话，谁把手抄的字面塞回地图都咬不住——两份句子会各说各的话。
+    expect(r.error).toContain("后端没在跑");
     expect(chat).toHaveBeenCalledTimes(1);
   });
 

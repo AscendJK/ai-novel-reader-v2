@@ -462,3 +462,53 @@ describe("厂商这一场不接（401/402/429）：一发就收手", () => {
     expect(chat).toHaveBeenCalledTimes(2);
   });
 });
+
+/**
+ * 「路的问题」在图谱这一腿（口径与判法同 `map-agent`，见那里的 P1..P6 与本文件顶部说明）。
+ *
+ * 为什么这一格原本是空的：笔 C 把地图手抄的错误分类收进 `classifyTransportFailure` 时，
+ * 图谱的 catch 走自己的 `formatError`，没接上——制作人 09-27 问「关掉服务器、没有代理时怎么办」，
+ * 顺着读代码才量出这条不对称：**后端关掉时浏览器抛的是 `TypeError: Failed to fetch`**
+ * （`apiFetch` 直接把 `fetch(...)` 原样返回，`src/lib/api-client.ts:104`，不套壳），
+ * 图谱把它当一次普通失败 → 再走一遍完整装配、再刷一次"正在重新分析"，白烧一发。
+ *
+ * 刀账 **TF1..TF4**（基线：`graph-agent.ts` aed820e341d197dc／`map-agent.ts` bff82bd2d5914b65／
+ * `error-handler.ts` 6d7ba689f1560377；0 刀对照 126 全绿，跑法固定＝这三只文件一起跑）：
+ *  TF1 摘掉图谱里的 unreachable 分支 → 红 1（本文件第一条），地图那条全 ✓；
+ *  TF2 摘掉图谱里的 timeout 分支 → 红 2（本文件两条——到期有两个来源：代理 504 与 provider 原话）；
+ *  TF3 在 `error-handler.ts` 改那半句"后端没在跑" → 红 2（地图与本文件各一条）＝搬家证据。
+ *      **但第一次打这刀只红 1 条**：当时地图那条只 `toContain("CORS")`，而 "CORS" 在旧手抄字面里
+ *      也有，句子前半怎么改它都不红——"两份句子各说各的话"这一格本来是空着的。给地图那条补上
+ *      `toContain("后端没在跑")`（只有唯一出处才有这半句）之后重打同一刀，才红 2。
+ *  TF4 把地图改回手抄字面（脱离唯一出处）→ 只红地图那条，本文件全 ✓（它还在用常量）。
+ */
+describe("图谱也认「路的问题」：出不了门别白撞，到期可以再撞", () => {
+  it("直连被拦下或后端已经关了（浏览器只说 Failed to fetch）：一发就收手，界面说清是没出得去", async () => {
+    chat.mockRejectedValue(new TypeError("Failed to fetch"));
+    const r = await run();
+    expect(r.success).toBe(false);
+    expect(chat, "请求没出浏览器：再撞一发只是白等，把话一次说完").toHaveBeenCalledTimes(1);
+    // 同地图那条：盯只有唯一出处才有的那半句，才咬得住"有人把句子抄回本地"（TF3/TF4）
+    expect(r.error).toContain("后端没在跑");
+  });
+
+  it("代理到期（真·HTTP 504）算超时：重试一次，并把超时提示带回 prompt", async () => {
+    const res = new Response(JSON.stringify({ error: "代理请求超时（3分钟），API 服务器响应过慢" }), { status: 504 });
+    chat
+      .mockRejectedValueOnce(await handleFetchError(res).then(() => null, (e) => e))
+      .mockResolvedValueOnce(reply(graphJson([N("令狐冲"), N("岳不群")], [])));
+    const r = await run();
+    expect(r.success).toBe(true);
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(promptOf(1)).toContain("API 请求超时");
+  });
+
+  it("provider 那条腿自己到期（原话带「超时」字样）也算超时，不许掉进「未知错误」", async () => {
+    chat
+      .mockRejectedValueOnce(new Error("直连超时（30 秒无响应），请检查网络或 API 地址"))
+      .mockResolvedValueOnce(reply(graphJson([N("令狐冲"), N("岳不群")], [])));
+    const r = await run();
+    expect(r.success).toBe(true);
+    expect(promptOf(1)).toContain("API 请求超时");
+  });
+});

@@ -117,6 +117,16 @@ export function classifyTransportFailure(err: unknown): TransportFailure | null 
 }
 
 /**
+ * `unreachable` 那句要说的话——**唯一出处**，地图与图谱都从这里取（刀账 TF3 在
+ * `graph-agent.test.ts`：改这里的一个字，两处同时红；只红一处就说明还有一只用手抄的字面）。
+ *
+ * 为什么这句话值得共用：症状是同一条——请求压根没到厂商，重试只是白等。而"后端已经关了"
+ * 也走这一句（`apiFetch` 原样返回 `fetch(...)`，`src/lib/api-client.ts:104`，同源请求出不了门
+ * 同样只给 `TypeError: Failed to fetch`），所以它必须同时点出"改用支持代理的服务商"这条出路。
+ */
+export const UNREACHABLE_HINT = "API 请求没能出得去：浏览器直连被 CORS 拦下、API 地址写错、后端没在跑或已经断网。请检查 API 地址，或改用支持服务器代理的服务商。";
+
+/**
  * 「厂商答了，答的是**这一场不接**」：认证不过（401/403）、额度用尽（402）、限流（429）。
  * 这三种重发第二发只会再撞一次同一个答案——Key 不会自己变对、余额不会自己回来、
  * 而限流窗口最坏被自己往后推。所以拿到它们**别再打**，直接把厂商那句交回界面。

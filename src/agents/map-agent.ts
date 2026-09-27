@@ -10,7 +10,7 @@ import { BaseAgent } from "./base-agent";
 import { extractJSON } from "./json-extractor";
 import { prepareAgentContext, chatWithContextRetry, sampleChapterTitles } from "./utils";
 import { computeAvailableInput, resolveOutputReserve, type TokenBudget } from "@/api/token-manager";
-import { isEmptyResultError, classifyTransportFailure, classifyVendorRefusal } from "@/api/error-handler";
+import { isEmptyResultError, classifyTransportFailure, classifyVendorRefusal, UNREACHABLE_HINT } from "@/api/error-handler";
 
 /**
  * 模型偶尔把坐标写成 `"620"` 这种数字字符串——今天它照样能渲染，所以收下并归一。
@@ -181,7 +181,7 @@ class MapAgent extends BaseAgent {
             const transport = classifyTransportFailure(err);
             // 请求没出浏览器：地址写错 / CORS 被拦 / 已断网，再撞一发只是白等，把话一次说完
             if (transport === "unreachable") {
-              return { success: false, error: "API 请求没能出得去：浏览器直连被 CORS 拦下、API 地址写错或已经断网。请检查 API 地址，或改用支持服务器代理的服务商。" };
+              return { success: false, error: UNREACHABLE_HINT };
             }
             // 到期（provider 两条腿的原话，或代理回过来的 504/524）：值得再撞一发，且不算空正文
             if (transport === "timeout") {
