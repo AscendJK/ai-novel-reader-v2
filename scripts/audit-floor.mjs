@@ -40,9 +40,14 @@ if (skipE2E && !fs.existsSync(LOG)) {
 if (!skipE2E) {
   fs.rmSync(LOG, { force: true });
   console.log(`[地板] 跑 dev 那一层（--project=chromium）并记录加载过的 src 模块 → ${LOG}`);
-  const run = spawnSync(process.execPath, [playwrightCli(), "test", "-c", "e2e/playwright.config.ts", "--project=chromium"], {
-    stdio: "inherit",
-    env: { ...process.env, ANR_E2E_MODULE_LOG: LOG },
+  const run = spawnSync(process.execPath, [playwrightCli(), "test", "-c", "e2e/playwright.config.ts", "--project=chromium", "--workers=2"], {
+  // ↑ 与 CI 同一档并发（`.github/workflows/release-backend.yml` 里是 `--workers=2`）。
+  //   不钉这一档的症状实测过一次：默认 8 workers 加这只脚本自己的模块记录插桩，把首帧之后
+  //   那一跳拉长到超过判据里 20 秒的显式预算，E9 红一条；而同一套全量在默认 workers **不带
+  //   插桩**时 130 条全绿、E9 只用 11.8 秒。地板是量覆盖的，不该把产品判据压红，
+  //   更不该为此去抬用例里的等待预算（那正是 playwright.config.ts 顶部警告的那种掩盖）。
+  stdio: "inherit",
+  env: { ...process.env, ANR_E2E_MODULE_LOG: LOG },
   });
   // 用例红了也继续算地板：地板这件事与"哪条用例挂了"是两回事，而且挂掉的用例同样加载过模块
   if (run.status !== 0) console.log(`[地板] 浏览器层退出码 ${run.status}（不影响地板计算，但那一层的记录可能不全）`);

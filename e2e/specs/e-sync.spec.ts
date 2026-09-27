@@ -351,6 +351,11 @@ test("E9 两个标签页同一个用户：A 页删掉的书必须从 B 页书架
   // 这条顺带是"删除"在浏览器层的唯一判据，所以把反复活那道闸也钉住：删除必须把
   // `/leave` 送到服务器（`src/sync/pending-leave.ts` 那本账），否则服务器一直认为还
   // joined，下次同步把这本书连云端摘要/笔记一起拉回来——症状是"删了又自己长回来"。
+  //
+  // 2026-09-27 实测的一句：这台机上 E9 全程 11.8 秒，下面那几个 20 秒预算是足够的；
+  // 唯一一次红它是在 `npm run audit:floor` 里——那只脚本给每个模块包了一层加载记录，
+  // 又用默认 8 workers，首帧之后那一跳被压过 20 秒。修的是工具（`scripts/audit-floor.mjs`
+  // 钉 `--workers=2`，与 CI 同档），**没抬这里的预算**：拿掩盖等待换绿灯，这条判据就没牙了。
   const backend = await signInOnline(page, baseTable({ "POST /api/novels/**": { body: { ok: true } } }));
 
   const second = await context.newPage();
