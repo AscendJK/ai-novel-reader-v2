@@ -35,7 +35,8 @@ async function readyWithBook(
   table: StubTable,
   opts: {
     bookTitle?: string; offline?: boolean; session?: boolean; chapters?: number;
-    /** 服务商表单里的两个预算字段；不填就走产品默认（模型表 → 未匹配模型 128k/4096） */
+    /** 服务商表单里的两个预算字段；不填就走产品默认（窗口按模型表，表外 128k；
+     *  输出那一格留空＝每个任务按自己的预设要，2,048～16,384——表里那列"输出上限"已删） */
     provider?: { contextWindow?: number; maxTokens?: number };
     /** 自带的书名文本（判"截断"那类要一章特别长、另几章照常短，现成样本都凑不出这个形状） */
     novelText?: string;

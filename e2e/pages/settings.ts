@@ -65,9 +65,10 @@ export async function addProvider(
   // 「上下文窗口」留空时按模型表取值；表里没有的模型（假厂商的 e2e-model 就是）默认 128k，
   // 要演"预算把原文挤掉"的那类判据就得把它填小。
   if (f.contextWindow !== undefined) await page.locator("#api-ctx").fill(String(f.contextWindow));
-  // 「最大输出 token」留空时产品按模型表给默认 4096。推理模型会先把这段预算花在"想"上
-  // （实测 sensenova 的 deepseek-flash：completion_tokens=4096、reasoning_tokens=4096、正文 0 字），
-  // 于是地图/时间线这类长结构化产物必然拿不到正文。设置页那行说明本来就叫用户"设为模型自身上限"。
+  // 「最大输出 token」填了就是**一份压所有任务的天花板**（`wanted = 用户填的 ?? 任务常数`）。
+  // 老注释写的是"留空时产品按模型表给默认 4096"——那一列已经删了（`8a4a750`）：留空时每个任务
+  // 按自己的预设要（问答/范围总结 2,048 … 分析/时间线/地图 16,384），厂商嫌多回带数字的 400 时
+  // 由 `output_limit` 自愈按它给的数缩。填这里只用于判"预算把正文挤没了"那一类。
   if (f.maxTokens !== undefined) await page.locator("#api-max-output").fill(String(f.maxTokens));
   await s.save.click();
 }
