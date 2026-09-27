@@ -217,8 +217,11 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
                 />
                 <span className="text-xs">关闭思考（Thinking）</span>
               </label>
-              <p className="text-[10px] text-muted-foreground pl-5">
-                DeepSeek 等推理模型默认会先思考，思考会占用输出预算且把 content 置空，导致地图/图谱等大 JSON 输出失败。勾选后发送 thinking type:disabled，让模型直接生成正文；对不支持该参数的非推理模型不产生影响。
+              <p className="text-[10px] text-muted-foreground pl-5 leading-relaxed">
+                推理模型默认先思考再回答（DeepSeek、GLM 那一类），思考那段也算在输出预算里；预算不够时就只回思考、正文一个字都没有，地图/图谱这种大份输出最先倒在这里。
+                勾上之后重发那一发会带 <code>thinking: disabled</code>，让模型直接写正文。
+                <b>但不是每家都理这个参数</b>：实测 sensenova 与 Anthropic 这条腿认（思考确实关掉），ModelScope 那家带着它仍回一整篇思考、正文 0 字——
+                碰上那种家只剩两条路：把上面的输出预算抬大，或者让它少写点。
               </p>
             </div>
             <div className="space-y-1">
@@ -228,9 +231,10 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
                 value={editing.contextWindow || ""}
                 onChange={(e) => setEditing((d) => d ? { ...d, contextWindow: e.target.value ? parseInt(e.target.value) : undefined } : d)}
                 className="h-7 text-xs" />
-              <p className="text-[10px] text-muted-foreground">
+              <p className="text-[10px] text-muted-foreground leading-relaxed">
                 模型的最大输入 token 数。留空则使用上方匹配到的默认值{modelInfo ? `（${modelInfo.budget.contextWindow.toLocaleString()}）` : "（128,000）"}，填写后优先使用。
                 这是模型一次能看见的全部内容（指令 + 原文 + 它自己的回答）：窗口填得比模型真值大，请求会被服务商打回；填得小则送进模型的原文更少，问答的检索上下文会被裁短、范围总结会整章不送并在卡片上注明。
+                <br />· 也不用你查表：服务商在报错里回过<b>真实窗口</b>之后，这一场会话里程序就按它说的那个数算（刷新后回到上面的默认值）。
               </p>
               <details className="text-[10px] text-muted-foreground">
                 <summary className="cursor-pointer hover:text-foreground">查看常用模型参考值</summary>
@@ -268,12 +272,17 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
                 value={editing.maxTokens || ""}
                 onChange={(e) => setEditing((d) => d ? { ...d, maxTokens: e.target.value ? parseInt(e.target.value) : undefined } : d)}
                 className="h-7 text-xs" />
-              <p className="text-[10px] text-muted-foreground">
-                模型单次调用的最大输出 token 数，「一般不用填」。留空时每个任务按自己该要的量去要（一章摘要 4,096，人物关系分析与剧情时间线 16,384，小说地图 16,384）；
-                厂商嫌多会回一句"最多只能给 N"，程序照它给的数缩一档重发，不用你试。
-                填了就一律照你的：填大能避免回答被截断（推理模型会先把这段预算花在"思考"上，太小就一个字都拿不到），
-                但它也是所有任务共用的天花板——填得比某个任务想要的少，那个任务就跟着少要（小说地图原本要 16,384，你填 8,192 它就只要 8,192，地图可能画到一半停住）。
-                代价在同一只窗口里：输出留得越多，喂给模型的原文就越少，送不进去的部分会在分析卡片上写明（如「另有 N 章原文没送出去」）。
+              <p className="text-[10px] text-muted-foreground leading-relaxed">
+                模型单次调用的最大输出 token 数。<span className="font-medium text-foreground">建议：留空。</span>
+                <br />· 留空时每个任务按自己该要的量去要：范围总结与问答 2,048；一章摘要 4,096；全书总结与人物关系图谱
+                8,192；人物关系分析、剧情时间线、小说地图 16,384。
+                <br />· 撞了不用你试：厂商嫌多会回一句「最多只能给 N」，程序照它给的数缩一档重发，这一场会话里同一家都按它说的来。
+                <br />· 填了就是一份<b>共用的天花板</b>管所有任务。好处：回答不会被截断（推理模型会先把这段预算花在「思考」上，
+                太小就一个字都拿不到）。代价：填得比某个任务想要的少，那个任务就跟着少要——你填 8,192，
+                地图本来要 16,384 也就只要 8,192，可能画到一半停住。
+                <br />· 还有一笔在同一只窗口里的账：输出留得越多，喂给模型的原文就越少，送不进去的部分会在分析卡片上写明
+                （如「另有 N 章原文没送出去」）。
+                <br />所以只有两种情况值得动它：想让某档任务多写点，或者配额紧、宁可截断也要省。
               </p>
             </div>
             <div className="flex gap-2 pt-1">

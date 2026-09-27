@@ -18,7 +18,8 @@
  *    配置会让卡片出现而里面那只下拉是空的。
  * 7) 「流式响应」的默认勾着必须与发送侧同源（`openai.ts:20`/`anthropic.ts:16` 都是
  *    `config.stream !== false`）：写成 `=== true` 就是界面显示"没开"而请求里一直在开。
- * 8) 两个预算输入的 placeholder 与说明里那个括号数，跟着 `getMatchedModelInfo` 走。
+ * 8) 只有**窗口**那一格的 placeholder 与说明里的括号数跟着 `getMatchedModelInfo` 走；
+ *    输出那一格与表无关（表里的"输出上限"那一列已删），换模型名不许它改一个字。
  * 9) 离线模式：`resetAutoOffline()` 必须**先于**翻档调用（顺序反了自动检测会立刻把它拨回去），
  *    且"开"要过 confirm、"关"不过。
  * 10) 四块子面板各挂一次——摘掉任何一块，症状是"这一屏少了整功能"。
@@ -39,7 +40,8 @@
  * 单行 `<input>` 按规范会剥掉所有 ASCII 换行（jsdom `HTMLInputElement-impl` 走
  * `sanitizeValueByType` → `stripNewlines`，浏览器同规则，实测这条前提断言直接红给我看过）。
  * 真可达的是另外两种：地址的尾随空格进 URL 编成 `%20`（服务商 404）、模型名带首尾空格匹配不上
- * 预算表（`getMatchedModelInfo` 只做精确 + startsWith，静默落兜底 128k/4096，只有黄字提示）。
+ * 预算表（`getMatchedModelInfo` 只做精确 + startsWith，窗口静默落兜底 128,000，只有黄字提示；
+ * 输出那一格现在与表无关，未匹配不再有"默认小上限"这回事）。
  */
 
 // @vitest-environment jsdom
@@ -216,7 +218,7 @@ describe("保存的门槛与出口", () => {
     expect({
       // 尾随空格进 URL 被 WHATWG 编成 %20 → 服务商 404
       href: new URL(`${saved.baseUrl}/chat/completions`).href,
-      // 模型名只做精确 + startsWith、不 trim → 匹配不上就静默落兜底 128k/4096（只有黄字提示）
+      // 模型名只做精确 + startsWith、不 trim → 匹配不上就静默落兜底窗口 128,000（只有黄字提示）
       matchedKey: getMatchedModelInfo(saved.model)?.matchedKey ?? null,
     }).toEqual({ href: "https://x/v1/chat/completions", matchedKey: "deepseek-chat" });
   });
@@ -405,6 +407,82 @@ describe("表单默认值与提示要跟着真表走", () => {
     fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "sk-1" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     expect(state().providers[0].contextWindow).toBeUndefined();
+  });
+});
+
+/**
+ * 「默认不填，但要给用户足够和清晰的提示」——制作人 2026-09-27 晚拍的口径。
+ *
+ * 为什么提示值得单独判：这一屏是"用户手填的数进 AI 预算"的唯一入口，而**留空与填了是两条不同的路**
+ * （留空＝按任务该要多少要多少、撞了由厂商教；填了＝一份天花板压所有任务）。说不清的症状不是报错，
+ * 是用户凭一句话把 8,192 填进来、然后发现地图和图谱写一半就停，却不知道为什么。
+ *
+ * 四条是立红写的（现在的文案没有这几句）；两条是**保护性**的（现在就绿，写在这里是防"下次简化文案
+ * 顺手把它删了"——按老规矩如实标注，不当成立红的成绩）。六条**都另下过一刀验牙**，见下面 `W1..W6`。
+ *
+ * **变异台账（基线 `ApiSettings.tsx` sha256 `a7f05d4fcb1b4d34…`，每刀跑完 `cp` 回基线并当场核 sha）**：
+ * 命令固定为「`diff 基线 现文件 | grep -c '^<'` 取删行数 → `CI=1 npx vitest run <本文件>` → 去 ANSI 数
+ * `^  ×`」。`markers` 这里读的是**被删掉的源行数**（一段说明折成两行字面量就是 2），不是一刀两刀的分。
+ * - `W1` 把「建议：留空。」换回老口径「一般不用填。」（markers=1）→ **红 1**：`结论摆在前面：明写「建议：留空」`
+ * - `W2` 删掉逐档那一条 bullet（markers=2，同一段）→ **红 1**：`留空那一档把每个任务要多少全列出来`
+ *   （`地图` 那条与 `此消彼长` 那条没跟着红，因为它们读的是别的 bullet——这句是"删多"时最容易混账的地方）
+ * - `W3` 删掉窗口说明里「也不用你查表…这一场会话…」那行（markers=1）→ **红 1**：`窗口那一格：要说清…`
+ * - `W4` 把「关闭思考」那三行实话换回老的「对不支持该参数的非推理模型不产生影响」（markers=3）→ **红 1**：`「关闭思考」不许承诺每家都吃这一套`
+ * - `W5` 把「你填 8,192，地图本来要 16,384…」换成不含数值的模糊说法（markers=2）→ **红 1**：`填了的代价要举到具体那一档`
+ *   ——这条与 `W6` 是给两条**保护性**判据补的牙：它们写下来时就绿，但"绿"不等于"判得住"，摘掉对应那半句它们各自红了，所以是真判据。
+ * - `W6` 掏空「输出留得越多…原文就越少…卡片上写明」那半句、只留引子（markers=2）→ **红 1**：`输出与原文此消彼长要说清`
+ * - `W0` 对照：0 刀时本文件 29 条全绿（sha 与基线逐字节相同）。
+ */
+describe("输出与窗口那两格的提示", () => {
+  const openOutputHint = () => {
+    render(<ApiSettings />);
+    openAddForm();
+    return {
+      output: screen.getByText(/模型单次调用的最大输出/).textContent || "",
+      context: screen.getByText(/模型的最大输入 token 数/).textContent || "",
+      thinking: screen.getByText(/推理模型默认/).textContent || "",
+    };
+  };
+
+  it("结论摆在前面：明写「建议：留空」", () => {
+    // 老文案只有「一般不用填」四个字夹在长段落中间——"一般"不是口径，用户读不出默认该动还是不该动
+    const { output } = openOutputHint();
+    expect(output).toMatch(/建议[：:]\s*留空/);
+  });
+
+  it("留空那一档把每个任务要多少全列出来（五档数一个不许少）", () => {
+    const { output } = openOutputHint();
+    // 2,048（范围总结／问答）与 8,192（全书总览／图谱）老文案压根没提，用户只能猜"留空是不是都按一个很小的值"
+    for (const n of ["2,048", "4,096", "8,192", "16,384"]) {
+      expect(output, `留空那一档该说明 ${n} 是谁要的`).toContain(n);
+    }
+  });
+
+  it("填了的代价要举到具体那一档：地图会被一起压下去（保护性：现在就绿）", () => {
+    const { output } = openOutputHint();
+    expect(output).toContain("地图");
+    expect(output).toMatch(/你填 8,192[^\n]*16,384|16,384[^\n]*8,192/);
+  });
+
+  it("输出与原文此消彼长要说清，并且界面会写明（保护性：现在就绿）", () => {
+    const { output } = openOutputHint();
+    expect(output).toMatch(/输出留得越多[^\n]*原文[^\n]*越少/);
+    expect(output).toMatch(/没送出去|注明/);
+  });
+
+  it("窗口那一格：要说清「厂商回了真实窗口，这一场会话自己会按它算」", () => {
+    // 代码里那一支（`discoveredContextWindows`）早就有，界面上从来没提——于是用户以为只能自己查表填死
+    const { context } = openOutputHint();
+    expect(context).toMatch(/回[^\n]{0,12}真实窗口|报错里[^\n]{0,10}窗口/);
+    expect(context).toMatch(/这一场会话|这场会话/);
+  });
+
+  it("「关闭思考」不许承诺每家都吃这一套，并给出那种家的退路", () => {
+    // 老那句"对不支持该参数的非推理模型不产生影响"是假话的一半：今天实测 modelscope **是推理型、
+    // 带着该字段仍回 982 帧／正文 0 字**（`thinking:{type:"disabled"}` 它压根不理）。
+    const { thinking } = openOutputHint();
+    expect(thinking).toMatch(/不是每家都理|有的厂商不理/);
+    expect(thinking).toMatch(/抬[^\n]{0,6}预算|预算抬大|少要点正文/);
   });
 });
 
