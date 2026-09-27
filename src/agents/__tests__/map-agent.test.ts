@@ -176,6 +176,73 @@ describe("地图任务的取数与请求参数", () => {
   });
 });
 
+/**
+ * 提示词里曾经同时写着两句相反的话：规则 5 说「河流、山脉…不作为独立地点」（`:280`），
+ * 而 type 举例与体量要求（「确保覆盖…山脉、河流」）又把它们当点位要。模型只能挑一句听——
+ * **这就是同一本书两次生成、有时冒出一条河有时没有的源头**，与喂不喂正文无关。
+ * 口径由制作人 2026-09-28 定：**保留"不生成自然地理元素"，改掉顶着它的两句**。
+ *
+ * 判据按**节 + 行**取词面而不是钉整句字面：只钉旧字面的话，把「山脉」挪个位置抄回来就混过去了；
+ * 而全文取行又不行——规则 5 与体量要求都提自然地形，不分会互相顶包。
+ * 本批先以整句字面立红（2 红），随后按节收紧；收紧后四条在改好的产品上全绿，牙由下面四刀证明。
+ *
+ * 刀账 **MP1..MP4**（基线：`map-agent.ts` 修好后 sha256 0dd1411c4d905477；变异前源码 cfdd0d56）：
+ *  MP1 摘掉规则 5 那一行 → 红 1「规则 5」；
+ *  MP2 把「山脉」塞回 type 举例行 → 红 1「type 举例行」；
+ *  MP3 把「山脉、河流」塞回覆盖行（出口行仍在，含同样的词）→ 红 1「确保覆盖行」——这条同时证明分节是对的；
+ *  MP4 删掉体量要求里的自然地形出口行（= 只删不写）→ 红 1「另起一行给出口」。
+ *  四刀各自只红一条，逐刀反向编辑还原，末了 sha256 与基线逐字相同。
+ *  如实记一笔：MP4 的盘状态是在跑它之前就被误改出来的（还原 MP3 时多带走了出口行），
+ *  靠 `git diff` 才发现；读数本身有效（那一盘确实只少了出口行），但**顺序上它不是一刀一回的产物**。
+ */
+describe("地图提示词不许自己跟自己打架", () => {
+  const NATURAL = ["山脉", "河流", "湖泊", "海洋"];
+  /** 按【节】取词面：规则 5 与体量要求都提自然地形，全文取行会让两节互相顶包 */
+  function section(head: string): string {
+    const p = promptOf();
+    const from = p.indexOf(head);
+    if (from < 0) return "";
+    const rest = p.slice(from + head.length);
+    const next = rest.search(/^【[一二三四五六七八九]、/m);
+    return next < 0 ? rest : rest.slice(0, next);
+  }
+  const lineIn = (head: string, key: string) =>
+    section(head).split("\n").find((l) => l.includes(key)) ?? "";
+  const SCALE = "【三、内容体量要求】";
+
+  it("规则 5「不生成自然地理元素」那行原样送出（改的是冲突，不是取消它）", async () => {
+    chat.mockResolvedValue(reply(validMap()));
+    await run();
+    expect(promptOf()).toContain("- 不生成自然地理元素：河流、山脉、湖泊、海洋等自然地形不作为独立地点");
+  });
+
+  it("type 举例行里不许出现自然地形（那是在教模型把河当地点）", async () => {
+    chat.mockResolvedValue(reply(validMap()));
+    await run();
+    const l = lineIn("【二、自主发挥区域", "地点类型 type：");
+    expect(l).not.toBe("");
+    for (const w of NATURAL) expect(l).not.toContain(w);
+  });
+
+  it("「确保覆盖」那一行里不许出现自然地形", async () => {
+    chat.mockResolvedValue(reply(validMap()));
+    await run();
+    const l = lineIn(SCALE, "确保覆盖");
+    expect(l).not.toBe("");
+    expect(l).toContain("城市");
+    for (const w of NATURAL) expect(l).not.toContain(w);
+  });
+
+  it("自然地形在体量要求里另起一行给出口（写进 description 与方位参照），不是简单删掉", async () => {
+    chat.mockResolvedValue(reply(validMap()));
+    await run();
+    const l = lineIn(SCALE, "自然地形");
+    expect(l).not.toBe("");
+    expect(l).toContain("description");
+    expect(l).toContain("不作为独立地点");
+  });
+});
+
 describe("地图 JSON 的解析：不许静默补全", () => {
   it("纯 JSON 正常解析并原样返回", async () => {
     chat.mockResolvedValue(reply(validMap()));
