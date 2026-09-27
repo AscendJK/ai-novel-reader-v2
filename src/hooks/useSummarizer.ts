@@ -16,7 +16,7 @@ import { saveSummary, saveMap, saveGraph, deleteMap, loadChapters, loadNovel } f
 import { getUserDB } from "@/db/database";
 import { APIError } from "@/api/error-handler";
 import { getTokenBudget, requireUsableInput, resolveOutputReserve, estimateTokens } from "@/api/token-manager";
-import { sampleChapterTitles } from "@/agents/utils";
+import { sampleChapterTitles, askWithThinkingFallback } from "@/agents/utils";
 import { buildIndex, retrieveRelevantWithDetails } from "@/rag/index";
 import { useRAGStore } from "@/stores/rag-store";
 import { syncClient } from "@/sync/sync-client";
@@ -568,11 +568,12 @@ ${combinedText}${omittedChapters > 0 ? `\n\n注意：请求范围内的后 ${omi
 
             status("正在等待 AI 回答...");
             const providerInstance = getProvider(provider);
-            const response = await providerInstance.chat({
+            const response = await askWithThinkingFallback((thinking) => providerInstance.chat({
               model: "", messages: [{ role: "user", content: prompt }],
               max_tokens: rangeReserve,
+              thinking,
               signal,
-            });
+            }));
 
             // 防御：即使 API 返回 200，空内容也视为失败，避免保存空白总结
             if (!response.content || !response.content.trim()) {
@@ -618,8 +619,12 @@ ${combinedText}${omittedChapters > 0 ? `\n\n注意：请求范围内的后 ${omi
       if (!provider) return null;
 
       // 上下文按预算装配（round 2 R-35）：此前系统提示里塞的是**全量**章节目录
-      // + 最多 80 个 RAG 片段（约 45k token）+ 全量对话历史，且不经过
-      // chatWithContextRetry → 长书 + 多轮追问必然 400，且不会自愈。
+      // + 最多 80 个 RAG 片段（约 45k token）+ 全量对话历史。
+      // **更正一处假话**（2026-09-27 读代码时发现的）：这里原来还写着"且不经过
+      // `chatWithContextRetry`→必然 400 且不会自愈"，读起来像已经接上了——并没有，
+      // 这一发到今天仍是裸调。现在补上的是"空正文→关思考重发"那一支
+      // （`askWithThinkingFallback`）；**窗口与输出上限那两条 400 自愈这两条路仍然没有**，
+      // 原因是它们的 prompt 是在调用之前一次性装配好的，学到新预算也来不及重拼。
       const QA_OUTPUT_TOKENS = 2048;
       const budget = getTokenBudget(provider.model, provider.contextWindow, provider.maxTokens);
       // 预留与请求值同一个数；两件事都发生在入队之前（round 3 R-73）：`resolveOutputReserve`
@@ -709,15 +714,16 @@ ${chapterSample.text}
           try {
             status("正在等待 AI 回答...");
             const providerInstance = getProvider(provider);
-            const response = await providerInstance.chat({
+            const response = await askWithThinkingFallback((thinking) => providerInstance.chat({
               model: "",
               messages,
               // 与上面 `requireUsableInput(budget, qaReserve, "问答")` 的输出预留同一个值，
               // 否则预算算小了而请求要得多，严格校验 input+max_tokens≤窗口的服务商必 400
               max_tokens: qaReserve,
               temperature: 0.5,
+              thinking,
               signal,
-            });
+            }));
 
             // 防御：即使 API 返回 200，空内容也视为失败，避免显示空白回答
             if (!response.content || !response.content.trim()) {

@@ -10,7 +10,7 @@ import { useAPIStore } from "@/stores/api-store";
 import { loadNovel } from "@/db/repositories";
 import type { Novel } from "@/parsers/types";
 import { getTokenBudget, estimateTokens, extractContextLength, setDiscoveredContextWindow, extractMaxOutputTokens, setDiscoveredMaxOutput, resolveOutputReserve, type TokenBudget } from "@/api/token-manager";
-import { APIError } from "@/api/error-handler";
+import { APIError, isEmptyResultError } from "@/api/error-handler";
 import type { AgentEnvironment } from "./base-agent";
 import type { ChatCompletionResponse } from "@/api/types";
 
@@ -303,6 +303,36 @@ export async function chatWithContextRetry(
     }
     throw err;
   }
+}
+
+/**
+ * 一次逻辑问答，加上它唯一的退路：**这一发一个字正文都没回，才关掉模型思考重发一发**。
+ *
+ * 为什么值得单独一处：默认开思考的模型（真厂商实测 sensenova、modelscope 的 GLM、deepseek-flash）
+ * 会把整份输出预算花在思考上，`delta.content` 一个字都不发（`982 帧 / 正文 0 字 /
+ * reasoning_content 3002 字 / finish_reason=length`）。这种形状不重发就永远是"API 返回了空内容"，
+ * 而重发时必须关思考才有正文——两件事在五个调用点上各写过一遍，本章摘要就漏在外面漏了一轮
+ * （`94c8356` 补的，第一版还挂错了地方：挂在"返回值是空串"上，而 provider 对空正文是**抛** `APIError`）。
+ *
+ * **封顶两发**（制作人 2026-09-27 拍的口径）：第一发照旧让模型想（质量优先），第二发才关；
+ * 两发都不成就把第二发那句原样抛出去，不许第三发。
+ * 非空正文的失败（超时／限流／CORS／解析失败）一律**不**触发重发——那时候关思考是白烧一发配额。
+ *
+ * `ask` 收第二枚参数当"这一发要不要关思考"，由本函数决定；调用点不许自己判空正文。
+ * 空白正文（provider 没抛错、只回了几个空格）同样算空正文：两条待遇不同就会有一边漏。
+ */
+export async function askWithThinkingFallback(
+  ask: (thinking: boolean | undefined) => Promise<ChatCompletionResponse>,
+): Promise<ChatCompletionResponse> {
+  let first: ChatCompletionResponse;
+  try {
+    first = await ask(undefined);
+  } catch (err) {
+    if (!isEmptyResultError(err)) throw err;
+    return await ask(false);
+  }
+  if (first.content && first.content.trim()) return first;
+  return await ask(false);
 }
 
 /**
