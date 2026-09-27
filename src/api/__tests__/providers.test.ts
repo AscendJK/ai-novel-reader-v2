@@ -192,11 +192,12 @@ describe("OpenAI provider parseResponse", () => {
   it("空字符串这一路也要说准原因：usage 里有 reasoning_tokens 就点名思考吃满", async () => {
     mockFetchResponse({
       choices: [{ message: { role: "assistant", content: "" } }],
-      usage: { completion_tokens: 8192, completion_tokens_details: { reasoning_tokens: 8192 } },
+      usage: { completion_tokens: 8192, completion_tokens_details: { reasoning_tokens: 4100 } },
     });
     const provider = createOpenAIProvider(openaiConfig);
     const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
-    expect(err.message).toContain("8192");
+    // 整句一起比，别只断言"含 4100"：末尾那句原始响应里 8192/4100 都印着，单挑数字谁都糊得过去
+    expect(err.message).toContain("4100 token 花在思考上");
     expect(err.message).toContain("思考");
   });
 
@@ -356,6 +357,23 @@ describe("OpenAI provider parseResponse", () => {
  * - N5 改前缀（`API 空响应`）                        1 红：锚那条
  * 立红阶段的过程账：这七条刚写下时 **3 红 4 绿**——4 条绿的是"钉现状"那半（没证据不许编、前缀不许动），
  * 它们的牙由 N5 与 N2 证明，不是由"实现前就红"证明。
+ *
+ * ## 2026-09-27 重打：措辞搬进 `error-handler.ts` 之后，夹具与断言各收紧一次
+ * 搬家的判据不能是"改 openai.ts 里的文案 openai 红"（那本来就同一只文件），得是**改另一只文件里
+ * 的共用内核，这一档跟着红**。基线换成 openai.ts `5f0378a9`（已无本地那份 `emptyResultNote`）。
+ * 先收了两处假绿的可能：
+ * - 三条 `toContain("8192")` 换成整句 `toContain("4100 token 花在思考上")`——只断"含这个数字"时，
+ *   报错句尾那段「原始响应：{…}」里 8192 本来就躺着，内核不报数也测不出（实测：旧断言下 G1 只红 1 条）。
+ * - `REASONING_USAGE` 里 `completion_tokens` 与 `reasoning_tokens` 不再同为一个数（8192 / 4100），
+ *   否则"读错字段"那一刀拿的是同一个数字，看不出来。
+ * 重打的读数（每轮一把，跑完 `cp` + `cmp` 还原）：
+ * - N6 内核 `${reasoningTokens}` → `${0}`            4 红：这一档 3 条 + 内核自己 1 条（`providers.test.ts`
+ *   三条同红就是"这一腿真在读那一份"的证据）
+ * - N7 内核整段判断废掉                              7 红：这一档 4 条 + 内核 3 条
+ * - N8 内核门槛 `> 0` → `>= 0`                       2 红：与旧 N1 同格，这一档只红「明确为 0」那条
+ * - N9 非流式取值换成 `usage.completion_tokens`       2 红（这一档非流式那条 + `parseResponse` 里
+ *   "空字符串这一路也要说准原因"）；流式那一腿同样换错字段 → 1 红。**旧夹具（两个数一样）下这两刀都是 0 红**，
+ *   也就是"读哪个字段"这一格在收紧之前根本没判住。
  */
 describe("OpenAI provider 空正文的措辞：有证据才说思考吃满，说了要给出口", () => {
   beforeEach(() => {
@@ -363,11 +381,13 @@ describe("OpenAI provider 空正文的措辞：有证据才说思考吃满，说
     localStorage.clear();
   });
 
+  // 两个数字**故意不一样**：以前 reasoning_tokens 也写 8192，于是"把读取的字段换成 completion_tokens"
+  // 这一刀打进去 0 红——那句里的 8192 是从哪儿来的根本分不出来。4100 只有走 reasoning_tokens 才会出现。
   const REASONING_USAGE = {
     prompt_tokens: 9900,
     completion_tokens: 8192,
     total_tokens: 18092,
-    completion_tokens_details: { reasoning_tokens: 8192 },
+    completion_tokens_details: { reasoning_tokens: 4100 },
   };
 
   it("流式：只有 reasoning 帧 + usage 带 reasoning_tokens → 说清是思考吃满，不再猜模型名", async () => {
@@ -375,8 +395,8 @@ describe("OpenAI provider 空正文的措辞：有证据才说思考吃满，说
     const provider = createOpenAIProvider(openaiConfig);
     const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
     expect(err).toBeInstanceOf(APIError);
-    expect(err.message).toContain("8192");
-    expect(err.message).toContain("思考");
+    // 整句一起比：只断言"句子里有 4100"会被末尾那段原始响应糊过去（原始响应里什么数字都有）
+    expect(err.message).toContain("4100 token 花在思考上");
     expect(err.message).not.toContain("模型名称不存在");
   });
 
@@ -418,7 +438,7 @@ describe("OpenAI provider 空正文的措辞：有证据才说思考吃满，说
     mockFetchResponse({ choices: null, usage: REASONING_USAGE });
     const provider = createOpenAIProvider(openaiConfig);
     const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
-    expect(err.message).toContain("8192");
+    expect(err.message).toContain("4100 token 花在思考上");
     expect(err.message).not.toContain("模型名称不存在");
   });
 
@@ -583,6 +603,10 @@ describe("Anthropic provider 请求级 thinking 覆盖配置级", () => {
  * 为什么这一笔值得单独记：**它修的不是"界面少一行字"，是一条链的开关**。agent 的
  * 「确认这一发空正文 → 第二发带 `thinking:false` 重发」认的是错误前缀（`error-handler.ts:53`），
  * 静默返回空串时那条链在 OpenAI 这条腿上根本不触发——而测试全绿、看不出来。
+ *
+ * 基线已过时一句：这笔之后 `emptyResultNote` 搬进了 `error-handler.ts`（openai.ts 基线
+ * `622ffd9a…` → `5f0378a9…`）。W1/W2/W3/W5 打在 openai.ts 的那两个 `if` 上，位置没动、结论照旧；
+ * **W4 那格（内核不报原因）已由上面台账的 N6/N7 在新基线上重打**，读数换成 4 红 / 7 红。
  */
 
 describe("Anthropic provider parseResponse", () => {

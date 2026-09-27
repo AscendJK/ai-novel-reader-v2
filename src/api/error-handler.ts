@@ -43,8 +43,8 @@ export class APIError extends AppError {
 /**
  * 「这一发一个字正文都没回」的唯一判法。
  *
- * 认的是**前缀**而不是整句：空正文的措辞会随手上的证据变（见 `providers/openai.ts` 的
- * `emptyResultNote`——有 `reasoning_tokens` 就说"思考吃满了预算"），锚不许跟着文案漂。
+ * 认的是**前缀**而不是整句：空正文的措辞会随手上的证据变（见下面那只 `emptyResultNote`——
+ * 有思考证据就说"思考吃满了预算"），锚不许跟着文案漂。
  * provider 抛的那句与 agent 自己判空白正文时写的那句都算。
  *
  * 用途只有一个：agent 的降级重发要靠它决定"这一发要不要关掉模型思考再试"。
@@ -54,6 +54,27 @@ const EMPTY_RESULT_MESSAGE = /^API 返回了空(结果|响应)/;
 
 export function isEmptyResultError(err: unknown): boolean {
   return err instanceof Error && EMPTY_RESULT_MESSAGE.test(err.message);
+}
+
+/**
+ * 空正文那句报错该怎么说。**两条腿共用这一份**，谁都不许自己抄一遍文案。
+ *
+ * 有思考证据才说"思考吃满了预算"——2026-09-27 真厂商实测到
+ * `completion_tokens=8192 / reasoning_tokens=8192 / 正文 0 字`，思考与正文共用同一份输出预算，
+ * 这时候旧文案猜的那三种原因（模型名不存在、无权访问、参数不支持）全是假话：名对、参对、密钥对。
+ * 没证据或数字是 0，就照旧说那三种猜测，**不替厂商编一个原因**。
+ *
+ * 两家给的证据长得不一样，所以数字得由调用方挑好了传进来：OpenAI 格式在
+ * `usage.completion_tokens_details.reasoning_tokens`；Anthropic 格式没这个字段，它的思考是
+ * `content` 里的 thinking 块、预算记在 `usage.output_tokens`（正文一个字都没有时那一发输出的
+ * 就是思考花掉的）。传错的不是这句文案的事，是"到底有没有证据"的事，判据在各自那条腿里。
+ */
+export function emptyResultNote(reasoningTokens: unknown): string {
+  if (typeof reasoningTokens === "number" && reasoningTokens > 0) {
+    return `模型把 ${reasoningTokens} token 花在思考上、一个字正文都没回（思考与正文共用同一份输出预算）。` +
+      `可以在设置里关闭思考，或调大输出上限。`;
+  }
+  return "可能原因：模型名称不存在或无权访问、请求参数不被支持。";
 }
 
 function classifyError(status: number, body: string): { code: APIErrorCode; message: string } {

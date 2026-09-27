@@ -1,5 +1,5 @@
 import type { AIProvider, ChatCompletionRequest, ChatCompletionResponse, ProviderConfig } from "../types";
-import { APIError, handleFetchError } from "../error-handler";
+import { APIError, handleFetchError, emptyResultNote } from "../error-handler";
 import { apiFetch } from "@/lib/api-client";
 import { useUIStore } from "@/stores/ui-store";
 import { readSSEData } from "./stream";
@@ -7,21 +7,9 @@ import { normalizeBaseUrl } from "./base-url";
 import { proxyWithSessionRetry } from "./proxy-session";
 
 /**
- * 空正文那句报错该怎么说。
- *
- * 有 `reasoning_tokens` 才说"思考吃满了预算"——2026-09-27 真厂商实测到
- * `completion_tokens=8192 / reasoning_tokens=8192 / 正文 0 字`，思考与正文共用同一份输出预算，
- * 这时候旧文案猜的那三种原因（模型名不存在、无权访问、参数不支持）全是假话：名对、参对、密钥对。
- * 没这个字段或它是 0，就照旧说那三种猜测，**不替厂商编一个原因**。
+ * 空正文那句报错的措辞住在 `../error-handler` 的 `emptyResultNote`，两条腿共用那一份：
+ * OpenAI 格式的证据是 `usage.completion_tokens_details.reasoning_tokens`，直接传给它。
  */
-function emptyResultNote(reasoningTokens: unknown): string {
-  if (typeof reasoningTokens === "number" && reasoningTokens > 0) {
-    return `模型把 ${reasoningTokens} token 花在思考上、一个字正文都没回（思考与正文共用同一份输出预算）。` +
-      `可以在设置里关闭思考，或调大输出上限。`;
-  }
-  return "可能原因：模型名称不存在或无权访问、请求参数不被支持。";
-}
-
 export function createOpenAIProvider(config: ProviderConfig): AIProvider {
   const baseUrl = normalizeBaseUrl(config.baseUrl, "/chat/completions") || "https://api.openai.com/v1";
 

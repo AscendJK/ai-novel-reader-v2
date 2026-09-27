@@ -9,7 +9,7 @@
  * 讲输出"就不返回数字，所以本修的是判读，不是花钱。）
  */
 import { describe, it, expect } from "vitest";
-import { APIError, handleFetchError, isEmptyResultError } from "../error-handler";
+import { APIError, handleFetchError, isEmptyResultError, emptyResultNote } from "../error-handler";
 
 async function classify(status: number, body: unknown): Promise<APIError> {
   const res = new Response(typeof body === "string" ? body : JSON.stringify(body), { status });
@@ -126,5 +126,62 @@ describe("isEmptyResultError：只认「一个字正文都没回」这一种失�
     expect(isEmptyResultError("API 返回了空结果")).toBe(false);
     expect(isEmptyResultError(undefined)).toBe(false);
     expect(isEmptyResultError(null)).toBe(false);
+  });
+});
+
+/**
+ * 空正文那句"到底该说什么"也住在这里，而且只有这一份。
+ *
+ * 它原先是 `providers/openai.ts` 里的模块私有函数，而现在两条腿都会遇到"一个字正文都没回"：
+ * OpenAI 格式的证据在 `usage.completion_tokens_details.reasoning_tokens`，Anthropic 格式没有那个
+ * 字段（它的思考是 `content` 里的 thinking 块，预算记在 `usage.output_tokens`）。各自抄一份文案的
+ * 下场就是同一件事在两家嘴里说法不一样，而 agent 认的锚只有前缀——文案漂移没人能发现。
+ *
+ * 判的是这只内核自己的三格：**有证据才说思考吃满**、**说了就得给出口**、**没证据时那三种猜测
+ * 不许被换成一句编出来的话**。两条腿各自"确实在读这一份"由 `providers.test.ts` 里两边的
+ * 措辞判据看着（那里各下一刀改这只内核，两腿同红才是搬家真的成立）。
+ *
+ * ## 变异台账（2026-09-27 本机；内核基线 error-handler.ts `a74f0b65`）
+ * 5 条判据、3 把刀，每轮一把、跑完立刻 `cp` 还原 + `cmp`（三次都回到 a74f0b65）。
+ * 每刀同时跑 `providers.test.ts`，因为这一档要看的正是"改这里的字，那条腿会不会跟着红"：
+ * - G1 句里的 `${reasoningTokens}` 换成 `${0}`          4 红：本档 1 条 + OpenAI 三条措辞判据
+ *   （**这一刀就是搬家的证据**：动的是 error-handler.ts，openai.ts 一个字没改却红了三条）
+ * - G2 整段判断废掉（`false && …`，恒说三种猜测）       7 红：本档 3 条 + OpenAI 4 条
+ * - G3 门槛 `> 0` 挪成 `>= 0`（有字段就当思考吃满）      2 红：本档"0 不许编"那条 + OpenAI
+ *   流式"reasoning_tokens 明确为 0"那条——与搬家前 N1 同一格，读数从 1 红变 2 红是因为内核自己
+ *   也补了一格。
+ * 过程账（别学）：G1 第一次打的时候**只红 1 条**——OpenAI 那三条当时写的是 `toContain("8192")`，
+ * 而报错句尾本来就带"原始响应：…"，8192 在那段里躺着，谁都糊得过去。断言换成整句
+ * `toContain("4100 token 花在思考上")` + 夹具把两个数字改开之后重打同一刀才是 4 红。
+ */
+describe("emptyResultNote：有证据才说思考吃满，说了就要给出口", () => {
+  it("带正数的 reasoning token → 点名思考吃满，并把那个数字写出来", () => {
+    const s = emptyResultNote(8192);
+    expect(s).toContain("8192");
+    expect(s).toContain("思考");
+  });
+
+  it("说了思考吃满就必须给出口：关思考与调大上限两条都在话里", () => {
+    const s = emptyResultNote(2048);
+    expect(s).toContain("关闭思考");
+    expect(s).toContain("调大输出上限");
+  });
+
+  it("两句不许同时出现：说了思考吃满就不许再猜那三种原因（否则等于没证据）", () => {
+    expect(emptyResultNote(1)).not.toContain("模型名称不存在");
+  });
+
+  it("token 数为 0（真·没思考）→ 保留原来那三种猜测，不许编一个原因", () => {
+    const s = emptyResultNote(0);
+    expect(s).toContain("模型名称不存在");
+    expect(s).not.toContain("思考");
+  });
+
+  it("厂商压根没给那个字段 / 给的不是数字 → 同样不许说成思考吃满", () => {
+    for (const v of [undefined, null, "8192", {}, NaN]) {
+      const s = emptyResultNote(v);
+      expect(s, `坏证据 ${JSON.stringify(v) ?? String(v)} 被说成了思考吃满`).toContain("模型名称不存在");
+      expect(s).not.toContain("token 花在思考上");
+    }
   });
 });
