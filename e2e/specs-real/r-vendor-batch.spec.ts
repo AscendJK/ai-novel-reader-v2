@@ -32,19 +32,49 @@ import { panel } from "../pages/panel";
 import { openSummaryPanel, addProvider, openSettings, leaveSettings } from "../pages/settings";
 import { importFiles, longNovel, navChapter, openBook, shelfCard, txtFile } from "../pages/shelf";
 import { RUN, realNovel, signIn, vendorReach } from "./fixtures";
+import { loadVendors, tryVendorKey, vendorTag, wireText, type VendorSpec } from "./vendors";
 
 /**
- * 用哪一家真厂商：优先厂商一，缺 key 时退到厂商二（sensenova）。
+ * 这一组跑哪一家厂商。
+ *
+ * 三个形状要分清：
+ *  - `ANR_VENDOR_ID=<id>` 指定一家 → 就它（**空串算没指定**：启动脚本里 `export ANR_VENDOR_ID=`
+ *    这种写法很常见，把它当成"指定了一家不存在的"会让整组莫名其妙不进）；
+ *    指定了清单里没有的 id 直接抛（打错一个字就会
+ *    "整组没跑而报告看着像跑过"，这一档每条都花钱，不能留这种格子）；
+ *  - 没指定 → 清单里第一家 keyFile 有货的；
+ *  - 一家都没 key（或压根没给清单）→ `v:null` + 一句点名缺什么的跳过原因。
  *
  * 写死厂商一是这一组最初的形状，代价是"只有 sensenova 一把 key"的时候这一组整组静默跳过——
- * 全书总览/地图/图谱这三条最贵的路径于是永远只被一家厂商量过。key 仍旧只从 env 来，不落文件。
+ * 全书总览/地图/图谱这三条最贵的路径于是永远只被一家厂商量过。key 值仍然只在 `keyFile` 里活着。
  */
-const WHICH: "1" | "2" = process.env.ANR_VENDOR1_KEY ? "1" : "2";
-const key = (WHICH === "1" ? process.env.ANR_VENDOR1_KEY : process.env.ANR_VENDOR2_KEY) ?? "";
-const BASE = (WHICH === "1" ? process.env.ANR_VENDOR1_BASE : process.env.ANR_VENDOR2_BASE)
-  ?? (WHICH === "1" ? "https://411.cc.cd/v1" : "https://token.sensenova.cn/v1");
-const MODEL = (WHICH === "1" ? process.env.ANR_VENDOR1_MODEL : process.env.ANR_VENDOR2_MODEL)
-  ?? (WHICH === "1" ? "gpt-5.6-luna" : "sensenova-6.8-flash-lite");
+function pickVendor(): { v: VendorSpec | null; key: string; missing: string } {
+  const all = loadVendors();
+  const withKeys = all.map((v) => ({ v, ...tryVendorKey(v) }));
+  const want = (process.env.ANR_VENDOR_ID ?? "").trim();
+  if (want !== "") {
+    const hit = withKeys.find((e) => e.v.id === want);
+    if (!hit) {
+      throw new Error(`ANR_VENDOR_ID="${want}" 不在厂商清单里；可选：${all.map((e) => e.id).join(" / ") || "（清单是空的）"}`);
+    }
+    return { v: hit.key !== "" ? hit.v : null, key: hit.key, missing: hit.missing ?? "" };
+  }
+  const ready = withKeys.find((e) => e.key !== "");
+  if (ready) return { v: ready.v, key: ready.key, missing: "" };
+  return {
+    v: null,
+    key: "",
+    missing: all.length === 0
+      ? "没设 ANR_VENDOR_MANIFEST，或清单里一条都没有"
+      : `清单里没有任何一家配了 key：${withKeys.map((e) => `${e.v.id}（${e.missing}）`).join("；")}`,
+  };
+}
+
+const PICKED = pickVendor();
+const VENDOR = PICKED.v;
+const key = PICKED.key;
+const BASE = VENDOR?.base ?? "";
+const MODEL = VENDOR?.model ?? "（没选到厂商）";
 const USER = `r组批量-${RUN}`;
 const BOOK = `批量长书-${RUN}`;
 /**
@@ -56,44 +86,23 @@ const BOOK = `批量长书-${RUN}`;
  */
 const MAX_OUTPUT = Number(process.env.ANR_VENDOR_MAX_OUTPUT ?? 8192);
 
-/**
- * 把一发厂商回包摊成纯文本。
- *
- * 必须是 SSE 感知的：`config.stream` 没显式关掉时 `openai.ts:20` 就带 `stream:true` 出去，
- * 这家厂商回的是 `text/event-stream`（实测 `200 text/event-stream`），照 JSON 解会一份都解不出来，
- * 于是"模型回了多少条关系"读成 0 —— 那是判据读错了，不是产品错了。代理那条腿原样转发，两边都认。
- */
+/** 把一发厂商回包摊成纯文本（形状由 `format` 决定，见 `vendors.ts` 的 `wireText` 为什么必须 SSE 感知） */
 function vendorText(body: string, contentType: string): string {
-  if (!contentType.includes("event-stream")) {
-    try {
-      return (JSON.parse(body) as { choices?: { message?: { content?: string } }[] }).choices?.[0]?.message?.content ?? "";
-    } catch {
-      return "";
-    }
-  }
-  let out = "";
-  for (const line of body.split(/\r?\n/)) {
-    if (!line.startsWith("data:")) continue;
-    const payload = line.slice(5).trim();
-    if (!payload || payload === "[DONE]") continue;
-    try {
-      out += (JSON.parse(payload) as { choices?: { delta?: { content?: string } }[] }).choices?.[0]?.delta?.content ?? "";
-    } catch {
-      // 半帧/心跳帧解不开不是这一条判据要管的事
-    }
-  }
-  return out;
+  if (!VENDOR) throw new Error("没选到厂商却想解回包");
+  return wireText(VENDOR, body, contentType);
 }
 
 // 不用 `.serial`：三条各自有 `beforeEach`（各自一份 context），串起来只会让第一条红了
 // 把后面两条一起吞掉（实测报 `did not run`），变异验收时看不全
-test.describe(`真后端：批量生成三条打在真厂商上（厂商${WHICH} · ${MODEL}）`, () => {
-  test.skip(!key, `没设 ANR_VENDOR${WHICH}_KEY：这一组要真厂商，缺了就跳过（不算红）`);
+test.describe(`真后端：批量生成三条打在真厂商上（${VENDOR ? vendorTag(VENDOR) : "没选到厂商"}）`, () => {
+  test.skip(VENDOR === null || key === "", PICKED.missing);
 
   // 与 r-vendor.spec.ts 同一套分类：厂商"不在"（连不出去/5xx）跳过并写明原因，
   // 4xx 照红——key 失效与"发出去的整本书没回内容"都是这一条要报的。
   test.beforeAll(async () => {
-    const r = await vendorReach({ base: BASE, model: MODEL, key });
+    // 走到这里 describe 级的 skip 已经把"没选到厂商"挡掉了；真到这儿就是 skip 逻辑坏了
+    if (!VENDOR) throw new Error(`没选到厂商却进了预探：${PICKED.missing}`);
+    const r = await vendorReach(VENDOR, key);
     if (r.reachable) return;
     console.log(`[R-E 批量] 预探：${r.why} → ${r.skip ? "跳过这一组" : "不跳过，让判据红"}`);
     test.skip(r.skip, `预探：${r.why}`);
@@ -105,6 +114,8 @@ test.describe(`真后端：批量生成三条打在真厂商上（厂商${WHICH}
   /** 三条都要同一份前置：配好厂商 + 一本 40 章长书 + 面板展开到「全书分析」 */
   test.beforeEach(async ({ page, baseURL }) => {
     test.setTimeout(12 * 60_000);
+    // 下面那行 `u.href.startsWith(BASE)` 在没选到厂商时会等于"拦掉一切请求"，所以先挡住
+    if (!VENDOR) throw new Error(`没选到厂商却进了前置：${PICKED.missing}`);
     // 抓包必须在**任何导航之前**装好（init script 只作用于之后的页面加载），所以放在 signIn 前面
     V = await watchWire(page);
     /**
@@ -118,7 +129,9 @@ test.describe(`真后端：批量生成三条打在真厂商上（厂商${WHICH}
     await page.route((u) => u.href.startsWith(BASE), (route) => route.abort());
     await signIn(page, baseURL!, USER);
     await openSettings(page);
-    await addProvider(page, { name: `R-E 批量-${RUN}`, key, baseUrl: BASE, model: MODEL, maxTokens: MAX_OUTPUT });
+    await addProvider(page, {
+      name: `R-E 批量-${RUN}`, key, baseUrl: BASE, model: MODEL, maxTokens: MAX_OUTPUT, format: VENDOR.format,
+    });
     const trigger = page.locator("#active-provider");
     if (!(await trigger.innerText()).includes(`R-E 批量-${RUN}`)) {
       await trigger.click();

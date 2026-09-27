@@ -1,6 +1,7 @@
 import { expect, type Page } from "@playwright/test";
 import { sel } from "../pages/app";
 import { CHAPTER_TITLES } from "../pages/shelf";
+import { probeRequest, type VendorSpec } from "./vendors";
 
 /**
  * 真后端那一档共用的三只工具。放在 specs-real 里而不是 `e2e/pages/`：
@@ -108,7 +109,7 @@ export type Reach = { reachable: true } | { reachable: false; skip: boolean; why
 /**
  * 厂商可达性预探（**在 node 侧发，不进浏览器**）。
  *
- * 这一档的 8 条判据全建立"外部厂商活着"之上，而它今天确实会飘：同一本合成长书跑两次，
+ * 这一档的判据全建立"外部厂商活着"之上，而它今天确实会飘：同一本合成长书跑两次，
  * 发出去的请求数就从 1 变 2（重试）。网络层挂了让判据红，报出来像"产品坏了"，
  * 而实际是外网不通 / 厂商 5xx。所以分类：
  *  - **连不出去（DNS/拒绝/超时）与 5xx → `skip`**，并在跳过原因里写清是哪一种；
@@ -118,22 +119,27 @@ export type Reach = { reachable: true } | { reachable: false; skip: boolean; why
  *  - **其余 4xx 不跳过**：key 失效、路径写错正是要让它红——R-E4 那条尤其依赖
  *    厂商真回 401（它判的是"厂商 401 不许说成本机会话失效"）。
  * 只探可达性，不探内容：内容对不对仍由各条判据自己说。
+ * 请求形状（端点、头、body）不在这里写死，一律走 `probeRequest`——两家协议的差别就在头那三行。
  */
-export async function vendorReach(opts: {
-  base: string; model: string; key: string; timeoutMs?: number;
-  /**
-   * 撞上 429 时最多再探几次、每次等多久。
-   *
-   * 默认 5 次 × 120 秒（最多等 8 分钟）。第一版给的是 3 × 60，实测不够：上一轮刚跑完 12 分钟
-   * 真厂商，配额窗口还热着，预探等满 2 分钟就放弃 → **整组 8 条一条都没测**（Playwright 还回
-   * exit 0，看着像"跑过了"）。这一档每一跑都花钱，宁可多等几分钟也别空跑。
-   */
-  triesOn429?: number; waitOn429Ms?: number;
-}): Promise<Reach> {
+export async function vendorReach(
+  vendor: VendorSpec,
+  key: string,
+  opts: {
+    timeoutMs?: number;
+    /**
+     * 撞上 429 时最多再探几次、每次等多久。
+     *
+     * 默认 5 次 × 120 秒（最多等 8 分钟）。第一版给的是 3 × 60，实测不够：上一轮刚跑完 12 分钟
+     * 真厂商，配额窗口还热着，预探等满 2 分钟就放弃 → **整组 8 条一条都没测**（Playwright 还回
+     * exit 0，看着像"跑过了"）。这一档每一跑都花钱，宁可多等几分钟也别空跑。
+     */
+    triesOn429?: number; waitOn429Ms?: number;
+  } = {},
+): Promise<Reach> {
   const tries = opts.triesOn429 ?? 5;
   const wait = opts.waitOn429Ms ?? 120_000;
   for (let attempt = 1; attempt <= tries; attempt++) {
-    const r = await oneProbe(opts);
+    const r = await oneProbe(vendor, key, opts.timeoutMs);
     if (r.reachable || r.status !== 429 || attempt === tries) return r;
     console.log(`[厂商预探] 429 限流，等 ${wait / 1000} 秒后再探（第 ${attempt}/${tries} 次）`);
     await new Promise((resolve) => setTimeout(resolve, wait));
@@ -141,16 +147,16 @@ export async function vendorReach(opts: {
   return { reachable: false, skip: true, why: "厂商限流（429），配额窗口没过去：这一档测不了，与产品无关" };
 }
 
-async function oneProbe(opts: { base: string; model: string; key: string; timeoutMs?: number }): Promise<Reach & { status?: number }> {
-  const { base, model, key } = opts;
+async function oneProbe(vendor: VendorSpec, key: string, timeoutMs?: number): Promise<Reach & { status?: number }> {
+  const { url, headers, body } = probeRequest(vendor, key);
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 30_000);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs ?? 30_000);
   try {
-    const res = await fetch(`${base}/chat/completions`, {
+    const res = await fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-      // 明确 stream:false：这里只要状态码，不想要一坨 SSE
-      body: JSON.stringify({ model, messages: [{ role: "user", content: "ping" }], max_tokens: 8, stream: false }),
+      headers,
+      // body 由 probeRequest 给：两种协议都明确不要流式，这里只要状态码，不想要一坨 SSE
+      body: JSON.stringify(body),
       signal: ctrl.signal,
     });
     if (res.status >= 500) return { reachable: false, skip: true, status: res.status, why: `厂商侧 HTTP ${res.status}（5xx 算它不在）` };
