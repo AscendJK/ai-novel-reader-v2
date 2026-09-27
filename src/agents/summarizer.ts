@@ -78,8 +78,9 @@ class SummarizerAgent extends BaseAgent {
 
       try {
         context.onStatus?.("AI 正在生成分析...");
-        const response = await chatWithContextRetry(env, async (b) => {
-          // 用最新预算重新计算章节截断阈值（400 自愈时预算缩小会触发更严格截断）
+        // 同一章的请求构造抽在这里，因为"第二发"要重算一遍：预算可能已被 400 自愈改小，
+        // 截断阈值与 reserve 都得按最新预算取（`chatWithContextRetry` 每次回调传进来的 b）。
+        const ask = (b: TokenBudget, thinking?: boolean) => {
           const reserve = this.reserve(b);
           const maxChars = Math.floor(requireUsableInput(b, reserve, "章节总结"));
           let content = chapter.content;
@@ -92,9 +93,19 @@ class SummarizerAgent extends BaseAgent {
             messages: [{ role: "user", content: p }],
             max_tokens: reserve,
             temperature: 0.5,
+            thinking,
             signal: context.signal,
           });
-        });
+        };
+        let response = await chatWithContextRetry(env, (b) => ask(b, undefined));
+
+        // 空正文先重发一发关掉思考，再判失败：推理型厂商会把整份 1024 预算花在思考上，
+        // `delta.content` 一个字都不发（2026-09-27 真厂商实测：994 帧、reasoning 3404 字、
+        // finish_reason=length），直接落"API 返回了空内容"就等于"这家配上了也用不了摘要"。
+        // 地图与图谱早走这条路（`map-agent.ts:164`、`graph-agent.ts:97`），本章摘要漏在外面。
+        if (!response.content || !response.content.trim()) {
+          response = await chatWithContextRetry(env, (b) => ask(b, false));
+        }
 
         // 防御：即使 API 返回 200，空内容也视为失败，避免保存空白总结
         if (!response.content || !response.content.trim()) {
