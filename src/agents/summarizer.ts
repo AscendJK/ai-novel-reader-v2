@@ -9,7 +9,7 @@ import { BaseAgent } from "./base-agent";
 import { buildChapterSummaryPrompt } from "@/lib/prompt-templates";
 import { sampleChapterContent, prepareAgentContext, chatWithContextRetry, isAbortError, sampleChapterTitles, usablePreRetrieval } from "./utils";
 import { estimateTokens, computeAvailableInput, requireUsableInput, resolveOutputReserve, type TokenBudget } from "@/api/token-manager";
-import { APIError } from "@/api/error-handler";
+import { APIError, isEmptyResultError } from "@/api/error-handler";
 import { formatAPIError } from "./runTask";
 
 /**
@@ -97,13 +97,18 @@ class SummarizerAgent extends BaseAgent {
             signal: context.signal,
           });
         };
-        let response = await chatWithContextRetry(env, (b) => ask(b, undefined));
-
-        // 空正文先重发一发关掉思考，再判失败：推理型厂商会把整份 1024 预算花在思考上，
-        // `delta.content` 一个字都不发（2026-09-27 真厂商实测：994 帧、reasoning 3404 字、
-        // finish_reason=length），直接落"API 返回了空内容"就等于"这家配上了也用不了摘要"。
+        // 空正文要重发一发关掉思考：推理型厂商会把整份 1024 预算花在思考上，`delta.content`
+        // 一个字都不发（2026-09-27 真厂商实测：994 帧、reasoning 3404 字、finish_reason=length）。
         // 地图与图谱早走这条路（`map-agent.ts:164`、`graph-agent.ts:97`），本章摘要漏在外面。
-        if (!response.content || !response.content.trim()) {
+        // **挂在 catch 上而不是挂在"返回值是空串"上**：这一腿对空正文是抛 `APIError`
+        // （`openai.ts:154`、注释在 `:190-193`），认的是 `isEmptyResultError` 那个前缀；
+        // 拿 `response.content` 判空的那版在真链路上一次都不会触发（R-E2 在真厂商上复跑仍红才发现）。
+        let response: Awaited<ReturnType<typeof provider.chat>>;
+        try {
+          response = await chatWithContextRetry(env, (b) => ask(b, undefined));
+        } catch (err) {
+          // 只认空正文这一种：超时／限流／CORS 时候关思考是白烧一发配额，交回外层按本章落败处理
+          if (!isEmptyResultError(err)) throw err;
           response = await chatWithContextRetry(env, (b) => ask(b, false));
         }
 
