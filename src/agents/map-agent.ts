@@ -133,6 +133,14 @@ class MapAgent extends BaseAgent {
      * 默认开思考的模型（实测 sensenova-6.8-flash-lite）会把整份输出预算花在思考上，
      * 地图这种"必须回一大份 JSON"的任务于是永远拿不到字。制作人定的口径是质量优先：
      * 第一发照旧让模型想，降级只作为兜底。
+     *
+     * **为什么这里不共用 `utils.ts` 的 `askWithThinkingFallback`**（制作人 2026-09-28 拍：不改）：
+     * 那个 helper 自己攥着"一次提问发几发"（封顶两发），而本文件的第二趟另有专职——
+     * 把上一趟的错误带回 prompt 让模型改（见下面 `buildPrompt(novel, chapterList, lastError)`）。
+     * 两层各发两下会相乘成四发，正好打穿「总共两发、不无限重烧配额」那条已钉住的判据；
+     * 而多出来的那两发恰好落在"关思考救不了"的厂商上（实测 modelscope 两发都 0 字）。
+     * 所以：**发送次数归本循环管**，helper 只管摘要/范围总结/问答那三条"要一段文字"的路。
+     * 两边共用的只有判法本身——`isEmptyResultError`（空正文）与 `error-handler` 那两位分类。
      */
     let sawEmptyBody = false;
 

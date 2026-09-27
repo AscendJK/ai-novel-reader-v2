@@ -61,7 +61,11 @@ class CharacterGraphAgent extends BaseAgent {
 
     // 尝试两次：第一次正常生成，第二次带上错误反馈
     let lastError: string | undefined;
-    /** 上一发是不是"一个字正文都没回"——只有它是，第二发才关思考重发（口径同 `map-agent`） */
+    /**
+     * 上一发是不是"一个字正文都没回"——只有它是，第二发才关思考重发（口径同 `map-agent`）。
+     * 这里同样**故意不用** `askWithThinkingFallback`：第二趟专职"把上一趟的错误带回 prompt 让模型改"，
+     * 套 helper 会把两发叠成四发。完整的理由与实测数据记在 `map-agent.ts` 那位 `sawEmptyBody` 上。
+     */
     let sawEmptyBody = false;
 
     for (let attempt = 1; attempt <= 2; attempt++) {
