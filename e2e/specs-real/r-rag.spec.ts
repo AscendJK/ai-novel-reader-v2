@@ -178,7 +178,7 @@ test.describe.serial("真后端：模型真下载、索引真建、问一句真�
   });
 
   test("R-C2 建库进度按服务端报的 current/total 往前推，不是一句写死的「构建中」", async ({ page, baseURL }) => {
-    test.setTimeout(8 * 60_000);
+    test.setTimeout(10 * 60_000);
     await signIn(page, baseURL!, USER);
     // 40 章：三章的书在热缓存下几秒就完事，"推进"这个过程根本采不到样（采不到就等于
     // 判据没跑）。章数多到足够让编码阶段跨过几次采样，current 才是可观测的。
@@ -188,7 +188,31 @@ test.describe.serial("真后端：模型真下载、索引真建、问一句真�
 
     const samples: { status?: string; current?: number; total?: number }[] = [];
     await waitForProxyHeadroom(page);
+
+    // 「点下去」与「服务端收到 POST /build」之间隔着**模型门**：`BookSelect.tsx:289` 先
+    // `await ensureModelReady(...)`，把 22.9MB 权重经 `/api/rag/model-proxy` 装进浏览器，
+    // 每个用例都是全新 context，这一段每次都重跑一遍。这段期间界面是「正在准备...」，
+    // 服务端那边什么都还没发生。
+    //
+    // 2026-09-27 那一轮 R-C2 就是红在这里，而且红得**不是产品的错**：采样窗从点击起算，
+    // 60 秒全被准备期吃掉，服务端日志一条 `[rag] queued` 都没有，240 个样本全是
+    // `{"status":"none"}`（同轮的 R-C1 会先把 models-cache 删掉，所以紧跟其后的这一条
+    // 最容易撞上）。原先 09-22 复现过一次、09-23 又绿，就是准备期长短随镜像与机器抖。
+    //
+    // 所以先等这一发 POST 落地，再开始数进度：四条判据一条没松（要采到中间态、current
+    // 要动、要单调、终态 ready），只是采样窗挪到了它本来该量的那一段上。
+    // 顺带新增一条真判据：点了构建不许无限期停在准备中——5 分钟内必须把请求发出去。
+    const clickedAt = Date.now();
+    const posted = page.waitForRequest(
+      (r) => r.method() === "POST" && /\/api\/rag\/[^/]+\/build$/.test(r.url()),
+      { timeout: 5 * 60_000 },
+    );
     await page.getByRole("button", { name: "构建", exact: true }).click();
+    // 拿不到就是 null：不抛、也不让用例挂满超时，交给下面那句判据说清是谁的错
+    const settled = await posted.then((r) => ({ r, ms: Date.now() - clickedAt })).catch(() => null);
+    expect(settled, "点了构建之后 5 分钟里浏览器一次都没把 POST /build 发出去（客户端卡在模型门）").not.toBeNull();
+    console.log(`[R-C2 读数] 模型门（点下去 → POST /build 发出）用了 ${settled!.ms}ms`);
+
     for (let i = 0; i < 240; i++) {
       const s = await progress(page, row.id);
       samples.push(s);
