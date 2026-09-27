@@ -571,7 +571,9 @@ export function BookSelect() {
                 {dragOver ? "释放以上传" : "点击上传或拖拽小说文件到此处"}
               </p>
               <p className="text-sm text-muted-foreground mt-1">
-                支持 .txt、.epub 格式，可多选文件
+                {isIOS
+                  ? "支持 .txt、.epub 格式。iPhone/iPad 上「从文件夹导入」只能整包上传，已隐藏；点这里选文件即可"
+                  : "支持 .txt、.epub 格式，可多选文件"}
               </p>
             </div>
             <div className="flex gap-2 mt-2" onClick={(e) => e.stopPropagation()}>
@@ -591,22 +593,35 @@ export function BookSelect() {
                   processFiles(Array.from(files)).finally(() => setBatchParsing(false));
                 }}
               />
-              {/* Folder picker button: opens showOpenFilePicker or falls back to webkitdirectory */}
-              <Button variant="outline" size="sm" onClick={handleFolderPick}>
-                <FolderOpen className="h-4 w-4 mr-2" />
-                从文件夹导入
-              </Button>
-              {/* Fallback: hidden webkitdirectory input (only used if showOpenFilePicker unsupported) */}
-              <input
-                ref={folderInputRef}
-                type="file"
-                id="novel-folder-input" name="novel-folder-input"
-                aria-label="选择小说文件夹"
-                /* @ts-expect-error webkitdirectory */
-                webkitdirectory=""
-                className="hidden"
-                onChange={handleFolderFallback}
-              />
+              {/*
+                文件夹导入整支在 iOS 上不出现。理由不是"体验差"，是它只有一种后果：
+                `handleFolderPick` 先看 `showOpenFilePicker`——iOS Safari 从未实现 File System
+                Access API（caniuse：Safari/iOS Safari 全版本 Not supported），于是必然落到第二支
+                那个 `webkitdirectory` input；而 iOS 的 `webkitdirectory`（Safari 18.4 起才支持，
+                见 WebKit "Features in Safari 18.4"）语义上**只能选文件夹**，返回的是该文件夹
+                （含子目录）的扁平全文件列表，`processFiles` 会把里面每个 .txt/.epub 逐本入库。
+                也就是说 iPhone 上没有"部分导入"这条走法，一按就是整包上架 —— 宁可没有入口。
+                桌面不受影响（真页面实测 `showOpenFilePicker` 在，那颗按钮走的是多选文件）。
+              */}
+              {!isIOS && (
+                <>
+                  <Button variant="outline" size="sm" onClick={handleFolderPick}>
+                    <FolderOpen className="h-4 w-4 mr-2" />
+                    从文件夹导入
+                  </Button>
+                  {/* Fallback: hidden webkitdirectory input (only used if showOpenFilePicker unsupported) */}
+                  <input
+                    ref={folderInputRef}
+                    type="file"
+                    id="novel-folder-input" name="novel-folder-input"
+                    aria-label="选择小说文件夹"
+                    /* @ts-expect-error webkitdirectory */
+                    webkitdirectory=""
+                    className="hidden"
+                    onChange={handleFolderFallback}
+                  />
+                </>
+              )}
             </div>
             {/* 编码纠错入口：自动识别有失败面（繁体 Big5 被判成 GBK 等），
                 识别错时整本书都是形近错字，必须留一条手动指定的路（R-57） */}

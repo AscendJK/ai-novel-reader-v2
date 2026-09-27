@@ -1,6 +1,6 @@
 import { test, expect, type Page, type Request } from "@playwright/test";
 import { stubBackend, idleTtsStatus, type Backend, type StubTable } from "../fixtures/backend";
-import { openApp } from "../pages/app";
+import { openApp, sel } from "../pages/app";
 import { backToShelf, epubFile, importFiles, miniNovel, openBook, shelfCard, txtFile } from "../pages/shelf";
 
 /**
@@ -296,4 +296,46 @@ test("B17 扫描书库失败：不许停在「扫描中...」，也不许把失�
   await expect(scan).toBeVisible();
   await expect(page.getByRole("button", { name: "扫描中..." })).toHaveCount(0);
   await expect(page.getByText("书库为空")).toHaveCount(0);
+});
+
+/**
+ * B18：iOS 那一支在浏览器层的证据（制作人 2026-09-28 拍方案 A：入口整条摘掉）。
+ *
+ * **这一条不验 iOS 的选框行为**——Playwright 只能换 UA，换不掉真 iPhone 的 Files app。
+ * 它验的是"产品按 UA 摘掉了那一支"这件事真的活在页面里：同一颗 Chromium（下面那行
+ * `expect(hasPicker).toBe(true)` 就是钉这一格——API 明明在，按钮却还是没了，说明起作用的是
+ * `BookSelect.tsx:45` 的 `isIOS`，不是"这浏览器没有 File System Access API"那条假解释），
+ * 换成 iPhone UA 之后，那颗按钮、那个隐藏的 `webkitdirectory` input、那行指引三样都要对得上，
+ * 而**唯一的选文件入口 `#novel-file-input` 不许跟着一起消失**。
+ *
+ * 就绪门不能用 `openOnline`——它自己就断言那颗按钮可见（在桌面那一组里当门是好的，在这里必挂）。
+ */
+test.describe("iPhone UA 下文件夹入口整条不出现", () => {
+  test.use({
+    userAgent:
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1",
+    isMobile: true,
+    hasTouch: true,
+    viewport: { width: 390, height: 844 },
+  });
+
+  test("B18 按钮与隐藏 input 都不在，指引换成那句实话，选文件入口还在", async ({ page }) => {
+    await stubBackend(page, {
+      ...idleTtsStatus,
+      "GET /api/novels": { body: [] },
+      "GET /api/rag/statuses/all": { body: {} },
+    });
+    await page.addInitScript((u) => {
+      localStorage.setItem("sync-username", u);
+      localStorage.setItem("sync-token", "e2e-token");
+    }, USER);
+    await openApp(page);
+
+    expect(await page.evaluate(() => "showOpenFilePicker" in window)).toBe(true);
+    await expect(sel.emptyShelf(page)).toBeVisible({ timeout: 20_000 });
+    await expect(sel.folderImportButton(page)).toHaveCount(0);
+    await expect(page.locator("#novel-folder-input")).toHaveCount(0);
+    await expect(page.locator("#novel-file-input")).toHaveCount(1);
+    await expect(page.getByText(/iPhone\/iPad 上「从文件夹导入」只能整包上传，已隐藏/)).toBeVisible();
+  });
 });

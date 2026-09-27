@@ -353,3 +353,95 @@ describe("BookSelect：删除与 join 那两步", () => {
     expect(useNovelStore.getState().novels).toEqual([]);
   });
 });
+
+/**
+ * iOS 上那颗「从文件夹导入」只能干一件坏事（制作人 2026-09-28 拍方案 A：入口摘掉，指引留下）。
+ *
+ * 机制（都查证过，不是猜的）：
+ *  - `handleFolderPick` 先看 `"showOpenFilePicker" in window`。**iOS Safari 从未实现 File System
+ *    Access API**（caniuse：Safari / iOS Safari 全版本 Not supported），所以 iOS 上必然落到
+ *    第二支——点那个隐藏的 `webkitdirectory` input；
+ *  - `webkitdirectory` 在 iOS 上从 Safari 18.4 起才支持（WebKit 发布说明原文："adds iOS support
+ *    for the webkitdirectory attribute"），而它的语义就是**只能选文件夹**，返回该文件夹（含子目录）
+ *    的**扁平全文件列表** → `processFiles` 把里面每个 .txt/.epub 逐本解析入库。
+ *  也就是说：iPhone 上那颗按钮没有"部分导入"这种走法，一按就是整包上架。桌面不受影响
+ *  （真页面实测 `showOpenFilePicker` 在，走的是多选文件），所以只摘 iOS 这一支。
+ *
+ * `isIOS` 是模块级常量（`BookSelect.tsx:45`，import 时算一次），所以每条用例都要
+ * `vi.resetModules()` + 换 UA + 动态 import 才能拿到属于自己的那一本组件。
+ *
+ * 刀账 **IOS1..IOS4**（基线：`BookSelect.tsx` 改完后 sha256 45783beb280eff20，每刀反向编辑还原并核 SHA）：
+ *  立红（产品未改）：红 3——「那颗按钮不出现」「支路也不在」「iOS 那句实话」；两条保护格当时就绿。
+ *  IOS1 摘掉整条 `!isIOS &&` → 一档红 2（按钮＋支路，同一个门管两处），e2e B18 同盘红 1；
+ *  IOS2 只把 `#novel-file-input` 改成 `disabled={isIOS}`（入口还在但成了死门）→ 红 1「入口不许跟着没」。
+ *       **这一刀第一次下是 0 红**：那时那条判据只断"元素存在"。补强成
+ *       "存在 ＋ enabled ＋ 点卡片真的把请求递给这只 input"之后重打同一刀才红 1（S13→S13b 同一族坑）；
+ *  IOS3 指引不分 iOS（沿用桌面那句"可多选文件"）→ 红 1「iOS 那句实话」；
+ *  IOS4 条件写反（`isIOS &&`）→ 红 3：iOS 那两条 ＋ 桌面保护格——两个相反的值都咬着，没写成单边。
+ */
+describe("iOS 上文件夹导入那一支整条不出现（方案 A）", () => {
+  const IOS_UA =
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1";
+  const DESKTOP_UA =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+  const realUA = Object.getOwnPropertyDescriptor(navigator, "userAgent");
+
+  async function mountWithUA(ua: string) {
+    vi.resetModules();
+    Object.defineProperty(navigator, "userAgent", { value: ua, configurable: true });
+    const { BookSelect: Fresh } = await import("../BookSelect");
+    const view = render(<Fresh />);
+    await new Promise((r) => setTimeout(r, 20));
+    return view;
+  }
+
+  afterEach(() => {
+    if (realUA) Object.defineProperty(navigator, "userAgent", realUA);
+    else vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it("那颗「从文件夹导入」在 iPhone 上根本不出现", async () => {
+    await mountWithUA(IOS_UA);
+    expect(screen.queryByRole("button", { name: "从文件夹导入" })).toBeNull();
+  });
+
+  it("那条 webkitdirectory 支路（隐藏 input）也不在 DOM 里——不是只把按钮藏起来", async () => {
+    const { container } = await mountWithUA(IOS_UA);
+    expect(container.querySelector("#novel-folder-input")).toBeNull();
+  });
+
+  it("唯一的选文件入口不许跟着一起没，也不许变成按不动的死门", async () => {
+    const { container } = await mountWithUA(IOS_UA);
+    const input = container.querySelector<HTMLInputElement>('#novel-file-input');
+    expect(input).not.toBeNull();
+    expect(input).toBeEnabled();
+    // 点卡片仍然要把请求递给这只 input——"入口在但没人去点它"是同一格的另一种死法
+    const clicked: string[] = [];
+    const realClick = HTMLInputElement.prototype.click;
+    HTMLInputElement.prototype.click = function (this: HTMLInputElement) { clicked.push(this.id); };
+    try {
+      fireEvent.click(screen.getByText("点击上传或拖拽小说文件到此处"));
+    } finally {
+      HTMLInputElement.prototype.click = realClick;
+    }
+    expect(clicked).toEqual(["novel-file-input"]);
+  });
+
+  it("iPhone 上那行指引说人话：这里只能整包上传、入口已隐藏、点这里选文件", async () => {
+    await mountWithUA(IOS_UA);
+    expect(screen.getByText(
+      "支持 .txt、.epub 格式。iPhone/iPad 上「从文件夹导入」只能整包上传，已隐藏；点这里选文件即可"
+    )).toBeInTheDocument();
+    expect(screen.queryByText("支持 .txt、.epub 格式，可多选文件")).toBeNull();
+  });
+
+  it("桌面照旧：按钮、隐藏支路、原文案三样都在，iOS 那句实话不许串台", async () => {
+    const { container } = await mountWithUA(DESKTOP_UA);
+    await screen.findByRole("button", { name: "从文件夹导入" });
+    expect(container.querySelector("#novel-folder-input")).not.toBeNull();
+    expect(container.querySelector('#novel-file-input')).not.toBeNull();
+    expect(screen.getByText("支持 .txt、.epub 格式，可多选文件")).toBeInTheDocument();
+    expect(screen.queryByText(/iPhone\/iPad 上「从文件夹导入」只能整包上传/)).toBeNull();
+  });
+});

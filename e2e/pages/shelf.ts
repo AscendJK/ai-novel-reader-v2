@@ -75,10 +75,13 @@ export async function epubFile(name: string, title: string, chapters: string[]):
 }
 
 /**
- * 走真文件输入（`BookSelect.tsx:561-575` 的隐藏 input）。
+ * 走真文件输入（`BookSelect.tsx:581-597` 的隐藏 input）。
  *
- * 不点"从文件夹导入"：那条路走 `showOpenFilePicker`（BookSelect.tsx:420），
- * 自动化浏览器里没有这个 API，点了只会走到 catch 分支。
+ * 不点"从文件夹导入"：那条路在桌面引擎上走的是 `showOpenFilePicker`（实测真页面
+ * `"showOpenFilePicker" in window === true`，本地 http://localhost 就是安全上下文），
+ * chooser 不是 `setInputFiles` 能喂的，点了只会挂在那一发上——**旧注释说"自动化浏览器里没有
+ * 这个 API，点了只会走 catch"是假的**，别再照它推理。文件夹那一支（iOS 上唯一会走的那条
+ * `webkitdirectory` 退路）由 `b2-shelf.spec.ts` 的 B18 用 iPhone UA 钉。
  */
 export async function importFiles(page: Page, files: { name: string; mimeType: string; buffer: Buffer }[]): Promise<void> {
   await page.locator("#novel-file-input").setInputFiles(files);
