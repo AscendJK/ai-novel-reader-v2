@@ -367,7 +367,22 @@ test.describe(`真后端：批量生成三条打在真厂商上（${VENDOR ? ven
    * 所以判"是不是配额"只看**响应正文里的关键词**，不依赖状态码。
    */
   const THROTTLED = /(频率过高|Too Many Requests|rate_limit_error|RateLimitExceeded)/i;
-  type Replies = { texts: string[]; raw: string[]; settle: () => Promise<void> };
+  /**
+   * `asks` 是**发出去**的那些发的 `max_tokens`（按请求先后），`raw`/`texts` 是回来的。
+   * 第五段（`ANR_VENDOR_MAX_OUTPUT=0`＝留空档）要判的就是这一格：预算到底按什么数发出去。
+   */
+  type Replies = { texts: string[]; raw: string[]; asks: number[]; settle: () => Promise<void> };
+
+  /**
+   * 留空档下每一发**该**按任务预设要多少（`resolveOutputReserve(budget, 常数)` 里那个常数）。
+   * 这张表是这一段唯一的判据：它对不上，就说明"删掉表里那一列之后留空会怎样"这一格还是没量到。
+   */
+  const PRESET_ASKS: Array<[RegExp, number]> = [
+    [/小说地图|剧情时间线|人物关系分析/, 16384],
+    [/全书总览|人物关系图谱/, 8192],
+    [/一章|本章摘要|逐章/, 4096],
+    [/范围总结|问答/, 2048],
+  ];
 
   /**
    * 抓厂商回包在页面里做，不在测试侧做。
@@ -384,6 +399,18 @@ test.describe(`真后端：批量生成三条打在真厂商上（${VENDOR ? ven
   async function watchWire(page: Page): Promise<Replies> {
     const texts: string[] = [];
     const raw: string[] = [];
+    const asks: number[] = [];
+    // 请求侧只读 `max_tokens` 这一个数，走 Playwright 的 request 事件（不碰页面、不影响真请求）
+    page.on("request", (r) => {
+      const u = r.url();
+      if (!(u.includes("/api/proxy/") || u.startsWith(BASE))) return;
+      try {
+        const body = r.postDataJSON() as { max_tokens?: unknown } | null;
+        if (body && typeof body.max_tokens === "number") asks.push(body.max_tokens);
+      } catch {
+        // 非 JSON 的请求体不参与（这一屏发的都是 JSON，进这里的就是不参与）
+      }
+    });
     await page.exposeBinding("__anrWire", (_source, f: { text: string; ct: string }) => {
       raw.push(f.text);
       const c = vendorText(f.text, f.ct);
@@ -409,7 +436,7 @@ test.describe(`真后端：批量生成三条打在真厂商上（${VENDOR ? ven
       }) as typeof fetch;
     }, { base: BASE });
     // 页面内那一读是"流读完才回调"，所以 raw 增长本身就等价于旧版 `settle()` 等 body 读完
-    return { texts, raw, settle: async () => {} };
+    return { texts, raw, asks, settle: async () => {} };
   }
 
   /** 取本用例那份回包（在 `beforeEach` 里已经装好，这里只是给用例一个短名字） */
@@ -467,6 +494,7 @@ test.describe(`真后端：批量生成三条打在真厂商上（${VENDOR ? ven
     const backoff = Number(process.env.ANR_VENDOR_BACKOFF_MS ?? 90_000);
     for (let attempt = 1; attempt <= 5; attempt++) {
       const before = v.raw.length;
+      const asksBefore = v.asks.length;
       await trigger();
       await expect
         .poll(() => v.raw.length, { timeout: 4 * 60_000, message: `${label}：点了没等到厂商响应` })
@@ -475,11 +503,26 @@ test.describe(`真后端：批量生成三条打在真厂商上（${VENDOR ? ven
       const lastRaw = v.raw[v.raw.length - 1] ?? "";
       if (!THROTTLED.test(lastRaw)) {
         const finish = [...lastRaw.matchAll(/"finish_reason"\s*:\s*"?([a-z_]+)"?/g)].map((m) => m[1]).join(",") || "?";
+        const asked = v.asks.slice(asksBefore);
         console.log(
-          `[R-E 回包] ${label}：${v.raw.length} 份响应、正文合计 ${v.texts.reduce((n, s) => n + s.length, 0)} 字、finish_reason=${finish}\n` +
+          `[R-E 回包] ${label}：${v.raw.length} 份响应、正文合计 ${v.texts.reduce((n, s) => n + s.length, 0)} 字、` +
+            `发出 max_tokens=[${asked.join(",")}]、finish_reason=${finish}\n` +
             `  正文前 200 字：${(v.texts[v.texts.length - 1] ?? "（空）").slice(0, 200).replace(/\s+/g, " ")}\n` +
             `  原始帧尾巴 200 字：${lastRaw.slice(-200).replace(/\s+/g, " ")}`,
         );
+        /**
+         * **留空档（`ANR_VENDOR_MAX_OUTPUT=0`）这一段的正主判据**：第一发就该按任务预设要。
+         *
+         * 为什么放在这里、放在 `skipIfVendorGaveNoBody` 之前：那一支在"厂商一个字正文都没回"时
+         * 会 `test.skip`，而"发出去的是多少"跟"回没回正文"是两件事——预算没按预设发出去，
+         * 就算这一家恰好又只思考不吐字，也必须红给我看，不能被"跳过"吞掉。
+         * 填了上限那一档（前四段都是）不判：那时每一发都等于用户填的数，判它等于判"env 生效"。
+         */
+        if (MAX_OUTPUT === 0) {
+          const want = PRESET_ASKS.find(([re]) => re.test(label))?.[1];
+          const hint = want === undefined ? "（这张表没这一档，去补）" : String(want);
+          expect(asked[0], `${label}：留空档第一发该按任务预设要 ${hint}，实际发出去的是这个`).toBe(want);
+        }
         await skipIfVendorGaveNoBody(page, v, label);
         return;
       }
@@ -618,6 +661,12 @@ test.describe(`真后端：批量生成三条打在真厂商上（${VENDOR ? ven
     // 本章摘要的任务级预算 4096（`summarizer.ts:34`，2026-09-27 从 1024 抬上来：`deepseek-flash`
     // 在 1024 那一发是思考吃满、正文 0 字），推理型厂商仍可能连 4096 都花在思考上 →
     // 三章全空时先钉"界面说没说出来"，再判这一档在这只模型上量不到后半截
+    // 批量这一腿不经过 `callVendor`（三发一起打，那边那条"第一发按预设"的判据够不到这里），
+    // 所以留空档在这条里单独判：三章各发一次，每一发都该按本章摘要的预设 4,096 要。
+    if (MAX_OUTPUT === 0) {
+      expect(v.asks.filter((n) => n === 4096).length, `逐章批量：三发都该按预设 4,096 要，实际发出去的是 [${v.asks.join(",")}]`)
+        .toBeGreaterThanOrEqual(3);
+    }
     await skipIfVendorGaveNoBody(page, v, "逐章批量总结");
 
     // 每一章都得有自己的正文，不能三章共用一段
