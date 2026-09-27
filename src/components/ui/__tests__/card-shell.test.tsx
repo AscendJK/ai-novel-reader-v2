@@ -33,12 +33,16 @@
  * - **`CardDescription` 的覆盖分支不判**：14 处调用点里它一次都没被传过 `className`
  *   （实测），只判"渲染成 p + 默认两条在"。给它写一条 `text-xs` 覆盖判据就是造一条走不到的分支。
  *
- * **一处上游笔误，报制作人、本轮不动**：`CardTitle` 声明的是
- * `forwardRef<HTMLParagraphElement, React.HTMLAttributes<HTMLHeadingElement>>`——ref 的元素类型
- * 写着 paragraph，渲染的却是 `h3`。全仓没人给它挂 ref，所以症状是零；真要修就是那一行类型参数，
- * 属于产品代码改动，谈定再动。
+ * **一处上游笔误已修（2026-09-27，制作人点头那一批发下来的第三件）**：`CardTitle` 原先声明成
+ * `forwardRef<HTMLParagraphElement, React.HTMLAttributes<HTMLHeadingElement>>`——ref 的元素类型写着
+ * paragraph，渲染的却是 h3，现已改成 `HTMLHeadingElement`。但要如实记一笔：**这一改动本身判不到**。
+ * lib.dom 里 `HTMLHeadingElement` 与 `HTMLParagraphElement` 结构完全同形（都只比 `HTMLElement` 多一个
+ * `align`），互相可赋值，所以把类型参数退回去（刀 K2）之后 `vitest` 14 条全绿、`npm run typecheck`
+ * 也是退出 0——两道闸门没有一格能分辨改前改后。改它是因为**声明写着什么**就是这只壳的对外契约，
+ * 不是因为它有症状（全仓此前没给这只标题挂过 ref，症状为零）。有症状、也有刀的那一半是
+ * "h3 上到底转不转交 ref"（判据 J14／刀 K1）。
  *
- * **13 条判据、14 把刀，逐条读数记在文件末尾**（短号 J1..J13 / C1..C14）。
+ * **14 条判据、16 把刀，逐条读数记在文件末尾**（短号 J1..J14 / C1..C14 / K1..K2）。
  */
 
 import { describe, it, expect } from "vitest";
@@ -229,6 +233,22 @@ describe("ui/card：props 穿过去、ref 转交、导出口就这五只", () =>
     expect(node).toBe(two.container.firstElementChild);
   });
 
+  it("CardTitle 转交 ref，而且 ref 那一头的元素类型与它真渲染的那个一致（h3）", () => {
+    // 上游笔误是 `forwardRef<HTMLParagraphElement, React.HTMLAttributes<HTMLHeadingElement>>`：
+    // 类型参数写着 paragraph，渲染的却是 h3。已经改成 HTMLHeadingElement（制作人点头那一批发下来的
+    // 三件事之一）。**要说清的是：这一格的两半里只有运行时那一半判得住。**
+    // 类型那一半实测判不到——改之前 `npm run typecheck` 退出 0，改之后还是 0：lib.dom 里
+    // `HTMLHeadingElement` 与 `HTMLParagraphElement` 结构上完全同形（都只比 `HTMLElement` 多一个
+    // `align`），互相可赋值，所以 `createRef<HTMLHeadingElement>()` 挂到写着 paragraph 的 ref 上
+    // tsc 一声不响。读数与那把"只回退类型参数"的刀记在文件末尾（K2）。
+    // 下面断的是"ref 到底转不转交、落在哪只元素上"——这一半有刀（K1：摘掉 h3 上的 `ref={ref}`）。
+    const titleRef = React.createRef<HTMLHeadingElement>();
+    render(<CardTitle ref={titleRef}>第三章 关门</CardTitle>);
+    expect(titleRef.current, "ref 根本没落到标题上").toBeTruthy();
+    expect(titleRef.current!.tagName).toBe("H3");
+    expect(titleRef.current!.textContent).toBe("第三章 关门");
+  });
+
   it("这个文件只导出五只：CardFooter 全仓零取用，本笔删掉了", () => {
     expect(Object.keys(cardModule).sort()).toEqual([
       "Card",
@@ -254,17 +274,22 @@ describe("ui/card：props 穿过去、ref 转交、导出口就这五只", () =>
 });
 
 /**
- * 判别力台账（2026-09-27 本机，`npx vitest run src/components/ui/__tests__/card-shell.test.tsx`）。
- * 基线两个：产品本笔**唯一的改动是删掉死出口 `CardFooter`**（6 行 + 1 个导出口名）。
- *  删之前 `76dc70ca…`／1804 字节，删之后 `f2679c7c…`／1529 字节；14 把刀全部打在删后的基线上，
- *  每刀之后 `cp` 回基线并 `cmp` + 重核 sha，全部回到 `f2679c7c…`。**没有一刀 0 红。**
- * 判据短号 J1..J13 按文件里的书写顺序；"连带"指红名里那些不是本刀目标的条目。
+ * 判别力台账（2026-09-27 本机，`CI=1 npx vitest run src/components/ui/__tests__/card-shell.test.tsx`）。
+ * 三个基线（同一只 51 行的壳，两笔产品改动）：
+ *  ① 原样 `76dc70ca…`／1804 字节 → 本档第一轮**唯一的改动是删掉死出口 `CardFooter`**（6 行＋1 个导出口名）
+ *  ② 删之后 `f2679c7c…`／1529 字节 —— 第一轮 14 把刀（C1..C14）全打在这份上，每刀之后 `cp` 回基线并
+ *     `cmp` + 重核 sha，**没有一刀 0 红**
+ *  ③ 同日第二笔：`CardTitle` 的 `forwardRef` 第一个类型参数 paragraph → heading（一行），
+ *     新基线 `1c91c958…`／1527 字节 —— J14 与 K1、K2 打在这份上，同样每刀之后 `cp` + `cmp` + 重核 sha。
+ * 每一刀的读数旁边标的是"红了几条判据"；K2 是唯一一把 0 红的，那一格判不到，理由写在文件头。
+ * 判据短号 J1..J14 按文件里的书写顺序；"连带"指红名里那些不是本刀目标的条目。
  *
  *  J1 标签（div/h3/p）  J2 真 heading level 3  J3 children 落点不插层
  *  J4 状态色 border+border-primary  J5 拖放区 border-2/bg-primary/5 各让一族
  *  J6 Title text-lg/base 顶 text-2xl  J7 Content p-5/py-4 两种覆盖  J8 Header pb-2/p-2 pb-0.5
  *  J9 反向：五只默认一字不少  J10 onClick+data-testid 透传  J11 ref 转交
  *  J12 导出口正好五只  J13 五只 displayName
+ *  J14 CardTitle 的 ref 落到真渲染的那只元素上（h3）
  *
  *  C1 Card 的 `cn(默认, className)` 写成 `className ?? 默认` → **2 红**（J4 J5）
  *  C2 CardTitle 的 `h3` 换成 `div` → **3 红**（J1 J2 目标；J9 连带——它按 `querySelector("h3")` 取）
@@ -282,9 +307,14 @@ describe("ui/card：props 穿过去、ref 转交、导出口就这五只", () =>
  *  C12 **把删掉的 CardFooter 原样接回来 → 1 红**（J12）——这次删除的守门刀
  *  C13 CardHeader 的 `cn(...)` 换成裸拼接 → **1 红**（J8）
  *  C14 CardTitle 的 `cn(...)` 换成裸拼接 → **1 红**（J6）
+ *  K1 `CardTitle` 的 h3 摘掉 `ref={ref}` → **1 红**（J14）。同一次 `tsc` 退出 2、1 个错误：
+ *     `ref` 那个形参没人用了（TS6133）——那是这把刀的副产品，不算判据的牙。
+ *  K2 **只**把类型参数退回 `HTMLParagraphElement`（＝改前那一份字节）→ **0 红、`tsc` 退出 0**
+ *     ＝"类型参数写错"那一格判不到的取证；理由与为什么不删这条判据都写在文件头。
  *
  * 一把作废重下：C8 第一次写成了坏语法（`{...props}` 落在 children 之后），那条读数没取，
  * 直接 `cp` 还原后重下——坏刀不算牙。
- * 没各下刀的两处（写在明处）：`CardHeader`/`CardTitle`/`CardDescription` 三只的 `ref` 与
- * `displayName` 各只下了一处（J11 走 Card+Content，J13 走 Card），其余是同一条路的另几处。
+ * 没各下刀的两处（写在明处）：`CardHeader`/`CardDescription` 两只的 `ref` 与 `CardTitle` 之外那几只的
+ * `displayName` 各只下了一处（J11 走 Card+Content、J13 走 Card、J14 走 CardTitle 的 ref）——
+ * 同一条路的另几处，症状一样，不再各补一把刀。
  */
