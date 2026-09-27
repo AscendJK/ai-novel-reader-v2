@@ -54,7 +54,9 @@ const upstream = http.createServer((req, res) => {
     }
     if (req.url === "/echo") {
       // 把代理真正转发过来的鉴权头回显出来：用来盯"头白名单是否区分大小写"这类问题。
-      // 顺手带一枚 x-ratelimit-*：真厂商（OpenAI 格式这几家）**每次成功响应都带**这类头，
+      // 顺手带一枚 x-ratelimit-*：这是给"成功腿不许记"那一格做的**样本**，不是厂商事实——
+      // 09-28 实测五家（411／longcat／deepseek／modelscope／sensenova）成功响应都不带这类头。
+      // 样本仍然必要：缺了它，"把取证搬到 !ok 之外"那一刀当场 0 红（有头就记＝每发都刷一行）。
       // 所以"只在出错时才记限流取证"这一格有东西可咬——写歪成"有头就记"就会每发都刷一行。
       res.writeHead(200, {
         "Content-Type": "application/json",
