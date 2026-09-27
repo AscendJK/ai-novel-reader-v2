@@ -119,6 +119,9 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
     let inputTokens = 0;
     let outputTokens = 0;
     let reasoningTokens: unknown;
+    // 流里累计到的思考字数：这一类只给 `delta.reasoning_content`、usage 里什么都不给的厂商
+    // （实测 modelscope 的 vllm 版 GLM）是空正文唯一的证据来源，别让它说那三种猜测。
+    let reasoningChars = 0;
 
     for (const evt of events) {
       const e = evt as Record<string, unknown>;
@@ -128,12 +131,14 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
         throw new APIError(`API 返回错误：${errBody}`, "server", 200, raw);
       }
       const choices = e.choices as
-        | Array<{ delta?: { content?: unknown }; message?: { content?: unknown } }>
+        | Array<{ delta?: { content?: unknown; reasoning_content?: unknown }; message?: { content?: unknown } }>
         | null
         | undefined;
       if (choices?.[0]) {
         const deltaContent = choices[0].delta?.content;
         if (typeof deltaContent === "string") content += deltaContent;
+        const deltaReasoning = choices[0].delta?.reasoning_content;
+        if (typeof deltaReasoning === "string") reasoningChars += deltaReasoning.length;
         // 兼容某些 API 流式返回 message.content 而非 delta.content
         const msgContent = choices[0].message?.content;
         if (typeof msgContent === "string" && !content) content = msgContent;
@@ -153,7 +158,7 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
     // 流式结束后内容为空 → 抛错（避免静默返回空白结果）
     if (!content.trim()) {
       throw new APIError(
-        `API 返回了空结果（流式响应无内容）。${emptyResultNote(reasoningTokens)}原始响应：${raw.slice(0, 300)}`,
+        `API 返回了空结果（流式响应无内容）。${emptyResultNote(reasoningTokens, reasoningChars)}原始响应：${raw.slice(0, 300)}`,
         "server",
         200,
         raw
@@ -202,9 +207,12 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
       const reasoning = (data.usage as
         | { completion_tokens_details?: { reasoning_tokens?: number } }
         | undefined)?.completion_tokens_details?.reasoning_tokens;
+      // 非流式的思考证据住在 message.reasoning_content 里（与流式那一腿同一类）
+      const reasoningField = (choices?.[0]?.message as { reasoning_content?: unknown } | undefined)?.reasoning_content;
+      const reasoningChars = typeof reasoningField === "string" ? reasoningField.length : 0;
       throw new APIError(
         `API 返回了空结果（${shape}）${model ? `，模型：${model}` : ""}。` +
-        `${emptyResultNote(reasoning)}原始响应：${errBody}`,
+        `${emptyResultNote(reasoning, reasoningChars)}原始响应：${errBody}`,
         "server",
         response.status,
         raw

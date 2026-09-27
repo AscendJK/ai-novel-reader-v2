@@ -64,15 +64,22 @@ export function isEmptyResultError(err: unknown): boolean {
  * 这时候旧文案猜的那三种原因（模型名不存在、无权访问、参数不支持）全是假话：名对、参对、密钥对。
  * 没证据或数字是 0，就照旧说那三种猜测，**不替厂商编一个原因**。
  *
- * 两家给的证据长得不一样，所以数字得由调用方挑好了传进来：OpenAI 格式在
+ * 三家给的证据长得不一样，所以数字得由调用方挑好了传进来：OpenAI 格式的非流式与主流厂商在
  * `usage.completion_tokens_details.reasoning_tokens`；Anthropic 格式没这个字段，它的思考是
  * `content` 里的 thinking 块、预算记在 `usage.output_tokens`（正文一个字都没有时那一发输出的
- * 就是思考花掉的）。传错的不是这句文案的事，是"到底有没有证据"的事，判据在各自那条腿里。
+ * 就是思考花掉的）。**还有一类只给流里的 `delta.reasoning_content`、usage 里什么都不给**
+ * （2026-09-27 实测：modelscope 的 vllm 版 `ZhipuAI/GLM-5.3-Flash`，`982 帧 / 正文 0 字 /
+ * reasoning_content 3002 字`）——那种时候只有字数可说，就报字数，**不换算成 token 糊人**。
+ * 传错的不是这句文案的事，是"到底有没有证据"的事，判据在各自那条腿里。
  */
-export function emptyResultNote(reasoningTokens: unknown): string {
+export function emptyResultNote(reasoningTokens: unknown, reasoningChars?: unknown): string {
   if (typeof reasoningTokens === "number" && reasoningTokens > 0) {
     return `模型把 ${reasoningTokens} token 花在思考上、一个字正文都没回（思考与正文共用同一份输出预算）。` +
       `可以在设置里关闭思考，或调大输出上限。`;
+  }
+  if (typeof reasoningChars === "number" && reasoningChars > 0) {
+    return `模型把这一发花在思考上、一个字正文都没回（响应里回的是 ${reasoningChars} 字思考，` +
+      `这一家没给 token 明细）。可以在设置里关闭思考，或调大输出上限。`;
   }
   return "可能原因：模型名称不存在或无权访问、请求参数不被支持。";
 }

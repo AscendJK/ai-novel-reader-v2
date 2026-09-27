@@ -209,6 +209,49 @@ describe("OpenAI provider parseResponse", () => {
     expect(err.message).toContain("思考");
   });
 
+  /**
+   * 这一格三条（+ 改口径的一条）的变异台账，2026-09-27 深夜实跑。
+   * 基线快照两份都在台架目录，还原走 `cp`（不许 `git restore`——同批文件里带着别的未提交改动）：
+   * `mut-baseline-openai.ts` sha 前缀 `1384d7369c220439`、`mut-baseline-errorhandler.ts` 前缀 `ab528880826a0317`。
+   * 四刀跑完 markers 都归零、两份 sha 都回到上面这两个值、`git diff --numstat` 回到 `11/3` 与 `10/3`。
+   * - N1 流式那处退回 `emptyResultNote(reasoningTokens)`（不递字数）→ 红 2：新写的流式格 + 改口径那条一字思考格。
+   * - N2 非流式那处退回 `emptyResultNote(reasoning)` → 红 1：非流式那一格（证明两处都得单独递，少一处就有一处说假话）。
+   * - N3 摘掉 `emptyResultNote` 里"只有字数证据"那一整支 → 红 3（三条全被推回那三种猜测）。
+   * - N4 那一支误用成 token 模板（把字数当 token 报）→ 红 1：只有"不许替厂商编 token 数"那条咬住它。
+   * 没有一刀 0 红。
+   */
+  it("流式那一腿只给 delta.reasoning_content、usage 没给 reasoning_tokens：也要说准是思考吃满", async () => {
+    // 2026-09-27 modelscope（ZhipuAI/GLM-5.3-Flash，vllm 版）实测形状：
+    // `982 帧 / delta.content 0 字 / reasoning_content 3002 字 / finish_reason=length`，
+    // 而它的 usage 只有 prompt/completion/total，**没有 completion_tokens_details** →
+    // 只看那个字段的产品会对用户说"模型名不存在/无权访问/参数不支持"这三句假话。
+    mockOpenAIStream([{ reasoning: "渡口与船家的意象反复出现，".repeat(60) }]);
+    const provider = createOpenAIProvider(openaiConfig);
+    const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+    expect(isEmptyResultError(err), "还是那句「空正文」，降级链认得到").toBe(true);
+    expect(err.message, `流里收到 660 字思考，报错却说那三种猜测：${err.message}`).toMatch(/字思考|花在思考上/);
+    expect(err.message).not.toContain("模型名称不存在");
+  });
+
+  it("非流式那一腿同一格证据也要用上：message.reasoning_content 有字就不许猜那三种原因", async () => {
+    mockFetchResponse({
+      choices: [{ message: { role: "assistant", content: "", reasoning_content: "船家＝摆渡人，等船的人＝未至之约" } }],
+      usage: { completion_tokens: 900 },
+    });
+    const provider = createOpenAIProvider(openaiConfig);
+    const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+    expect(err.message).toMatch(/字思考|花在思考上/);
+    expect(err.message).not.toContain("模型名称不存在");
+  });
+
+  it("反向那一格：连思考都没回（正文与 reasoning 全空）→ 照旧只说那三种猜测，不替厂商编原因", async () => {
+    mockOpenAIStream([{ content: "" }]);
+    const provider = createOpenAIProvider(openaiConfig);
+    const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+    expect(err.message).toContain("模型名称不存在");
+    expect(err.message).not.toMatch(/字思考|花在思考上/);
+  });
+
   it("反向那一格：正文哪怕只有一个字也不许当空壳抛掉", async () => {
     mockFetchResponse({
       choices: [{ message: { role: "assistant", content: "好" } }],
@@ -423,12 +466,16 @@ describe("OpenAI provider 空正文的措辞：有证据才说思考吃满，说
     expect(err.message).toContain("上限");
   });
 
-  it("流式：usage 里没有 reasoning_tokens → 保留原来那三种猜测，不许编一个原因", async () => {
+  it("流式：只有一字思考、usage 没给 token 明细 → 点名「回过思考」但不许编出 token 数", async () => {
+    // 这条老判据编码的是"没有 token 数就猜那三种原因"，而"猜原因"正是 2026-09-27 要修的假话
+    // （流里明明收到 reasoning_content）。口径改成：**见到过思考就说见过（按字数），
+    // 但一家厂商没给 token 明细就不许报 token 数**——两半各钉一头，谁都不许糊。
     mockOpenAIStream([{ reasoning: "想" }], { prompt_tokens: 5, completion_tokens: 0, total_tokens: 5 });
     const provider = createOpenAIProvider(openaiConfig);
     const err = await provider.chat({ messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
-    expect(err.message).toContain("模型名称不存在或无权访问");
-    expect(err.message).not.toContain("花在思考上");
+    expect(err.message).toMatch(/1 字思考/);
+    expect(err.message, "这家没给明细，报 token 数就是替厂商编").not.toMatch(/\d+ token 花在思考上/);
+    expect(err.message).not.toContain("模型名称不存在");
   });
 
   it("流式：reasoning_tokens 明确为 0（真·空流）同样不许说成思考吃满", async () => {
