@@ -1,11 +1,13 @@
 /**
  * 逐章摘要的"空正文 → 关思考重发"判别力
  *
- * 真厂商实测到的形状（2026-09-27，modelscope `ZhipuAI/GLM-5.3-Flash`）：按产品这一发原样复刻
+ * 真厂商实测到的形状（2026-09-27，modelscope `ZhipuAI/GLM-5.3-Flash`）：按产品当时的这一发原样复刻
  * （同 prompt、`max_tokens:1024`、`temperature:0.5`、`stream:true`）得到
  * `994 帧 / delta.content 0 字 / reasoning_content 3404 字 / finish_reason=length`——整份输出预算
  * 被思考链吃光，正文一个字都不发；而把提示里的"300-500 字"改成"120 字以内"，同一型号立刻回正文。
  * 也就是说**这家配上了也用不了本章摘要**，而界面上只有一句空正文的报错。
+ * （同日另一处修复把这一发的预算从 1024 抬到 4096，那是照 `deepseek-flash` 的量做的；
+ * modelscope 抬到 4096 够不够**仍未量**，下面两条判据与预算大小无关。）
  *
  * 地图与图谱早就走这条路（`map-agent.ts:164` / `graph-agent.ts:97`：第二发带 `thinking:false` 重发），
  * 本章摘要漏在外面。判据按两头发写：第一发不许动思考（默认权留给厂商），只有确认那一发一个字

@@ -59,6 +59,10 @@ const MODEL_LIMITS: Record<string, TokenBudget> = {
   "deepseek-chat": { contextWindow: 128000, maxOutputTokens: 8192 },
   "deepseek-reasoner": { contextWindow: 128000, maxOutputTokens: 8192 },
   "deepseek-coder": { contextWindow: 128000, maxOutputTokens: 8192 },
+  // 真厂商实测（2026-09-27 直连 `api.deepseek.com`）：`max_tokens` 填到 65536 都回 200，
+  // 单发时间线实际吃掉 10,004 completion token（其中思考 7,739）。它以前不在表里，
+  // 于是走 `DEFAULT_BUDGET` 的 4096——分析类要的 8192 被压成 4096，正文一个字都回不来。
+  "deepseek-flash": { contextWindow: 128000, maxOutputTokens: 16384 },
   "deepseek-v4-pro": { contextWindow: 128000, maxOutputTokens: 16384 },
   "deepseek-v4-flash": { contextWindow: 128000, maxOutputTokens: 16384 },
 

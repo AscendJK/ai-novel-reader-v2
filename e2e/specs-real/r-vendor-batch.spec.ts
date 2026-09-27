@@ -612,7 +612,8 @@ test.describe(`真后端：批量生成三条打在真厂商上（${VENDOR ? ven
     await expect.poll(() => calls, { timeout: 6 * 60_000, message: "批量总结等不到三发厂商请求" }).toBeGreaterThanOrEqual(3);
     await expect(panel.button(page, "批量")).toBeVisible({ timeout: 6 * 60_000 });   // 「停止」换回来 = 批量跑完
     await expectNoFailure(page, v);
-    // 本章摘要的任务级预算只有 1024（`summarizer.ts:26`），推理模型光思考就能把它吃满 →
+    // 本章摘要的任务级预算 4096（`summarizer.ts:34`，2026-09-27 从 1024 抬上来：`deepseek-flash`
+    // 在 1024 那一发是思考吃满、正文 0 字），推理型厂商仍可能连 4096 都花在思考上 →
     // 三章全空时先钉"界面说没说出来"，再判这一档在这只模型上量不到后半截
     await skipIfVendorGaveNoBody(page, v, "逐章批量总结");
 

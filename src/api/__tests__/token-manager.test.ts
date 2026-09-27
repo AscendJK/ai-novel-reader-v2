@@ -75,6 +75,22 @@ describe("getTokenBudget", () => {
     expect(budget.maxOutputTokens).toBe(8192);
   });
 
+  /**
+   * `deepseek-flash` 以前**不在表里**，于是走 `DEFAULT_BUDGET` 的 4096：分析类任务的默认预算 8192
+   * 被它压成 4096，一发下来就是 `completion_tokens=4096 / reasoning_tokens=4096 / 正文 0 字 /
+   * finish_reason=length`。抬到 16384 同一发回了 3232 字正文、`finish_reason=stop`
+   * （实际吃掉 10,004 token，其中思考 7739）。厂商侧对 `max_tokens` 8192/16384/32768/65536 一律 200。
+   * 三条读数都是 2026-09-27 直连 `api.deepseek.com` 量到的（`anr-e2e-real/probe-deepseek-budget.mjs`）。
+   *
+   * **修法只能是"给这一家补名字"，不是把 `DEFAULT_BUDGET` 整体抬大**：未匹配的厂商里真有只让写
+   * 4096 的，而输出超限的 400 没有自愈（只落成 `[输出超限]` 一句报错），盲抬等于把别的家往墙上推。
+   */
+  it("deepseek-flash 命中自己的条目，不被 DEFAULT 的 4096 钳住", () => {
+    const budget = getTokenBudget("deepseek-flash");
+    expect(budget.contextWindow).toBe(128000);
+    expect(budget.maxOutputTokens).toBe(16384);
+  });
+
   it("发现了服务端真实上下文后应优先使用", () => {
     // 模拟 400 自愈写入发现缓存（Qwen/Qwen3-8B 真实上下文 32768）
     setDiscoveredContextWindow("Qwen/Qwen3-8B", 16384);

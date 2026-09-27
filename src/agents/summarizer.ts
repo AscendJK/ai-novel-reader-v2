@@ -20,10 +20,18 @@ class SummarizerAgent extends BaseAgent {
   description = "生成章节摘要或全书总结";
   taskType = TaskType.CHAPTER;
 
-  // 输出预算（token）：必须与请求的 max_tokens 取同一值——若预留 1024 却请求
-  // maxOutputTokens（4096+），严格校验 input+max_tokens≤context 的服务商上
-  // 长章节必然 400，且自愈重试按同样预算重算、无法恢复
-  private static readonly OUTPUT_TOKENS = 1024;
+  /**
+   * 输出预算（token）：必须与请求的 `max_tokens` 取同一值——若预留 4096 却按表值发更大的数，
+   * 严格校验 input+max_tokens≤context 的服务商上长章节必然 400，且自愈重试按同样预算重算、无法恢复。
+   *
+   * 从 1024 抬到 4096（2026-09-27 直连 `api.deepseek.com` 量的）：老口径那句"一章一份、
+   * 实测没写满过"已经不成立——同一份摘要请求，`max_tokens=1024` 那一发是
+   * `completion_tokens=1024 / reasoning_tokens=1024 / 正文 0 字 / finish_reason=length`，
+   * 思考把整份预算吃光；抬到 4096 才回 484 字正文并 `stop`（实际只用 1,174 token）。
+   * 也就是说这 3,072 不是"多花的钱"，而是推理型厂商下"这条路径能不能用"的分界。
+   * 逐章批量时它按 1:1 从输入侧扣（128k 窗口每章少喂约 3,000 字），所以只抬到实测够用的这一档。
+   */
+  private static readonly OUTPUT_TOKENS = 4096;
 
   /**
    * 本任务的输出预留——同一个数既从输入侧扣掉、又作为 `max_tokens` 发出去。

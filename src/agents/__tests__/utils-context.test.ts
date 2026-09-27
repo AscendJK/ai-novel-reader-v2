@@ -303,8 +303,9 @@ describe("chatWithContextRetry — context_length 自愈", () => {
 
   it("自愈重试不许把表里的默认上限冒充成用户亲手填的", async () => {
     // 用户没填上限时 `maxOutputTokens` 来自预算表。回灌时若把它当作 getTokenBudget 的
-    // 第三参，重试那一发就凭空多出"用户显式要过 4096"这条事实，任务默认预算会误让路
-    // （章节摘要从 1024 变 4096），比第一次还要得更多——正好是这次改动要修的反面。
+    // 第三参，重试那一发就凭空多出"用户显式要过这个数"这条事实，任务默认预算得给它让路：
+    // 表值 4096 会把人物关系分析要的 16384 压回去，表值更大时（`gpt-4o` 的 16384 对章节总结的
+    // 4096）又比第一次要得更多。两个方向都不是用户的意思——正好是这次改动要修的反面。
     const seen: Array<{ maxOutputTokens: number; userMaxOutputTokens?: number }> = [];
     const attempt = vi.fn(async (b: { maxOutputTokens: number; userMaxOutputTokens?: number }) => {
       seen.push({ maxOutputTokens: b.maxOutputTokens, userMaxOutputTokens: b.userMaxOutputTokens });
