@@ -59,12 +59,6 @@ Copy-Item "server/middleware/*.js" "backend-pack-tmp/server/middleware/"
 Copy-Item "server/lib/*.js" "backend-pack-tmp/server/lib/"
 Copy-Item "server/lib/*.mjs" "backend-pack-tmp/server/lib/"
 
-# 出包闸门：把包内每个 js/mjs 的本地依赖（相对 import、path.join(__dirname, …)）解析
-# 一遍，缺文件就中止。这样"新增被 import 的文件却忘了进清单"当场就响，而不是让用户
-# 在解压后才发现。
-node scripts/check-server-pack.mjs "backend-pack-tmp/server"
-if ($LASTEXITCODE -ne 0) { throw "pack-check FAILED: package is missing referenced files (see list above)" }
-
 # 复制并重命名配置和脚本
 # 后端包版本号跟随主 package.json（单一事实来源），避免前后端版本不一致
 node -e "const fs=require('fs');const main=JSON.parse(fs.readFileSync('package.json','utf8'));const pkg=JSON.parse(fs.readFileSync('package-server.json','utf8'));pkg.version=main.version;fs.writeFileSync('backend-pack-tmp/package.json',JSON.stringify(pkg,null,2)+'\n');"
@@ -91,6 +85,16 @@ if ($IncludeDist) {
     Copy-Item "start-full-backend.bat" "backend-pack-tmp/start.bat" -Force
     Copy-Item "start-full-backend.sh" "backend-pack-tmp/start.sh" -Force
 }
+
+# 出包闸门（必须在「所有」复制与改名都做完之后、压 zip 之前）：
+# ① 包内每只源文件引用的本地文件（含 admin.html 这类非 js 资源）必须在包内，
+# ② 源码树 server/ 里该带进包的每一只都必须进包（不靠「有没有人 import 它」），
+# ③ 包根那几个支撑文件必须齐。
+# 判据在 src/lib/__tests__/pack-gate.test.ts（PG1..PG7／刀账 PK1..PK7）。
+# 注：这一档注释里别在汉字后面直接写半角引号——Windows PowerShell 5.1 把本文件按 GBK 读，
+#     「字节的最后一位 + 0x22」会被当成一个双字节字吃掉，于是整条字符串失去终止符。
+node scripts/check-server-pack.mjs "backend-pack-tmp" "."
+if ($LASTEXITCODE -ne 0) { throw "pack-check FAILED: package contents are wrong (see the list above), aborting" }
 
 # 压缩（手动创建 zip 条目并强制正斜杠分隔，兼容 Linux/macOS 的 unzip）。
 # ⚠️ 不能用 Compress-Archive / .NET Framework 的 CreateFromDirectory：在 Windows 上它们
