@@ -98,23 +98,32 @@ jobs:
       - name: Verify package contents
         shell: pwsh
         run: |
+          # $ErrorActionPreference 必须是 Stop：GitHub Actions 给 pwsh 的默认值是 Continue，
+          # 而 Write-Error 在非终止模式下只是写一条错误记录，脚本继续跑到结尾、退出码 0。
+          # 2026-09-29 本机拿真 yml 的这段原文预演量死的：轻包删掉 server/tts-worker.py 之后
+          # 照样打印 "missing critical files" 再打 "OK: entries 40"，退出码 **0**；把 tag 换成
+          # v9.9.9（zip 里还是 2.4.0）也一样红字＋退出码 0。也就是说这一格以前**从来不红**，
+          # 于是下面这些检查全成了摆设，而 Create Release 会把坏包照常发出去。
+          $ErrorActionPreference = "Stop"
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           function Check-Zip {
             param($Path, [string[]]$Required, $ExpectedVersion)
-            if (-not (Test-Path $Path)) { Write-Error "Package missing: $Path" }
+            # 下面一律用 throw 而不是 Write-Error：throw 本身就是终止性的，退出码必然非 0，
+            # 不依赖上面那行首选项在 runner 上到底有没有生效（两重保险，各咬一头）。
+            if (-not (Test-Path $Path)) { throw "Package missing: $Path" }
             $archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $Path))
             try {
               $names = $archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') }
               $missing = @($Required | Where-Object { $_ -notin $names })
               if ($missing.Count -gt 0) {
-                Write-Error "$Path missing critical files: $($missing -join ', ')"
+                throw "$Path missing critical files: $($missing -join ', ')"
               }
               if ($ExpectedVersion) {
                 $entry = $archive.Entries | Where-Object { $_.FullName.Replace('\', '/') -eq "package.json" } | Select-Object -First 1
                 $reader = New-Object System.IO.StreamReader($entry.Open())
                 try { $zipPkg = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
                 if ($zipPkg.version -ne $ExpectedVersion) {
-                  Write-Error "$Path version mismatch: zip=$($zipPkg.version), tag=$ExpectedVersion"
+                  throw "$Path version mismatch: zip=$($zipPkg.version), tag=$ExpectedVersion"
                 }
               }
               Write-Host "$Path OK: entries $($names.Count)"
@@ -124,8 +133,15 @@ jobs:
           }
           $tagVersion = $null
           if ($env:GITHUB_REF_TYPE -eq "tag") { $tagVersion = $env:GITHUB_REF_NAME -replace '^v', '' }
-          Check-Zip "release/ai-novel-reader-v2-backend.zip" @("server/tts-worker.py", "server/routes/rag.js", "package.json", "start.bat", "start.sh") $tagVersion
-          Check-Zip "release/ai-novel-reader-v2-full.zip" @("server/tts-worker.py", "server/routes/rag.js", "package.json", "start.bat", "start.sh", "dist/index.html", "dist/sw.js") $tagVersion
+          # 这份清单是**独立证人**，与 pack-backend.ps1 里出包闸门那份（REQUIRED_PACK_FILES，
+          # 判据 PG6）故意不共用：闸门那份若被改坏，这里还得有人说话。
+          # package-lock.json 是 2026-09-29 补的——①（`135bafd`）整件事就落在这只文件上，
+          # 而当时这里只列了 5 条，锁没进包也不会红。admin.* / stop.* / README.txt 同批补齐。
+          $support = @("package.json", "package-lock.json", "README.txt", "start.bat", "start.sh",
+                       "stop.bat", "stop.sh", "admin.bat", "admin.sh",
+                       "scripts/cleanup-processes.ps1", "scripts/cleanup-processes.sh")
+          Check-Zip "release/ai-novel-reader-v2-backend.zip" (@("server/tts-worker.py", "server/routes/rag.js") + $support) $tagVersion
+          Check-Zip "release/ai-novel-reader-v2-full.zip" (@("server/tts-worker.py", "server/routes/rag.js", "dist/index.html", "dist/sw.js") + $support) $tagVersion
 
       - name: Create Release
         # 只在真打 tag 时才发布：手动 dispatch 跑在分支上没有 tag，而这个 action 会拿
