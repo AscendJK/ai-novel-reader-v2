@@ -596,65 +596,93 @@ function readAttempt(attempt: Attempt, storedIndex: number) {
  * 最后那条 `interleaved > 0` 是台架自检：它红了不是产品坏了，而是这一轮两个写者根本没
  * 碰上——那上面三条判据全是空转，绿灯不算数。
  */
-test("B24 补载补偿与跳章纠正抢 scrollTop：点第 24 章不许落回别处", async ({ page }) => {
-  test.setTimeout(360_000); // 每轮都要重开一次书，慢机档还要降速
-  const CHAPTERS = 25;
-  const CLICK_CHAPTER = 24; // 已载窗口 10~25 里的深处一章：跳它，落点离scrollTop=30 越远越看得出
-  await importFiles(page, [txtFile("补载争用.txt", longNovel(CHAPTERS))]);
-  await openBook(page, "补载争用");
-  await page.waitForTimeout(900);
+/**
+ * 只给 B24 一次重跑（制作人 2026-09-28 拍 A：**产品与判据都不动**）。
+ *
+ * 读数：2026-09-28 全量并行那一跑里 B24 落败，同一天单独重跑绿（台账记 42.5s）；包进下面这一层
+ * 之后当场又复跑三回——单跑 49.1s 绿、单跑 48.8s 绿、与 B 组其余 11 条＋AN 那 6 条同盘跑
+ * 18/18 绿（整跑 1.0m）。台架自己那行仪表：台账那一次是 `3/5 轮出现"补偿写在跳章之后"，
+ * 判据红 0 条`，今天这三回按上面那个顺序依次是 `3/5`、`4/5`、`3/5`，判据红也都是 0 条。
+ * 也就是**哪几轮撞上本来就是掷骰子**，而"掷到了"这四回都没把任何一条判据顶到错的一边。
+ * **那一次落败的细节没留下来**——那一跑用的是 line reporter，stdout 只留下末尾 recap 那一行，
+ * 所以这里不写成因："并发争用"只是与上面那些读数都不矛盾的猜测，不是量到的东西。
+ *
+ * 为什么 retries 只包这一条、不铺给整份文件：全局 `retries: 0`（`playwright.config.ts:30`）是
+ * 故意的——安静重跑会把真缺陷洗成绿。这一条有而别条没有的性质只有一条：它是**五轮 × 两档时钟**
+ * 的长跑，`test.setTimeout(360_000)` 是这份文件里最宽的一档（其次 180 秒，`:299` 与 `:718`）。
+ * 至于那一次到底红在哪一头上，见上面那句"细节没留下来"——不拿猜测当理由。
+ *
+ * 更要紧的是那条闸的语义：`interleaved > 0` 是台架自检，它红的意思是**这一轮两个写者根本没碰上**，
+ * 三条判据全在空转——这种红正确的处置就是再掷一次骰子，而不是放过产品。真缺陷躲不掉：
+ * 2026-09-28 用一次性探针（跑完即删）在这份配置下量过两头——一把红一把绿 → 报告是 `1 flaky`、
+ * 退出码 0；**两把都红 → `1 failed`、退出码 1**。也就是"重试洗掉的那一次"在报告里留得下来，
+ * 而真要坏是两把一起坏，闸门该红还是红。下面那行「第 N 次尝试」把读数按把分开，谁在第几把红看得见。
+ */
+test.describe("B24 长跑台架（一次性重跑，理由见上）", () => {
+  test.describe.configure({ retries: 1 });
 
-  const cdp = await page.context().newCDPSession(page);
-  const bad: string[] = [];
-  const log: string[] = [];
-  let interleaved = 0;
+  test("B24 补载补偿与跳章纠正抢 scrollTop：点第 24 章不许落回别处", async ({ page }) => {
+    test.setTimeout(360_000); // 每轮都要重开一次书，慢机档还要降速
+    // 读数按"把"分开：重试用没用过、哪一把红的，全量跑完之后只看这份日志就能回答
+    console.log(`[B24] ── 第 ${test.info().retry + 1} 次尝试 ──`);
+    const CHAPTERS = 25;
+    const CLICK_CHAPTER = 24; // 已载窗口 10~25 里的深处一章：跳它，落点离scrollTop=30 越远越看得出
+    await importFiles(page, [txtFile("补载争用.txt", longNovel(CHAPTERS))]);
+    await openBook(page, "补载争用");
+    await page.waitForTimeout(900);
 
-  for (const phase of [
-    { rate: 1, delays: [0, 16, 40] },
-    { rate: 6, delays: [0, 24] },
-  ]) {
-    await cdp.send("Emulation.setCPUThrottlingRate", { rate: phase.rate });
-    for (const delay of phase.delays) {
-      // 现场复位：进度必须在第 20 章，且必须"从书架重新点开"，这样载入窗口才是 10~25 章
-      await navEntry(page, 20).click();
-      await page.waitForTimeout(1_600);
-      await backToShelf(page);
-      await expect(shelfCard(page, "补载争用")).toBeVisible({ timeout: 30_000 });
-      await openBook(page, "补载争用");
-      await page.waitForTimeout(1_500); // 等恢复位置那 600ms 静默期走完
-      await installScrollProbe(page);
+    const cdp = await page.context().newCDPSession(page);
+    const bad: string[] = [];
+    const log: string[] = [];
+    let interleaved = 0;
 
-      const chapterId = await navEntry(page, CLICK_CHAPTER).getAttribute("data-chapter-id");
-      if (!chapterId) throw new Error("B24 台架：目录里没有第 24 章");
-      const attempt = await provokePrependRace(page, chapterId, delay);
-      const n = readAttempt(attempt, await storedChapterIndex(page));
-      const label = `降速${phase.rate}×/延迟${delay}ms`;
-      interleaved += n.raced;
+    for (const phase of [
+      { rate: 1, delays: [0, 16, 40] },
+      { rate: 6, delays: [0, 24] },
+    ]) {
+      await cdp.send("Emulation.setCPUThrottlingRate", { rate: phase.rate });
+      for (const delay of phase.delays) {
+        // 现场复位：进度必须在第 20 章，且必须"从书架重新点开"，这样载入窗口才是 10~25 章
+        await navEntry(page, 20).click();
+        await page.waitForTimeout(1_600);
+        await backToShelf(page);
+        await expect(shelfCard(page, "补载争用")).toBeVisible({ timeout: 30_000 });
+        await openBook(page, "补载争用");
+        await page.waitForTimeout(1_500); // 等恢复位置那 600ms 静默期走完
+        await installScrollProbe(page);
 
-      if (n.raced > 0) {
-        if (!(n.terminalPx >= 0 && n.terminalPx <= 2)) {
-          bad.push(`${label} → 补偿写在跳章之后落笔，收工之后第${CLICK_CHAPTER}章顶部离落点 ${n.terminalPx.toFixed(0)}px`);
+        const chapterId = await navEntry(page, CLICK_CHAPTER).getAttribute("data-chapter-id");
+        if (!chapterId) throw new Error("B24 台架：目录里没有第 24 章");
+        const attempt = await provokePrependRace(page, chapterId, delay);
+        const n = readAttempt(attempt, await storedChapterIndex(page));
+        const label = `降速${phase.rate}×/延迟${delay}ms`;
+        interleaved += n.raced;
+
+        if (n.raced > 0) {
+          if (!(n.terminalPx >= 0 && n.terminalPx <= 2)) {
+            bad.push(`${label} → 补偿写在跳章之后落笔，收工之后第${CLICK_CHAPTER}章顶部离落点 ${n.terminalPx.toFixed(0)}px`);
+          }
+          if (n.storedIndex !== CLICK_CHAPTER - 1) {
+            bad.push(`${label} → 界面当前章=第${n.storedIndex + 1}章，不是点的第${CLICK_CHAPTER}章`);
+          }
+          if (!(n.flashPx >= 0 && n.flashPx < n.view)) {
+            bad.push(`${label} → 跳章之后有帧把第${CLICK_CHAPTER}章甩开 ${n.flashPx.toFixed(0)}px（一屏 ${n.view}px）`);
+          }
         }
-        if (n.storedIndex !== CLICK_CHAPTER - 1) {
-          bad.push(`${label} → 界面当前章=第${n.storedIndex + 1}章，不是点的第${CLICK_CHAPTER}章`);
-        }
-        if (!(n.flashPx >= 0 && n.flashPx < n.view)) {
-          bad.push(`${label} → 跳章之后有帧把第${CLICK_CHAPTER}章甩开 ${n.flashPx.toFixed(0)}px（一屏 ${n.view}px）`);
-        }
+        log.push(
+          `${label} 补偿${n.prependWrites}/交错${n.raced}/补偿距跳章${n.compAfterMs.toFixed(0)}ms/这一笔挪${n.writtenPx.toFixed(0)}/纠正${n.settleWrites}[${n.settles.join(",")}]/跳章${n.jumps}` +
+            `/窗内最大偏${n.flashPx.toFixed(0)}/最晚离开落点${n.lastOffMs.toFixed(0)}ms/落点${n.terminalPx.toFixed(1)}/第${n.storedIndex + 1}章`
+        );
       }
-      log.push(
-        `${label} 补偿${n.prependWrites}/交错${n.raced}/补偿距跳章${n.compAfterMs.toFixed(0)}ms/这一笔挪${n.writtenPx.toFixed(0)}/纠正${n.settleWrites}[${n.settles.join(",")}]/跳章${n.jumps}` +
-          `/窗内最大偏${n.flashPx.toFixed(0)}/最晚离开落点${n.lastOffMs.toFixed(0)}ms/落点${n.terminalPx.toFixed(1)}/第${n.storedIndex + 1}章`
-      );
     }
-  }
-  await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
 
-  console.log(`[B24] ${log.join("\n[B24] ")}`);
-  console.log(`[B24] ${interleaved}/5 轮出现"补偿写在跳章之后"，判据红 ${bad.length} 条：${bad.join("；") || "无"}`);
+    console.log(`[B24] ${log.join("\n[B24] ")}`);
+    console.log(`[B24] ${interleaved}/5 轮出现"补偿写在跳章之后"，判据红 ${bad.length} 条：${bad.join("；") || "无"}`);
 
-  expect(interleaved, "台架没能让补偿落在跳章之后（这一轮两个写者根本没抢过同一只 scrollTop）").toBeGreaterThan(0);
-  expect(bad, `${bad.length} 轮的落点/当前章离开了刚点的那一章`).toEqual([]);
+    expect(interleaved, "台架没能让补偿落在跳章之后（这一轮两个写者根本没抢过同一只 scrollTop）").toBeGreaterThan(0);
+    expect(bad, `${bad.length} 轮的落点/当前章离开了刚点的那一章`).toEqual([]);
+  });
 });
 
 /**

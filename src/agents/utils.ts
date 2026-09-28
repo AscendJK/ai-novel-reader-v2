@@ -320,6 +320,15 @@ export async function chatWithContextRetry(
  *
  * `ask` 收第二枚参数当"这一发要不要关思考"，由本函数决定；调用点不许自己判空正文。
  * 空白正文（provider 没抛错、只回了几个空格）同样算空正文：两条待遇不同就会有一边漏。
+ * 那一支在真链路上目前到不了——两条腿对空正文一律**抛**（`openai.ts:160`/`:213`、
+ * `anthropic.ts:171`/`:226`），留它是防以后接一条"静默回空串"的腿。
+ *
+ * 判它的档有两处，都不在本文件（所以按符号名 grep 测试目录会找不到）：本章摘要
+ * `src/agents/__tests__/summarizer-thinking.test.ts`（X1..X3 刀账）、范围总结与问答
+ * `src/hooks/__tests__/useSummarizer-thinking-fallback.test.tsx`（A1..A8 刀账，空白正文那一支是 A3）。
+ * 2026-09-28 当场复验两把：A3 重打（`first.content && first.content.trim()` 摘成 `first.content`）
+ * → 12 条正好红空白正文那 1 条；A9 新刀（第一发 `ask(undefined)`→`ask(false)`，即"预先关思考"）
+ * → 红 5 条，全是要看 `thinkingOf(0)` 的那 5 条，两发封顶与超时不重发那几条照旧绿。
  */
 export async function askWithThinkingFallback(
   ask: (thinking: boolean | undefined) => Promise<ChatCompletionResponse>,

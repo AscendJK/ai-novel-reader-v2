@@ -38,6 +38,17 @@
  * - **A7** 只绕范围总结那一处 → 红 1：范围那条；问答 5 条全 ✓。
  * - **A8** 只绕问答那一处 → 红 3：问答那三条；范围那条 ✓。
  *   **A7/A8 各一刀**才咬得住"两个调用点只接了一个"的半修。
+ *
+ * ## 2026-09-28 复验 A3 + 新刀 A9（内核 sha 已换，语义未动）
+ * 内核 `src/agents/utils.ts` 只加了一段"谁在判它"的注释，sha 从 `19ed5dae8ecb4106` 变成
+ * `6542af8ede5edfba`，上面八刀的读数**仍然有效**（改的不是行为）。
+ * 当天重打两把，两份档一起跑（本文件 7 + 本章摘要 5）：
+ * - **A3 重打** `first.content && first.content.trim()` 摘成 `first.content` → **12 条正好红 1**：
+ *   就是本文件"provider 没抛错、只回了空白正文"那条。当初记的读数今天又对上一次。
+ * - **A9 新刀**（这一格原先只有断言、没有读数）第一发 `ask(undefined)` 换成 `ask(false)`，
+ *   也就是"预先关思考" → **红 5**：五处看 `thinkingOf(0)/asked(0)` 的断言全抓到；
+ *   "封顶两发不许第三发"与"超时不许白烧"照旧绿——那一刀动的不是发数，不该红它们。
+ * 两把各自还原后都当场核过 sha，0 刀对照 12 绿。
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";

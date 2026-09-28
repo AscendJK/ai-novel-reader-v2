@@ -45,16 +45,25 @@ import { importFiles, miniNovel, openBook, txtFile } from "../pages/shelf";
  * 收到的第二发 body 里确实带 `"thinking":{"type":"disabled"}`）。改成"两发＋第二发带 disabled"后：
  * - BK8 `summarizer.ts` 不走 `askWithThinkingFallback`（直接一发）  1 红：AN6（Expected 2 / Received 1，
  *   界面那句「花在思考上」仍绿——红的是发数，不是措辞）
- * - BK9 helper 的 catch 支第二发不带 `disabled`（`utils.ts:332` `ask(false)`→`ask(undefined)`）
+ * - BK9 helper 的 catch 支第二发不带 `disabled`（`utils.ts` catch 里那句 `ask(false)`→`ask(undefined)`）
  *   1 红：AN6；**AN5 不跟着红**——图谱那条腿**故意不用**这个 helper（`graph-agent.ts:66` 写明：
  *   套 helper 会把两发叠成四发），所以 AN5 与 AN6 分属两个落点，不算重复钉
- * - BK9' helper 的"第一发回空串"支（`utils.ts:335`）同样摘掉 `disabled`  **0 红**：
- *   这一支在浏览器层走不到——两条腿对空正文都是**抛** `APIError`（注释在 `summarizer.ts:108-110`）。
- *   如实记成**判不到的格子**：`askWithThinkingFallback` 这个共用小内核目前**没有任何一档单测直接看着它**
- *   （`grep askWithThinkingFallback src` 只命中产品文件），335 那一支连浏览器层也够不着。
+ * - BK9' helper 的"第一发回空串"那一支（`if (first.content && first.content.trim()) return first;`
+ *   后面的 `return await ask(false)`）同样摘掉 `disabled`  **0 红**：
+ *   这一支在浏览器层走不到——两条腿对空正文都是**抛** `APIError`（注释在 `summarizer.ts:108-110`），
+ *   假厂商要造出"200 且 `content` 是空白串"那一形状，浏览器层这一档根本没有出口。
+ *   **但它不是没判**：jsdom 层 `src/hooks/__tests__/useSummarizer-thinking-fallback.test.tsx` 里
+ *   「provider 没抛错、只回了空白正文，同样算空正文要降级」那条判的就是它，刀账编号 A3。
+ *   2026-09-28 当场复验：把那句的 `&& first.content.trim()` 摘掉，两份档一起跑 12 条里
+ *   **正好红这一条**；还原后当场核 sha 回到当时的 A 刀基线 `19ed5dae8ecb4106`、0 刀对照 12 绿
+ *   （那之后 `utils.ts` 只加了一段"谁在判它"的注释，现值 `6542af8ede5edfba`，行为未动）。
+ *   顺带纠一处假话：本注释上一版写着"全仓无一档单测直接看着这个 helper"——错在我拿
+ *   `grep askWithThinkingFallback src` 找判据，而那一档隔着 provider 边界打桩，符号名不会出现在
+ *   测试文件里。**找判据要按行为找，不是按名字找。**
  *
  * 三条一开始就按设计"绿着"的护栏各有自己的刀：AN1 的 BK1、AN5 的 BK6、AN6 的 BK7。
- * 没有为 BK3 那格假造读数，也没有把 BK9' 的 0 红说成"判住了"。
+ * 没有为 BK3 那格假造读数。BK9' 那 0 红说的是**这一档判不到**，不是"那一格没人判"——
+ * 判它的那一档在 jsdom 层，见上面那条的文件名与今天的复验读数。
  */
 
 const USER = "e2e-anthropic-user";
