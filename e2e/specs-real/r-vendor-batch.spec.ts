@@ -296,28 +296,47 @@ test.describe(BATCH_GROUP, () => {
      *  - 回包没被截断而界面还是空态 → 那才是产品的格子，照红。
      * 先等落定再分（与 `skipIfVendorGaveNoBody` 同一口径）：第二发在飞的时候面板挂的是
      * 「AI 正在重新分析」，拿那一刻判"界面没说话"会把自愈读成静默。
+     *
+     * **只认厂商自己写明的切断**（09-28 深夜实测，戳 `truncB-0928f`）：411/gpt-6-luna 把上限压到
+     * 512 仍一回就出了图（5 层级／26 地点），而它的 SSE 收尾帧压根没进这份抓包——尾巴停在中间一帧、
+     * `finish_reason` 全是 `null`。所以别把"流自己断了"当成 `length`：那种形状落不进上面任何一头。
      */
     let settled = "";
     await expect
       .poll(async () => {
         if (await header.isVisible()) settled = "图";
         else {
-          const err = (await panel.root(page).innerText()).match(/API 返回了空结果|未能从 AI 响应中解析|生成失败|无法生成|解析失败/)?.[0];
-          // 报错横幅是任务落定之后才挂上去的（`map-agent.ts:209/226` 两条出口都带这句）
-          if (err) settled = `空态（挂着「${err}」）`;
+          /**
+           * 报错横幅**认结构不认措辞**：面板里唯一一枚名字恰好是「关闭」的按钮就挂在那条红字里
+           * （`SummaryPanel.tsx` 的 Error banner，全仓就这一处 `>关闭<`）。
+           *
+           * 原先这里列的是五句写死的文案。09-28 深夜戳 `truncC-0928g`（上限压到 64）实测第三种形状：
+           * 第二发关思考重发后回的是半截 JSON，产品把它交给 schema 校验，面板老实说了
+           * 「places 为空或不是数组」——那句不在名单里，于是判据在"面板明明说了话"的时刻
+           * 报"既没出折叠头，也没留下一句报错"。又一次判据瞎（同族第三次，见
+           * [[project-verification-traps]]），所以不再往名单上补第四句。
+           */
+          const row = panel.button(page, /^关闭$/).first().locator("xpath=..");
+          const said = (await row.count()) > 0 ? (await row.innerText()).replace(/关闭\s*$/, "").trim() : "";
+          if (said) settled = `空态（挂着「${said.slice(0, 90)}」）`;
         }
         return settled;
-      }, { timeout: 4 * 60_000, intervals: [2000], message: "地图两发都没落定：既没出折叠头，也没留下一句报错" })
+      }, { timeout: 4 * 60_000, intervals: [2000], message: "地图两发都没落定：既没出折叠头，也没留下一条报错横幅" })
       .not.toBe("");
     if (settled !== "图") {
       const last = v.raw[v.raw.length - 1] ?? "";
       const cut = /"finish_reason"\s*:\s*"?length"?/.test(last);
       const numbers =
-        `厂商最后一发：发出 max_tokens=${v.asks[v.asks.length - 1] ?? "?"}、` +
+        `厂商 ${v.asks.length} 发、thinking=[${v.thinks.join(",") || "?"}]；最后一发：发出 max_tokens=${v.asks[v.asks.length - 1] ?? "?"}、` +
         `completion_tokens=${last.match(/"completion_tokens"\s*:\s*(\d+)/)?.[1] ?? "?"}（其中思考 ` +
         `${last.match(/"reasoning_tokens"\s*:\s*(\d+)/)?.[1] ?? "这家没给明细"}）、正文 ${(v.texts[v.texts.length - 1] ?? "").length} 字、` +
         `finish_reason=${cut ? "length" : "不是 length"}`;
-      if (cut) test.skip(true, `R-E6：${numbers}——半截 JSON 谁也都画不出整张图，界面已如实报错（${settled}）。这一条测不了，与产品无关`);
+      // 跳过原因只有 `list` reporter 打不出来（实测戳 `truncD-0928h` 报上只留一句 `1 skipped`），
+      // 所以自己把这份证据打进 stdout，别留一条"跳了但没说为什么"的绿
+      if (cut) {
+        console.log(`[R-E6 跳过] ${numbers}——界面：${settled}`);
+        test.skip(true, `R-E6：${numbers}——厂商自己把这一发切断了（finish_reason=length：0 字与半截 JSON 都算），谁都拼不出整张图，界面已如实报错（${settled}）。这一条测不了，与产品无关`);
+      }
       expect(settled, `R-E6：${numbers}。回包是完整的而地图没出来——${settled}`).toBe("图");
     }
     // 「小说地图」这枚折叠头在**生成过程中是 disabled 的**（实测直接点会卡在 actionTimeout 的
@@ -332,6 +351,17 @@ test.describe(BATCH_GROUP, () => {
     const caption = panel.text(page, /\d+ 个层级 · \d+ 个地点 · \d+ 个势力/).first();
     await expect(caption).toBeVisible({ timeout: 30_000 });
     const [, layers, places, forces] = (await caption.innerText()).match(/(\d+) 个层级 · (\d+) 个地点 · (\d+) 个势力/) ?? [];
+    /**
+     * 「≥3 个地点」这一下限**默认厂商拿到了够写的预算**。
+     *
+     * 09-28 深夜拿 LongCat 在 512 上取证时红过一次：两发都成、图也真出来了，但只有 2 个地点——
+     * 512 token 本来就写不出 3 个地点，红它等于拿测试自己压的预算当产品缺陷（同一口径见本文件
+     * 文件头与 R-E6 那条 skip：真厂商判据不许拿外部条件画红）。所以小上限档改判"图出来了没"，
+     * 数量下限只在够写的预算上判。留空（`MAX_OUTPUT=0`）与正常档都走原来的下限。
+     */
+    if (MAX_OUTPUT > 0 && MAX_OUTPUT < 2048) {
+      test.skip(true, `R-E6：这一跑把输出上限压到 ${MAX_OUTPUT}，厂商写不出 3 个地点是预算的事实（界面真出了图：${layers} 层级 · ${places} 地点）——数量下限不适用`);
+    }
     expect(Number(places), `地图只给出 ${places} 个地点：40 章的书不可能只有这一点地理`).toBeGreaterThanOrEqual(3);
     expect(Number(layers), `地图只有 ${layers} 个层级`).toBeGreaterThanOrEqual(1);
     // 势力**不断言**：`longNovel` 那本合成长书里根本没有阵营，模型回 0 个势力才是对的
@@ -439,8 +469,12 @@ test.describe(BATCH_GROUP, () => {
   /**
    * `asks` 是**发出去**的那些发的 `max_tokens`（按请求先后），`raw`/`texts` 是回来的。
    * 第五段（`ANR_VENDOR_MAX_OUTPUT=0`＝留空档）要判的就是这一格：预算到底按什么数发出去。
+   *
+   * `thinks` 与 `asks` 一一对应，记每一发请求体里的 `thinking`（`关`／`开`／`默认`）。
+   * 加它是因为「被截断也算这一发没成」（`17690f3`）这件事的**唯一现场证据就是线上那一发的请求体**：
+   * 代理只往 `server.log` 写 URL，不写请求体，光看"打了两发"分不出第二发是关思考那发还是照旧开思考。
    */
-  type Replies = { texts: string[]; raw: string[]; asks: number[]; settle: () => Promise<void> };
+  type Replies = { texts: string[]; raw: string[]; asks: number[]; thinks: string[]; settle: () => Promise<void> };
 
   /**
    * 留空档下每一发**该**按任务预设要多少（`resolveOutputReserve(budget, 常数)` 里那个常数）。
@@ -469,13 +503,19 @@ test.describe(BATCH_GROUP, () => {
     const texts: string[] = [];
     const raw: string[] = [];
     const asks: number[] = [];
-    // 请求侧只读 `max_tokens` 这一个数，走 Playwright 的 request 事件（不碰页面、不影响真请求）
+    const thinks: string[] = [];
+    // 请求侧只读 `max_tokens` 与 `thinking` 这两格，走 Playwright 的 request 事件（不碰页面、不影响真请求）
     page.on("request", (r) => {
       const u = r.url();
       if (!(u.includes("/api/proxy/") || u.startsWith(BASE))) return;
       try {
-        const body = r.postDataJSON() as { max_tokens?: unknown } | null;
-        if (body && typeof body.max_tokens === "number") asks.push(body.max_tokens);
+        const body = r.postDataJSON() as { max_tokens?: unknown; thinking?: { type?: unknown } } | null;
+        if (body && typeof body.max_tokens === "number") {
+          asks.push(body.max_tokens);
+          // 产品只在"关掉"时把这格放上线（`openai.ts` 的 `body.thinking = { type: "disabled" }`），
+          // 所以"没这格"就是照模型默认，不是没降级
+          thinks.push(body.thinking?.type === "disabled" ? "关" : body.thinking ? "开" : "默认");
+        }
       } catch {
         // 非 JSON 的请求体不参与（这一屏发的都是 JSON，进这里的就是不参与）
       }
@@ -505,7 +545,7 @@ test.describe(BATCH_GROUP, () => {
       }) as typeof fetch;
     }, { base: BASE });
     // 页面内那一读是"流读完才回调"，所以 raw 增长本身就等价于旧版 `settle()` 等 body 读完
-    return { texts, raw, asks, settle: async () => {} };
+    return { texts, raw, asks, thinks, settle: async () => {} };
   }
 
   /** 取本用例那份回包（在 `beforeEach` 里已经装好，这里只是给用例一个短名字） */
@@ -573,9 +613,10 @@ test.describe(BATCH_GROUP, () => {
       if (!THROTTLED.test(lastRaw)) {
         const finish = [...lastRaw.matchAll(/"finish_reason"\s*:\s*"?([a-z_]+)"?/g)].map((m) => m[1]).join(",") || "?";
         const asked = v.asks.slice(asksBefore);
+        const th = v.thinks.slice(asksBefore);
         console.log(
           `[R-E 回包] ${label}：${v.raw.length} 份响应、正文合计 ${v.texts.reduce((n, s) => n + s.length, 0)} 字、` +
-            `发出 max_tokens=[${asked.join(",")}]、finish_reason=${finish}\n` +
+            `发出 max_tokens=[${asked.join(",")}]、thinking=[${th.join(",")}]、finish_reason=${finish}\n` +
             `  正文前 200 字：${(v.texts[v.texts.length - 1] ?? "（空）").slice(0, 200).replace(/\s+/g, " ")}\n` +
             `  原始帧尾巴 200 字：${lastRaw.slice(-200).replace(/\s+/g, " ")}`,
         );
