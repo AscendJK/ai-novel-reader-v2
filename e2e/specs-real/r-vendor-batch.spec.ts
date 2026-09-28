@@ -271,7 +271,50 @@ test.describe(BATCH_GROUP, () => {
     // 锚死整名：`/小说地图/` 会同时认上「生成小说地图」那枚按钮（`NovelMapSection.tsx:337/352`），
     // 于是"折叠头出现了"变成一句空话，而下面那次 `header.click()` 实际又发起了一整发真请求
     const header = panel.button(page, /^小说地图$/);
-    await expect(header).toBeVisible({ timeout: 5 * 60_000 });
+    /**
+     * 折叠头（`NovelMapSection.tsx:359` 起那一段）只在**有地图数据**时才存在，所以它不出现
+     * 有三种可能：模型还在写、厂商回的东西拼不出整张图、产品把一份能用的回包丢了。
+     *
+     * 原先这里是一条 5 分钟的 `toBeVisible`。2026-09-28 戳 `vbatch-deepseek-0928` 实测红成
+     * `element(s) not found`，成因全压在上一行 `[R-E 回包]` 里：那一跑 `ANR_VENDOR_MAX_OUTPUT`
+     * 用默认的 8192，把地图预设的 16384 一起压了下去（见文件头 `MAX_OUTPUT` 那段），
+     * `deepseek-flash` 第一发 `completion_tokens=8192 / reasoning_tokens=8080 / 正文 246 字 /
+     * finish_reason=length`——回的是**半截 JSON**。它不是空正文，所以
+     * `map-agent.ts:191` 那条「只有确认空正文才关思考重发」的降级没有触发；第二发照旧开思考，
+     * 这一回一个字都没回（`reasoning_tokens=8192 / 正文 0 字`），面板挂的是第二发那句
+     * 「API 返回了空结果」。（我自己第一遍把它读成"定位器过期了"——错，见
+     * [[project-audit-baseline-2026-09]] 第十九次。）
+     *
+     * 现在按回包自己的证据分两头，两头都有牙：
+     *  - 厂商被自己的输出上限截断 → 跳过并写出「要了多少 / 回了多少 / 思考占了多少 / 正文几字」，
+     *    红它等于拿厂商的预算当产品缺陷（批次「真厂商判据不许拿外网抖动画红」的口径）；
+     *  - 回包没被截断而界面还是空态 → 那才是产品的格子，照红。
+     * 先等落定再分（与 `skipIfVendorGaveNoBody` 同一口径）：第二发在飞的时候面板挂的是
+     * 「AI 正在重新分析」，拿那一刻判"界面没说话"会把自愈读成静默。
+     */
+    let settled = "";
+    await expect
+      .poll(async () => {
+        if (await header.isVisible()) settled = "图";
+        else {
+          const err = (await panel.root(page).innerText()).match(/API 返回了空结果|未能从 AI 响应中解析|生成失败|无法生成|解析失败/)?.[0];
+          // 报错横幅是任务落定之后才挂上去的（`map-agent.ts:209/226` 两条出口都带这句）
+          if (err) settled = `空态（挂着「${err}」）`;
+        }
+        return settled;
+      }, { timeout: 4 * 60_000, intervals: [2000], message: "地图两发都没落定：既没出折叠头，也没留下一句报错" })
+      .not.toBe("");
+    if (settled !== "图") {
+      const last = v.raw[v.raw.length - 1] ?? "";
+      const cut = /"finish_reason"\s*:\s*"?length"?/.test(last);
+      const numbers =
+        `厂商最后一发：发出 max_tokens=${v.asks[v.asks.length - 1] ?? "?"}、` +
+        `completion_tokens=${last.match(/"completion_tokens"\s*:\s*(\d+)/)?.[1] ?? "?"}（其中思考 ` +
+        `${last.match(/"reasoning_tokens"\s*:\s*(\d+)/)?.[1] ?? "这家没给明细"}）、正文 ${(v.texts[v.texts.length - 1] ?? "").length} 字、` +
+        `finish_reason=${cut ? "length" : "不是 length"}`;
+      if (cut) test.skip(true, `R-E6：${numbers}——半截 JSON 谁也都画不出整张图，界面已如实报错（${settled}）。这一条测不了，与产品无关`);
+      expect(settled, `R-E6：${numbers}。回包是完整的而地图没出来——${settled}`).toBe("图");
+    }
     // 「小说地图」这枚折叠头在**生成过程中是 disabled 的**（实测直接点会卡在 actionTimeout 的
     // 60 秒上，报出来像"按钮点不动"的产品缺陷，其实是模型还在写），所以先等它放开
     await expect(header).toBeEnabled({ timeout: 5 * 60_000 });
