@@ -106,6 +106,20 @@ function vendorText(body: string, contentType: string): string {
 const BATCH_JUDGES = ["R-E5", "R-E6", "R-E7", "R-E8", "R-E9", "R-E10", "R-E11", "R-E12"];
 
 /**
+ * 「等任务落定」的窗口——按**产品自己的超时**算，别拿判据的耐心当产品的上限。
+ *
+ * 一发最慢＝直连流式 30 秒没响应（`openai.ts` 的 `DIRECT_STREAM_TIMEOUT_MS`）→ 换代理腿 →
+ * 客户端 120 秒（同文件 `REQUEST_TIMEOUT_MS`；后端那 180 秒轮不到先撤）＝ **150 秒**。
+ * `17690f3` 之后地图与图谱允许两发，所以 2×150＝300 秒是产品**合法**的最慢速度，窗口得比它宽。
+ *
+ * 09-28 深夜那笔红就是反例（戳 `truncI-0928n`，deepseek 上限压到 64，4.6 分钟）：判据只等 240 秒，
+ * 第二发还在路上就先被判成"既没出折叠头也没留报错横幅"。**红的是判据的窗口，不是产品静默**
+ * （地图失败态只有一条出口：`runTask.ts` 的 `onError` → `useSummarizer.ts` 的 `setNovelError` →
+ * `SummaryPanel.tsx` 那条带「关闭」的横幅，除"用户取消"外没有绕开它的路）。
+ */
+const SETTLE_MS = 6 * 60_000;
+
+/**
  * 组名只写这一份：`describe` 的标题与收尾小计（`recordPreProbeSkip` 的 `group`）都取它。
  *
  * 标题原先写着"批量生成三条"，而这一组到今天有八条（R-E5..R-E12）——小计要把组名连同
@@ -321,7 +335,7 @@ test.describe(BATCH_GROUP, () => {
           if (said) settled = `空态（挂着「${said.slice(0, 90)}」）`;
         }
         return settled;
-      }, { timeout: 4 * 60_000, intervals: [2000], message: "地图两发都没落定：既没出折叠头，也没留下一条报错横幅" })
+      }, { timeout: SETTLE_MS, intervals: [2000], message: "地图两发都没落定：既没出折叠头，也没留下一条报错横幅" })
       .not.toBe("");
     if (settled !== "图") {
       const last = v.raw[v.raw.length - 1] ?? "";
@@ -389,7 +403,8 @@ test.describe(BATCH_GROUP, () => {
     const v = collectReplies();
     await callVendor(page, v, () => panel.button(page, "生成人物关系图谱").click(), "人物关系图谱");
     const header = panel.button(page, /人物关系分析图/);
-    await expect(header).toBeVisible({ timeout: 5 * 60_000 });
+    // 图谱与地图同一条降级（两发封顶），所以"等它出现"的窗口按 `SETTLE_MS` 走，不是随手一个 5 分钟
+    await expect(header).toBeVisible({ timeout: SETTLE_MS });
     await expect(header).toBeEnabled({ timeout: 5 * 60_000 });   // 生成中折叠头是禁用的
     await expectNoFailure(page, v);
     await header.click();
@@ -610,7 +625,7 @@ test.describe(BATCH_GROUP, () => {
     if (v.texts.some((t) => t.trim())) return;
     await expect
       .poll(async () => (await panel.root(page).innerText()).includes("正在"), {
-        timeout: 4 * 60_000,
+        timeout: SETTLE_MS,
         message: `${label}：自愈重发一直没落定（面板还挂着「正在…」）`,
       })
       .toBe(false);
