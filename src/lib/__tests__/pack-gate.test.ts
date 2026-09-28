@@ -20,6 +20,7 @@
  * - PK7 `REQUIRED_PACK_FILES` 缺一只却照样通过 → PG6 红。
  * - PK8 `SHIP_EXT` 退回只有 js/mjs（不收 py 与 html）→ PG7 红。
  */
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 // @ts-expect-error - 出包脚本是纯 JS，没有类型声明（与 server/lib 那些同一待遇）
@@ -27,12 +28,14 @@ const gate = await import("../../../scripts/lib/pack-gate.mjs");
 const {
   REQUIRED_PACK_FILES,
   listShippable,
+  lockSyncProblems,
   missingLocalDeps,
   missingRequiredFiles,
   missingSourceFiles,
 } = gate as {
   REQUIRED_PACK_FILES: string[];
   listShippable: (root: string) => string[];
+  lockSyncProblems: (pkgDeps: Record<string, string>, lock: unknown) => string[];
   missingLocalDeps: (files: Array<{ path: string; source: string }>, exists: (p: string) => boolean) => string[];
   missingRequiredFiles: (required: string[], pack: string[]) => string[];
   missingSourceFiles: (source: string[], pack: string[]) => string[];
@@ -110,5 +113,46 @@ describe("PG 名字集合：仓库里的源码必须全进包", () => {
     expect(list.filter((f) => f.startsWith("data/"))).toEqual([]);
     expect(list.filter((f) => f.endsWith(".log"))).toEqual([]);
     expect(list.filter((f) => f.includes("__tests__"))).toEqual([]);
+  });
+});
+
+describe("PG 后端 lock：用户装到的必须是我们验过的那一版", () => {
+  it("PG8 包根必须带 package-lock.json（不带 lock 时用户 `npm install` 拿到的是浮动版本）", () => {
+    expect(REQUIRED_PACK_FILES).toContain("package-lock.json");
+  });
+
+  it("PG9 依赖表与 lock 对不上就要响：改过范围却没重生成 lock＝过期", () => {
+    const deps = { express: "^5.2.1", cors: "^2.8.6" };
+    expect(lockSyncProblems(deps, {
+      lockfileVersion: 3,
+      packages: { "": { dependencies: { express: "^5.2.0", cors: "^2.8.6" } } },
+    })).toEqual(["package.json 里 express 是 ^5.2.1，lock 里是 ^5.2.0"]);
+    // 只有一边有才是要报的两种方向
+    expect(lockSyncProblems(deps, { lockfileVersion: 3, packages: { "": { dependencies: { express: "^5.2.1" } } } }))
+      .toEqual(["package.json 里有 cors，lock 里没有"]);
+    expect(lockSyncProblems({ express: "^5.2.1" }, {
+      lockfileVersion: 3,
+      packages: { "": { dependencies: { express: "^5.2.1", extra: "^1.0.0" } } },
+    })).toEqual(["lock 里有 extra，package.json 里没有"]);
+    // 声明对了但没解析结果：npm ci 装不出来，等于没有 lock
+    expect(lockSyncProblems(deps, { lockfileVersion: 3, packages: { "": { dependencies: deps } } }))
+      .toEqual(["lock 里没有 express 的解析结果", "lock 里没有 cors 的解析结果"]);
+    // 全对上时不许报
+    expect(lockSyncProblems(deps, {
+      lockfileVersion: 3,
+      packages: {
+        "": { dependencies: deps },
+        "node_modules/express": { version: "5.2.1" },
+        "node_modules/cors": { version: "2.8.6" },
+      },
+    })).toEqual([]);
+    // 缺 lock 是这一族里最该响的那一种
+    expect(lockSyncProblems(deps, null)).toEqual(["包里没有 package-lock.json"]);
+  });
+
+  it("PG10 仓库里那份后端 lock 必须存在，且与 package-server.json 逐只对得上", () => {
+    const pkg = JSON.parse(readFileSync("package-server.json", "utf-8"));
+    const lock = JSON.parse(readFileSync("package-server-lock.json", "utf-8"));
+    expect(lockSyncProblems(pkg.dependencies, lock)).toEqual([]);
   });
 });

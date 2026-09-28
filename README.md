@@ -33,19 +33,19 @@
 
 | 包 | 体积 | 适用 |
 |---|---|---|
-| `ai-novel-reader-v2-backend.zip` | ~100 KB | **后端包**：配合 GitHub Pages 前端使用 |
+| `ai-novel-reader-v2-backend.zip` | ~115 KB | **后端包**：配合 GitHub Pages 前端使用 |
 | `ai-novel-reader-v2-full.zip` | ~1 MB | **前后端全包**：内含预构建前端，iPhone 同源免证书访问 |
 
 解压后：
 - **Windows**：双击 `start.bat`
 - **macOS / Linux**：`chmod +x start.sh && ./start.sh`
 
-两个包的启动脚本依次做三件事：调用 `scripts/cleanup-processes.*` 清掉上次残留的 node/python 进程（`stop.*` 也走同一份清理逻辑）→ `npm install`（仅 5 个后端依赖）→ `node server/index.js`；区别是全包的脚本自带 `--full` 参数并伺服 `dist/`（**无需任何构建步骤**）。
+两个包的启动脚本依次做三件事：调用 `scripts/cleanup-processes.*` 清掉上次残留的 node/python 进程（`stop.*` 也走同一份清理逻辑）→ 装依赖（仅 5 个后端依赖；包内带 `package-lock.json`，所以走 `npm ci`，装出来的版本与发版前实测量过的那一版完全一致，没有 lock 或 `npm ci` 失败才回退 `npm install`）→ `node server/index.js`；区别是全包的脚本自带 `--full` 参数并伺服 `dist/`（**无需任何构建步骤**）。
 
 > **如何更新后端包**：下载新版 zip，直接解压到旧版目录覆盖即可。
 > 后端包不包含 `server/data/` 目录，你的数据库（小说、笔记、阅读进度等）不会丢失。
 > 如果之前修改过 `start.bat`（如自定义端口号），覆盖后需重新修改。
-> 依赖有变动时脚本会自动执行 `npm install`，无需手动操作。
+> 依赖有变动时脚本会自动装依赖（带 lock 走 `npm ci`），无需手动操作。
 > 启动脚本会检测 Python + sherpa-onnx（可选依赖），缺失时仅提示、不阻塞启动。
 
 **维护者：如何打包 / 发布后端包**
@@ -53,11 +53,14 @@
 本地打包（跨平台，PowerShell 7 或 Windows PowerShell 均可）：
 
 ```bash
+npm run pack:lock                         # 后端依赖有变动时：重生成包内那份 lock（package-server-lock.json）
 npm run pack:backend                      # 只打后端包
 pwsh -File pack-backend.ps1 -IncludeDist  # 额外打前后端全包（需先 npm run build）
 ```
 
-分别生成到 `release/` 目录：`release/ai-novel-reader-v2-backend.zip`（约 100 KB）和 `release/ai-novel-reader-v2-full.zip`（约 1 MB）。该目录已被 `.gitignore` 忽略。
+分别生成到 `release/` 目录：`release/ai-novel-reader-v2-backend.zip`（约 115 KB）和 `release/ai-novel-reader-v2-full.zip`（约 1 MB）。该目录已被 `.gitignore` 忽略。
+
+出包前有闸门 `scripts/check-server-pack.mjs`（纯逻辑在 `scripts/lib/pack-gate.mjs`）核四件事，缺任何一只文件就中止：包内源文件引用的本地文件（含 `admin.html` 这类非 js 资源）必须在包内、源码树 `server/` 里该带的逐只对名字、包根支撑文件（含 `package-lock.json`）必须齐、包内 lock 与包内依赖表必须对得上（过期就报"重跑 npm run pack:lock"）。判据 `src/lib/__tests__/pack-gate.test.ts`（PG1..PG10）。
 
 **自动发布 Release**：推送到 `main` 分支只触发前端部署，不会打包后端。需要发布新版本时打 tag：
 

@@ -15,6 +15,7 @@ import path from "node:path";
 import {
   REQUIRED_PACK_FILES,
   listShippable,
+  lockSyncProblems,
   missingLocalDeps,
   missingRequiredFiles,
   missingSourceFiles,
@@ -51,18 +52,30 @@ const deps = missingLocalDeps(pack.filter((f) => f.path.startsWith("server/")), 
 const absentSources = missingSourceFiles(sourceServer, packServer);
 const absentRoot = missingRequiredFiles(REQUIRED_PACK_FILES, packPaths);
 
-const problems = [...deps, ...absentSources, ...absentRoot];
+// ④ 包内 lock 必须存在且与包内依赖表对得上——否则用户 `npm ci` 装到的是没人验过的版本
+let lockProblems = [];
+if (packPaths.includes("package.json")) {
+  const pkg = JSON.parse(fs.readFileSync(path.join(packDir, "package.json"), "utf8"));
+  let lock = null;
+  if (packPaths.includes("package-lock.json")) {
+    lock = JSON.parse(fs.readFileSync(path.join(packDir, "package-lock.json"), "utf8"));
+  }
+  lockProblems = lockSyncProblems(pkg.dependencies ?? {}, lock);
+}
+
+const problems = [...deps, ...absentSources, ...absentRoot, ...lockProblems];
 
 if (problems.length) {
   console.error(`[pack-check] 后端包有问题 ${problems.length} 条：`);
   for (const p of deps) console.error(`  - 引用缺文件：${p}`);
   for (const p of absentSources) console.error(`  - 源码树里的 ${p} 没进包（加进 pack-backend.ps1 的复制清单）`);
   for (const p of absentRoot) console.error(`  - 包根缺 ${p}`);
+  for (const p of lockProblems) console.error(`  - 依赖锁：${p}（重跑 npm run pack:lock）`);
   process.exit(1);
 }
 
 // 取证：数量本身要说话——"通过"但核对了 0 只是另一种瞎
 console.log(
   `[pack-check] 通过：包内 ${packPaths.length} 条（server/ ${packServer.length} 只，源码树 ${sourceServer.length} 只逐只对得上）、`
-  + `支撑文件 ${REQUIRED_PACK_FILES.length} 条齐、本地依赖引用 ${deps.length} 条缺`,
+  + `支撑文件 ${REQUIRED_PACK_FILES.length} 条齐、本地依赖引用 ${deps.length} 条缺、依赖锁已核对`,
 );

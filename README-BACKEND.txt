@@ -16,7 +16,8 @@ AI Novel Reader - 后端包部署说明
 Windows:  双击 start.bat   （或管理员 cmd 运行）
 macOS/Linux: sh start.sh    （赋予执行权限: chmod +x start.sh）
 
-首次启动会自动 npm install（需联网）。启动成功后:
+首次启动会自动装依赖（需联网）：本包带 package-lock.json，走的是 npm ci，
+装出来的版本与发版前实测量过的那一版完全一致；没有 lock 或 npm ci 失败才回退 npm install。启动成功后:
 - 后端地址: http://localhost:5173
 - 管理后台: http://localhost:5173/admin
 - 前端页面: https://ascendjk.github.io/ai-novel-reader-v2/
@@ -42,10 +43,11 @@ macOS/Linux: sh start.sh    （赋予执行权限: chmod +x start.sh）
 四、数据
 -------
 - server/data/ 目录保存数据库（novels.db）与模型缓存，删除即重置数据。
-- 同步/备份功能请在管理后台配置。
+- 备份可以在管理后台查看与调整（默认每 24 小时一份，落在 server/data/backups）。
+- 跨设备同步不需要配置：多台设备登录同一个用户名即自动同步（服务器地址在前端登录页填）。
 
 五、常见问题
 -----------
 - 端口被占用: 5173 被其他程序占用时启动失败，关闭占用程序后重试。
-- npm install 失败: 确认 Node 为 18-22 LTS；网络受限可换国内 npm 镜像。
+- 装依赖失败: 确认 Node 为 18-22 LTS；网络受限可换国内 npm 镜像（npm ci 失败会自动回退 npm install）。
 - 服务端推理不可用: 确认已安装 Python 并 pip install sherpa-onnx。

@@ -63,7 +63,10 @@ fi
 
 if [ ! -d "node_modules" ]; then
   echo "Installing dependencies..."
-  npm install
+  # The package ships package-lock.json so npm ci installs exactly the versions
+  # the real-backend bench verified; fall back to npm install when the lock is
+  # missing (old extracted dirs) or ci fails (hand-edited package.json).
+  if [ -f package-lock.json ]; then npm ci || npm install; else npm install; fi
   echo ""
 fi
 

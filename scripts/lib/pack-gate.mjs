@@ -39,6 +39,7 @@ const SKIP_DIRS = new Set(["data", "dist", "node_modules", "__tests__"]);
 /** 包根必须存在的支撑文件（`pack-backend.ps1` 的改名与复制清单，写死在这里好过散在脚本里） */
 export const REQUIRED_PACK_FILES = [
   "package.json",
+  "package-lock.json",
   "README.txt",
   "start.bat",
   "start.sh",
@@ -108,4 +109,33 @@ export function missingSourceFiles(source, pack) {
 export function missingRequiredFiles(required, pack) {
   const have = new Set(pack);
   return required.filter((f) => !have.has(f));
+}
+
+/**
+ * 后端依赖表与包内 lock 是否对得上（不一致＝lock 过期，用户会装到没人验过的版本）。
+ *
+ * 一次只说一层：先说"哪一对声明不一致"，声明都对了才去查"有没有解析结果"。
+ * 两层混在一起报会把真原因淹掉——`npm ci` 在两种情况下都是红，但修法完全不同。
+ *
+ * @param pkgDeps `package.json` 里的 dependencies（name → range）
+ * @param lock 解析后的 lock 对象；`null` 代表包里根本没有 lock
+ */
+export function lockSyncProblems(pkgDeps, lock) {
+  if (!lock) return ["包里没有 package-lock.json"];
+  const declared = pkgDeps ?? {};
+  const root = lock?.packages?.[""]?.dependencies ?? {};
+  const declaration = [];
+  for (const [name, range] of Object.entries(declared)) {
+    if (!(name in root)) declaration.push(`package.json 里有 ${name}，lock 里没有`);
+    else if (root[name] !== range) declaration.push(`package.json 里 ${name} 是 ${range}，lock 里是 ${root[name]}`);
+  }
+  for (const name of Object.keys(root)) {
+    if (!(name in declared)) declaration.push(`lock 里有 ${name}，package.json 里没有`);
+  }
+  if (declaration.length) return declaration;
+  const unresolved = [];
+  for (const name of Object.keys(declared)) {
+    if (!lock?.packages?.[`node_modules/${name}`]?.version) unresolved.push(`lock 里没有 ${name} 的解析结果`);
+  }
+  return unresolved;
 }

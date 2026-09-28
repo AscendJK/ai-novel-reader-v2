@@ -62,6 +62,12 @@ Copy-Item "server/lib/*.mjs" "backend-pack-tmp/server/lib/"
 # 复制并重命名配置和脚本
 # 后端包版本号跟随主 package.json（单一事实来源），避免前后端版本不一致
 node -e "const fs=require('fs');const main=JSON.parse(fs.readFileSync('package.json','utf8'));const pkg=JSON.parse(fs.readFileSync('package-server.json','utf8'));pkg.version=main.version;fs.writeFileSync('backend-pack-tmp/package.json',JSON.stringify(pkg,null,2)+'\n');"
+# 后端专用锁（npm run pack:lock 生成，进仓库）。带上它，用户 npm ci 装出来的就是
+# 我们在真后端台架上验过的那一版；不带的话 start 脚本的 npm install 会拿浮动范围，
+# 而开发机与 CI 走的是根 package-lock.json（钉 better-sqlite3 12.10.0），台架按用户
+# 方式装出来的是 12.11.1——两边不是同一版，且哪天上游一变没有任何东西会响。
+# 闸门里 lockSyncProblems 专门核这份 lock 有没有过期（判据 PG8..PG10）。
+Copy-Item "package-server-lock.json" "backend-pack-tmp/package-lock.json"
 Copy-Item "start-backend.bat" "backend-pack-tmp/start.bat"
 Copy-Item "start-backend.sh" "backend-pack-tmp/start.sh"
 Copy-Item "admin-backend.bat" "backend-pack-tmp/admin.bat"

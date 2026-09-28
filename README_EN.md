@@ -33,7 +33,7 @@ Download from [Releases](https://github.com/AscendJK/ai-novel-reader-v2/releases
 
 | Package | Size | For |
 |---|---|---|
-| `ai-novel-reader-v2-backend.zip` | ~100 KB | **Backend only**: use it with the GitHub Pages frontend |
+| `ai-novel-reader-v2-backend.zip` | ~115 KB | **Backend only**: use it with the GitHub Pages frontend |
 | `ai-novel-reader-v2-full.zip` | ~1 MB | **Frontend + backend**: ships the prebuilt frontend, so an iPhone can reach it same-origin without a certificate |
 
 After extracting:
@@ -41,22 +41,25 @@ After extracting:
 - **Windows**: Double-click `start.bat`
 - **macOS / Linux**: `chmod +x start.sh && ./start.sh`
 
-Both start scripts do three things in order: run `scripts/cleanup-processes.*` to clear node/python processes left over from a previous run (`stop.*` uses the same cleanup) → `npm install` (5 backend dependencies only) → `node server/index.js`. The difference is that the full package's scripts pass `--full` and serve `dist/` — **no build step needed**.
+Both start scripts do three things in order: run `scripts/cleanup-processes.*` to clear node/python processes left over from a previous run (`stop.*` uses the same cleanup) → install dependencies (the 5 backend ones only; the package ships `package-lock.json`, so this is `npm ci` and you get exactly the versions verified before release — it falls back to `npm install` only when the lock is missing or `npm ci` fails) → `node server/index.js`. The difference is that the full package's scripts pass `--full` and serve `dist/` — **no build step needed**.
 
 > **Package contents**: Only `server/` source code (including `tts-worker.py`, the server-inference script), `package.json` (5 backend dependencies), start/stop scripts, `scripts/cleanup-processes.*`, and `README.txt` (deployment notes); the full package additionally ships the prebuilt `dist/`. Runtime data (database, model cache, certificates) is created automatically on first server start.
 >
-> **How to update**: Download the new zip and extract it directly into your existing backend directory, overwriting files. The backend package does **not** include the `server/data/` directory, so your database (novels, notes, reading progress, etc.) is safe. If you modified `start.bat` (e.g., changed the port), you'll need to re-apply your changes after overwriting. If dependencies changed, the script will automatically run `npm install`. The start script also probes for Python + sherpa-onnx (optional) and prints a hint without blocking startup if missing.
+> **How to update**: Download the new zip and extract it directly into your existing backend directory, overwriting files. The backend package does **not** include the `server/data/` directory, so your database (novels, notes, reading progress, etc.) is safe. If you modified `start.bat` (e.g., changed the port), you'll need to re-apply your changes after overwriting. If dependencies changed, the script installs them automatically (`npm ci` while the shipped lock is present). The start script also probes for Python + sherpa-onnx (optional) and prints a hint without blocking startup if missing.
 
 **For maintainers: how to build / publish the backend packages**
 
 Build locally (cross-platform; works with PowerShell 7 or Windows PowerShell):
 
 ```bash
+npm run pack:lock                         # regenerate the shipped lock (package-server-lock.json) after touching backend deps
 npm run pack:backend                      # backend package only
 pwsh -File pack-backend.ps1 -IncludeDist  # also build the frontend+backend package (run `npm run build` first)
 ```
 
-They land in the (git-ignored) `release/` directory: `release/ai-novel-reader-v2-backend.zip` (~100 KB) and `release/ai-novel-reader-v2-full.zip` (~1 MB).
+They land in the (git-ignored) `release/` directory: `release/ai-novel-reader-v2-backend.zip` (~115 KB) and `release/ai-novel-reader-v2-full.zip` (~1 MB).
+
+Before anything is zipped, `scripts/check-server-pack.mjs` (pure logic in `scripts/lib/pack-gate.mjs`, judged by `src/lib/__tests__/pack-gate.test.ts`, PG1..PG10) aborts the build if any of these is untrue: every local file referenced by a packaged source file — including non-JS assets such as `admin.html` — is present; every shippable file under `server/` made it into the package; the package-root support files (including `package-lock.json`) are all there; and the packed lock still matches the packed dependency list (a stale lock reports "re-run npm run pack:lock").
 
 **Auto-publish a Release**: Pushing to `main` only triggers the frontend deployment — it does not package the backend. To release a new version, create a tag:
 
