@@ -339,3 +339,40 @@ test.describe("iPhone UA 下文件夹入口整条不出现", () => {
     await expect(page.getByText(/iPhone\/iPad 上「从文件夹导入」只能整包上传，已隐藏/)).toBeVisible();
   });
 });
+
+/**
+ * B19：桌面那条 `webkitdirectory` 支路的「先算后动」（制作人 2026-09-28 拍 A 带折中）。
+ *
+ * 为什么浏览器层也要一条：jsdom 那一档（`BookSelect-folder-import.test.tsx`）把 `useFileParser`
+ * 整只 mock 掉了——它判得住"确认之前不许解析"，判不住"确认之后真把书送上架"。
+ * 被 mock 的壳里那条真解析链从没被穿过，正是跨薄壳那一族的老坑。
+ *
+ * **喂法不是 `setInputFiles`**：今天实测 Playwright 直接拒——
+ * `locator.setInputFiles: Error: [webkitdirectory] input requires passing a path to a directory`，
+ * 它只肯往普通 file input 里塞文件。所以这里在页面里造两只 `File` 装进 `input.files` 再派 `change`。
+ * 少掉的只有"浏览器真的把一个目录摊成扁平清单"这一步（那是 `webkitdirectory` 的语义，
+ * 由 B18 与 `BookSelect.tsx` 那段注释管着）；产品这一侧从 `change` 往后的整条链——过滤、计数、
+ * 确认、真解析、落库、上架——穿的仍是实现本身。
+ */
+test("B19 整文件夹导入：先只报数量，点了确认卡片才出现", async ({ page }) => {
+  await openOffline(page);
+  const sample = miniNovel();
+  await page.evaluate(({ names, body }) => {
+    const el = document.querySelector<HTMLInputElement>("#novel-folder-input");
+    if (!el) throw new Error("#novel-folder-input 不在 DOM 里（桌面这一支被谁摘了？）");
+    const list = names.map((n) => new File([body], n, { type: "text/plain" }));
+    Object.defineProperty(el, "files", { value: list, configurable: true });
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }, { names: ["洛阳旧事.txt", "虎牢关记.txt"], body: sample });
+
+  await expect(page.getByText(/找到 2 本小说/)).toBeVisible();
+  // 确认之前一本书都不许上架——这才是这一格的正面
+  await expect(shelfCard(page, "洛阳旧事")).toHaveCount(0);
+  await expect(shelfCard(page, "虎牢关记")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "确认导入 2 本" }).click();
+  await expect(shelfCard(page, "洛阳旧事")).toBeVisible();
+  await expect(shelfCard(page, "虎牢关记")).toBeVisible();
+  // 面板收走：留着那颗按钮，第二下就是把同一批再导一遍
+  await expect(page.getByRole("button", { name: /确认导入/ })).toHaveCount(0);
+});

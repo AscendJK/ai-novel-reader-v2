@@ -46,6 +46,18 @@ const isIOS =
   /iPad|iPhone|iPod/.test(navigator.userAgent) ||
   (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 
+/**
+ * 哪些文件算一本小说。**唯一出处**：`processFiles` 与文件夹确认面板都读它——
+ * 两处各写一遍就会漂，面板说的本数与真解析的次数就对不上（那条判据钉的就是这件事）。
+ */
+const isNovelFile = (f: File) => f.name.endsWith(".txt") || f.name.endsWith(".epub");
+
+/**
+ * 一次要从文件夹里导超过这么多本时，确认按钮先锁着，必须显式勾一下（制作人 2026-09-28 拍的量）。
+ * 边界按"超过 50 才要勾"算：50 本不多那一次点击。
+ */
+const FOLDER_IMPORT_ACK_MIN = 50;
+
 /** 服务器返回的小说数据类型 */
 interface ServerNovel {
   id: string;
@@ -77,6 +89,14 @@ export function BookSelect() {
   const [txtEncoding, setTxtEncoding] = useState("auto");
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  /**
+   * 「先算后动」：`webkitdirectory` 那一支选完先只把这一批摊在界面上，确认之后才落库。
+   * 只这一支有闸——多选与拖拽是用户一只只挑出来的，加闸只会让常用路径多一次点击。
+   */
+  const [pendingFolder, setPendingFolder] = useState<{ files: File[]; bytes: number } | null>(null);
+  const [folderAck, setFolderAck] = useState(false);
+  /** 取消之后的回执（"这一批我没导"也得在界面说一声，别让人以为还在跑） */
+  const [notice, setNotice] = useState<string | null>(null);
 
   // 订阅构建状态变化，触发重渲染
   const builds = useBuildStore((state) => state.builds);
@@ -380,9 +400,7 @@ export function BookSelect() {
 
   const processFiles = useCallback(
     async (files: File[]) => {
-      const valid = files.filter(
-        (f) => f.name.endsWith(".txt") || f.name.endsWith(".epub")
-      );
+      const valid = files.filter(isNovelFile);
       if (valid.length === 0) {
         setError("所选文件夹中未找到 .txt 或 .epub 文件");
         return;
@@ -476,21 +494,48 @@ export function BookSelect() {
     }
   }, [processFiles]);
 
-  // Fallback handler for webkitdirectory
+  /**
+   * `webkitdirectory` 那条退路的落点：**只统计，不入库**。
+   *
+   * 为什么单单这一支要闸：它语义上只能选文件夹，返回的是该文件夹（含子目录）的**扁平全文件清单**。
+   * 用户点的是"从文件夹导入"，心里的预期很可能是"里面那几本"，而旧代码拿到清单就直接逐本入库——
+   * "我以为只导三本"和"整个目录树的 .txt 都上了架"之间一个字都没有。
+   * 上面那条 `showOpenFilePicker` 的主路不需要闸：那是一只只多选出来的。
+   */
   const handleFolderFallback = useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const files = e.target.files;
-      if (!files || files.length === 0) {
-        setBatchParsing(false);
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const valid = Array.from(e.target.files ?? []).filter(isNovelFile);
+      // 立刻清 value：不清的话"再选同一个文件夹"根本不再触发 change（同一只 input 的值没变）。
+      // 已取出的 `File` 引用不受影响，确认时用的就是这一批。
+      e.target.value = "";
+      if (valid.length === 0) {
+        setPendingFolder(null);
+        setError("所选文件夹中未找到 .txt 或 .epub 文件");
         return;
       }
-      await processFiles(Array.from(files));
-      // Reset so same folder can be picked again
-      e.target.value = "";
-      setBatchParsing(false);
+      setError(null);
+      setNotice(null);
+      setFolderAck(false);
+      setPendingFolder({ files: valid, bytes: valid.reduce((sum, f) => sum + f.size, 0) });
     },
-    [processFiles]
+    []
   );
+
+  const confirmFolderImport = useCallback(() => {
+    if (!pendingFolder) return;
+    const { files } = pendingFolder;
+    // 面板先收走再开跑：留着那颗按钮，第二下就是把同一批再导一遍
+    setPendingFolder(null);
+    setFolderAck(false);
+    setBatchParsing(true);
+    processFiles(files).finally(() => setBatchParsing(false));
+  }, [pendingFolder, processFiles]);
+
+  const cancelFolderImport = useCallback(() => {
+    setPendingFolder(null);
+    setFolderAck(false);
+    setNotice("已取消，一本书都没导入。");
+  }, []);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -623,6 +668,47 @@ export function BookSelect() {
                 </>
               )}
             </div>
+            {/*
+              「先算后动」的那一面。整块必须 stopPropagation：它挂在上传卡片**里面**，
+              而那张卡片的 `onClick` 是"打开文件选择器"——不拦的话点「取消」顺手把系统选择器又开了。
+              体积只写"共约 N KB"而不套 `formatBytes`：那只函数在 `@/lib/storage-stats` 里，
+              顺带会把 `@/tts/tts-cache` 那一坨拖进书架这条路径。
+            */}
+            {pendingFolder && (
+              <div className="mt-3 w-full max-w-md rounded-lg border-2 bg-background p-3 text-left" onClick={(e) => e.stopPropagation()}>
+                <p className="text-sm font-medium">
+                  找到 {pendingFolder.files.length} 本小说（.txt/.epub），共约 {Math.round(pendingFolder.bytes / 1024)} KB。
+                </p>
+                <p className="text-sm text-muted-foreground mt-1">确认后才逐本解析入库；不确认，一本都不导。</p>
+                {pendingFolder.files.length > FOLDER_IMPORT_ACK_MIN && (
+                  <label className="flex items-center gap-2 text-sm mt-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={folderAck}
+                      onChange={(e) => setFolderAck(e.target.checked)}
+                    />
+                    这一下要导 {pendingFolder.files.length} 本，勾上才继续
+                  </label>
+                )}
+                <div className="flex gap-2 mt-3">
+                  <Button
+                    size="sm"
+                    disabled={pendingFolder.files.length > FOLDER_IMPORT_ACK_MIN && !folderAck}
+                    onClick={confirmFolderImport}
+                  >
+                    确认导入 {pendingFolder.files.length} 本
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={cancelFolderImport}>
+                    取消
+                  </Button>
+                </div>
+              </div>
+            )}
+            {notice && (
+              <p className="mt-2 text-sm text-muted-foreground" onClick={(e) => e.stopPropagation()}>
+                {notice}
+              </p>
+            )}
             {/* 编码纠错入口：自动识别有失败面（繁体 Big5 被判成 GBK 等），
                 识别错时整本书都是形近错字，必须留一条手动指定的路（R-57） */}
             <div className="flex items-center gap-2 text-xs text-muted-foreground" onClick={(e) => e.stopPropagation()}>
