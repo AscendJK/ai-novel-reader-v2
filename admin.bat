@@ -7,7 +7,12 @@ echo.
 where node >nul 2>&1
 if %errorlevel% neq 0 ( echo [ERROR] Node.js not found. && pause && exit /b 1 )
 
-if not exist "node_modules\" ( echo Installing deps... && call npm install )
+if not exist "node_modules\" (
+    echo Installing deps...
+    REM Lock first so this installs the same versions start.bat does; fall back to
+    REM npm install when package-lock.json is missing or ci fails.
+    if exist "package-lock.json" ( call npm ci || call npm install ) else ( call npm install )
+)
 
 set ADMIN_PORT=5173
 

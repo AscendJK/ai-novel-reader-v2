@@ -42,6 +42,8 @@
 
 两个包的启动脚本依次做三件事：调用 `scripts/cleanup-processes.*` 清掉上次残留的 node/python 进程（`stop.*` 也走同一份清理逻辑）→ 装依赖（仅 5 个后端依赖；包内带 `package-lock.json`，所以走 `npm ci`，装出来的版本与发版前实测量过的那一版完全一致，没有 lock 或 `npm ci` 失败才回退 `npm install`）→ `node server/index.js`；区别是全包的脚本自带 `--full` 参数并伺服 `dist/`（**无需任何构建步骤**）。
 
+包内的 `admin.bat` / `admin.sh` 在依赖还没装时走同一条装依赖逻辑。源码仓库那一侧也一样：`start.bat` / `start.sh` 与 `admin.bat` / `admin.sh` 见到 `node_modules` 不在就先 `npm ci`（跟着仓库根的 `package-lock.json`，装的是前端那一套依赖），没有锁或 `npm ci` 失败才回退 `npm install`。
+
 > **如何更新后端包**：下载新版 zip，直接解压到旧版目录覆盖即可。
 > 后端包不包含 `server/data/` 目录，你的数据库（小说、笔记、阅读进度等）不会丢失。
 > 如果之前修改过 `start.bat`（如自定义端口号），覆盖后需重新修改。

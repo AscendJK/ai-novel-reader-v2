@@ -40,7 +40,10 @@ echo.
 
 if not exist "node_modules\" (
     echo Installing dependencies...
-    call npm install
+    REM The repo ships package-lock.json so npm ci installs exactly the versions the
+    REM gates were run against; fall back to npm install when the lock is missing
+    REM or ci fails (hand-edited package.json, older clone, offline mirror).
+    if exist "package-lock.json" ( call npm ci || call npm install ) else ( call npm install )
     if %errorlevel% neq 0 (
         echo [ERROR] npm install failed.
         pause

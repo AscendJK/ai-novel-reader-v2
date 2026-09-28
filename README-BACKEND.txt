@@ -17,7 +17,8 @@ Windows:  双击 start.bat   （或管理员 cmd 运行）
 macOS/Linux: sh start.sh    （赋予执行权限: chmod +x start.sh）
 
 首次启动会自动装依赖（需联网）：本包带 package-lock.json，走的是 npm ci，
-装出来的版本与发版前实测量过的那一版完全一致；没有 lock 或 npm ci 失败才回退 npm install。启动成功后:
+装出来的版本与发版前实测量过的那一版完全一致；没有 lock 或 npm ci 失败才回退 npm install。
+admin.bat / admin.sh 在依赖还没装时走同一条逻辑。启动成功后:
 - 后端地址: http://localhost:5173
 - 管理后台: http://localhost:5173/admin
 - 前端页面: https://ascendjk.github.io/ai-novel-reader-v2/

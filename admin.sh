@@ -14,7 +14,9 @@ fi
 # Install deps if needed
 if [ ! -d "node_modules" ]; then
   echo "Installing dependencies..."
-  npm install
+  # Lock first so this installs the same versions start.sh does; fall back to
+  # npm install when package-lock.json is missing or ci fails.
+  if [ -f package-lock.json ]; then npm ci || npm install; else npm install; fi
   echo ""
 fi
 

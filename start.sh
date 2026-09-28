@@ -43,7 +43,9 @@ echo ""
 
 if [ ! -d "node_modules" ]; then
   echo "Installing dependencies..."
-  npm install
+  # The repo ships package-lock.json so npm ci installs exactly the versions the
+  # gates were run against; fall back to npm install when the lock is missing or ci fails.
+  if [ -f package-lock.json ]; then npm ci || npm install; else npm install; fi
   echo ""
 fi
 
