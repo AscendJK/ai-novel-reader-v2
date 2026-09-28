@@ -2,6 +2,7 @@ import { readFileSync, existsSync, statSync, writeFileSync, openSync, appendFile
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { clearPreProbeTally } from "./fixtures";
 
 /**
  * 跑真后端那一档之前的硬检查 + **这一轮专用的后端进程**。
@@ -83,6 +84,10 @@ export default async function preflight(): Promise<() => void> {
   if (!DATA_DIR) fail("没设 ANR_REAL_DATA_DIR：这一档必须指向包外的一次性数据目录，不许落在仓库的 server/data 上");
   if (!existsSync(DATA_DIR)) fail(`ANR_REAL_DATA_DIR=${DATA_DIR} 不存在`);
   if (path.resolve(DATA_DIR).startsWith(repoRoot)) fail(`ANR_REAL_DATA_DIR 在仓库里（${DATA_DIR}）：换成仓库外的目录`);
+
+  // 上一轮的预探小计必须先清掉，`postflight` 报出来的才**是这一轮**被跳过的判据。
+  // （这一档的数据目录跨轮累积，日志也一样会串——同一条规矩管着 `server.log` 那段。）
+  clearPreProbeTally();
 
   let version = await versionOf();
   const teardowns: Array<() => void> = [];

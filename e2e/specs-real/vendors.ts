@@ -123,7 +123,8 @@ export function chatBody(v: VendorSpec, prompt: string, maxTokens: number): unkn
 }
 
 /**
- * 预探用的那一发请求（只在 node 侧发，看的是状态码）。
+ * 预探用的那一发请求（**两条腿都从这一处取形状**：node 直连厂商那一发，与 node 交给后端代理
+ * 转发的那一发；见 `fixtures.ts` 的 `vendorReach`/`proxyProbe`）。看的是状态码，不是内容。
  *
  * 头这一格是整个预探的风险所在：anthropic 用 `x-api-key` + `anthropic-version`，拿 Bearer 打过去
  * 厂商回 401，而 401 在判据里属于"真问题、不许跳过"那一档——形状写错就会红成"key 坏了"。

@@ -28,9 +28,8 @@ import { test, expect, type Page } from "@playwright/test";
 import { panel } from "../pages/panel";
 import { openSettings, openSummaryPanel, addProvider, leaveSettings } from "../pages/settings";
 import { importFiles, openBook, shelfCard, txtFile } from "../pages/shelf";
-import { ORIGIN, RUN, benchUsername, realNovel, signIn, vendorReach } from "./fixtures";
+import { ORIGIN, RUN, benchUsername, realNovel, recordPreProbeSkip, signIn, vendorReach } from "./fixtures";
 import { authHeaders, chatBody, chatEndpoint, loadVendors, tryVendorKey, vendorTag, probeReply, type VendorSpec } from "./vendors";
-
 /**
  * 一家厂商在本轮的全部身份：清单里那份静态描述 + 它的 key + 两个按 `RUN` 戳派生的名字。
  *
@@ -123,12 +122,14 @@ for (const l of LEGS) {
     // Playwright 报 "No tests found" 并非零退出；"要跑真厂商却没给清单"不该报成"跑过了"。
     test.skip(!l.key, l.missing ?? "");
 
-    // 厂商"不在"与产品"坏了"是两件事：连不出去/5xx 就整组跳过并写明原因，
-    // 4xx（key 失效、额度、路径写错）照红——那正是这些判据要报的东西。
+    // 厂商"不在"与产品"坏了"是两件事：连不出去/5xx 先换代理腿再探一次，两条腿都不通才整组跳过
+    // 并写明原因；4xx（key 失效、额度、路径写错）照红——那正是这些判据要报的东西。
     test.beforeAll(async () => {
       const r = await vendorReach(v, l.key);
       if (r.reachable) return;
       console.log(`[R-E] ${v.label} 预探：${r.why} → ${r.skip ? "跳过这一组" : "不跳过，让判据红"}`);
+      // 跳过 = 这两条判据这一跑没测到，登记进收尾的小计（`postflight.ts`），别让 exit 0 盖过去
+      if (r.skip) recordPreProbeSkip({ group: `R-E ${vendorTag(v)}`, vendor: v.label, why: r.why, judges: ["R-E1", "R-E2"] });
       test.skip(r.skip, `${v.label} 预探：${r.why}`);
     });
 
@@ -225,11 +226,12 @@ for (const l of LEGS) {
     test.skip(!l.key, l.missing ?? "");
 
     // 这条依赖厂商**真回 401**（判的是"厂商 401 不许说成本机会话失效"），所以厂商连不上时
-    // 它没有可判的东西：与上面同一套分类——网络层/5xx 跳过，4xx 照跑。
+    // 它没有可判的东西：与上面同一套分类——直连腿不通先换代理腿，两条腿都不通才跳过，4xx 照跑。
     test.beforeAll(async () => {
       const r = await vendorReach(v, l.key);
       if (r.reachable) return;
       console.log(`[R-E4] ${v.label} 预探：${r.why} → ${r.skip ? "跳过" : "不跳过，让判据红"}`);
+      if (r.skip) recordPreProbeSkip({ group: `R-E 两条腿的分工（错 key · ${v.id}）`, vendor: v.label, why: r.why, judges: ["R-E4"] });
       test.skip(r.skip, `${v.label} 预探：${r.why}`);
     });
 

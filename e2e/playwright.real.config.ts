@@ -58,4 +58,7 @@ export default defineConfig({
   },
   projects: [{ name: "real" }],
   globalSetup: path.join(here, "specs-real", "preflight.ts"),
+  // 收尾把"这一跑有几条判据被厂商预探跳过"打出来：预探跳过不是失败，Playwright 只回一句
+  // `N skipped` 加 exit 0，少了这一段就只能靠人去翻日志（2026-09-28 就是这么漏掉 #38 的）。
+  globalTeardown: path.join(here, "specs-real", "postflight.ts"),
 });

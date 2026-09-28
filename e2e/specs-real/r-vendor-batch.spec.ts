@@ -31,7 +31,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { panel } from "../pages/panel";
 import { openSummaryPanel, addProvider, openSettings, leaveSettings } from "../pages/settings";
 import { importFiles, longNovel, navChapter, openBook, shelfCard, txtFile } from "../pages/shelf";
-import { RUN, benchUsername, realNovel, signIn, vendorReach } from "./fixtures";
+import { RUN, benchUsername, realNovel, recordPreProbeSkip, signIn, vendorReach } from "./fixtures";
 import { loadVendors, tryVendorKey, vendorTag, wireText, type VendorSpec } from "./vendors";
 
 /**
@@ -95,19 +95,40 @@ function vendorText(body: string, contentType: string): string {
   return wireText(VENDOR, body, contentType);
 }
 
-// 不用 `.serial`：三条各自有 `beforeEach`（各自一份 context），串起来只会让第一条红了
-// 把后面两条一起吞掉（实测报 `did not run`），变异验收时看不全
-test.describe(`真后端：批量生成三条打在真厂商上（${VENDOR ? vendorTag(VENDOR) : "没选到厂商"}）`, () => {
+// 不用 `.serial`：这几条各自有 `beforeEach`（各自一份 context），串起来只会让第一条红了
+// 把后面的一起吞掉（实测报 `did not run`），变异验收时看不全
+/**
+ * 这一组判的是哪几条 —— 收尾小计用它回答"这一跑少测了几条"。
+ *
+ * **手写的**：新增或删掉一条判据就得改这里。对不上时看得出来：`list` 报的 skipped 标题会比
+ * 小计那一行多出一条，多出来的就是没登记的那条。
+ */
+const BATCH_JUDGES = ["R-E5", "R-E6", "R-E7", "R-E8", "R-E9", "R-E10", "R-E11", "R-E12"];
+
+/**
+ * 组名只写这一份：`describe` 的标题与收尾小计（`recordPreProbeSkip` 的 `group`）都取它。
+ *
+ * 标题原先写着"批量生成三条"，而这一组到今天有八条（R-E5..R-E12）——小计要把组名连同
+ * "这一组被跳掉几条"一起打出来，留着"三条"就会自相矛盾，所以把数目从标题里拿掉，
+ * 数目只在上面的 `BATCH_JUDGES` 出现。
+ */
+const BATCH_GROUP = `真后端：批量生成打在真厂商上（${VENDOR ? vendorTag(VENDOR) : "没选到厂商"}）`;
+
+test.describe(BATCH_GROUP, () => {
   test.skip(VENDOR === null || key === "", PICKED.missing);
 
-  // 与 r-vendor.spec.ts 同一套分类：厂商"不在"（连不出去/5xx）跳过并写明原因，
-  // 4xx 照红——key 失效与"发出去的整本书没回内容"都是这一条要报的。
+  // 与 r-vendor.spec.ts 同一套分类：直连腿连不出去/5xx 先换代理腿再探一次，两条腿都不通才跳过并写明
+  // 原因；4xx 照红——key 失效与"发出去的整本书没回内容"都是这一条要报的。
   test.beforeAll(async () => {
     // 走到这里 describe 级的 skip 已经把"没选到厂商"挡掉了；真到这儿就是 skip 逻辑坏了
     if (!VENDOR) throw new Error(`没选到厂商却进了预探：${PICKED.missing}`);
     const r = await vendorReach(VENDOR, key);
     if (r.reachable) return;
     console.log(`[R-E 批量] 预探：${r.why} → ${r.skip ? "跳过这一组" : "不跳过，让判据红"}`);
+    // 这一组被跳掉就是这八条判据没测到，登记进收尾小计（`postflight.ts`），别让 exit 0 盖过去
+    if (r.skip) {
+      recordPreProbeSkip({ group: BATCH_GROUP, vendor: VENDOR.label, why: r.why, judges: BATCH_JUDGES });
+    }
     test.skip(r.skip, `预探：${r.why}`);
   });
 
