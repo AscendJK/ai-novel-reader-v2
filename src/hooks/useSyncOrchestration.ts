@@ -629,7 +629,6 @@ const applySyncData = useCallback(async (data: SyncData) => {
       }
 
       onSyncReady();
-      useUIStore.getState().setDebugMode(false);
     } finally {
       // R-51：登录门控必须在任何退出路径上解除——决策窗口里还有多个未包 try 的
       // await（clearLocalData、removeLocalUser/localStorage 写入等）。门控残留的

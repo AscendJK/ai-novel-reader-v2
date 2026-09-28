@@ -223,6 +223,26 @@ describe("登录换用户", () => {
       .toBeLessThan(setCurrentUser.mock.invocationCallOrder[0]);
   });
 
+  /**
+   * 「真机自检」是熄屏取证的唯一入口，而它只在 `debugMode` 为真时才挂（`AppLayout.tsx`
+   * 的 `{debugMode && <DebugPanel />}`）。09-28 复跑真后端那一档时 R-D4 当场红：
+   * `localStorage` 里已经写了 `novel-reader-debug=true`，登录与同步一跑完就被收尾那行
+   * `setDebugMode(false)` 抹掉——**面板在真后端上根本挂不住**，主套的假后端台架走不到那行所以从没发现。
+   * 这条钉"用户自己开着的面板不许被同步流程关掉"；默认仍是关，那条在 AppLayout-shell 里判。
+   * 刀账 Z13：那一行原样存在时这一条红 1（这个文件 13 条里只红这一条），删掉后 13 条全绿。
+   */
+  it("用户开着调试面板时，登录与同步跑完不许替它关掉（真机自检要在真后端上挂得住）", async () => {
+    localStorage.setItem("sync-username", USER_OLD);
+    useUIStore.getState().setDebugMode(true);
+    syncClient.login.mockResolvedValue({ success: true });
+
+    const { result } = hook();
+    await act(async () => { await result.current.handleLogin(USER_NEW); });
+
+    expect(useUIStore.getState().debugMode, "同步收尾把面板关了，真机上再也攒不出时间线").toBe(true);
+    expect(localStorage.getItem("novel-reader-debug"), "写回 false 之后连刷新都开不回来").toBe("true");
+  });
+
   it("登录成功后要读回这个用户自己的阅读进度（离线重登不回第一章）", async () => {
     localStorage.setItem("sync-username", USER_OLD);
     localStorage.setItem(`novel-reader-positions:${USER_NEW}`, JSON.stringify({

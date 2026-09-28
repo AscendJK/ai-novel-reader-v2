@@ -273,4 +273,80 @@ test.describe.serial("真后端：模型真下载、SSE 真逐帧、音频真出
     expect(serverSynths, "浏览器推理这一腿偷偷回落到服务端合成了（判据判的就不是 wasm）").toBe(0);
     await page.getByTitle(/停止/).first().click().catch(() => {});
   });
+
+  /**
+   * R-D4：真出声这一腿要把「音频秒表」活着送进导出的那份报告。
+   *
+   * 为什么只有这一档判得了（09-28 傍晚记在台账里的那格）：主套 P 组用的是假后端台架，
+   * 那里没有真朗读会话，`describeRuntime()` 只会回「当前没有朗读会话」，现场行里压根
+   * 不会有秒数；把秒表桩出来演给判据看又是另一种假（桩不许返回真实现永远产不出的值）。
+   * 这一条要的是**浏览器真放过声**之后，用户手上拿到的那份文本里确实有一枚在往前爬的钟。
+   *
+   * 三格各钉一头，缺一刀就红：
+   *  1. 现场行至少两枚，且每枚都带 `[时分秒]`（store 的统一贴戳要活着走到导出）
+   *  2. `音频秒表=<数字>s` 存在且**严格前进**（摘掉秒表→第 2 条找不到数；
+   *     读错字段拿 `startedAt`→数一直不动）
+   *  3. 不许写成「没有音频上下文」（真出声时它就是有的）
+   *
+   * 这一条第一次跑就是红的，而红得有价值：面板压根没挂上（`debug=false 面板=0`）。
+   * 根因在 `useSyncOrchestration` 的收尾那行 `setDebugMode(false)`——**只要连着真后端登录一次，
+   * 用户自己开着的调试面板就被同步流程关掉**，主套的假后端台架走不到那一行，所以 146 条全绿而这里红。
+   * 那一行已删（`useSyncOrchestration-identity.test.ts` 里有一条 jsdom 判据钉住）。
+   * 刀账：Z12 把音频秒表从包里摘掉（改 `src` → 重构建 → 灌包）→ 本条红 1；
+   * Z13 是那一行强关面板本身，立红那一跑就是这一刀（jsdom 红 1 ＋ 本条红 1）。
+   */
+  test("R-D4 真出声时导出的那份报告里，音频秒表要一路往前爬", async ({ page, baseURL }) => {
+    test.setTimeout(6 * 60_000);
+    // 面板开关与分享桩都要在应用启动前就位
+    await page.addInitScript(() => {
+      localStorage.setItem("novel-reader-debug", "true");
+      Object.defineProperty(navigator, "share", {
+        configurable: true,
+        value: async (d: { text?: string }) => {
+          (window as unknown as { __shared: string }).__shared = d.text ?? "";
+        },
+      });
+    });
+    await openSettingsWithEngine(page, baseURL!, "朗读引擎：服务端推理");
+    await leaveSettings(page);
+    await expect(shelfCard(page, BOOK)).toBeVisible({ timeout: 30_000 });
+    await openBook(page, BOOK);
+    console.log(`[R-D4 探针] debug=${await page.evaluate(() => localStorage.getItem("novel-reader-debug"))} 面板=${await page.getByRole("button", { name: "真机自检" }).count()}`);
+
+    await page.getByRole("button", { name: "真机自检" }).click();
+    // 面板默认坐在右下角，正好压着播放栏那排按钮；收起只藏正文，探针跟着 tab 还挂着
+    await page.getByRole("button", { name: "收起面板" }).click();
+    await page.getByTitle("语音朗读").click();
+    const counter = page.getByText(/\d+\s*\/\s*\d+\s*段/).first();
+    let sawSegment = 0;
+    await expect
+      .poll(
+        async () => {
+          const m = (await counter.innerText().catch(() => "")).match(/(\d+)\s*\/\s*(\d+)/);
+          if (m) sawSegment = Math.max(sawSegment, Number(m[1]));
+          return sawSegment;
+        },
+        { timeout: 120_000, intervals: [300], message: "没出声（段号不前进）——这一条判的就不是秒表而是台架" },
+      )
+      .toBeGreaterThanOrEqual(2);
+
+    // 出声之后再等两拍，让采样器（每 3 秒一枚）至少攒下两枚不同的秒表读数
+    await page.waitForTimeout(7_000);
+    await page.getByRole("button", { name: "展开面板" }).click();
+    await page.getByRole("button", { name: "导出报告" }).click();
+    const text = await page.evaluate(() => (window as unknown as { __shared?: string }).__shared ?? "");
+    const rows = (text.split("【最近事件时间线】\n")[1] ?? "").split("\n").filter(Boolean);
+    const live = rows.filter((l) => l.includes("朗读现场"));
+    console.log(`[R-D4 现场行] ${JSON.stringify(live)}`);
+
+    expect(live.length, `导出的时间线里一枚现场行都没有（共 ${rows.length} 行）`).toBeGreaterThanOrEqual(2);
+    expect(rows.filter((l) => !/^\[\d{2}:\d{2}:\d{2}/.test(l)), "有行没带时刻，两行相减算不出时长").toHaveLength(0);
+    const clocks = live
+      .map((l) => Number(/音频秒表=([\d.]+)s/.exec(l)?.[1]))
+      .filter((n) => Number.isFinite(n));
+    expect(clocks.length, `现场行里没有音频秒表那一格：${live[0] ?? "(没有现场行)"}`).toBeGreaterThanOrEqual(2);
+    expect(live.some((l) => l.includes("音频秒表=没有音频上下文")), "真出声时音频上下文就在，这句话说的是假话").toBe(false);
+    expect(clocks[clocks.length - 1] - clocks[0], `秒表没往前走（第一枚 ${clocks[0]}s，最后 ${clocks[clocks.length - 1]}s）`).toBeGreaterThanOrEqual(1);
+    await page.getByTitle(/停止/).first().click().catch(() => {});
+  });
 });
