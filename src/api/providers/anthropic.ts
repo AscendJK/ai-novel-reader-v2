@@ -138,6 +138,8 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
     // 这一发到底有没有在思考：Anthropic 格式没有 OpenAI 那个 `reasoning_tokens` 字段，
     // 思考是以 `thinking_delta` 帧的形式出现的，所以证据只能一边读一边记。
     let sawThinking = false;
+    // 这一发被输出上限切断了（`stop_reason:"max_tokens"`）——与 OpenAI 那腿同一个字段，理由见 types.ts
+    let cut = false;
 
     for (const evt of events) {
       const e = evt as Record<string, unknown>;
@@ -163,6 +165,7 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
       if (e.type === "message_delta") {
         const usage = e.usage as Record<string, unknown> | undefined;
         outputTokens = typeof usage?.output_tokens === "number" ? usage.output_tokens : 0;
+        if ((e.delta as Record<string, unknown> | undefined)?.stop_reason === "max_tokens") cut = true;
       }
     }
 
@@ -179,6 +182,7 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
     return {
       content,
       tokensUsed: { input: inputTokens, output: outputTokens, total: inputTokens + outputTokens },
+      truncated: cut,
     };
   }
 
@@ -239,6 +243,7 @@ export function createAnthropicProvider(config: ProviderConfig): AIProvider {
         output: (data.usage as { output_tokens?: number } | undefined)?.output_tokens || 0,
         total: ((data.usage as { input_tokens?: number } | undefined)?.input_tokens || 0) + ((data.usage as { output_tokens?: number } | undefined)?.output_tokens || 0),
       },
+      truncated: data.stop_reason === "max_tokens",
     };
   }
 

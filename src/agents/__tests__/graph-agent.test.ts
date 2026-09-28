@@ -56,6 +56,11 @@ function reply(content: string) {
   return { content, tokensUsed: { input: 11, output: 77, total: 88 } };
 }
 
+/** 厂商把这一发切断了（`stop_reason`/`finish_reason` 说是 max_tokens/length）的形状 */
+function replyCut(content: string) {
+  return { ...reply(content), truncated: true };
+}
+
 function promptOf(callIndex = 0): string {
   return chat.mock.calls[callIndex][0].messages[1].content as string;
 }
@@ -280,6 +285,38 @@ describe("空正文才降级：第二发带 thinking:false 重发", () => {
 
   it("降级那一发仍然空正文就到此为止：总共两发，不无限重烧配额", async () => {
     chat.mockRejectedValue(new Error(EMPTY_BODY));
+    const r = await run();
+    expect(r.success).toBe(false);
+    expect(chat).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * 与地图同一格：厂商把预算花在思考上、挤出**半截 JSON**（`truncated`），制作人 2026-09-28 拍
+ * 与空正文同等对待。**变异台账与三头的理由记在 `map-agent.test.ts` 那一段档头**，两边一起数。
+ * 对照组同样是上面那条「回了字但解析不出 JSON 不算空正文」（那里给的是没标截断的完整回包）。
+ */
+describe("回包被输出上限切断也算这一发没成：第二发带 thinking:false", () => {
+  const CUT = '{"nodes":[{"id":"令狐冲","group":"主角"},{"id":"岳不群","group":"配角","description":';
+  const OK = () => reply(graphJson([N("令狐冲"), N("岳不群")], []));
+
+  it("第一发是切断的半截 JSON → 第二发关思考重发，而第一发不许带", async () => {
+    chat.mockResolvedValueOnce(replyCut(CUT)).mockResolvedValueOnce(OK());
+    const r = await run();
+    expect(r.success).toBe(true);
+    expect(chat.mock.calls[0][0].thinking).toBeUndefined();
+    expect(chat.mock.calls[1][0].thinking).toBe(false);
+  });
+
+  it("切断但仍然拼出一张可用图谱：一发就收手，不许多烧配额", async () => {
+    chat.mockResolvedValueOnce(replyCut(graphJson([N("令狐冲"), N("岳不群")], [])));
+    const r = await run();
+    expect(r.success).toBe(true);
+    expect(chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("降级那一发仍然被切断 → 总共两发就收手", async () => {
+    chat.mockResolvedValue(replyCut(CUT));
     const r = await run();
     expect(r.success).toBe(false);
     expect(chat).toHaveBeenCalledTimes(2);

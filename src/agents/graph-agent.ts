@@ -62,11 +62,13 @@ class CharacterGraphAgent extends BaseAgent {
     // 尝试两次：第一次正常生成，第二次带上错误反馈
     let lastError: string | undefined;
     /**
-     * 上一发是不是"一个字正文都没回"——只有它是，第二发才关思考重发（口径同 `map-agent`）。
+     * 上一发有没有"等于没回话"——只有它有，第二发才关思考重发（口径同 `map-agent`：
+     * 空正文与被输出上限切断的半截 JSON 都算，2026-09-28 制作人拍）。
      * 这里同样**故意不用** `askWithThinkingFallback`：第二趟专职"把上一趟的错误带回 prompt 让模型改"，
-     * 套 helper 会把两发叠成四发。完整的理由与实测数据记在 `map-agent.ts` 那位 `sawEmptyBody` 上。
+     * 套 helper 会把两发叠成四发。完整的理由与实测数据记在 `map-agent.ts` 那两只 flag 上。
      */
     let sawEmptyBody = false;
+    let sawTruncated = false;
 
     for (let attempt = 1; attempt <= 2; attempt++) {
       // 取消之后不再进第二次尝试。这道守卫在浏览器层量不出来——已 abort 的 fetch 到不了
@@ -98,10 +100,15 @@ class CharacterGraphAgent extends BaseAgent {
             // 用户在设置里填过上限时由它顶开 8192（`resolveOutputReserve`）。
             max_tokens: reserve,
             temperature: 0.3,
-            thinking: sawEmptyBody ? false : undefined,
+            thinking: sawEmptyBody || sawTruncated ? false : undefined,
             signal: context.signal,
           });
         });
+
+        // 厂商说这一发被输出上限切断了 → 与空正文同等对待，第二发关思考重发。
+        // 照样先交给解析：截断不一定毁掉整份图（09-23 实测过 4852 字的截断回包仍拼得出可用图谱），
+        // 只有解析或校验没过才会走到第二发。
+        if (response.truncated) sawTruncated = true;
 
         // 检查响应内容
         if (!response.content || response.content.trim().length === 0) {

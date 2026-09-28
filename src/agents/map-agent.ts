@@ -129,10 +129,18 @@ class MapAgent extends BaseAgent {
     // 尝试两次：第一次正常生成，第二次带上错误反馈
     let lastError: string | undefined;
     /**
-     * 上一发是不是"一个字正文都没回"。只有它是，第二发才关掉模型思考重发——
+     * 上一发有没有"这一发等于没回话"。只有它有，第二发才关掉模型思考重发——
      * 默认开思考的模型（实测 sensenova-6.8-flash-lite）会把整份输出预算花在思考上，
      * 地图这种"必须回一大份 JSON"的任务于是永远拿不到字。制作人定的口径是质量优先：
      * 第一发照旧让模型想，降级只作为兜底。
+     *
+     * 它有**两种形状**（2026-09-28 制作人拍：两种都算，这就是"质量优先"那次口径的收窄）：
+     *  - 一个字正文都没回 → provider 抛错，`isEmptyResultError` 认（`sawEmptyBody`）；
+     *  - 思考吃满预算、**挤出半截 JSON** → provider 带着 `truncated` 正常返回
+     *    （实测 deepseek-flash 打地图：`completion=8192 / 思考 8080 / 正文 246 字 /
+     *    finish_reason=length`）。对地图来说半份 JSON 与空是同一件事，所以它同等对待。
+     * 摘要/范围总结/问答那三条路**不这么算**——那里半段话仍然是能看的话，见 `utils.ts` 的
+     * `askWithThinkingFallback`。
      *
      * **为什么这里不共用 `utils.ts` 的 `askWithThinkingFallback`**（制作人 2026-09-28 拍：不改）：
      * 那个 helper 自己攥着"一次提问发几发"（封顶两发），而本文件的第二趟另有专职——
@@ -140,9 +148,11 @@ class MapAgent extends BaseAgent {
      * 两层各发两下会相乘成四发，正好打穿「总共两发、不无限重烧配额」那条已钉住的判据；
      * 而多出来的那两发恰好落在"关思考救不了"的厂商上（实测 modelscope 两发都 0 字）。
      * 所以：**发送次数归本循环管**，helper 只管摘要/范围总结/问答那三条"要一段文字"的路。
-     * 两边共用的只有判法本身——`isEmptyResultError`（空正文）与 `error-handler` 那两位分类。
+     * 两边共用的是"空正文"那半判法（`isEmptyResultError` 与 `error-handler` 那两位分类）；
+     * `truncated` 这一半只有本文件与 `graph-agent` 认。
      */
     let sawEmptyBody = false;
+    let sawTruncated = false;
 
     for (let attempt = 1; attempt <= 2; attempt++) {
       // 取消之后不再进第二次尝试。这道守卫在浏览器层量不出来——已 abort 的 fetch 到不了
@@ -169,7 +179,7 @@ class MapAgent extends BaseAgent {
               // 与输入侧抽样同一个数，见 `reserve` 的说明。
               max_tokens: reserve,
               temperature: 0.3,
-              thinking: sawEmptyBody ? false : undefined,
+              thinking: sawEmptyBody || sawTruncated ? false : undefined,
               signal: context.signal,
             });
           });
@@ -194,6 +204,11 @@ class MapAgent extends BaseAgent {
           }
           throw err;
         }
+
+        // 厂商说这一发被输出上限切断了 → 记下来，让第二发关思考重发（口径见上面那只 flag 的档头）。
+        // 但**不就地失败**：截断的回包照样先交给解析（09-23 实测过 4852 字的截断回包仍拼得出可用的图），
+        // 只有解析或校验没过才走到第二发。
+        if (response.truncated) sawTruncated = true;
 
         // 检查响应内容
         if (!response.content || response.content.trim().length === 0) {

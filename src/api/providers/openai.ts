@@ -122,6 +122,9 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
     // 流里累计到的思考字数：这一类只给 `delta.reasoning_content`、usage 里什么都不给的厂商
     // （实测 modelscope 的 vllm 版 GLM）是空正文唯一的证据来源，别让它说那三种猜测。
     let reasoningChars = 0;
+    // 厂商自己说这一发被输出上限切断了（`finish_reason:"length"`）。正文有没有字都照实记：
+    // "思考吃满 → 一个字都不回"那一支走抛错，"挤出半截 JSON"这一支只有这个数认得出来。
+    let cut = false;
 
     for (const evt of events) {
       const e = evt as Record<string, unknown>;
@@ -131,10 +134,11 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
         throw new APIError(`API 返回错误：${errBody}`, "server", 200, raw);
       }
       const choices = e.choices as
-        | Array<{ delta?: { content?: unknown; reasoning_content?: unknown }; message?: { content?: unknown } }>
+        | Array<{ delta?: { content?: unknown; reasoning_content?: unknown }; message?: { content?: unknown }; finish_reason?: unknown }>
         | null
         | undefined;
       if (choices?.[0]) {
+        if (choices[0].finish_reason === "length") cut = true;
         const deltaContent = choices[0].delta?.content;
         if (typeof deltaContent === "string") content += deltaContent;
         const deltaReasoning = choices[0].delta?.reasoning_content;
@@ -168,6 +172,7 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
     return {
       content,
       tokensUsed: { input: inputTokens, output: outputTokens, total: inputTokens + outputTokens },
+      truncated: cut,
     };
   }
 
@@ -196,7 +201,7 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
     // 于是"这一发一个字正文都没回"在两腿之间口径不一致（流式那一腿是抛错的）。代价不只是界面空白：
     // agent 的「空正文才关掉思考重发」认的是错误前缀（`isEmptyResultError`），静默返回让那条链在
     // 这条腿上整条不起作用。本仓没有把空正文当合法答复的调用点（不解析 tool_calls / function_call）。
-    const choices = data.choices as Array<{ message?: { content?: unknown } }> | null | undefined;
+    const choices = data.choices as Array<{ message?: { content?: unknown }; finish_reason?: unknown }> | null | undefined;
     const content = typeof choices?.[0]?.message?.content === "string" ? choices[0].message.content : null;
     if (content === null || content.trim() === "") {
       const shape = content === null ? "choices 为空" : "正文是空白";
@@ -226,6 +231,7 @@ export function createOpenAIProvider(config: ProviderConfig): AIProvider {
         output: (data.usage as { completion_tokens?: number } | undefined)?.completion_tokens || 0,
         total: (data.usage as { total_tokens?: number } | undefined)?.total_tokens || 0,
       },
+      truncated: choices?.[0]?.finish_reason === "length",
     };
   }
 

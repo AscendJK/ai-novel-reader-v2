@@ -65,6 +65,14 @@ function reply(content: string) {
   return { content, tokensUsed: { input: 10, output: 20, total: 30 } };
 }
 
+/**
+ * 厂商把这一发切断了的形状：`finish_reason=length` → provider 会带 `truncated:true`。
+ * 真读数（2026-09-28，deepseek-flash 打小说地图）：`completion=8192 / 思考 8080 / 正文 246 字`。
+ */
+function replyCut(content: string) {
+  return { ...reply(content), truncated: true };
+}
+
 /** 取第 n 次请求里真正发给模型的用户 prompt */
 function promptOf(callIndex = 0): string {
   return chat.mock.calls[callIndex][0].messages[1].content as string;
@@ -688,6 +696,59 @@ describe("空正文才降级：第二发带 thinking:false 重发", () => {
 
   it("降级那一发仍然空正文就到此为止：总共两发，不无限重烧配额", async () => {
     chat.mockRejectedValue(new Error(EMPTY_BODY));
+    const r = await run();
+    expect(r.success).toBe(false);
+    expect(chat).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * 「空正文才降级」漏掉的那一半：厂商把预算花在思考上、**挤出半截 JSON**（制作人在
+ * 2026-09-28 拍：算，与空正文同等对待——这就是"质量优先"那条口径的一次收窄，
+ * 因为对地图来说半截 JSON 与一个字都没有是同一件事：整张图没有）。
+ *
+ * 真读数：`vbatch-deepseek-0928` 那一跑，地图第一发 `completion_tokens=8192 /
+ * reasoning_tokens=8080 / 正文 246 字 / finish_reason=length`，产品没认它是空正文，
+ * 于是第二发照旧开思考，那一发才真的一个字没回；用户看到的是「API 返回了空结果」，
+ * 而真正的原因（上限被压到 8192）两发都没说出来。
+ *
+ * 三头各钉一格，缺一刀就红：
+ *  1. 截断的半截 JSON → 第二发必须关思考，而第一发不许关；
+ *  2. **反向那一头**：回了完整一份而厂商没标截断（`reply`）→ 第二发不许关思考
+ *     （就是上面那条「回了字但解析不出 JSON 也不算空正文」，它是这一批的对照组，别删）；
+ *  3. 截断但已经拼出一张可用地图 → 一发就收手，不许多烧配额
+ *     （09-23 实测过 `4852 字 / finish_reason=length` 仍然可用那种形状）。
+ *
+ * ## 变异台账（2026-09-28 实跑；provider 那一层的四刀 AA1..AA4 记在 `providers.test.ts` 档头）
+ * 基线与还原核对同那一批：`openai.ts 7c96dc39…` / `anthropic.ts 1301fad7…` /
+ * `map-agent.ts e41b4ec2…` / `graph-agent.ts b86b72f6…`，对照轮（0 刀）175 条全绿、reds=0。
+ *  - AA5 map 摘掉 `if (response.truncated) sawTruncated = true;` → 红 1（本文件那条主判据）
+ *  - AA6 graph 摘掉同一行 → 红 1（`graph-agent.test.ts` 那条同名主判据）——**两边各一刀**：
+ *    两文件里那条标题一字不差，归因靠"改了哪只文件 + `FAIL` 行的文件名"，别只数红数
+ *  - AA7 map 把那一读改成"切断就地 `continue`（不交给解析）" → 红 1（一发就收手那条）
+ *     ——这一刀是"过度修"的形状：只把降级接上、不留住"截断仍可用"那一格，当场就看不出差别
+ * 三刀无一记 0 红。
+ */
+describe("回包被输出上限切断也算这一发没成：第二发带 thinking:false", () => {
+  const CUT = '{"places":[{"id":"1","name":"洛阳","level":1,"x":500,"y":500},{"id":"2","name":"虎牢关","level":2,"parentId":"1","x":';
+
+  it("第一发是切断的半截 JSON → 第二发关思考重发，而第一发不许带", async () => {
+    chat.mockResolvedValueOnce(replyCut(CUT)).mockResolvedValueOnce(reply(validMap()));
+    const r = await run();
+    expect(r.success).toBe(true);
+    expect(chat.mock.calls[0][0].thinking).toBeUndefined();
+    expect(chat.mock.calls[1][0].thinking).toBe(false);
+  });
+
+  it("切断但仍然拼出一张可用地图：一发就收手，不许多烧配额", async () => {
+    chat.mockResolvedValueOnce(replyCut(validMap()));
+    const r = await run();
+    expect(r.success).toBe(true);
+    expect(chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("降级那一发仍然被切断 → 总共两发就收手", async () => {
+    chat.mockResolvedValue(replyCut(CUT));
     const r = await run();
     expect(r.success).toBe(false);
     expect(chat).toHaveBeenCalledTimes(2);

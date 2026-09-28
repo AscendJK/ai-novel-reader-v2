@@ -50,7 +50,7 @@ function mockFetchCapture(body?: unknown) {
 }
 
 /** 构造 OpenAI 格式的 SSE 流式响应 */
-function mockOpenAIStream(chunks: { content?: string; reasoning?: string }[], usage?: unknown) {
+function mockOpenAIStream(chunks: { content?: string; reasoning?: string }[], usage?: unknown, finish = "stop") {
   const lines: string[] = [];
   for (const c of chunks) {
     const delta: Record<string, unknown> = {};
@@ -67,8 +67,8 @@ function mockOpenAIStream(chunks: { content?: string; reasoning?: string }[], us
     lines.push(`data: ${JSON.stringify(evt)}`);
     lines.push("");
   }
-  // 结束块
-  lines.push(`data: ${JSON.stringify({ id: "chatcmpl-1", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}`);
+  // 结束块。`finish` 默认 "stop"；被输出上限切断那一发厂商在这里给的是 "length"
+  lines.push(`data: ${JSON.stringify({ id: "chatcmpl-1", choices: [{ index: 0, delta: {}, finish_reason: finish }] })}`);
   lines.push("");
   lines.push("data: [DONE]");
   lines.push("");
@@ -1064,5 +1064,90 @@ describe("Anthropic provider 消息归一", () => {
     const body = JSON.parse(calls[0].init?.body as string);
     expect(body.system).toBe("你是助手");
     expect(body.messages).toEqual([{ role: "user", content: "u1" }]);
+  });
+});
+
+/**
+ * 厂商这一发被自己的输出上限切断了，得把这个事实带到调用方（`truncated`）。
+ *
+ * 为什么要 provider 来摊：`finish_reason` / `stop_reason` 只存在于厂商的响应里，而 agent 拿到的
+ * 只有 `content`。2026-09-28 真厂商（`vbatch-deepseek-0928`，小说地图那一发）实测到的形状是
+ * **思考吃满预算但挤出半截 JSON**：`completion_tokens=8192 / reasoning_tokens=8080 / 正文 246 字 /
+ * finish_reason=length`。它不是"一个字正文都没回"，所以 agent 那条「空正文才关思考重发」的降级
+ * 完全不认它，第二发照旧开思考、这回一个字都没回。
+ *
+ * 只认厂商给的那个值，别自己拿"正文短"或"括号不配对"去猜——猜出来的会把一份本来能用的回包
+ * 也标成截断（09-23 实测过 4852 字的截断回包仍拼出了可用地图）。
+ * 两头各钉一条：`length`/`max_tokens` 必须标，正常收尾与别的收尾原因（`content_filter`）不许标。
+ *
+ * ## 变异台账（2026-09-28 实跑，四刀无一记 0 红；四只产品文件先 `cp` 基线、每刀还原后当场核 sha）
+ * 基线：`openai.ts 7c96dc39…` / `anthropic.ts 1301fad7…` / `map-agent.ts e41b4ec2…` /
+ * `graph-agent.ts b86b72f6…`。对照轮（0 刀）175 条全绿、reds=0。
+ *  - AA1 openai 流式那处写死 `truncated:false` → 红 1（流式正例）
+ *  - AA2 openai 非流式那处写死 `false` → 红 1（非流式正例）——**两条腿各一刀**：只接一支的写法
+ *    在这里会放过另一支，与上面"空正文两腿各一刀"是同一族坑
+ *  - AA3 anthropic 流式摘掉 `stop_reason` 那一读 → 红 1（图谱那腿的正例）
+ *  - AA4 openai 流式把判断放宽成"凡非空收尾都算切断" → 红 1（正常收尾不许标那一条）
+ *    ——这条是这一批唯一咬住"过度标记"的刀，别以为有了正例就不用下它
+ *  产品那一层的刀（AA5..AA7：map/graph 摘掉 `response.truncated` 那一读、切断就地不交给解析）
+ *  记在 `src/agents/__tests__/map-agent.test.ts` 那一段末尾，同一轮一起数。
+ */
+describe("厂商被输出上限切断那一发要摊到调用方（truncated）", () => {
+  // 断在字符串中间的地图 JSON，真回包的尾巴就是这个样子
+  const CUT = '{"layers":[{"level":1,"name":"沧澜水路天下"},{"level":2,"name":"府郡港域","description":';
+
+  it("OpenAI 流式：正文有字而 finish_reason=length → truncated:true", async () => {
+    mockOpenAIStream([{ content: CUT }], { completion_tokens: 8192, completion_tokens_details: { reasoning_tokens: 8080 } }, "length");
+    const provider = createOpenAIProvider(openaiConfig);
+    const r = await provider.chat({ messages: [{ role: "user", content: "画一张地图" }] });
+    expect(r.content).toBe(CUT);
+    expect(r.truncated, "厂商说这一发被切断了，agent 拿不到这个数就会把半截 JSON 当成一份完整回包").toBe(true);
+  });
+
+  it("OpenAI 流式：正常收尾（stop）不许带截断标记", async () => {
+    mockOpenAIStream([{ content: CUT }]);
+    const provider = createOpenAIProvider(openaiConfig);
+    const r = await provider.chat({ messages: [{ role: "user", content: "hi" }] });
+    expect(r.truncated, "正文一样长、只有收尾不同：拿正文猜截断就是把每一发都标成没成").toBeFalsy();
+  });
+
+  it("OpenAI 非流式：choices[0].finish_reason=length → truncated:true", async () => {
+    mockFetchResponse({
+      choices: [{ message: { role: "assistant", content: CUT }, finish_reason: "length" }],
+      usage: { completion_tokens: 8192 },
+    });
+    const provider = createOpenAIProvider(openaiConfig);
+    const r = await provider.chat({ messages: [{ role: "user", content: "hi" }] });
+    expect(r.truncated).toBe(true);
+  });
+
+  it("OpenAI 非流式：别的收尾原因（content_filter）不算被上限切断", async () => {
+    mockFetchResponse({
+      choices: [{ message: { role: "assistant", content: "这段被内容策略拦了" }, finish_reason: "content_filter" }],
+      usage: { completion_tokens: 12 },
+    });
+    const provider = createOpenAIProvider(openaiConfig);
+    const r = await provider.chat({ messages: [{ role: "user", content: "hi" }] });
+    expect(r.truncated, "关思考重发救不了内容策略：把它标成截断等于对用户说假话").toBeFalsy();
+  });
+
+  it("Anthropic 流式：message_delta 里 stop_reason=max_tokens → truncated:true", async () => {
+    mockAnthropicRawStream([
+      { type: "message_start", message: { id: "m", usage: { input_tokens: 10, output_tokens: 0 } } },
+      { type: "content_block_delta", delta: { type: "text_delta", text: CUT } },
+      { type: "message_delta", delta: { stop_reason: "max_tokens" }, usage: { output_tokens: 4096 } },
+      { type: "message_stop" },
+    ]);
+    const provider = createAnthropicProvider(anthropicConfig);
+    const r = await provider.chat({ messages: [{ role: "user", content: "画一张地图" }] });
+    expect(r.content).toBe(CUT);
+    expect(r.truncated).toBe(true);
+  });
+
+  it("Anthropic 非流式：stop_reason=end_turn 不许带截断标记", async () => {
+    mockFetchResponse({ content: [{ type: "text", text: "写完了" }], stop_reason: "end_turn", usage: {} });
+    const provider = createAnthropicProvider(anthropicConfig);
+    const r = await provider.chat({ messages: [{ role: "user", content: "hi" }] });
+    expect(r.truncated).toBeFalsy();
   });
 });
