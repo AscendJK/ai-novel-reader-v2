@@ -127,6 +127,30 @@ describe("installConsoleCapture（应用内日志转发）", () => {
     } finally { restore(); }
   });
 
+  /**
+   * 转写行首那一枚时刻必须与 `clockStamp` 同源（24 小时制、零填充）。
+   *
+   * 这一格是"唯一出处"搬家的另一半边：`logger.ts` 原来自己写 `toLocaleTimeString("zh-CN")`，
+   * 看着无害，但它和 `debug-store.ts` 那枚不带 locale 的拼在一起，同一份真机自检报告里就
+   * 同时出现 `[15:59:32 WARN]` 与 `[3:59:32 PM] 引擎切换`——拿相邻两行算停摆长度会多出 12 小时。
+   */
+  it("转写行首是 24 小时制的时刻，且 ragLog 那种带标签的行不会被再贴一枚", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 8, 28, 15, 59, 32));
+    const { seen, restore } = withCapturedConsole();
+    try {
+      console.warn("同步中");
+      expect(seen[0], `行首不是那一把钟：${seen[0]}`).toBe("[15:59:32 WARN] 同步中");
+      ragLog("建库开始");
+      expect(seen[1]).toMatch(/^\[RAG 15:59:32\] /);
+      // store 那一边认这两种行首，不会再贴第二枚（判据在 debug-store.test.ts，这里只钉形状）
+      expect(seen[1].match(/\d{2}:\d{2}:\d{2}/g)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+      restore();
+    }
+  });
+
   it("warn/error 也转发并带级别；Error 与循环对象不会抛异常", () => {
     const { seen, restore } = withCapturedConsole();
     try {

@@ -61,10 +61,10 @@ export function DebugPanel() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logLines.length]);
 
-  // 记录状态变化
+  // 记录状态变化（时刻由 debug-store 统一贴在行首——这里再拼一遍就成了两枚，
+  // 而且这一枚是不带 locale 的 `toLocaleTimeString()`，en-US 下会写成 `3:59:32 PM`）
   useEffect(() => {
-    const ts = new Date().toLocaleTimeString();
-    appendDebugLog(`[${ts}] 引擎切换: ${engine}`);
+    appendDebugLog(`引擎切换: ${engine}`);
   }, [engine]);
 
   useEffect(() => {
@@ -99,7 +99,13 @@ export function DebugPanel() {
 
   // 拖拽 / 缩放：用 pointer 事件，手机触摸与鼠标同一条路径
   const onDragStart = useCallback((e: React.PointerEvent) => {
-    if ((e.target as HTMLElement).classList.contains("resize-handle")) return;
+    const el = e.target as HTMLElement;
+    if (el.classList.contains("resize-handle")) return;
+    // 把手这一排里坐着三条按钮（日志 / 真机自检 / 收起面板）。在这里捕获指针会让
+    // pointerup 与随后的 click 改派给把手，按钮自己的 onClick 永远收不到——
+    // 09-28 在真 Chromium 上量到"鼠标点不动、手指与键盘都正常"就是这么来的。
+    // jsdom 的 fireEvent.click 直接派发 click、不走指针链，所以它的用例全绿而浏览器里坏着。
+    if (el.closest("button, input, select, textarea, a")) return;
     dragging.current = true;
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
     startPos.current = { x: e.clientX - pos.x, y: e.clientY - pos.y };
@@ -183,10 +189,11 @@ export function DebugPanel() {
   return (
     <div
       ref={panelRef}
+      data-debug-panel
       className="fixed z-[9999] bg-black/95 border border-gray-700 rounded-lg shadow-2xl overflow-hidden flex flex-col font-mono text-[11px]"
       style={{ ...panelStyle, pointerEvents: "all" }}
     >
-      <div className="bg-gray-800 px-2 py-1 flex items-center justify-between cursor-move touch-none shrink-0" onPointerDown={onDragStart}>
+      <div data-debug-handle className="bg-gray-800 px-2 py-1 flex items-center justify-between cursor-move touch-none shrink-0" onPointerDown={onDragStart}>
         <span className="text-green-400 font-semibold text-[11px]">🔧 调试 {collapsed ? "—" : ""}</span>
         <div className="flex gap-1 items-center">
           <button

@@ -66,7 +66,7 @@ export const DEVICE_CHECKLIST: ChecklistItem[] = [
     id: "screen-off-listening",
     title: "熄屏之后还在读吗（三档引擎各来一次）",
     how: "先记下用的哪一档引擎（服务端推理/浏览器推理/系统语音），并记下播放栏「第 N/M 段」和章号 → 按电源键让屏幕熄灭，不要按 Home、不要切到别的应用 → 纯听 60~90 秒 → 亮屏核对段号。每一档在纸上记一行：引擎 / 熄屏秒数 / 段号从 N 到几",
-    expect: "声音不断，且段号推进的段数与熄屏时长相称（服务端推理一段约 2~5 秒音频）。若某档熄屏后就无声，导出时间线看三处：唤醒锁有没有「已放开/申请被拒」、有没有「页面被冻结」、「朗读现场」那几行的段号在熄屏期间有没有往前爬——三档引擎的结论本来就不同，没记引擎等于没测",
+    expect: "声音不断。核对的是导出里的两件事：亮屏后有没有一行「探针停摆 N 秒」（有就说明那段没人记录，不能当成没在读），以及停摆前后两行的**时刻**与**音频秒表**——时刻之差是过了多久，秒表之差是音频线程实际走了多久，两者相称才算真的一直在读；段号（播放栏的 N/M）只作旁证，它在停摆期间本来就冻在原地。三档引擎的结论本来就不同，没记引擎等于没测",
   },
   {
     id: "auto-next-chapter",
@@ -314,10 +314,14 @@ const RUNTIME_HEARTBEAT_TICKS = 7;
  * 时间线探针：面板打开期间挂着，返回卸载函数。
  * 事件类只记对判断有意义的，不记高频量（滚动/指针移动等）。
  *
- * 除了事件，还按 `RUNTIME_SAMPLE_MS` 抄一份朗读现场（段号 / 缓冲池 / 页面可见性）：
- * 熄屏那 60~90 秒没人看得见屏幕，"到底还在不在读"只能事后从导出的时间线里读出来——
- * 段号一直在往前爬 = 活着；停在某一段再无新行 = 停了。变化才落行是为了别把导出窗口
- * （最近 120 行）刷满，心跳是为了让"没有行"这件事本身还能被解释。
+ * 除了事件，还按 `RUNTIME_SAMPLE_MS` 抄一份朗读现场（段号 / 缓冲池 / 页面可见性 / 音频秒表）。
+ *
+ * **别把"没有新行"读成"没在读"**（09-28 一次性台架量出来的，旧注释在这里教的正是错的那一套）：
+ * 熄屏/切后台最可能的形态是整个 JS 主线程被停住——台架里用 `Debugger.pause` 停 30 秒，
+ * 导出在那 30 秒里**一行都没写**，而挂在页面外的独立 AudioContext 显示那 30 秒音频走了 36.12 秒。
+ * 采样器与心跳用的是同一把 `setInterval`，所以"探针自己没跑"和"朗读停了"在旧报告里长得一模一样。
+ * 现在的口径：醒过来发现自己漏了一拍以上，就先补一行「探针停摆 N 秒」再接现场行——
+ * 沉默要有名字，读的人才知道这段空白说的是"没人记"而不是"没发生"。
  */
 export function installProbes(push: (line: string) => void): () => void {
   const onVisibility = () => push(`可见性 → ${document.visibilityState}${document.hidden ? "（页面已隐藏）" : ""}`);
@@ -330,10 +334,16 @@ export function installProbes(push: (line: string) => void): () => void {
 
   let lastSample = "";
   let quietTicks = 0;
+  let lastTickAt = Date.now();
   const sampleRuntime = () => {
+    const now = Date.now();
+    const stalledMs = now - lastTickAt;
+    lastTickAt = now;
     const line = `朗读现场 ${getActiveTTSManager()?.describeRuntime() ?? "当前没有朗读会话"} · 页面=${document.visibilityState}`;
     quietTicks += 1;
-    if (line === lastSample && quietTicks < RUNTIME_HEARTBEAT_TICKS) return;
+    const stalled = stalledMs > RUNTIME_SAMPLE_MS * 2;
+    if (stalled) push(`探针停摆 ${(stalledMs / 1000).toFixed(1)} 秒（这一段没有任何现场记录，不等于没在读）`);
+    if (!stalled && line === lastSample && quietTicks < RUNTIME_HEARTBEAT_TICKS) return;
     lastSample = line;
     quietTicks = 0;
     push(line);

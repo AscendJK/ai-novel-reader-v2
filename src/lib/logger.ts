@@ -2,6 +2,7 @@
  * 独立的日志模块
  * 替代对 DebugPanel 的直接依赖
  */
+import { clockStamp } from "@/lib/clock-format";
 
 type LogListener = (message: string) => void;
 
@@ -24,7 +25,7 @@ export function onRagLog(listener: LogListener): () => void {
  * 用于记录 RAG 相关的操作日志
  */
 export function ragLog(message: string): void {
-  const timestamp = new Date().toLocaleTimeString("zh-CN");
+  const timestamp = clockStamp();
   const logMessage = `[RAG ${timestamp}] ${message}`;
 
   // 输出到控制台。capturing 挡住 console 包装的再次转发：本函数下面已经亲手
@@ -110,7 +111,7 @@ export function installConsoleCapture(): () => void {
       if (capturing) return;
       capturing = true;
       try {
-        const ts = new Date().toLocaleTimeString("zh-CN");
+        const ts = clockStamp();
         const text = args.map(formatArg).join(" ");
         const line = `[${ts} ${level.toUpperCase()}] ${text}`;
         for (const listener of listeners) {

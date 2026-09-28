@@ -313,6 +313,16 @@ class WebSpeechTTSEngine {
     this.utterance = null;
   }
   isSpeaking(): boolean { return this.available ? speechSynthesis.speaking : false; }
+  /**
+   * 系统语音那一档的现场快照。它**没有** AudioContext，所以熄屏之后唯一还能对账的
+   * 两枚数字是：`onboundary` 收了几次（原生引擎每念到一个词边界就是一次）与这一段
+   * 开了多久。停摆期间事件到不了 JS，但恢复后计数会跳——跳多少就是原生侧走了多远。
+   */
+  describeSpeech(): string {
+    if (!this.available) return "这档不支持（没有 speechSynthesis）";
+    return `speaking=${speechSynthesis.speaking} paused=${speechSynthesis.paused} ` +
+      `boundary=${this.boundaryEventCount} 已播=${Math.max(0, (performance.now() - this.chunkStartTime) / 1000).toFixed(1)}s`;
+  }
   destroy(): void { this.stop(); }
 }
 
@@ -322,7 +332,7 @@ class WebSpeechTTSEngine {
  * - ZipVoiceTTSEngine：浏览器 wasm 推理（离线）
  * - ServerTTSEngine：服务器 Python 推理（快，RTF≈0.6）
  */
-class ZipVoiceTTSEngine {
+export class ZipVoiceTTSEngine {
   protected audioContext: AudioContext | null = null;
   protected currentSource: AudioBufferSourceNode | null = null;
   protected paused = false;
@@ -685,8 +695,12 @@ class ZipVoiceTTSEngine {
    * AudioContext 状态与暂停标志判定，手机又开不了 devtools，所以把它导成一行文本。
    */
   describeAudio(): string {
-    const ctxState = this.audioContext ? this.audioContext.state : "(未创建)";
-    return `ctx=${ctxState} paused=${this.paused} pauseRequested=${this.pauseRequested} ` +
+    const ctx = this.audioContext;
+    // `音频秒表` 是这一行里唯一的单调时钟：熄屏/冻结期间 JS 不跑，但音频线程照走，
+    // 所以亮屏后第一枚与熄屏前那一枚相减，才是"那段时间到底有没有出声"的证据。
+    // 只写 `ctx=running` 不够——状态字符串在停摆前后长得一模一样（09-28 台架量过）。
+    const clock = ctx ? `音频秒表=${ctx.currentTime.toFixed(1)}s` : "音频秒表=没有音频上下文";
+    return `ctx=${ctx ? ctx.state : "(未创建)"} ${clock} paused=${this.paused} pauseRequested=${this.pauseRequested} ` +
       `source=${this.currentSource ? "有" : "无"} buffer=${this.currentBuffer ? "有" : "无"} ` +
       `pendingResolve=${this.pendingPlayResolve ? "挂着(链在等恢复)" : "无"} stopped=${this.stopped}`;
   }
@@ -1442,11 +1456,17 @@ export class TTSManager {
    * 不改变任何状态，也不触发加载。
    */
   describeRuntime(): string {
-    const kokoro = this.zipvoice ? this.zipvoice.describeAudio() : "无 Kokoro 实例";
+    // 三档引擎的进度线索不是同一种东西：两档 Kokoro 看 AudioContext 的秒表，
+    // 系统语音那一档压根没有 AudioContext，只能看 `onboundary` 计数与已播时长。
+    // 旧实现只在前两者成立，读到 webspeech 时那一格印的是"无 Kokoro 实例"——熄屏实测
+    // 最想看的这一档反而什么都没记到。
+    const audio = this.engine === "webspeech"
+      ? this.webSpeech.describeSpeech()
+      : (this.zipvoice ? this.zipvoice.describeAudio() : "无 Kokoro 实例");
     return `engine=${this.engine} lastKokoro=${this.lastKokoroKind ?? "-"} ` +
       `chunk=${this.currentChunkIndex + 1}/${this.chunks.length} para=${this.currentParagraphIndex} ` +
       `gen=${this.generationId} userPaused=${this.userPaused} stopped=${this.stopped} ` +
-      `缓冲池=${this.buffered.length}段 在飞预生成=${this.inFlightPrefetch.size} · 音频侧[${kokoro}]`;
+      `缓冲池=${this.buffered.length}段 在飞预生成=${this.inFlightPrefetch.size} · 音频侧[${audio}]`;
   }
 
   seekToChunk(index: number): void {
