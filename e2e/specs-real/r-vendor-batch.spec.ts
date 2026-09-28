@@ -560,12 +560,15 @@ test.describe(BATCH_GROUP, () => {
    *
    * 请求侧（`page.on("request")`）与回包侧（页面内 fetch 抓包）是两条事件流，按下标配对；
    * 哪一格配不上就如实写"没抓到"，不拿另一发的数顶。
+   *
+   * 两个地方用它：`callVendor` 那行 `[R-E 回包]`（**跑绿了也要看得出哪一发被切**，
+   * 不然"正文合计"会把 0 字与几百字混成一个数），以及 R-E6 落空时的证据行。
    */
-  function sendShapes(v: Replies): string {
+  function sendShapes(v: Replies, from = 0): string {
     const n = Math.max(v.asks.length, v.raw.length);
     const at = <T,>(xs: T[], i: number) => (i < xs.length ? xs[i] : undefined);
     const parts: string[] = [];
-    for (let i = 0; i < n; i++) {
+    for (let i = from; i < n; i++) {
       const r = at(v.raw, i);
       const b = at(v.bodies, i);
       // finish_reason 只认厂商自己写明的收尾帧（411 那家收尾帧不进这份抓包，见上面那段实测）
@@ -649,6 +652,7 @@ test.describe(BATCH_GROUP, () => {
         console.log(
           `[R-E 回包] ${label}：${v.raw.length} 份响应、正文合计 ${v.texts.reduce((n, s) => n + s.length, 0)} 字、` +
             `发出 max_tokens=[${asked.join(",")}]、thinking=[${th.join(",")}]、finish_reason=${finish}\n` +
+            `  逐发形状：${sendShapes(v, asksBefore)}\n` +
             `  正文前 200 字：${(v.texts[v.texts.length - 1] ?? "（空）").slice(0, 200).replace(/\s+/g, " ")}\n` +
             `  原始帧尾巴 200 字：${lastRaw.slice(-200).replace(/\s+/g, " ")}`,
         );
