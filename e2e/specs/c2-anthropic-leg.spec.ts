@@ -39,8 +39,22 @@ import { importFiles, miniNovel, openBook, txtFile } from "../pages/shelf";
  *   `disabled`，剧本就一直只回思考块，图谱做不出来
  * - BK7 非流式那句不喂证据（`emptyResultNote(undefined)`）    1 红：AN6（界面退回那三种猜测）
  *
+ * ## 2026-09-28 补：AN6 的发数那一格原本是陈旧判据，按新口径重写后再下刀
+ * `94c8356`「本章摘要空正文也关思考重发一发」只改了 `summarizer.ts` 与它的单测，
+ * 浏览器层这条 `toHaveLength(1)` 没跟着改 → 从那天起**稳红**（全量 e2e 一次、单独复跑一次，
+ * 收到的第二发 body 里确实带 `"thinking":{"type":"disabled"}`）。改成"两发＋第二发带 disabled"后：
+ * - BK8 `summarizer.ts` 不走 `askWithThinkingFallback`（直接一发）  1 红：AN6（Expected 2 / Received 1，
+ *   界面那句「花在思考上」仍绿——红的是发数，不是措辞）
+ * - BK9 helper 的 catch 支第二发不带 `disabled`（`utils.ts:332` `ask(false)`→`ask(undefined)`）
+ *   1 红：AN6；**AN5 不跟着红**——图谱那条腿**故意不用**这个 helper（`graph-agent.ts:66` 写明：
+ *   套 helper 会把两发叠成四发），所以 AN5 与 AN6 分属两个落点，不算重复钉
+ * - BK9' helper 的"第一发回空串"支（`utils.ts:335`）同样摘掉 `disabled`  **0 红**：
+ *   这一支在浏览器层走不到——两条腿对空正文都是**抛** `APIError`（注释在 `summarizer.ts:108-110`）。
+ *   如实记成**判不到的格子**：`askWithThinkingFallback` 这个共用小内核目前**没有任何一档单测直接看着它**
+ *   （`grep askWithThinkingFallback src` 只命中产品文件），335 那一支连浏览器层也够不着。
+ *
  * 三条一开始就按设计"绿着"的护栏各有自己的刀：AN1 的 BK1、AN5 的 BK6、AN6 的 BK7。
- * 没有为 BK3 那格假造读数。
+ * 没有为 BK3 那格假造读数，也没有把 BK9' 的 0 红说成"判住了"。
  */
 
 const USER = "e2e-anthropic-user";
@@ -168,6 +182,7 @@ test("AN5 一整发只想不答：第二发真的带上 `thinking:disabled`，�
 });
 
 test("AN6 两发都只回思考：界面上说的是那句『花在思考上』，不是那三种猜测", async ({ page }) => {
+  test.setTimeout(90_000); // 两发 + 面板展开
   const backend = await readyWithAnthropic(page, {
     nonStreaming: true, thinking: THINKING_TEXT, content: "", usage: { input: 900, output: 3072 },
   });
@@ -176,5 +191,18 @@ test("AN6 两发都只回思考：界面上说的是那句『花在思考上』�
   await expect(panel.text(page, /花在思考上/)).toBeVisible({ timeout: 20_000 });
   // 反面对照：这句一出现，那三种猜测就不许同时出现（名对、钥对、参数对，说它等于说假话）
   await expect(panel.text(page, /模型名称不存在/)).toHaveCount(0);
-  expect(messagesSent(backend)).toHaveLength(1);
+  /*
+   * 发数这一格原本写的是 `toHaveLength(1)`——那时**本章摘要还没接上**"空正文→关思考重发"。
+   * `94c8356`（fix(agents/summarizer)：本章摘要空正文也关思考重发一发）只改了
+   * `summarizer.ts` 与它自己的单测，浏览器层这条没跟着改，于是从那天起稳红
+   * （2026-09-28 全量 e2e 红一次、单独复跑红一次，收到的第二发 body 里确实带
+   * `"thinking":{"type":"disabled"}`）。两头各钉一句：
+   *  - 旧口径"只发一发"**作废**，它编码的是"这一路不走降级"；
+   *  - 现在钉"本章摘要也听共用那顶封顶两发"——第一发不许预先关思考，第二发必须带上。
+   * 摘掉重发（BK8）红这一条；第二发不带 `disabled`（BK9）同时红 AN5 与本条（共用内核）。
+   */
+  const sent = messagesSent(backend);
+  expect(sent.length, "本章摘要也要接上空正文→关思考重发（封顶两发）").toBe(2);
+  expect(sent[0].thinking, "第一发不许预先关掉思考（质量优先）").toBeUndefined();
+  expect(sent[1].thinking).toEqual({ type: "disabled" });
 });
