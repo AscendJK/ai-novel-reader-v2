@@ -326,11 +326,8 @@ test.describe(BATCH_GROUP, () => {
     if (settled !== "图") {
       const last = v.raw[v.raw.length - 1] ?? "";
       const cut = /"finish_reason"\s*:\s*"?length"?/.test(last);
-      const numbers =
-        `厂商 ${v.asks.length} 发、thinking=[${v.thinks.join(",") || "?"}]；最后一发：发出 max_tokens=${v.asks[v.asks.length - 1] ?? "?"}、` +
-        `completion_tokens=${last.match(/"completion_tokens"\s*:\s*(\d+)/)?.[1] ?? "?"}（其中思考 ` +
-        `${last.match(/"reasoning_tokens"\s*:\s*(\d+)/)?.[1] ?? "这家没给明细"}）、正文 ${(v.texts[v.texts.length - 1] ?? "").length} 字、` +
-        `finish_reason=${cut ? "length" : "不是 length"}`;
+      // 逐发形状，不只报最后一发（见 `sendShapes` 那段：两种"没成"的形状只差在第一发上）
+      const numbers = `厂商 ${v.asks.length} 发、thinking=[${v.thinks.join(",") || "?"}]；${sendShapes(v)}｜ completion_tokens=${last.match(/"completion_tokens"\s*:\s*(\d+)/)?.[1] ?? "?"}`;
       // 跳过原因只有 `list` reporter 打不出来（实测戳 `truncD-0928h` 报上只留一句 `1 skipped`），
       // 所以自己把这份证据打进 stdout，别留一条"跳了但没说为什么"的绿
       if (cut) {
@@ -473,8 +470,10 @@ test.describe(BATCH_GROUP, () => {
    * `thinks` 与 `asks` 一一对应，记每一发请求体里的 `thinking`（`关`／`开`／`默认`）。
    * 加它是因为「被截断也算这一发没成」（`17690f3`）这件事的**唯一现场证据就是线上那一发的请求体**：
    * 代理只往 `server.log` 写 URL，不写请求体，光看"打了两发"分不出第二发是关思考那发还是照旧开思考。
+   *
+   * `bodies` 与 `raw` 一一对应（空正文也占一格，这一点与 `texts` 不同），给 `sendShapes` 按发算正文用。
    */
-  type Replies = { texts: string[]; raw: string[]; asks: number[]; thinks: string[]; settle: () => Promise<void> };
+  type Replies = { texts: string[]; bodies: string[]; raw: string[]; asks: number[]; thinks: string[]; settle: () => Promise<void> };
 
   /**
    * 留空档下每一发**该**按任务预设要多少（`resolveOutputReserve(budget, 常数)` 里那个常数）。
@@ -501,6 +500,7 @@ test.describe(BATCH_GROUP, () => {
    */
   async function watchWire(page: Page): Promise<Replies> {
     const texts: string[] = [];
+    const bodies: string[] = [];
     const raw: string[] = [];
     const asks: number[] = [];
     const thinks: string[] = [];
@@ -523,6 +523,8 @@ test.describe(BATCH_GROUP, () => {
     await page.exposeBinding("__anrWire", (_source, f: { text: string; ct: string }) => {
       raw.push(f.text);
       const c = vendorText(f.text, f.ct);
+      // `bodies` 与 `raw` 一发对一发，**空正文也占一格**（`texts` 会把空的摘掉，配对就断了）
+      bodies.push(c);
       if (c.trim()) texts.push(c);
     });
     await page.addInitScript(({ base }) => {
@@ -545,7 +547,37 @@ test.describe(BATCH_GROUP, () => {
       }) as typeof fetch;
     }, { base: BASE });
     // 页面内那一读是"流读完才回调"，所以 raw 增长本身就等价于旧版 `settle()` 等 body 读完
-    return { texts, raw, asks, thinks, settle: async () => {} };
+    return { texts, bodies, raw, asks, thinks, settle: async () => {} };
+  }
+
+  /**
+   * 把**每一发各自的形状**摊成一行字：`发N[max_tokens=… thinking=… 正文=… 思考=… finish=…]`。
+   *
+   * 为什么按发算而不是只报最后一发：`17690f3` 之后"这一发没成"有两种形状（0 字／挤出半截 JSON），
+   * 而方案 A 的行为差异全在**第一发是什么形状、第二发有没有关思考**上。只报最后一发的话，
+   * 「第一发半截→第二发关思考」与「第一发 0 字→第二发关思考」打出来是同一句话，
+   * 那一格就永远记不进台账（09-28 深夜就是这么把唯一想抓的那一形看漏的）。
+   *
+   * 请求侧（`page.on("request")`）与回包侧（页面内 fetch 抓包）是两条事件流，按下标配对；
+   * 哪一格配不上就如实写"没抓到"，不拿另一发的数顶。
+   */
+  function sendShapes(v: Replies): string {
+    const n = Math.max(v.asks.length, v.raw.length);
+    const at = <T,>(xs: T[], i: number) => (i < xs.length ? xs[i] : undefined);
+    const parts: string[] = [];
+    for (let i = 0; i < n; i++) {
+      const r = at(v.raw, i);
+      const b = at(v.bodies, i);
+      // finish_reason 只认厂商自己写明的收尾帧（411 那家收尾帧不进这份抓包，见上面那段实测）
+      const fr = r?.match(/"(?:finish_reason|stop_reason)"\s*:\s*"([^"]+)"\s*[,}]/g)?.pop() ?? "";
+      const finish = fr.includes("length") || fr.includes("max_tokens") ? "被上限切断" : fr ? "完整收尾" : "没给收尾帧";
+      parts.push(
+        `发${i + 1}[max_tokens=${at(v.asks, i) ?? "没抓到"} thinking=${at(v.thinks, i) ?? "没抓到"} ` +
+          `正文=${b === undefined ? "没抓到" : `${b.length} 字`} ` +
+          `思考=${r?.match(/"reasoning_tokens"\s*:\s*(\d+)/)?.[1] ?? "这家没给明细"} finish=${finish}]`,
+      );
+    }
+    return parts.join(" ");
   }
 
   /** 取本用例那份回包（在 `beforeEach` 里已经装好，这里只是给用例一个短名字） */
