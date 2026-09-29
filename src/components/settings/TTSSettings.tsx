@@ -603,6 +603,7 @@ export function TTSSettings() {
         {voicesLoaded ? (
           <div className="flex gap-2">
             <select
+              name="webspeech-voice"
               aria-label="语音选择"
               className="flex-1 text-xs border rounded px-2 py-1.5 bg-background"
               value={effectiveVoiceId}
@@ -663,6 +664,7 @@ export function TTSSettings() {
           </p>
           <div className="flex gap-2">
             <select
+              name="kokoro-voice"
               aria-label="Kokoro 音色选择"
               className="flex-1 text-xs border rounded px-2 py-1.5 bg-background"
               value={ZH_VOICES[voiceId] ? voiceId : "45"}
@@ -715,7 +717,7 @@ export function TTSSettings() {
             </p>
             <span className="text-xs text-muted-foreground">{chunkSize} 字</span>
           </div>
-          <input type="range" min={30} max={500} step={10}
+          <input name="tts-chunk-size" type="range" min={30} max={500} step={10}
             value={chunkSize}
             aria-label="单次生成字数"
             onChange={(e) => setChunkSize(parseInt(e.target.value, 10))}
@@ -740,7 +742,7 @@ export function TTSSettings() {
             </p>
             <span className="text-xs text-muted-foreground">{prefetchCount} 段</span>
           </div>
-          <input type="range" min={1} max={10} step={1}
+          <input name="tts-prefetch-count" type="range" min={1} max={10} step={1}
             value={prefetchCount}
             aria-label="开播前预生成段数"
             onChange={(e) => setPrefetchCount(parseInt(e.target.value, 10))}
@@ -763,7 +765,7 @@ export function TTSSettings() {
             <p className="text-xs font-medium text-muted-foreground">并行推理 Worker 数</p>
             <span className="text-xs text-muted-foreground">{workerCount} 个</span>
           </div>
-          <input type="range" min={1} max={3} step={1}
+          <input name="tts-worker-count" type="range" min={1} max={3} step={1}
             value={workerCount}
             aria-label="并行推理 Worker 数"
             onChange={(e) => setWorkerCount(parseInt(e.target.value, 10))}
@@ -784,7 +786,7 @@ export function TTSSettings() {
           <p className="text-xs font-medium text-muted-foreground">语速（生成参数）</p>
           <span className="text-xs text-muted-foreground">{speed.toFixed(1)}x</span>
         </div>
-        <input type="range" min={0.5} max={3.0} step={0.25} value={speed}
+        <input name="tts-speed" type="range" min={0.5} max={3.0} step={0.25} value={speed}
           aria-label="语速"
           onChange={(e) => setSpeed(parseFloat(e.target.value))} className="w-full h-1.5" />
         <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -801,7 +803,7 @@ export function TTSSettings() {
           <p className="text-xs font-medium text-muted-foreground">音调</p>
           <span className="text-xs text-muted-foreground">{pitch.toFixed(1)}</span>
         </div>
-        <input type="range" min={0.5} max={2.0} step={0.1} value={pitch}
+        <input name="tts-pitch" type="range" min={0.5} max={2.0} step={0.1} value={pitch}
           aria-label="音调"
           onChange={(e) => setPitch(parseFloat(e.target.value))} className="w-full h-1.5" />
         <div className="flex justify-between text-[10px] text-muted-foreground">

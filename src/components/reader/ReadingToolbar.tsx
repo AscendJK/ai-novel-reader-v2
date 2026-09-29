@@ -57,7 +57,7 @@ export const ReadingToolbar = React.memo(function ReadingToolbar(props: ReadingT
       </div>
       {readingMode !== "scroll" && windowWidth >= 768 && (
         <label className="flex items-center gap-2 cursor-pointer select-none">
-          <input type="checkbox" checked={autoSwitchPageMode}
+          <input name="auto-switch-page-mode" type="checkbox" checked={autoSwitchPageMode}
             onChange={(e) => setAutoSwitchPageMode(e.target.checked)}
             className="rounded border-input" />
           <span className="text-[10px] text-muted-foreground">大屏自动双页</span>

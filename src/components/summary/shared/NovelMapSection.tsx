@@ -510,6 +510,7 @@ export function NovelMapSection({
               {/* 地点快捷选择：零命中测试的兜底入口，移动端点节点热区失效时也能看描述 */}
               {mapData?.places?.length ? (
                 <select
+                  name="map-place-select"
                   value={selectedPlace ?? ""}
                   onChange={(e) => e.target.value && setSelectedPlace(e.target.value)}
                   className="h-8 rounded-md border border-input bg-background px-2 text-xs max-w-[40vw] sm:max-w-[220px] cursor-pointer"

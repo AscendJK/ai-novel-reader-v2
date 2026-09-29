@@ -196,6 +196,7 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
             <div className="space-y-1">
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input
+                  name="provider-stream"
                   type="checkbox"
                   checked={editing.stream !== false}
                   onChange={(e) => setEditing((d) => d ? { ...d, stream: e.target.checked } : d)}
@@ -210,6 +211,7 @@ export function ApiSettings({ onBack }: { onBack?: () => void }) {
             <div className="space-y-1">
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input
+                  name="provider-thinking"
                   type="checkbox"
                   checked={editing.thinking === false}
                   onChange={(e) => setEditing((d) => d ? { ...d, thinking: e.target.checked ? false : undefined } : d)}

@@ -180,6 +180,7 @@ export function NotesTab({ notesHook, filteredNotes }: NotesTabProps) {
               <CardContent className="p-2 pt-0">
                 {isEditing ? (
                   <Textarea
+                    name="note-edit-content"
                     aria-label="编辑笔记内容"
                     className="text-xs min-h-[60px]"
                     value={notesHook.editingContent}

@@ -683,6 +683,7 @@ export function BookSelect() {
                 {pendingFolder.files.length > FOLDER_IMPORT_ACK_MIN && (
                   <label className="flex items-center gap-2 text-sm mt-2 cursor-pointer">
                     <input
+                      name="folder-import-ack"
                       type="checkbox"
                       checked={folderAck}
                       onChange={(e) => setFolderAck(e.target.checked)}

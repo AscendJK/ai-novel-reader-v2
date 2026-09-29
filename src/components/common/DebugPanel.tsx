@@ -333,6 +333,7 @@ export function DebugPanel() {
                   {logLines.slice(-40).map((line, i) => <div key={i}>{line}</div>)}
                 </div>
                 <textarea
+                  name="debug-report"
                   readOnly
                   value={buildReport(facts ?? [], checks)}
                   onFocus={(e) => e.currentTarget.select()}

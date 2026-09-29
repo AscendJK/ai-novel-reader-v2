@@ -195,6 +195,7 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
               </div>
               <div className="relative">
                 <Input
+                  name="server-url"
                   ref={inputRef}
                   placeholder="192.168.1.100"
                   value={serverUrl}
