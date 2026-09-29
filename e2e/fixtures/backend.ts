@@ -25,8 +25,12 @@ export type Responder = Reply | ((req: Request) => Reply | Promise<Reply>);
 export type StubTable = Record<string, Responder>;
 
 export interface Backend {
-  /** 命中过的请求（方法 + 路径 + 请求体原文），按发生顺序 */
-  seen(): { method: string; path: string; body: string | null }[];
+  /**
+   * 命中过的请求（方法 + 路径 + **协议与主机** + 请求体原文），按发生顺序。
+   * `origin` 是给「连接方式」那一格用的：登录页两条腿的路径完全一样（`/api/sync/check-user/test`），
+   * 只按 path 计数就分不出"选了 HTTP 却偷偷也探了 8443"。
+   */
+  seen(): { method: string; path: string; origin: string; body: string | null }[];
   /** 没有任何桩接住的请求——静默放过就是假绿的温床，所以只记录、不假装成功 */
   unmatched(): string[];
   count(method: string, path: string): number;
@@ -65,7 +69,7 @@ function resolveKey(table: StubTable, method: string, pathname: string): string 
 }
 
 export async function stubBackend(page: Page, table: StubTable): Promise<Backend> {
-  const seen: { method: string; path: string; body: string | null }[] = [];
+  const seen: { method: string; path: string; origin: string; body: string | null }[] = [];
   const unmatched = new Set<string>();
 
   // 只按 pathname 前缀判定，**不能用 "**/api/**"**：dev 下 Vite 用
@@ -78,7 +82,7 @@ export async function stubBackend(page: Page, table: StubTable): Promise<Backend
     // body 只给 POST/PUT/PATCH 留：E4 那类"客户端到底推了什么上去"的判据要用它，
     // 而 GET 的 query 已经在 path 里了
     const body = req.method() === "GET" || req.method() === "HEAD" ? null : req.postData();
-    seen.push({ method: req.method(), path: url.pathname, body });
+    seen.push({ method: req.method(), path: url.pathname, origin: url.origin, body });
 
     const name = resolveKey(table, req.method(), url.pathname);
     if (!name) {

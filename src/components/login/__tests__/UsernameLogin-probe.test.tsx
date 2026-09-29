@@ -22,7 +22,11 @@ vi.mock("@/lib/api-client", async (importActual) => {
     ...actual,
     getServerUrl: () => "https://192.168.1.10:8443",
     setServerUrl: vi.fn(),
-    detectAndSetServerUrl: vi.fn(async (u: string) => u),
+    // 保存那一发与挂载那一发共用同一个桩：reason 必须跟着 mockResolvedValue 走，不许两处各写一套
+    detectAndSetServerUrl: vi.fn(async (u: string) => {
+      const p = await probeResult();
+      return { url: u, ok: p.ok, reason: p.reason };
+    }),
     probeServer: () => probeResult(),
   };
 });

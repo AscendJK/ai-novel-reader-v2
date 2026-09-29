@@ -3,14 +3,17 @@
  * 这一档只钉**浏览器里真能确定**的那几格，剩下的一律归到那句总括：
  *
  *  1. 后端**有回应**但状态码不是 200/404 —— 那就不是"连不上"，更不该让人去改地址；
- *  2. **混合内容**：HTTPS 页面打 HTTP 的非回环地址，浏览器在出门前就拦掉了（09-29 在
- *     `https://ascendjk.github.io` 里实测 `http://192.168.1.10:5173` **2 毫秒**就死，控制台那句是 Mixed Content；
- *     同一发里 `http://127.0.0.1:5173` 走了 2.0 秒到 ERR_CONNECTION_REFUSED —— 所以回环那一档**不在这一类**）；
- *  3. **「本地网络访问」权限是被拒状态**（Chrome/Edge 现在用权限提示，不再是 `Access-Control-Allow-Private-Network` 那个头）；
+ *  2. **混合内容**：只有 HTTPS 页面打**公网**的 HTTP 目标才算这一类。09-29 深夜在
+ *     `https://ascendjk.github.io` 里真浏览器量死：`http://example.com/` **0～1 毫秒** TypeError（出门前就拦），
+ *     而 `http://192.168.1.10:5173` 在 4 毫秒拿到 **HTTP 200**、`http://192.168.1.99:5173` 走了 21 秒得
+ *     `ERR_CONNECTION_TIMED_OUT` —— **本机/局域网的明文不按混合内容处理**，那一路上管它的是第 3 类那道授权。
+ *     （这里更正一处旧假话：本文件曾写"局域网 HTTP 2 毫秒被混合内容拦死"，那是把公网那一格的读数安到了局域网头上。）
+ *  3. **「本地网络访问」权限是被拒状态**（Chrome/Edge 现在用权限提示，不再是 `Access-Control-Allow-Private-Network` 那个头；
+ *     09-29 深夜制作人在真 Chrome 上量到提示并点了允许——第一次失败、允许之后同一网站不再问且直连成功）；
  *  4. 我们自己的 **5 秒**到点（`AbortController`，不是网络报错）；
  *  5. 以上都不是 → 老实说"连不上"，并把**证书不认**一起报出来（js 里分不出"端口没人听"与"证书不被信任"，不许假分）。
  *
- * 顺序本身也要判住：2 与 3 同时成立时必须说 2（那一格是**必然**的，3 只是"有这个可能"）。
+ * 顺序本身也要判住：本地目标**永远不许**报成混合内容（那是把浏览器当幌子，真实原因多半是端口没人听）。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { probeServer, PROBE_FAILURE_TEXT } from "@/lib/api-client";
@@ -65,20 +68,39 @@ describe("PR1 后端有回应 ≠ 连不上", () => {
   });
 });
 
-describe("PR2 混合内容那一格（HTTPS 页面 → HTTP 非回环）", () => {
-  it("https 页面打 http://192.168.1.10:5173 失败 → mixed-content", async () => {
+describe("PR2 混合内容那一格（只有 HTTPS 页面 → 公网 HTTP 才算）", () => {
+  it("https 页面打公网明文 http://example.com 失败 → mixed-content（这一格浏览器确实是出门前就拦）", async () => {
     globalThis.fetch = vi.fn(async () => { throw new TypeError("Failed to fetch"); });
-    const r = await probeServer("http://192.168.1.10:5173");
+    const r = await probeServer("http://example.com");
     expect(r.reason).toBe("mixed-content");
   });
 
-  it("同一条规则不许误伤回环：http://127.0.0.1:5173 与 http://localhost:5173 都真走到网络", async () => {
-    for (const target of ["http://127.0.0.1:5173", "http://localhost:5173"]) {
+  it("本机/局域网的明文**永远不许**报混合内容——那一路真实原因多半是端口没人听", async () => {
+    const localTargets = [
+      "http://192.168.1.10:5173",   // 09-29 深夜真机：https 页里这发拿到过 HTTP 200
+      "http://192.168.1.99:5173",   // 同页另一发走了 21 秒 ERR_CONNECTION_TIMED_OUT：出网了，没被策略拦
+      "http://10.0.0.5:5173",
+      "http://172.20.8.9:5173",
+      "http://169.254.7.7:5173",
+      "http://mybook.local:5173",
+      "http://127.0.0.1:5173",
+      "http://localhost:5173",
+      "http://[::1]:5173",
+    ];
+    for (const target of localTargets) {
       globalThis.fetch = vi.fn(async () => { throw new TypeError("Failed to fetch"); });
       const r = await probeServer(target);
-      expect(r.reason, `${target} 是 potentially trustworthy，不该报混合内容`).not.toBe("mixed-content");
+      expect(r.reason, `${target} 是本地地址，不许甩锅给混合内容`).not.toBe("mixed-content");
       expect(r.reason).toBe("unreachable");
     }
+  });
+
+  it("172.16 与 172.31 之间的私有段算本地；172.32 与 173.16 这种公网冒充形状不算", async () => {
+    globalThis.fetch = vi.fn(async () => { throw new TypeError("Failed to fetch"); });
+    expect((await probeServer("http://172.16.0.1:5173")).reason).not.toBe("mixed-content");
+    expect((await probeServer("http://172.31.255.254:5173")).reason).not.toBe("mixed-content");
+    expect((await probeServer("http://172.32.0.1:5173")).reason).toBe("mixed-content");
+    expect((await probeServer("http://173.16.0.1:5173")).reason).toBe("mixed-content");
   });
 
   it("页面本身不是安全上下文（本机 http 开着用）→ 一律不许报混合内容", async () => {
@@ -128,10 +150,19 @@ describe("PR3 「本地网络访问」被拒那一格", () => {
     expect(r.reason).toBe("unreachable");
   });
 
-  it("顺序：混合内容与权限被拒同时成立 → 必须报混合内容（那是必然，不是可能）", async () => {
+  it("本地明文目标 + 权限被拒 → 报「被拦住」，不许报混合内容（制作人 09-29 真机点允许那一条的形状）", async () => {
     setPermissionState("denied");
     globalThis.fetch = vi.fn(async () => { throw new TypeError("Failed to fetch"); });
     const r = await probeServer("http://192.168.1.10:5173");
+    expect(r.reason).toBe("local-network-blocked");
+  });
+
+  it("公网明文目标 → 这一格轮不到权限去解释（不查权限，直接报混合内容）", async () => {
+    const query = vi.fn(() => Promise.resolve({ state: "denied" }));
+    Object.defineProperty(navigator, "permissions", { value: { query }, configurable: true });
+    globalThis.fetch = vi.fn(async () => { throw new TypeError("Failed to fetch"); });
+    const r = await probeServer("http://book.example.org:8080");
+    expect(query, "公网目标出不了混合内容那一格，权限状态解释不了它").not.toHaveBeenCalled();
     expect(r.reason).toBe("mixed-content");
   });
 });
@@ -172,8 +203,16 @@ describe("PR5 文案与类别同源，且五类各说各话", () => {
     expect(note, "权限被拒也可能是环境默认值，不许把话说死").toMatch(/端口|后端/);
   });
 
-  it("混合内容那一类必须给出可执行的那一句（改用 https）", () => {
-    expect(PROBE_FAILURE_TEXT["mixed-content"].note).toMatch(/https:\/\/.*8443/);
+  it("混合内容那一类必须说清是「公网明文」并给出可执行的那一句（改用 https）", () => {
+    const note = PROBE_FAILURE_TEXT["mixed-content"].note;
+    expect(note).toMatch(/https:\/\//);
+    expect(note, "这一类现在只管公网目标，话里必须点明，否则局域网用户会被指去配 8443").toContain("公网");
+  });
+
+  it("「被拦住」那一类要告诉用户这份授权记在网站身上、只点一次", () => {
+    const note = PROBE_FAILURE_TEXT["local-network-blocked"].note;
+    expect(note, "不说清授权的落点，用户会以为每填一个地址都要点一次").toMatch(/这(一|个)站|这个网站/);
+    expect(note).toMatch(/一(次|下)/);
   });
 
   it("总括那一类不许再假指唯一的错因（证书不认也在里面）", () => {

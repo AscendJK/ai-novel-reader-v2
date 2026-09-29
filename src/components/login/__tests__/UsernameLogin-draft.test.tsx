@@ -21,12 +21,16 @@ import { render, screen, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const probeServer = vi.fn(async () => ({ ok: true, reason: null as string | null }));
-vi.mock("@/lib/api-client", () => ({
-  getServerUrl: () => "https://192.168.1.5:8443",
-  setServerUrl: vi.fn(),
-  detectAndSetServerUrl: vi.fn(async (u: string) => u),
-  probeServer: () => probeServer(),
-}));
+vi.mock("@/lib/api-client", async (importActual) => {
+  const actual = await importActual<typeof import("@/lib/api-client")>();
+  return {
+    ...actual,
+    getServerUrl: () => "https://192.168.1.5:8443",
+    setServerUrl: vi.fn(),
+    detectAndSetServerUrl: vi.fn(async (u: string) => ({ url: u, ok: true, reason: null })),
+    probeServer: () => probeServer(),
+  };
+});
 
 const { default: UsernameLogin } = await import("@/components/login/UsernameLogin").then((m) => ({ default: m.UsernameLogin }));
 

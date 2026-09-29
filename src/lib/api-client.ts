@@ -108,46 +108,68 @@ export async function apiFetch(
   });
 }
 
+/** 登录页那枚「连接方式」的两种取值（制作人 09-29 拍：选了哪条就只连哪条，默认 HTTP） */
+export type ServerScheme = "http" | "https";
+
+/** 地址里写了协议就返回那个协议；没写返回 null（这一格只说"他到底写了什么"，不替它编默认值） */
+export function explicitSchemeOf(input: string): ServerScheme | null {
+  const trimmed = (input ?? "").trim();
+  if (/^https:\/\//i.test(trimmed)) return "https";
+  if (/^http:\/\//i.test(trimmed)) return "http";
+  return null;
+}
+
 /**
- * 智能解析并保存服务器地址：
- * - 输入含显式协议（http:// 或 https://）→ 直接按现有规则规范化保存（不探测）；
- *   其中无端口的 https 显式补 :8443、无端口 http 显式补 :5173
- * - 裸 IP/域名（无协议无端口）→ 依次探测 https://<host>:8443 与 http://<host>:5173，
- *   第一个连通者胜出并保存（双端口在线时优先 HTTPS）；全部不通时保存 http://…:5173
- *   （让后续连接失败的错误提示有明确指向）。
- *
- * @param input 用户输入的地址
- * @returns 最终保存的地址（已规范化）
+ * 这一格该显示哪个协议：**输入框里写了协议就以它为准**，否则跟已生效的那个地址，
+ * 两个都没有就是默认的 http。选择器的状态只从这里算，不另存一份，免得两处各说各话。
  */
-export async function detectAndSetServerUrl(input: string): Promise<string> {
+export function serverSchemeOf(input: string, effective: string = getServerUrl()): ServerScheme {
+  return explicitSchemeOf(input) ?? explicitSchemeOf(effective) ?? "http";
+}
+
+/**
+ * 把用户填的东西与所选协议拼成最终地址（纯函数，不保存也不探测）。
+ * 界面上"切换协议时立刻重探一次"与"保存"两条路共用它，免得一个拼出来另一个拼出来不一样。
+ */
+export function composeServerUrl(input: string, scheme: ServerScheme): string {
   const trimmed = input.trim().replace(/[/:]+$/, "");
-  if (!trimmed) {
+  if (!trimmed) return "";
+  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `${scheme}://${trimmed}`;
+  return normalizeServerUrl(withScheme);
+}
+
+/**
+ * 把地址里的协议换成所选那一条（界面点按钮时用它，所以按钮对"已经存过地址"的人也真的管用）。
+ * 端口跟着换的条件是它**正好是另一条的默认端口**；用户自己写过的端口原样保留。
+ */
+export function withScheme(input: string, scheme: ServerScheme): string {
+  const body = (input ?? "").trim().replace(/^https?:\/\//i, "").replace(/[/:]+$/, "");
+  if (!body) return "";
+  const otherDefault = scheme === "http" ? ":8443" : ":5173";
+  const mine = scheme === "http" ? ":5173" : ":8443";
+  const ported = body.endsWith(otherDefault) ? body.slice(0, -otherDefault.length) + mine : body;
+  return normalizeServerUrl(`${scheme}://${ported}`);
+}
+
+/**
+ * 按所选的连接方式解析并保存服务器地址。
+ * - 输入含显式协议 → 以输入为准（绝不被选择器改写），无端口时按该协议补默认端口；
+ * - 裸 IP/域名 → 拼成所选协议，无端口补 `:5173`／`:8443`；
+ * - **只探所选那一条**，不再自动改试另一条（旧口径"双端口在线时优先 HTTPS"作废：
+ *   局域网机器没开 8443 是常态，白撞一发实测要吃 2 秒，而"哪条通"用户自己最清楚）；
+ * - 探不通也照样保存所选那条，并把原因带回给界面——存不存与通不通是两件事。
+ */
+export async function detectAndSetServerUrl(
+  input: string,
+  scheme: ServerScheme = "http",
+): Promise<{ url: string; ok: boolean; reason: ProbeFailure | null }> {
+  const url = composeServerUrl(input, scheme);
+  if (!url) {
     throw new Error("服务器地址不能为空");
   }
-
-  const hasProtocol = /^https?:\/\//i.test(trimmed);
-  const hasPort = /:\d+$/.test(trimmed);
-  if (hasProtocol || hasPort) {
-    // 显式协议或端口：尊重用户选择，直接规范化保存
-    const normalized = normalizeServerUrl(trimmed);
-    setServerUrl(normalized);
-    return normalized;
-  }
-
-  // 裸 IP/域名：双端口探测，HTTPS 优先
-  const candidates = ["https://" + trimmed + ":8443", "http://" + trimmed + ":5173"];
-  for (const candidate of candidates) {
-    const ok = await checkServerReachable(candidate);
-    if (ok) {
-      setServerUrl(candidate);
-      return candidate;
-    }
-  }
-
-  // 全部不可达：保存 HTTP 默认值，交由后续连接流程给出明确错误
-  const fallback = "http://" + trimmed + ":5173";
-  setServerUrl(fallback);
-  return fallback;
+  setServerUrl(url);
+  const probe = await probeServer(url);
+  return { url, ok: probe.ok, reason: probe.reason };
 }
 
 /**
@@ -173,12 +195,13 @@ export const PROBE_FAILURE_TEXT: Record<ProbeFailure, { badge: string; note: str
   },
   "mixed-content": {
     badge: "需 HTTPS",
-    note: "浏览器不许在这个 HTTPS 页面上连 HTTP 的后端。请把地址改成 https://<地址>:8443。",
+    note: "这个页面是 HTTPS，而你填的是公网上明文的 http:// 地址——浏览器在出门前就不许连。请把地址改成 https:// 开头。"
+      + "（本机与局域网地址不受这一条限制，那一类失败另有原因。）",
   },
   "local-network-blocked": {
     badge: "被拦住",
-    note: "浏览器把这个地址按「本地网络访问」拦下了（那一页的权限是被拒状态）。点地址栏右侧的权限图标改为允许；"
-      + "如果本来就是允许的，那就是端口不对或后端没起。",
+    note: "浏览器把这个地址按「本地网络访问」拦下了（这一站的权限是被拒状态）。点地址栏那枚权限图标，把「本地网络访问」改成允许——"
+      + "这份授权记在这个网站身上，点一次以后就不再问。如果本来就是允许的，那就是端口不对或后端没起。",
   },
   timeout: {
     badge: "无响应",
@@ -228,8 +251,11 @@ async function localNetworkPermissionDenied(): Promise<boolean> {
 }
 
 /**
- * 顺序就是把握度：后端答过话 → 别谈拦截；HTTPS 页面连 HTTP 非回环是**必然**被拦，
- * 排在"权限看起来是被拒"（那可能只是环境的默认值）之前；再往后才是我们自己那 5 秒。
+ * 顺序就是把握度：后端答过话 → 别谈拦截；然后是混合内容，但**只有公网明文目标**才算它——
+ * 09-29 深夜在 `https://ascendjk.github.io` 里真浏览器量过：`http://example.com` 0～1 毫秒就被拦，
+ * 而 `http://192.168.1.10:5173` 4 毫秒拿到 HTTP 200、`http://192.168.1.99:5173` 走了 21 秒才
+ * `ERR_CONNECTION_TIMED_OUT`。本机/局域网那一路上管它的是「本地网络访问」这道授权，不是混合内容，
+ * 把局域网失败说成"浏览器不许连 HTTP"会把人指去配一个根本不需要配的 8443。
  */
 function classifyProbeFailure(o: {
   pageIsSecure: boolean;
@@ -241,7 +267,7 @@ function classifyProbeFailure(o: {
   if (o.httpStatus !== null) return "http-status";
   const host = probeHostOf(o.targetUrl);
   const scheme = /^https:\/\//i.test(o.targetUrl) ? "https" : "http";
-  if (o.pageIsSecure && scheme === "http" && !isLoopbackHost(host)) return "mixed-content";
+  if (o.pageIsSecure && scheme === "http" && !isLocalAddressHost(host)) return "mixed-content";
   if (o.localNetworkDenied) return "local-network-blocked";
   if (o.timedOut) return "timeout";
   return "unreachable";

@@ -161,30 +161,82 @@ test("D7 展开用户名菜单之后，「退出登录」必须还点得动", as
   await expect(sel.loginGate(page)).toBeVisible();
 });
 
-test("D6 只填裸 IP：探到 HTTPS 在跑就定 :8443，两边都不通退回 :5173", async ({ page }) => {
+/**
+ * D6 裸 IP 的连接方式（制作人 09-29 深夜把口径翻成「选什么连什么，默认 http」）。
+ *
+ * 这一档**推翻**的是我先前那句假话——旧测试钉的是"先探 HTTPS，不通再探 HTTP，两条都活着就定 8443"，
+ * 而那套行为的依据是"Pages 上那条 HTTP 腿永远被混合内容拦掉"；09-29 深夜在真 Chrome 里量过
+ * `https://ascendjk.github.io` 探 `http://192.168.1.10:5173` **能拿到 200**，那条依据不成立，
+ * 加上白撞一发 8443 实测要吃 2 秒（局域网机器没开 8443 是常态），所以整条自动改试另一腿的行为删掉了。
+ * 桩把**两条腿都装成活**的：旧口径在这里会定到 `:8443`，新口径必须停在用户选的那一条、另一条一次都不发。
+ */
+test("D6 只填裸 IP：选哪条连哪条，默认 HTTP，另一条一次都不许背头发", async ({ page }) => {
   await signOut(page);
 
-  let httpsUp = true;
   const backend = await stubBackend(page, {
     ...idleTtsStatus,
-    "GET /api/sync/check-user/test": () =>
-      httpsUp ? { status: 404, headers: { "Access-Control-Allow-Origin": "*" } } : { abort: true },
+    "GET /api/sync/check-user/test": { status: 404, headers: { "Access-Control-Allow-Origin": "*" } },
   });
+  const probes = () => backend.seen().filter((s) => s.path === "/api/sync/check-user/test").map((s) => s.origin);
 
   await page.getByRole("button", { name: "配置" }).click();
   await page.getByPlaceholder("192.168.1.100").fill("192.168.1.5");
   await page.getByRole("button", { name: "保存" }).click();
-  await expect(page.getByText("https://192.168.1.5:8443")).toBeVisible();
 
-  // 反过来：HTTPS 探不通必须落到 http://…:5173，而不是停在"无法连接"就完事
-  httpsUp = false;
+  // 默认那一枚是 HTTP：存下来的就是 5173，而且没有第二发
+  await expect(page.getByText("http://192.168.1.5:5173")).toBeVisible();
+  expect(probes(), "选了 HTTP 就不该有人替用户去连 8443").toEqual(["http://192.168.1.5:5173"]);
+
+  // 已存过地址的人打开面板时框里就带着协议：这两枚必须真的能动它（09-29 第一版把它们做成 disabled，
+  // 对老用户等于没有这个选项——就是这一格当场抓出来的）
   await page.getByRole("button", { name: "更改" }).click();
-  await page.getByPlaceholder("192.168.1.100").fill("192.168.1.6");
+  const address = page.getByPlaceholder("192.168.1.100");
+  const httpBtn = page.getByRole("radio", { name: "HTTP :5173" });
+  const httpsBtn = page.getByRole("radio", { name: "HTTPS :8443" });
+  await expect(address).toHaveValue("http://192.168.1.5:5173");
+  await expect(httpBtn).toBeEnabled();
+
+  await httpsBtn.click();
+  await expect(address, "点 HTTPS 要把地址开头的协议与默认端口一起改掉").toHaveValue("https://192.168.1.5:8443");
+  // 换完当场就按新那条重探（面板里那行结果跟着走），不发第二腿
+  await expect(page.getByText("连接成功！")).toBeVisible();
+  expect(probes(), "点 HTTPS 之后当场重探的必须是 8443 那一发").toEqual([
+    "http://192.168.1.5:5173",
+    "https://192.168.1.5:8443",
+  ]);
+
+  await page.getByRole("button", { name: "保存" }).click();
+  await expect(page.getByText("https://192.168.1.5:8443")).toBeVisible();
+  expect(
+    probes().filter((o) => o.startsWith("http://")),
+    "已经换到 HTTPS 了还补一腿 http 就是没改干净"
+  ).toEqual(["http://192.168.1.5:5173"]);
+
+  // 自己写过的端口保留，只有那一头的默认端口跟着换
+  await page.getByRole("button", { name: "更改" }).click();
+  await address.fill("http://192.168.1.7:9000");
+  await httpsBtn.click();
+  await expect(address, "9000 是用户自己写的，不该被换成 8443").toHaveValue("https://192.168.1.7:9000");
+  await page.getByRole("button", { name: "跳过" }).click();
+
+  // 地址里只写 IP（没写协议）→ 仍然按按钮选的那条走
+  await page.getByRole("button", { name: "更改" }).click();
+  await page.getByRole("radio", { name: "HTTP :5173" }).click();
+  await address.fill("192.168.1.6");
   await page.getByRole("button", { name: "保存" }).click();
   await expect(page.getByText("http://192.168.1.6:5173")).toBeVisible();
 
-  const probed = backend.seen().filter((s) => s.path === "/api/sync/check-user/test").length;
-  expect(probed, "裸 IP 要先探 HTTPS，不通再探 HTTP").toBeGreaterThanOrEqual(3);
+  // 清单**摊开着**的那一路：框是空的、最近地址有货 → 一聚焦就摊开。
+  // 这条钉的是"摊开的清单不许挡掉连接方式那两枚"——旧版是 absolute 浮层，正好盖在上面，点不动。
+  await page.getByRole("button", { name: "更改" }).click();
+  await address.fill("");
+  await address.blur();
+  await address.click();
+  await expect(page.getByText("http://192.168.1.5:5173")).toBeVisible();
+  await httpsBtn.click();
+  await expect(httpsBtn, "清单摊开着也要点得动那两枚").toBeChecked();
+  await page.getByText("http://192.168.1.5:5173").click();
+  await expect(address).toHaveValue("http://192.168.1.5:5173");
 });
 
 test("D8 改用户名：API 配置跟着搬到新名字下，旧名的键不许留在共享库里", async ({ page }) => {

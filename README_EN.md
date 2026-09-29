@@ -111,10 +111,13 @@ One backend instance supports all of the modes below at the same time — pick b
 **Configure the frontend** (modes ①②):
 
 1. Open the frontend page
-2. On the login screen, click "Configure" and enter the backend address
+2. On the login screen, click "Configure", enter the backend address, and pick a "Connection type" (HTTP :5173 / HTTPS :8443)
 3. Click "Save & Connect" — "Connected" means success
 
-> **Smart completion**: the address field accepts shorthand — `192.168.1.100` becomes `http://192.168.1.100:5173`; `https://192.168.1.100` becomes `https://192.168.1.100:8443`. Addresses that already carry a port are kept as typed.
+> **What you pick is what it connects to**: HTTP is the default. A bare IP such as `192.168.1.100` is completed along the selected leg into `http://192.168.1.100:5173` or `https://192.168.1.100:8443`, and the app **no longer silently retries the other leg** — if both ports are listening, switch with the two buttons; switching re-probes along the new leg immediately.
+> If the address itself carries a scheme (`https://192.168.1.100`), **what is in the box is what gets saved and connected** — the two buttons show that same scheme, and clicking one swaps the leading scheme to your pick (`https://192.168.1.100` + HTTP → `http://192.168.1.100:5173`). A port you typed yourself (`192.168.1.100:9000`) is kept as typed; only the other leg's default port follows the switch.
+
+> **Connecting from GitHub Pages to a local or LAN device**: Chrome/Edge ask once for "allow access to devices on your local network". The grant is remembered for that site — allow it once. If you denied it earlier and can't connect, click the permission icon in the address bar and allow it. On desktop browsers an HTTPS page reaching a LAN `http://IP:5173` only logs a yellow warning and works; **iOS Safari blocks it outright** — use mode ② or same-origin on iOS.
 
 > **How to find the server IP**: Windows: run `ipconfig`, macOS/Linux: run `ifconfig` or `ip addr`, look for the LAN IPv4 address.
 
@@ -294,7 +297,7 @@ You can log in while the server is unreachable. Reading, notes, and AI analysis 
 On first visit, a login dialog appears:
 
 1. **Enter a username** (2-30 chars), choose "Create and Enter" or select an existing user
-2. **Configure server address** (optional): Click "Configure" to enter the backend address (e.g., `http://192.168.1.100:5173`). Without it, the app runs in offline mode
+2. **Configure server address** (optional): Click "Configure", enter the backend address and pick the connection type — a bare `192.168.1.100` is completed along the selected leg (HTTP → `:5173`, HTTPS → `:8443`, HTTP is the default) and the other leg is never probed behind your back; a scheme typed into the field wins. Without a server the app runs in offline mode (same-origin deployments need no configuration)
 
 > Data is **browser-first** — the server is only for backup and cross-device sync. When the server is unreachable, "Create New" works normally as a local account. "Join Existing" requires the server to be online to fetch data.
 >

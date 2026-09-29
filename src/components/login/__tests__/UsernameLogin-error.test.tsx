@@ -11,12 +11,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 
-vi.mock("@/lib/api-client", () => ({
-  getServerUrl: () => "https://192.168.1.5:8443",
-  setServerUrl: vi.fn(),
-  detectAndSetServerUrl: vi.fn(async (u: string) => u),
-  probeServer: vi.fn(async () => ({ ok: true, reason: null })),
-}));
+// 整模块 mock 缺一个出口就会让整档 vitest 退出码变红（台架 trap 68），所以展开真实实现再覆盖需要的那几个。
+vi.mock("@/lib/api-client", async (importActual) => {
+  const actual = await importActual<typeof import("@/lib/api-client")>();
+  return {
+    ...actual,
+    getServerUrl: () => "https://192.168.1.5:8443",
+    setServerUrl: vi.fn(),
+    detectAndSetServerUrl: vi.fn(async (u: string) => ({ url: u, ok: true, reason: null })),
+    probeServer: vi.fn(async () => ({ ok: true, reason: null })),
+  };
+});
 
 const { UsernameLogin } = await import("@/components/login/UsernameLogin");
 

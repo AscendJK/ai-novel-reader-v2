@@ -123,70 +123,70 @@ describe("setServerUrl / checkServerReachable 无端口按协议补端口", () =
 });
 
 
-// ── detectAndSetServerUrl 裸 IP 智能探测 ──
+// ── detectAndSetServerUrl：选什么连什么（09-29 深夜改口径）──
+//
+// 旧口径是"裸 IP 双端口自动探测、两条都开着优先 HTTPS"，这一格把它整个换掉：
+// 登录页现在有一枚「连接方式」选项，选了哪条就只探那一条。换的理由是真机读数——局域网机器没开 8443 是常态，
+// 白撞一发要吃 2 秒（实测 ECONNREFUSED 2010ms，IP 打错更是 21 秒）。细则与判据在 api-client-server-scheme.test.ts。
 
-describe("detectAndSetServerUrl 裸 IP 智能探测", () => {
+describe("detectAndSetServerUrl 选什么连什么", () => {
   beforeEach(() => {
     localStorage.clear();
     globalThis.fetch = vi.fn();
   });
 
-  it("双端口在线时优先 HTTPS", async () => {
+  it("裸 IP + 选 http：存 http:5173，只发一发", async () => {
     vi.mocked(globalThis.fetch).mockResolvedValue(new Response(null, { status: 200 }));
 
-    const saved = await detectAndSetServerUrl("192.168.1.100");
+    const r = await detectAndSetServerUrl("192.168.1.100", "http");
 
-    expect(saved).toBe("https://192.168.1.100:8443");
-    expect(getServerUrl()).toBe("https://192.168.1.100:8443");
-    // 探测顺序：先 https 后 http，https 通则只探测一次
-    const calls = vi.mocked(globalThis.fetch).mock.calls.map((c) => c[0]);
-    expect(String(calls[0])).toContain("https://192.168.1.100:8443");
-    expect(calls.length).toBe(1);
-  });
-
-  it("仅 HTTP 在线时回落 5173", async () => {
-    vi.mocked(globalThis.fetch).mockImplementation(async (input: RequestInfo | URL) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      if (String(url).includes("https://")) throw new TypeError("fetch failed");
-      return new Response(null, { status: 200 });
-    });
-
-    const saved = await detectAndSetServerUrl("192.168.1.100");
-
-    expect(saved).toBe("http://192.168.1.100:5173");
+    expect(r.url).toBe("http://192.168.1.100:5173");
     expect(getServerUrl()).toBe("http://192.168.1.100:5173");
+    expect(vi.mocked(globalThis.fetch).mock.calls.map((c) => String(c[0]))).toEqual([
+      "http://192.168.1.100:5173/api/sync/check-user/test",
+    ]);
   });
 
-  it("全部不可达时保存 http 默认值", async () => {
+  it("裸 IP + 选 https：存 https:8443", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response(null, { status: 200 }));
+
+    const r = await detectAndSetServerUrl("192.168.1.100", "https");
+
+    expect(r.url).toBe("https://192.168.1.100:8443");
+    expect(getServerUrl()).toBe("https://192.168.1.100:8443");
+  });
+
+  it("不通也存所选那条，并把原因带回来（旧口径在这里会回落到 http 默认值）", async () => {
     vi.mocked(globalThis.fetch).mockRejectedValue(new TypeError("fetch failed"));
 
-    const saved = await detectAndSetServerUrl("192.168.1.100");
+    const r = await detectAndSetServerUrl("192.168.1.100", "https");
 
-    expect(saved).toBe("http://192.168.1.100:5173");
-    expect(getServerUrl()).toBe("http://192.168.1.100:5173");
-  });
-
-  it("显式协议不探测直接规范化", async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValue(new Response(null, { status: 200 }));
-
-    const saved = await detectAndSetServerUrl("https://192.168.1.100");
-
-    expect(saved).toBe("https://192.168.1.100:8443");
+    expect(r.url).toBe("https://192.168.1.100:8443");
     expect(getServerUrl()).toBe("https://192.168.1.100:8443");
-    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(r.ok).toBe(false);
+    expect(r.reason).not.toBeNull();
   });
 
-  it("显式端口不探测直接规范化", async () => {
+  it("显式协议以输入为准：选择器给 http 也存 https，并且现在要探这一发", async () => {
     vi.mocked(globalThis.fetch).mockResolvedValue(new Response(null, { status: 200 }));
 
-    const saved = await detectAndSetServerUrl("192.168.1.100:9000");
+    const r = await detectAndSetServerUrl("https://192.168.1.100", "http");
 
-    expect(saved).toBe("http://192.168.1.100:9000");
-    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(r.url).toBe("https://192.168.1.100:8443");
+    expect(getServerUrl()).toBe("https://192.168.1.100:8443");
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("显式端口留住，协议仍由选择器决定", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response(null, { status: 200 }));
+
+    const r = await detectAndSetServerUrl("192.168.1.100:9000", "https");
+
+    expect(r.url).toBe("https://192.168.1.100:9000");
   });
 
   it("空输入抛错", async () => {
-    await expect(detectAndSetServerUrl("  ")).rejects.toThrow("服务器地址不能为空");
+    await expect(detectAndSetServerUrl("  ", "http")).rejects.toThrow("服务器地址不能为空");
   });
 });
 

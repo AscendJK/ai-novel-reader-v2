@@ -4,7 +4,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2 } from "lucide-react";
-import { getServerUrl, setServerUrl, detectAndSetServerUrl, probeServer, PROBE_FAILURE_TEXT, type ProbeFailure } from "@/lib/api-client";
+import {
+  getServerUrl, setServerUrl, detectAndSetServerUrl, probeServer,
+  serverSchemeOf, explicitSchemeOf, withScheme, PROBE_FAILURE_TEXT,
+  type ProbeFailure, type ServerScheme,
+} from "@/lib/api-client";
 import { APP_VERSION } from "@/config/version";
 
 const RECENT_URLS_KEY = "novel-reader-recent-urls";
@@ -68,12 +72,18 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
   const [newUsername, setNewUsername] = useState(() => readLoginDraft().typed);
   const [loading, setLoading] = useState(false);
   const [serverUrl, setServerUrlState] = useState(getServerUrl());
+  /** 连接方式：选哪条就只连哪条，默认 http（制作人 09-29 拍）。地址里写了协议时以它为准，见 `shownScheme` */
+  const [scheme, setScheme] = useState<ServerScheme>(() => serverSchemeOf(getServerUrl(), ""));
   const [serverStatus, setServerStatus] = useState<"unknown" | "checking" | "ok" | "fail">("unknown");
   /** 探测失败的原因（`probeServer` 分出来的那一类）；null 表示没探过、探通了、或那条不知道原因的入口 */
   const [serverReason, setServerReason] = useState<ProbeFailure | null>(null);
   const [showServerConfig, setShowServerConfig] = useState(false);
   const [showRecent, setShowRecent] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // 框里写了协议就照它显示（那两枚选中的跟着输入走）；点按钮会连输入一起改掉，见 `handlePickScheme`
+  const typedScheme = explicitSchemeOf(serverUrl);
+  const shownScheme = typedScheme ?? scheme;
 
   // 检查服务器状态
   const checkServer = async (url: string) => {
@@ -84,17 +94,28 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
     setServerReason(r.ok ? null : r.reason);
   };
 
+  // 换连接方式：连地址里的协议一起改掉，再按新那条重探。
+  // 只改内部 state 是不够的——已存过地址的人打开面板时框里就带着 `http://`（`setServerUrl` 一律规范化过），
+  // 那样这两枚对老用户永远是空的。09-29 真浏览器跑 D6 时撞到的就是这个。
+  const handlePickScheme = (next: ServerScheme) => {
+    setScheme(next);
+    const raw = serverUrl.trim();
+    if (!raw) return;
+    const rewritten = withScheme(raw, next);
+    setServerUrlState(rewritten);
+    void checkServer(rewritten);
+  };
+
   // 保存服务器地址
   const handleSaveServerUrl = async () => {
     const raw = serverUrl.trim().replace(/\/+$/, "");
     if (!raw) return;
     setServerStatus("checking");
     try {
-      // 智能探测：显式协议/端口直接规范化保存；裸 IP 自动尝试 https:8443 与 http:5173
-      const url = await detectAndSetServerUrl(raw);
-      setServerUrlState(url);
-      addRecentUrl(url);
-      const r = await probeServer(url);
+      // 只探所选那一条（探不通也先把那条存下来，界面才说得出为什么连不上）
+      const r = await detectAndSetServerUrl(raw, shownScheme);
+      setServerUrlState(r.url);
+      addRecentUrl(r.url);
       setServerStatus(r.ok ? "ok" : "fail");
       setServerReason(r.ok ? null : r.reason);
     } catch {
@@ -109,6 +130,8 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
   const handleSelectRecent = (url: string) => {
     setServerUrlState(url);
     setServerUrl(url);
+    const fromUrl = explicitSchemeOf(url);
+    if (fromUrl) setScheme(fromUrl);
     setShowRecent(false);
     inputRef.current?.focus();
   };
@@ -122,17 +145,10 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
     }
   }, []);
 
-  // 点击外部关闭下拉
-  useEffect(() => {
-    if (!showRecent) return;
-    const handleClick = (e: MouseEvent) => {
-      if (inputRef.current && !inputRef.current.parentElement?.contains(e.target as Node)) {
-        setShowRecent(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [showRecent]);
+  // 原来这里有一道"点框外就收起"的 mousedown 监听。删掉它：清单现在是内联的，
+  // 那点它旁边的任何控件都会先触发"收起→整块往上跳"，mousedown 与 mouseup 落在不同元素上，
+  // 浏览器把 click 交给共同祖先，按钮的 onClick 一次都不跑（09-29 真浏览器量到的就是这一形）。
+  // 现在它只跟着"选中一条 / 保存 / 开始打字"走。
 
   const isNewUser = selectedUser === "__new__";
   const username = isNewUser ? newUsername.trim() : selectedUser;
@@ -204,14 +220,23 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
                   ref={inputRef}
                   placeholder="192.168.1.100"
                   value={serverUrl}
-                  onChange={(e) => setServerUrlState(e.target.value)}
+                  onChange={(e) => {
+                    setServerUrlState(e.target.value);
+                    // 一开始打字就收起那份清单：它内联排在框下面，留在那儿会把行高顶来顶去
+                    if (e.target.value.trim()) setShowRecent(false);
+                  }}
                   onKeyDown={(e) => e.key === "Enter" && handleSaveServerUrl()}
-                  onFocus={() => { if (getRecentUrls().length > 0) setShowRecent(true); }}
+                  onFocus={() => { if (!serverUrl.trim() && getRecentUrls().length > 0) setShowRecent(true); }}
                   autoFocus
                 />
-                {/* 最近使用的地址下拉 */}
+                {/* 最近使用的地址：**内联**排在输入框下面，且只在框是空的时候展开。
+                    原来它是 `absolute top-full` 浮层 + 一 focus 就展开 + 点框外才收起，三件事凑在一起
+                    09-29 真浏览器里量到两种咬手：①浮层盖住下面的「连接方式」两枚，点不到；
+                    ②改成内联之后，点下面任何控件都会先"点框外→收起"，那一收让整块往上跳 ~34px，
+                    mousedown 与 mouseup 落在不同元素上，浏览器把 click 交给共同祖先，按钮的 onClick 根本不触发
+                    （读数：radio 拿到 focus 但 aria-checked 不动）。收起改成只跟着"选中/保存/开始打字"走。 */}
                 {showRecent && getRecentUrls().length > 0 && (
-                  <div className="absolute top-full left-0 right-0 mt-1 bg-popover border rounded-md shadow-md z-10 max-h-40 overflow-y-auto">
+                  <div className="mt-1 bg-popover border rounded-md shadow-md max-h-40 overflow-y-auto">
                     {getRecentUrls().map((url) => (
                       <div key={url} className="flex items-center justify-between px-3 py-1.5 hover:bg-accent text-sm cursor-pointer group"
                         onClick={() => handleSelectRecent(url)}>
@@ -229,8 +254,30 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
                   </div>
                 )}
               </div>
+              {/* 连接方式：选哪条连哪条，默认 HTTP。点它会把地址开头的协议（和那条的默认端口）一起改掉 */}
+              <div role="radiogroup" aria-label="连接方式" className="flex items-center gap-2">
+                <span className="text-[10px] text-muted-foreground shrink-0">连接方式</span>
+                {(["http", "https"] as ServerScheme[]).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    role="radio"
+                    name={`server-scheme-${s}`}
+                    aria-checked={shownScheme === s}
+                    onClick={() => handlePickScheme(s)}
+                    className={`flex-1 rounded border px-2 py-1 text-[11px] ${
+                      shownScheme === s
+                        ? "border-primary text-foreground font-medium"
+                        : "text-muted-foreground hover:bg-accent"
+                    }`}
+                  >
+                    {s === "http" ? "HTTP :5173" : "HTTPS :8443"}
+                  </button>
+                ))}
+              </div>
               <p className="text-[10px] text-muted-foreground">
-                输入 IP 自动探测 https(:8443)/http(:5173)；也可显式填写完整地址
+                只填 IP 时按上面选的方式连：HTTP 走 :5173，HTTPS 走 :8443；地址里已经写了协议，点这两枚会把开头的协议一起改掉（自己写过的端口保留）。
+                第一次连本机或局域网的设备，浏览器可能问一次「允许访问本地网络」——授权记在这个网站上，允许过一次就不再问。
               </p>
               <div className="flex gap-2">
                 <Button
