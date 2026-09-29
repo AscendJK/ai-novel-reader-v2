@@ -66,8 +66,8 @@ Before anything is zipped, `scripts/check-server-pack.mjs` (pure logic in `scrip
 **Auto-publish a Release**: Pushing to `main` only triggers the frontend deployment — it does not package the backend. To release a new version, create a tag:
 
 ```bash
-git tag v2.5.0
-git push origin v2.5.0
+git tag v2.6.0
+git push origin v2.6.0
 ```
 
 GitHub Actions (`.github/workflows/release-backend.yml`) then builds the frontend, packs both zips, verifies the artifacts (checks critical files such as `tts-worker.py`, `rag.js`, and — for the full package — `dist/index.html`; fails the run if any is missing), creates a Release, and uploads them. You can also trigger it manually from the Actions tab (workflow_dispatch).
