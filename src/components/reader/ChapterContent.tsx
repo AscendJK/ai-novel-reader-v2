@@ -399,7 +399,17 @@ export function ChapterContent({ summaryOpen, hasSummary, immersive, onToggleImm
   }, [currentNovel, chapters, setSelectedChapter, addChapters]);
 
   // 翻页导航
+  //
+  // 分页测量排在 100ms 防抖之后（`usePagination.ts:100`），窗内 `totalPages` 恒 0。渲染层
+  // 此时已经把整章兜底成一页（见下面 `displayTotalPages`），可导航那半没兜底：`safePage(0)
+  // < totalPages-1(-1)` 不成立，就被当成"已在末页"而跳进隔壁章——读者刚点开一章、手快碰了
+  // 一下屏幕，整章内容直接被翻过去。2026-09-29 CI 的 B20 第一次撞上这一格（点右缘之后界面
+  // 写着「第二章」）。
+  // 空章节与滚动模式不算这一格：那两条路上"没有下一页"是真的，跨章照旧。
+  const pendingMeasure = isPaginated && contentParagraphs.length > 0 && totalPages === 0;
+
   const goNextPage = useCallback(() => {
+    if (pendingMeasure) return;
     if (isDouble) {
       const nextFirst = (spreadIndex + 1) * 2;
       if (nextFirst < totalPages) setCurrentPage(nextFirst);
@@ -408,9 +418,10 @@ export function ChapterContent({ summaryOpen, hasSummary, immersive, onToggleImm
       if (safePage < totalPages - 1) setCurrentPage(safePage + 1);
       else if (nextChapter) { autoAdvanceTargetRef.current = nextChapter.id; goToChapter(nextChapter.id); }
     }
-  }, [isDouble, spreadIndex, totalPages, safePage, nextChapter, goToChapter]);
+  }, [isDouble, spreadIndex, totalPages, safePage, nextChapter, goToChapter, pendingMeasure]);
 
   const goPrevPage = useCallback(() => {
+    if (pendingMeasure) return;
     if (isDouble) {
       if (spreadIndex > 0) setCurrentPage((spreadIndex - 1) * 2);
       else if (prevChapter) goToChapter(prevChapter.id);
@@ -418,7 +429,7 @@ export function ChapterContent({ summaryOpen, hasSummary, immersive, onToggleImm
       if (safePage > 0) setCurrentPage(safePage - 1);
       else if (prevChapter) goToChapter(prevChapter.id);
     }
-  }, [isDouble, spreadIndex, safePage, prevChapter, goToChapter]);
+  }, [isDouble, spreadIndex, safePage, prevChapter, goToChapter, pendingMeasure]);
 
   // 键盘快捷键
   const goNextPageRef = useRef(goNextPage);
@@ -764,8 +775,11 @@ export function ChapterContent({ summaryOpen, hasSummary, immersive, onToggleImm
           <BottomNav
             ref={bottomNavRef}
             immersive={immersive}
-            prevLabel={safePage > 0 ? "上一页" : (prevChapter ? prevChapter.title : "已是第一章")}
-            nextLabel={safePage < totalPages - 1 ? "下一页" : (nextChapter ? nextChapter.title : "已是最后一章")}
+            // 窗内不知道"本页之后还有没有页"，所以邻章在的时候先写「上一页／下一页」，量完再换成章题
+            // ——护栏已经让跨章那一下点不动了，按钮继续写着章题就是第二句假话。两头本来就没邻章的
+            // （第一章／最后一章）不动：那两句在窗内也是实话。
+            prevLabel={safePage > 0 || (pendingMeasure && !!prevChapter) ? "上一页" : (prevChapter ? prevChapter.title : "已是第一章")}
+            nextLabel={safePage < totalPages - 1 || (pendingMeasure && !!nextChapter) ? "下一页" : (nextChapter ? nextChapter.title : "已是最后一章")}
             onPrev={() => { setAutoReadEnabled(false); goPrevPage(); }}
             onNext={() => { setAutoReadEnabled(false); goNextPage(); }}
             prevDisabled={safePage === 0 && !prevChapter}

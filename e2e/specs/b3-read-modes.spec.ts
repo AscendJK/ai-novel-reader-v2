@@ -140,6 +140,12 @@ test("B20 移动端：点屏幕左中右三块各自是上一页、双击沉浸�
   await openApp(page);
   await openPagedBook(page, "阅读页");
 
+  // 必须先等分页量出来再点：测量排在 100ms 防抖之后，窗内 `totalPages` 恒 0，而那时点右缘
+  // 的正确行为是"什么都不做"（`ChapterContent.tsx` 的 pendingMeasure 护栏）。B18/B19 一开始
+  // 就等，这一条漏了——CI 2026-09-29 首次跑全量时它落在窗内，判据把"护栏生效"读成坏了。
+  // 窗内那一格由 jsdom 层钉住（`ChapterContent-internals.test.tsx`），这儿要钉的是量完之后。
+  await settledTotal(page);
+
   // 正文容器：翻页模式下唯一带 touch-action 的那块（点它才走 handlePageClick）
   const canvas = page.locator('div[style*="touch-action"]');
   await expect(canvas).toBeVisible();

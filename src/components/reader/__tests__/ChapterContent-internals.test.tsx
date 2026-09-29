@@ -78,6 +78,8 @@ function rect(top: number, height: number, width: number): DOMRect {
 }
 
 const realGetBoundingClientRect = Element.prototype.getBoundingClientRect;
+/** 窄屏判据会把 `innerWidth` 改成 420，留一只初值好在 afterEach 里还原，别漏给同文件下一条 */
+const realInnerWidth = window.innerWidth;
 const realScrollIntoView = Element.prototype.scrollIntoView;
 const realScrollBy = Element.prototype.scrollBy;
 const realScrollTo = Element.prototype.scrollTo;
@@ -161,6 +163,19 @@ const autoReadButton = () => screen.getByTitle("自动阅读（速度/间隔在�
 const stopAutoReadButton = () => screen.getByTitle("停止自动阅读");
 const fontPanelButton = () => screen.getByTitle("字体设置");
 const pagingCanvas = () => document.querySelector<HTMLElement>('div[style*="touch-action"]')!;
+
+/** `handlePageClick` 只在窄屏走（`ChapterContent.tsx:569`：`innerWidth >= 768` 直接 return） */
+function narrowScreen(): void {
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 420 });
+}
+
+/** 点翻页容器上横向 clientX 那一处，再推进 ms 毫秒：刷掉 startTransition，又不越过那 100ms 防抖 */
+async function tap(clientX: number, ms: number): Promise<void> {
+  await act(async () => {
+    fireEvent.click(pagingCanvas(), { clientX });
+    vi.advanceTimersByTime(ms);
+  });
+}
 const pageLabel = () => screen.getByText(/^\d+(-\d+)? \/ \d+$/);
 
 /** 取组件交给 useAutoRead 的那份参数（每次渲染重记，拿到的就是当前这一次） */
@@ -230,6 +245,7 @@ beforeEach(() => {
 
 afterEach(() => {
   Element.prototype.getBoundingClientRect = realGetBoundingClientRect;
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: realInnerWidth });
   Element.prototype.scrollIntoView = realScrollIntoView;
   Element.prototype.scrollBy = realScrollBy;
   Element.prototype.scrollTo = realScrollTo;
@@ -393,6 +409,47 @@ describe("翻页手势", () => {
     });
     fireEvent.wheel(canvas, { deltaY: -120 });
     expect(pageLabel().textContent).toBe("1 / 3");
+  });
+
+  // 分页测量排在 100ms 防抖之后（`usePagination.ts:100`），窗内 `totalPages` 恒 0。
+  // 渲染层此时把整章兜底成一页（`ChapterContent.tsx:627`），可导航那半没兜底：
+  // `goNextPage` 见 `safePage(0) < totalPages-1(-1)` 不成立，就当"已在末页"跳进下一章。
+  // CI 2026-09-29 第一次跑到这一格就撞上了（`B20` 点右缘后界面写着「第二章」）。
+  it("页数还没量出来时点右缘：不许跳下一章，量完之后同一坐标要真翻页", async () => {
+    narrowScreen();
+    mount({ novel: novelOf(3, [true, true, true]), chapterId: "ch-1" });
+    expect(pageLabel().textContent, "未量出时那一格兜底成一页").toBe("1 / 1");
+
+    // 600 宽容器里 560 → ratio 0.93 > 2/3；先推进 50ms 把 startTransition 刷出来，
+    // 又不越过那 100ms 防抖——不然"没跳章"可能只是"还没刷"，判不到东西
+    await tap(560, 50);
+    expect(useNovelStore.getState().selectedChapterId, "测量窗内点右缘不该把人甩进下一章").toBe("ch-1");
+    expect(pageLabel().textContent).toBe("1 / 1");
+    // 护栏点了"不许跳"，底栏就不能再预告下一章——那枚按钮写着章题却按不动是第二句假话
+    expect(screen.queryByRole("button", { name: "第2章" }), "窗内底栏不许写着下一章标题").toBeNull();
+    expect(screen.getByRole("button", { name: "下一页" }).hasAttribute("disabled"), "窗内那一枚是活的下一页").toBe(false);
+
+    // 对照：量完之后同一个坐标就是"下一页"（少了这一格，上面那条会连着"翻页整个坏了"一起绿）
+    await settle();
+    expect(pageLabel().textContent).toBe("1 / 3");
+    await tap(560, 50);
+    expect(pageLabel().textContent, "量出来之后同一坐标该翻到下一页").toBe("2 / 3");
+  });
+
+  it("页数还没量出来时点左缘：不许跳上一章，量完之后第一页往左才该回上一章", async () => {
+    narrowScreen();
+    mount({ novel: novelOf(3, [true, true, true]), chapterId: "ch-2" });
+
+    await tap(40, 50); // ratio 0.067 < 1/3
+    expect(useNovelStore.getState().selectedChapterId, "同一扇窗里的反向那一格").toBe("ch-2");
+    expect(screen.getByRole("button", { name: "上一页" }), "窗内写着方向，不写章题").toBeTruthy();
+    expect(screen.queryByRole("button", { name: "第1章" })).toBeNull();
+
+    await settle();
+    // 对照：量完之后本章第一页就该改口写上一章标题（少了这一格，"永远写上一页"也绿）
+    expect(screen.getByRole("button", { name: "第1章" })).toBeTruthy();
+    await tap(40, 50);
+    expect(useNovelStore.getState().selectedChapterId, "量完之后本章第一页再往左就是上一章").toBe("ch-1");
   });
 
   it("空格翻页：字体面板开着、或焦点落在按钮上时让开", async () => {
