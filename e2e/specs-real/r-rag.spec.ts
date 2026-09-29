@@ -16,6 +16,10 @@
  * 所以"浏览器有没有把权重下进 Cache Storage"在有服务器的场合**不是**检索成立的前提。
  * 我前两版都把它当成了前提：一版断言缓存有货（红在 0 条），一版让 TF-IDF 静默降级蒙了过去。
  *
+ * 09-29 补的 R-C5 就是踩在这条回退腿上：把 `/api/rag/encode` 掐掉，让浏览器自己下一趟权重、
+ * 自己编译 WASM、自己编出那条查询向量。**这一腿在此之前没有任何一层走过**——F 组桩掉 model-proxy，
+ * 单测把 `encode.worker` 整只 mock，而 R-C3 走的是服务端编码。
+ *
  * 判据口径：
  *  - 服务端侧的"真下载"用**落盘字节**量（`<DATA_DIR>/models-cache` 里出现 ≥20MB 的 .onnx），
  *    不靠日志、不靠"请求发出去了"；
@@ -276,7 +280,8 @@ test.describe.serial("真后端：模型真下载、索引真建、问一句真�
     // "TF-IDF（内置）"（`src/rag/engines.ts:14-16`）
     await expect(panel.text(page, "TF-IDF（内置）")).toHaveCount(0);
     await expect(panel.text(page, /BGE Small/).first()).toBeVisible();
-    // 浏览器端编码那一腿只在断网时走，归 R-F（真后端离线复跑）
+    // 这一条同时是 R-C5 的对照组：不掐的时候查询编码就该走服务端。没有它，
+    // "永远走浏览器 Worker"那种写法当场也是绿的
   });
 
   test("R-C4 换一个用户：书架上不该长出别人的书（过滤靠服务端算的 joined，界面只留 join 过的）", async ({ page, baseURL }) => {
@@ -298,5 +303,70 @@ test.describe.serial("真后端：模型真下载、索引真建、问一句真�
     expect(book!.joined, "服务端把别人上传的书标成了我 join 过").toBe(false);
     const mine = rows.filter((r) => r.joined).map((r) => r.title);
     expect(mine, `新用户不该 join 过任何书，服务端报了：${mine.join("、")}`).toEqual([]);
+  });
+
+  /**
+   * R-C5：掐掉服务端编码腿，逼出**浏览器 Worker 编码**那一条回退。
+   *
+   * 这一格历史上没有任何一层走过：F 组把 model-proxy 桩掉了，单测把 `encode.worker` 整只
+   * mock，R-C3 走的是服务端编码。R-C3 结尾那句"归 R-F"是句假话——R-F 只有两条（断网重开
+   * 与包内清单），不碰检索。所以"浏览器自己跑一次 WASM 推理"这件事到今天才有判据。
+   *
+   * 它同时是 CSP 收紧（`'unsafe-eval'` → `'wasm-unsafe-eval'`）的功能验收：浏览器侧真编译
+   * WASM、真推理、真搜得回来。
+   *
+   * 归因靠三件一起说：① 服务端编码请求**确实被掐**（否则量的还是 R-C3 那条路）；
+   * ② 结果第一条命中全书唯一的哨兵数字，且引擎行不是 TF-IDF（排除"静默降级成关键词打分"）；
+   * ③ 权重真的落在**这份 context 自己的** `transformers-cache` 里（正向证据：每个用例都是全新
+   * 浏览器 context，这份货不会是上一轮留下的）。
+   * ③ 一开始想按"worker 的 URL 里有没有 `encode.worker-`"来认，实测认不到——产物里那只 worker 是
+   * blob URL，文件名不出现在 URL 上（第一版就是这么红的：功能四条全过，只有这枚定位器假红）。
+   *
+   * 对照组不另开一条：R-C3 钉的就是"不掐时走服务端 `/api/rag/encode` 且回 200"，
+   * 少了它，"永远走 Worker"那种写法当场也是绿的。
+   */
+  test("R-C5 掐掉服务端编码：浏览器 Worker 真跑一次 WASM 推理，第一条仍命中那句哨兵", async ({ page, baseURL }) => {
+    test.setTimeout(9 * 60_000);
+    await signIn(page, baseURL!, USER);
+    await expect(shelfCard(page, BOOK)).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/BGE (已缓存|已加载)/).first()).toBeVisible({ timeout: 240_000 });
+    // 每个用例都是全新的 context，浏览器那份 Cache Storage 是空的 → 这一腿要真下 22.9MB 权重，
+    // 而 model-proxy 上挂着 `rateLimit(10)`：先等前面几条把它打出的配额窗过去
+    await waitForProxyHeadroom(page);
+    await openBook(page, BOOK);
+    await openSummaryPanel(page);
+    await panel.tab(page, "搜索").click();
+
+    let killed = 0;
+    await page.route("**/api/rag/encode", (route) => {
+      killed++;
+      void route.abort();
+    });
+
+    await panel.root(page).locator("#rag-search-input").fill(QUERY);
+    await page.keyboard.press("Enter");
+
+    const firstResult = panel.root(page).locator("p.whitespace-pre-wrap").first();
+    await expect(firstResult, "第一条结果不是那句哨兵句：浏览器编码没成立").toContainText(UNIQUE_FACT, { timeout: 5 * 60_000 });
+    expect(killed, "服务端编码腿根本没被掐——那这一条量的还是 R-C3 那条路").toBeGreaterThan(0);
+    await expect(panel.text(page, "未找到相关内容")).toHaveCount(0);
+    await expect(panel.text(page, "TF-IDF（内置）")).toHaveCount(0);
+    // 归因靠上面三件（掐腿 + 与目标句零词面重叠的哨兵 + 引擎行不是 TF-IDF）：剩下的编码路径只有浏览器一条。
+    // 这一条再补一件正面的：权重真的进了**这份 context 自己的** Cache Storage
+    //（每个用例都是全新 context，所以这份货不可能是上一轮留下的）。
+    // 曾经想按 worker 的 URL 里有没有 `encode.worker-` 来认，实测认不到——产物里那只 worker 是
+    // blob URL（`blob:http://127.0.0.1:5399/<uuid>`），文件名根本不出现在 URL 上。
+    const cachedWeights = await page.evaluate(async () => {
+      const names = await caches.keys();
+      const cache = await caches.open("transformers-cache");
+      const keys = await cache.keys();
+      const onnx = keys.filter((r) => /\.onnx$|model_quantized/.test(r.url)).length;
+      return { names, total: keys.length, onnx };
+    });
+    expect(
+      cachedWeights.onnx,
+      `浏览器 Cache Storage 里没有权重（cache 名：${cachedWeights.names.join("、") || "一个都没有"}；` +
+        `transformers-cache 共 ${cachedWeights.total} 条）——那这一趟不是浏览器自己编的`,
+    ).toBeGreaterThan(0);
   });
 });
