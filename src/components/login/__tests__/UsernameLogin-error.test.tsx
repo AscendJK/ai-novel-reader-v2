@@ -14,8 +14,8 @@ import { render, screen, cleanup } from "@testing-library/react";
 vi.mock("@/lib/api-client", () => ({
   getServerUrl: () => "https://192.168.1.5:8443",
   setServerUrl: vi.fn(),
-  checkServerReachable: vi.fn(async () => true),
   detectAndSetServerUrl: vi.fn(async (u: string) => u),
+  probeServer: vi.fn(async () => ({ ok: true, reason: null })),
 }));
 
 const { UsernameLogin } = await import("@/components/login/UsernameLogin");

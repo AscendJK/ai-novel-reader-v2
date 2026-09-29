@@ -20,12 +20,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-const checkServerReachable = vi.fn(async () => true);
+const probeServer = vi.fn(async () => ({ ok: true, reason: null as string | null }));
 vi.mock("@/lib/api-client", () => ({
   getServerUrl: () => "https://192.168.1.5:8443",
   setServerUrl: vi.fn(),
-  checkServerReachable: () => checkServerReachable(),
   detectAndSetServerUrl: vi.fn(async (u: string) => u),
+  probeServer: () => probeServer(),
 }));
 
 const { default: UsernameLogin } = await import("@/components/login/UsernameLogin").then((m) => ({ default: m.UsernameLogin }));
@@ -45,7 +45,7 @@ async function typeNewUser() {
 beforeEach(() => {
   sessionStorage.clear();
   localStorage.clear();
-  checkServerReachable.mockClear();
+  probeServer.mockClear();
 });
 afterEach(cleanup);
 

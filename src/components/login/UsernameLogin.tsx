@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2 } from "lucide-react";
-import { getServerUrl, setServerUrl, checkServerReachable, detectAndSetServerUrl } from "@/lib/api-client";
+import { getServerUrl, setServerUrl, detectAndSetServerUrl, probeServer, PROBE_FAILURE_TEXT, type ProbeFailure } from "@/lib/api-client";
 import { APP_VERSION } from "@/config/version";
 
 const RECENT_URLS_KEY = "novel-reader-recent-urls";
@@ -69,16 +69,19 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
   const [loading, setLoading] = useState(false);
   const [serverUrl, setServerUrlState] = useState(getServerUrl());
   const [serverStatus, setServerStatus] = useState<"unknown" | "checking" | "ok" | "fail">("unknown");
+  /** 探测失败的原因（`probeServer` 分出来的那一类）；null 表示没探过、探通了、或那条不知道原因的入口 */
+  const [serverReason, setServerReason] = useState<ProbeFailure | null>(null);
   const [showServerConfig, setShowServerConfig] = useState(false);
   const [showRecent, setShowRecent] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // 检查服务器状态
   const checkServer = async (url: string) => {
-    if (!url) { setServerStatus("unknown"); return; }
+    if (!url) { setServerStatus("unknown"); setServerReason(null); return; }
     setServerStatus("checking");
-    const ok = await checkServerReachable(url);
-    setServerStatus(ok ? "ok" : "fail");
+    const r = await probeServer(url);
+    setServerStatus(r.ok ? "ok" : "fail");
+    setServerReason(r.ok ? null : r.reason);
   };
 
   // 保存服务器地址
@@ -91,10 +94,12 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
       const url = await detectAndSetServerUrl(raw);
       setServerUrlState(url);
       addRecentUrl(url);
-      const ok = await checkServerReachable(url);
-      setServerStatus(ok ? "ok" : "fail");
+      const r = await probeServer(url);
+      setServerStatus(r.ok ? "ok" : "fail");
+      setServerReason(r.ok ? null : r.reason);
     } catch {
       setServerStatus("fail");
+      setServerReason(null);
     }
     setShowServerConfig(false);
     setShowRecent(false);
@@ -248,7 +253,9 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
                 </Button>
               </div>
               {serverStatus === "fail" && (
-                <p className="text-xs text-destructive text-center">无法连接到服务器，请检查地址是否正确</p>
+                <p className="text-xs text-destructive text-center">
+                  {serverReason ? PROBE_FAILURE_TEXT[serverReason].note : "无法连接到服务器，请检查地址是否正确"}
+                </p>
               )}
               {serverStatus === "ok" && (
                 <p className="text-xs text-green-600 text-center">连接成功！</p>
@@ -268,7 +275,9 @@ export function UsernameLogin({ localUsers, onLogin, onDelete, error, syncing, o
                 </div>
                 <div className="flex items-center gap-1.5">
                   {serverStatus === "ok" && <span className="text-green-600">● 已连接</span>}
-                  {serverStatus === "fail" && <span className="text-destructive">● 无法连接</span>}
+                  {serverStatus === "fail" && (
+                    <span className="text-destructive">● {serverReason ? PROBE_FAILURE_TEXT[serverReason].badge : "无法连接"}</span>
+                  )}
                   {serverStatus === "checking" && <span className="text-muted-foreground">● 检测中</span>}
                   <Button
                     variant="ghost"
