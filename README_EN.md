@@ -339,9 +339,9 @@ Click any novel on the bookshelf to enter reading view:
 - **Directory Auto-scroll**: When navigating chapters with buttons, the left sidebar automatically scrolls to the current chapter
 - **Three Reading Modes** (switch via Aa button):
   - **Scroll Mode**: Traditional scrolling with infinite continuous scroll (auto-loads next chapter at bottom)
-  - **Single Page Mode**: Page-by-page reading, click left/right sides / scroll wheel / keyboard `←` `→` `Space` to turn pages
+  - **Single Page Mode**: Page-by-page reading — scroll wheel / keyboard `←` `→` `Space` / bottom bar buttons. Tapping either side of the screen turns the page too: that works on touch devices at any window width, while a mouse on a wide window gets no page turn (that click usually means selecting text)
   - **Double Page Mode**: Book-like layout with two pages side by side (desktop ≥1024px only)
-- **Immersive Reading Mode**: Press `i` to toggle, hides sidebar and AI panel, shows only title and text
+- **Immersive Reading Mode**: Press `i` to toggle, hides sidebar and AI panel, shows only title and text; on touch devices double-tap the middle of the text to do the same
 - Aa button adjusts reading mode, font size, weight, line height, paragraph spacing, and font family (system default / Song / Kai / monospace)
 - Dark / light mode toggle
 - Mobile-responsive, auto-switches to single page mode

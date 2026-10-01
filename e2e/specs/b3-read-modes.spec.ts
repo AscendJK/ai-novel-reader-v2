@@ -27,8 +27,8 @@ function pagedNovel(chapters = 3, paragraphs = 34): string {
   }).join("\n\n");
 }
 
-/** 分页模式偏好：`double`/`single` 走 localStorage 初值（`ui-store.ts:43-46`），自动切页关掉，免得被宽度牵着走 */
-async function seedReadingMode(page: Page, mode: "single" | "double", autoSwitch = false): Promise<void> {
+/** 分页/滚动偏好：`single`/`double`/`scroll` 走 localStorage 初值（`ui-store.ts:43-46`），自动切页关掉，免得被宽度牵着走 */
+async function seedReadingMode(page: Page, mode: "single" | "double" | "scroll", autoSwitch = false): Promise<void> {
   await page.addInitScript(
     ({ m, auto }) => {
       localStorage.setItem("novel-reader-reading-mode", m);
@@ -134,7 +134,12 @@ test("B19 两头的边界要改口：第一章第一页没有「回上一页」�
   await expect(nav.getByRole("button", { name: "下一页" })).toHaveCount(0);
 });
 
-test("B20 移动端：点屏幕左中右三块各自是上一页、双击沉浸、下一页", async ({ page }) => {
+/**
+ * B20 钉的是闸门里「窄窗口」那一支：这里没有 `hasTouch`，Chromium 的指针仍是鼠标
+ * （`(pointer: coarse)` 为假），点按还灵就说明宽度那半没被摘走——桌面把窗子拖窄的读者照旧能点。
+ * B28 钉另一支（触摸 + 宽屏），B29 钉"两支都不成立时不接管"。
+ */
+test("B20 窄窗口 + 鼠标：点屏幕左中右三块各自是上一页、双击沉浸、下一页", async ({ page }) => {
   await page.setViewportSize({ width: 420, height: 820 });
   await seedReadingMode(page, "single");
   await openApp(page);
@@ -281,4 +286,166 @@ test("B25 目录里一条超长章节标题：不许把列表拉宽，要走省�
     w.vpClient + 1
   );
   expect(w.spanClient, "标题那一格没被截（可见宽就等于需要宽），省略号没生效").toBeLessThan(w.spanScroll);
+});
+
+/**
+ * B27：自动阅读（滚动模式）真的在动吗——最低档 0.5 行/秒。
+ *
+ * 制作人报"设到 0.5 行/秒就卡住不动"。成因在 `useAutoRead.ts:217` 那一行
+ * `el.scrollTop += 速度 × 行高 × dt × 缓启动系数`：**浏览器写 `scrollTop` 会归到整数像素**，
+ * 而 0.5 行/秒 × 行高 32.4px ÷ 60 帧 ≈ **0.27px/帧**——每一帧都被抹平，小数永远进不了下一像素。
+ * 这一格单测看不见：`useAutoRead.test.ts:44` 里那个 `el.scrollTop` 是只普通 JS 数字属性
+ * （jsdom 不模拟取整），+= 0.27 攒得干干净净，所以既有 5 条判据（最低测到 1 行/秒）全绿。
+ * 判据放在浏览器层，并且**同一趟跑两档**：4 行/秒是对照，用来证明"红了是产品坏了"而不是量法坏了。
+ */
+test("B27 自动阅读（滚动模式）：最低档 0.5 行/秒要真的在动，4 行/秒是对照", async ({ page }) => {
+  // 两档各测 6 秒 / 4 秒，加开机与导入：这条天生比别家慢，天花板单独抬（同 D6 的做法）
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await seedReadingMode(page, "scroll");
+  await openApp(page);
+  await importFiles(page, [txtFile("阅读页.txt", pagedNovel())]);
+  await expect(shelfCard(page, "阅读页")).toBeVisible();
+  await shelfCard(page, "阅读页").click();
+  const scroller = page.locator(".chapter-scroll-container");
+  await expect(scroller).toBeVisible({ timeout: 20_000 });
+
+  /** 开自动阅读，并把滚动速度设成 `speed` 行/秒（走真 UI：那枚「快捷调速」的下拉） */
+  const setSpeed = async (speed: number) => {
+    await page.getByTitle("自动阅读（速度/间隔在字体面板中设置）").click();
+    await expect(page.getByTitle("停止自动阅读")).toBeVisible();
+    await page.getByTitle("快捷调速").click();
+    await page.getByRole("button", { name: `${speed} 行/秒` }).click();
+    await expect(page.getByTitle("快捷调速")).toContainText(`${speed} 行/秒`);
+  };
+
+  /** 在 `windowMs` 毫秒里量正文真的挪了多少像素（行高取正文段落现场的 `line-height`，不抄默认值） */
+  const measure = (windowMs: number) =>
+    page.evaluate(async (ms) => {
+      const el = document.querySelector(".chapter-scroll-container") as HTMLElement;
+      // `.chapter-section` 里第一只 `p` 是章题下面那行小字（text-xs，行高 16px），
+      // 要的是正文：`.prose` 里那些（实测行高 = 字号 18 × 1.8 = 32.4px）
+      const bodyPara = el.querySelector(".chapter-section .prose p") ?? el.querySelector("p");
+      const lineHeightPx = parseFloat(getComputedStyle(bodyPara!).lineHeight);
+      const start = el.scrollTop;
+      const t0 = performance.now();
+      await new Promise((r) => setTimeout(r, ms));
+      return {
+        lineHeightPx,
+        moved: el.scrollTop - start,
+        elapsed: performance.now() - t0,
+        room: el.scrollHeight - el.clientHeight - start,
+      };
+    }, windowMs);
+
+  /** 期望位移：扣掉 800ms 缓启动平均少跑的那半秒 */
+  const expectedPx = (speed: number, lineHeightPx: number, elapsedMs: number) =>
+    speed * lineHeightPx * ((elapsedMs / 1000) - 0.4);
+
+  // ── 报的那一档：0.5 行/秒 ──
+  await setSpeed(0.5);
+  const slow = await measure(6000);
+  const slowExpected = expectedPx(0.5, slow.lineHeightPx, slow.elapsed);
+  console.log(
+    `[B27] 0.5 行/秒：行高 ${slow.lineHeightPx.toFixed(1)}px，${(slow.elapsed / 1000).toFixed(2)} 秒里挪了 ` +
+      `${slow.moved}px（该 ${slowExpected.toFixed(0)}px），剩余可滚 ${slow.room}px`
+  );
+  expect(slow.room, "样本撑不出可滚距离，这一格是空转").toBeGreaterThan(slowExpected * 2);
+  expect(
+    slow.moved,
+    `0.5 行/秒该走约 ${slowExpected.toFixed(0)}px，实际 ${slow.moved}px——逐帧位移不足 1px 时被 scrollTop 取整抹平了`
+  ).toBeGreaterThanOrEqual(slowExpected * 0.6);
+
+  // ── 对照：4 行/秒（同一台机器同一趟，量法坏了它也得不绿）──
+  await page.getByTitle("快捷调速").click();
+  await page.getByRole("button", { name: "4 行/秒" }).click();
+  const fast = await measure(4000);
+  const fastExpected = expectedPx(4, fast.lineHeightPx, fast.elapsed);
+  console.log(`[B27] 4 行/秒（对照）：${(fast.elapsed / 1000).toFixed(2)} 秒里挪了 ${fast.moved}px（该 ${fastExpected.toFixed(0)}px）`);
+  expect(fast.moved, `对照组只走了 ${fast.moved}px，说明量法或自动阅读本身没生效`).toBeGreaterThanOrEqual(fastExpected * 0.6);
+
+  await page.getByTitle("停止自动阅读").click();
+});
+
+/**
+ * B28/B29/B30：点按手势跟「输入方式」走，不跟宽度走。
+ *
+ * 制作人报"翻页模式下点屏幕左右两半翻不了页"。旧闸门是 `innerWidth >= 768` 直接 return，
+ * 平板竖屏正好撞在这一格上——iPad 竖屏就是 768 CSS px，手指点两侧什么都不发生。
+ * 现在的口径是 `窄窗口 || (pointer: coarse)`：触摸设备任意宽度都接管，桌面宽度 + 鼠标不接管
+ * （那一次 click 常见的是划选文字，误翻页比少一个手势坏）。
+ *
+ * 触摸那一支靠 `hasTouch` 造出来，所以两格开头都先自证媒体查询现场是真/假——
+ * 台架要是没把主指针换成触摸，B28 会退化成"什么都不测"的假绿。
+ */
+test.describe("平板竖屏那一档：手指点两侧翻页", () => {
+  test.use({ viewport: { width: 768, height: 1024 }, hasTouch: true });
+
+  test("B28 768 宽 + 触摸：点右缘翻下一页，点左缘翻回上一页", async ({ page }) => {
+    await seedReadingMode(page, "single");
+    await openApp(page);
+    expect(
+      await page.evaluate(() => window.matchMedia("(pointer: coarse)").matches),
+      "hasTouch 没把主指针变成触摸，这一格会空转"
+    ).toBe(true);
+    await openPagedBook(page, "阅读页");
+
+    const total = await settledTotal(page);
+    expect(total, "样本撑不出多页，点按判据会空转").toBeGreaterThan(2);
+
+    const canvas = page.locator('div[style*="touch-action"]');
+    const box = (await canvas.boundingBox())!;
+    const at = (ratio: number) => ({ x: box.width * ratio, y: box.height * 0.5 });
+
+    await canvas.click({ position: at(0.92) });
+    await expect(pageLabel(page), "触摸设备在 768 宽点右缘该翻到下一页").toHaveText(`2 / ${total}`);
+    await canvas.click({ position: at(0.06) });
+    await expect(pageLabel(page), "同一宽度点左缘该翻回上一页").toHaveText(`1 / ${total}`);
+  });
+
+  test("B30 同一宽度、滚动模式：点中间两下照样进沉浸（两处手势共用一道闸门）", async ({ page }) => {
+    // `ChapterContent` 里点按手势有两处：分页那三块与滚动模式中间的双击沉浸。
+    // 旧口径两处各写一遍 `innerWidth >= 768`，改一处漏一处就会"平板上翻页能用、沉浸按不动"，
+    // 而现在它们共用 `tapGesturesEnabled()`——这一格钉的就是共用那半。
+    await seedReadingMode(page, "scroll");
+    await openApp(page);
+    expect(await page.evaluate(() => window.matchMedia("(pointer: coarse)").matches), "台架没造出触摸").toBe(true);
+    await openPagedBook(page, "阅读页");
+
+    const scroller = page.locator(".chapter-scroll-container");
+    await expect(scroller).toBeVisible();
+    const box = (await scroller.boundingBox())!;
+    await expect(page.getByTitle("退出沉浸模式")).toHaveCount(0);
+
+    await scroller.dblclick({ position: { x: box.width * 0.5, y: box.height * 0.5 } });
+    await expect(page.getByTitle("退出沉浸模式"), "768 宽的触摸设备上双击中间该进沉浸").toBeVisible();
+  });
+});
+
+test.describe("桌面宽度 + 鼠标：点正文两侧不接管", () => {
+  test("B29 1280 宽、指针是 fine：点两侧页码一动不动", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await seedReadingMode(page, "single");
+    await openApp(page);
+    expect(
+      await page.evaluate(() => window.matchMedia("(pointer: coarse)").matches),
+      "这一格要的是鼠标环境，coarse 为真说明台架串了"
+    ).toBe(false);
+    await openPagedBook(page, "阅读页");
+
+    const total = await settledTotal(page);
+    const canvas = page.locator('div[style*="touch-action"]');
+    const box = (await canvas.boundingBox())!;
+    const at = (ratio: number) => ({ x: box.width * ratio, y: box.height * 0.5 });
+
+    // 右缘那一发才是这格的靶子：闸门写成恒真时它翻到 2，直接红。
+    // （左缘在第一页时就算闸门开着也只是"已是第一章"点了不动，所以往回那一发要先翻到第 2 页再试）
+    await canvas.click({ position: at(0.92) });
+    await expect(pageLabel(page), "桌面宽度 + 鼠标：点右缘不该翻页").toHaveText(`1 / ${total}`);
+
+    await bottomNav(page).getByRole("button", { name: "下一页" }).click();
+    await expect(pageLabel(page)).toHaveText(`2 / ${total}`);
+    await canvas.click({ position: at(0.06) });
+    await expect(pageLabel(page), "桌面宽度 + 鼠标：点左缘不该翻回去").toHaveText(`2 / ${total}`);
+  });
 });

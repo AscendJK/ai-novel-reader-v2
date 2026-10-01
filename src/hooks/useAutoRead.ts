@@ -177,6 +177,7 @@ export function useAutoRead({
     let rafId = 0;
     let lastTs: number | null = null; // null=首帧未初始化（首帧 ts 可能为 0，不能用 0 哨兵）
     let startTs: number | null = null; // 缓启动基准：开启时刻（首帧记录）
+    let carry = 0; // 攒着的不满一像素的余数，见 loop 里那段注释
 
     // 滚动期间禁用 CSS scroll-behavior: smooth（scroll-smooth 类）：
     // 部分浏览器（Firefox）对 scrollTop 赋值也应用平滑动画，与 rAF 逐帧位移冲突导致滞后；
@@ -214,7 +215,13 @@ export function useAutoRead({
         // 缓启动：开启后 easeInMs 内速度从 0 线性增至目标
         const elapsed = startTs !== null ? ts - startTs : 0;
         const factor = easeInRef.current > 0 ? Math.min(1, elapsed / easeInRef.current) : 1;
-        if (el) el.scrollTop += speedRef.current * lineHeightRef.current * dt * factor; // 行/秒 × 行高 × 帧间隔 × 缓启动系数
+        // 行/秒 × 行高 × 帧间隔 × 缓启动系数。**写 scrollTop 会被浏览器归到整像素**：
+        // 0.5 行/秒（最低档）每帧只有约 0.27px，直接 `+=` 小数就被抹平、正文一帧都不动，
+        // 所以不满一像素的量攒进 carry，攒够才落笔。
+        const step = speedRef.current * lineHeightRef.current * dt * factor + carry;
+        const whole = Math.trunc(step);
+        carry = step - whole;
+        if (whole !== 0 && el) el.scrollTop += whole;
       }
       if (startTs === null) startTs = ts;
       lastTs = ts;

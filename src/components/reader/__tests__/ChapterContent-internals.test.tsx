@@ -80,6 +80,8 @@ function rect(top: number, height: number, width: number): DOMRect {
 const realGetBoundingClientRect = Element.prototype.getBoundingClientRect;
 /** 窄屏判据会把 `innerWidth` 改成 420，留一只初值好在 afterEach 里还原，别漏给同文件下一条 */
 const realInnerWidth = window.innerWidth;
+/** `setup.ts` 那只 `matchMedia` 桩恒回 `matches: false`（=鼠标），点按闸门的触摸那一支要靠它，得能换掉 */
+const realMatchMedia = window.matchMedia;
 const realScrollIntoView = Element.prototype.scrollIntoView;
 const realScrollBy = Element.prototype.scrollBy;
 const realScrollTo = Element.prototype.scrollTo;
@@ -164,9 +166,28 @@ const stopAutoReadButton = () => screen.getByTitle("停止自动阅读");
 const fontPanelButton = () => screen.getByTitle("字体设置");
 const pagingCanvas = () => document.querySelector<HTMLElement>('div[style*="touch-action"]')!;
 
-/** `handlePageClick` 只在窄屏走（`ChapterContent.tsx:569`：`innerWidth >= 768` 直接 return） */
+/** `handlePageClick` 那两道点按手势的闸门：窄窗口 或 触摸设备（`tapGesturesEnabled`） */
 function narrowScreen(): void {
   Object.defineProperty(window, "innerWidth", { configurable: true, value: 420 });
+}
+
+/** 拉宽到「桌面」那一档：旧口径（只看宽度）下点按整条不响应 */
+function wideScreen(): void {
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 1280 });
+}
+
+/** 这根指针是手指（coarse）还是鼠标（fine）——点按闸门问的就是这一句 */
+function pointerKind(kind: "coarse" | "fine"): void {
+  window.matchMedia = ((query: string) => ({
+    matches: query === "(pointer: coarse)" && kind === "coarse",
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  })) as typeof window.matchMedia;
 }
 
 /** 点翻页容器上横向 clientX 那一处，再推进 ms 毫秒：刷掉 startTransition，又不越过那 100ms 防抖 */
@@ -246,6 +267,7 @@ beforeEach(() => {
 afterEach(() => {
   Element.prototype.getBoundingClientRect = realGetBoundingClientRect;
   Object.defineProperty(window, "innerWidth", { configurable: true, value: realInnerWidth });
+  window.matchMedia = realMatchMedia;
   Element.prototype.scrollIntoView = realScrollIntoView;
   Element.prototype.scrollBy = realScrollBy;
   Element.prototype.scrollTo = realScrollTo;
@@ -450,6 +472,44 @@ describe("翻页手势", () => {
     expect(screen.getByRole("button", { name: "第1章" })).toBeTruthy();
     await tap(40, 50);
     expect(useNovelStore.getState().selectedChapterId, "量完之后本章第一页再往左就是上一章").toBe("ch-1");
+  });
+
+  it("点按翻页跟输入方式走：宽屏 + 手指照样翻页", async () => {
+    // 旧口径只看宽度（`innerWidth >= 768` 就整条不响应），于是平板竖屏——iPad 正好 768 CSS px——
+    // 用手指点两侧也不翻页。现在触摸设备任意宽度都接管。
+    wideScreen();
+    pointerKind("coarse");
+    mount({ novel: novelOf(3, [true, true, true]), chapterId: "ch-1" });
+    await settle();
+    expect(pageLabel().textContent, "样本没量出三页，后面两条判据会空转").toBe("1 / 3");
+
+    await tap(560, 50); // ratio 0.93 > 2/3
+    expect(pageLabel().textContent, "宽屏 + 手指：点右缘该翻到下一页").toBe("2 / 3");
+    await tap(40, 50); // ratio 0.067 < 1/3
+    expect(pageLabel().textContent, "宽屏 + 手指：点左缘该翻回上一页").toBe("1 / 3");
+  });
+
+  it("宽屏 + 鼠标：点两侧什么都不做（划选文字释放的那一下不算翻页）", async () => {
+    // 这一格钉的是"放开触摸"这一刀没顺手把鼠标那半也放开。少了它，谓词写成恒真照样全绿，
+    // 而桌面读者每选一次词就跳一页。
+    // **左右各点一下再统一断言是假判据**：那两下正好抵消，恒真也绿（第一版就这么漏过去的）。
+    wideScreen();
+    pointerKind("fine");
+    mount({ novel: novelOf(3, [true, true, true]), chapterId: "ch-1" });
+    await settle();
+    expect(pageLabel().textContent).toBe("1 / 3");
+
+    await tap(560, 50);
+    expect(pageLabel().textContent, "桌面宽度 + 鼠标：点右缘不该翻页").toBe("1 / 3");
+
+    // 往回那一发要先真的站到第 2 页：第 1 页点左缘本来就无事可做，判不出坏
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+      vi.advanceTimersByTime(50);
+    });
+    expect(pageLabel().textContent).toBe("2 / 3");
+    await tap(40, 50);
+    expect(pageLabel().textContent, "桌面宽度 + 鼠标：点左缘不该翻回去").toBe("2 / 3");
   });
 
   it("空格翻页：字体面板开着、或焦点落在按钮上时让开", async () => {

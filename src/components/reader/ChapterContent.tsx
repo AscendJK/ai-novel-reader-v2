@@ -35,6 +35,17 @@ const PAGE_PADDING = 24;
 const PAGE_PADDING_MOBILE = 12;
 const MAX_SINGLE_WIDTH = 768;
 
+/**
+ * 点按手势（分页模式点两侧翻页、点中间双击进沉浸）该不该接管这次点击。
+ *
+ * 旧口径只看宽度（`innerWidth >= 768` 直接不响应），于是平板竖屏——iPad 正好 768 CSS px——
+ * 用手指点两侧也不翻页。改成按输入方式判：触摸设备任意宽度都接管。
+ * 窄窗口那条留着：桌面把窗子拖窄时读者也在点，只放开不摘走。
+ * 关掉的那一格只剩「桌面宽度 + 鼠标」，因为那边一次 click 常见的是划选文字，误翻页比少一个手势坏。
+ */
+const tapGesturesEnabled = () =>
+  window.innerWidth < 768 || window.matchMedia("(pointer: coarse)").matches;
+
 export function ChapterContent({ summaryOpen, hasSummary, immersive, onToggleImmersive, scrollControlRef }: ChapterContentProps) {
   const currentNovel = useNovelStore((s) => s.currentNovel);
   const selectedChapterId = useNovelStore((s) => s.selectedChapterId);
@@ -577,7 +588,7 @@ export function ChapterContent({ summaryOpen, hasSummary, immersive, onToggleImm
 
   // 翻页模式点击
   const handlePageClick = (e: React.MouseEvent) => {
-    if (window.innerWidth >= 768) return;
+    if (!tapGesturesEnabled()) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const ratio = (e.clientX - rect.left) / rect.width;
     if (ratio < 1 / 3) goPrevPage();
@@ -824,8 +835,8 @@ export function ChapterContent({ summaryOpen, hasSummary, immersive, onToggleImm
         ref={scrollContainerRef}
         className="flex-1 overflow-y-auto scroll-smooth chapter-scroll-container"
         onClick={(e) => {
-          // 移动端双击中间区域切换沉浸模式
-          if (window.innerWidth >= 768 || !onToggleImmersive) return;
+          // 双击中间区域切换沉浸模式（与分页那处点按共用同一道闸门）
+          if (!tapGesturesEnabled() || !onToggleImmersive) return;
           const rect = e.currentTarget.getBoundingClientRect();
           const ratio = (e.clientX - rect.left) / rect.width;
           if (ratio < 1 / 3 || ratio > 2 / 3) return; // 只响应中间区域

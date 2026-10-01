@@ -41,7 +41,20 @@ function makeScrollEl() {
   const el = document.createElement("div");
   Object.defineProperty(el, "scrollHeight", { value: 2000, configurable: true });
   Object.defineProperty(el, "clientHeight", { value: 500, configurable: true });
-  el.scrollTop = 0;
+  /**
+   * **把 scrollTop 改成浏览器的整像素语义**。jsdom 默认它就是一只普通数字属性，
+   * `+= 0.27` 攒得干干净净，于是"最低档 0.5 行/秒 卡住不动"这一格在单测层永远看不见
+   * ——真浏览器里写入会被归到整数像素，实测那一档 6 秒挪 **0px**（判据见 e2e `B27`）。
+   * 桩按浏览器那样取整之后，这一层才有牙：不攒余数的实现当场红。
+   */
+  let px = 0;
+  Object.defineProperty(el, "scrollTop", {
+    configurable: true,
+    get: () => px,
+    set: (v: number) => {
+      px = Math.round(v);
+    },
+  });
   return el as HTMLDivElement;
 }
 
@@ -134,6 +147,8 @@ describe("useAutoRead", () => {
 
   // ── 滚动模式（rAF 持续滚动）──
   // 用真实浏览器帧间隔（16ms）喂帧序列：单帧间隔超过 MAX_FRAME_DT(0.2s) 会被钳制跳过
+  // 位移断言一律留 1px 容差：`scrollTop` 只落在整像素上（上面那只桩照此改过），
+  // 攒余数的实现每帧最多差 1px——期望值仍然是"速度 × 行高 × 时长"，差的只是可见的最小单位。
   const ONE_SEC_FRAMES = Array.from({ length: 63 }, (_, i) => i * 16); // 0..992ms ≈ 1 秒
   // 有效滚动时长 = (帧数-1) × 16ms（首帧仅初始化 lastTs）
   const EFFECTIVE_SECONDS = ((ONE_SEC_FRAMES.length - 1) * 16) / 1000; // 0.992
@@ -141,20 +156,34 @@ describe("useAutoRead", () => {
   it("滚动模式：正文持续匀速滑动（速度 = 行/秒 × 行高）", () => {
     const { hook, scrollEl } = setup({ paginated: false });
     runFrames(ONE_SEC_FRAMES);
-    expect(scrollEl.scrollTop).toBeCloseTo(2 * 30 * EFFECTIVE_SECONDS, 1);
+    expect(Math.abs(scrollEl.scrollTop - 2 * 30 * EFFECTIVE_SECONDS)).toBeLessThan(1);
     hook.unmount();
   });
 
   it("滚动模式：速度可调（1 行/秒 vs 4 行/秒）", () => {
     const { hook: hook1, scrollEl: el1 } = setup({ paginated: false, speedLinesPerSec: 1 });
     runFrames(ONE_SEC_FRAMES);
-    expect(el1.scrollTop).toBeCloseTo(1 * 30 * EFFECTIVE_SECONDS, 1);
+    expect(Math.abs(el1.scrollTop - 1 * 30 * EFFECTIVE_SECONDS)).toBeLessThan(1);
     hook1.unmount();
 
     const { hook: hook2, scrollEl: el2 } = setup({ paginated: false, speedLinesPerSec: 4 });
     runFrames(ONE_SEC_FRAMES);
-    expect(el2.scrollTop).toBeCloseTo(4 * 30 * EFFECTIVE_SECONDS, 1);
+    expect(Math.abs(el2.scrollTop - 4 * 30 * EFFECTIVE_SECONDS)).toBeLessThan(1);
     hook2.unmount();
+  });
+
+  /**
+   * 制作人报的那一档。0.5 行/秒 × 行高 30px × 16ms ≈ **0.24px/帧**：
+   * 直接把小数加到 `scrollTop` 上，浏览器（和上面那只按浏览器语义改过的桩）每次都给回原值，
+   * 正文一帧都不动。实现里"攒着不满一像素的余数"就是为这一档存在的。
+   */
+  it("滚动模式：最低档 0.5 行/秒（每帧不足 1px）不许停在原地", () => {
+    const { hook, scrollEl } = setup({ paginated: false, speedLinesPerSec: 0.5 });
+    runFrames(ONE_SEC_FRAMES);
+    const 期望 = 0.5 * 30 * EFFECTIVE_SECONDS; // ≈ 14.9px
+    expect(scrollEl.scrollTop, "0.5 行/秒这一档一帧都没动——每帧不满 1px 的位移没被攒起来").toBeGreaterThan(0);
+    expect(Math.abs(scrollEl.scrollTop - 期望)).toBeLessThan(1);
+    hook.unmount();
   });
 
   it("滚动模式：后台恢复不跳屏（帧间隔超过上限时跳过位移）", () => {
@@ -194,11 +223,11 @@ describe("useAutoRead", () => {
     //   位移 = 2 行/秒 × 30px × 0.016s × 50 帧 × 0.51 ≈ 24.48px（半速等效 0.4s）
     runFrames(Array.from({ length: 51 }, (_, i) => i * 16)); // 0,16,...,800
     const easePhase = 2 * 30 * 0.016 * 50 * 0.51;
-    expect(scrollEl.scrollTop).toBeCloseTo(easePhase, 1);
+    expect(Math.abs(scrollEl.scrollTop - easePhase)).toBeLessThan(1);
     // 816..1600ms：51 帧全部满速（elapsed 已超 800ms）
     //   位移 = 2 行/秒 × 30px × 0.016s × 51 帧 = 48.96px
     runFrames(Array.from({ length: 51 }, (_, i) => 816 + i * 16));
-    expect(scrollEl.scrollTop).toBeCloseTo(easePhase + 2 * 30 * 0.016 * 51, 1);
+    expect(Math.abs(scrollEl.scrollTop - (easePhase + 2 * 30 * 0.016 * 51))).toBeLessThan(1);
     hook.unmount();
   });
 
